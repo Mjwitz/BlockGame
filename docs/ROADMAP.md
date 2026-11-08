@@ -28,19 +28,19 @@ This document outlines the 5 development milestones for **BlockGame**, with clea
 ## 🚩 Milestone 2: Infinite World & Procedural Generation
 **Objective:** Add a flying spectator camera, dynamic chunk loading/unloading around the player, and deterministic 2D/3D noise terrain.
 
-- [ ] **World Manager & Spatial Partitioning**
-  - [ ] `ChunkPos(i32, i32, i32)` and `World` coordinate transforms.
-  - [ ] Hash-map or spatial grid of loaded chunks.
-  - [ ] Render distance radius loader (load chunks in radius $R$, unload at $R + 2$).
-- [ ] **Procedural Terrain Pipeline**
-  - [ ] Deterministic seed-based Perlin/Simplex noise generation.
-  - [ ] 2D Fractal Brownian Motion (fBm) surface heightmap.
-  - [ ] Surface block distribution (Grass top, 3 layers Dirt, Stone beneath, Bedrock floor).
-  - [ ] 3D cave carving noise pass.
-- [ ] **Asynchronous Multithreaded Meshing**
-  - [ ] Background thread pool for chunk generation and mesh building (`rayon`).
-  - [ ] Message queue to deliver completed vertex/index buffers to render thread without frame drops.
-  - [ ] Neighbor chunk boundary resolution for seamless culling across borders.
+- [x] **World Manager & Spatial Partitioning**
+  - [x] `ChunkPos(i32, i32, i32)` and `World` coordinate transforms.
+  - [x] Hash-map or spatial grid of loaded chunks.
+  - [x] Render distance radius loader (load chunks in radius $R$, unload at $R + 2$).
+- [x] **Procedural Terrain Pipeline**
+  - [x] Deterministic seed-based Perlin/Simplex noise generation.
+  - [x] 2D Fractal Brownian Motion (fBm) surface heightmap.
+  - [x] Surface block distribution (Grass top, 3 layers Dirt, Stone beneath, Bedrock floor).
+  - [x] 3D cave carving noise pass.
+- [x] **Asynchronous Multithreaded Meshing**
+  - [x] Background thread pool for chunk generation and mesh building (`rayon`).
+  - [x] Message queue to deliver completed vertex/index buffers to render thread without frame drops.
+  - [x] Neighbor chunk boundary resolution for seamless culling across borders.
 
 ---
 

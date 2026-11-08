@@ -1,0 +1,10 @@
+[package]
+name = "blockgame_gen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blockgame_core = { path = "../blockgame_core" }
+glam.workspace = true
+noise.workspace = true

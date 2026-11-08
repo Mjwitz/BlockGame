@@ -1,19 +1,23 @@
-use blockgame_core::{block::BlockRegistry, chunk::Chunk};
+use std::sync::Arc;
+
+use blockgame_core::block::BlockRegistry;
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, ChunkMesher, VoxelPipeline,
+    create_depth_texture, VoxelPipeline,
 };
 use glam::Vec3;
 
-pub async fn render_chunk_to_image(
-    chunk: &Chunk,
-    registry: &BlockRegistry,
+use crate::world_manager::WorldManager;
+
+pub async fn render_world_to_image(
+    seed: u32,
+    render_distance: i32,
     width: u32,
     height: u32,
     output_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    log::info!("Initializing wgpu instance for offscreen rendering...");
+    log::info!("Initializing wgpu for multi-chunk world landscape rendering...");
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         flags: wgpu::InstanceFlags::default(),
@@ -36,7 +40,7 @@ pub async fn render_chunk_to_image(
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
-                label: Some("Offscreen Device"),
+                label: Some("Offscreen Landscape Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
@@ -49,7 +53,7 @@ pub async fn render_chunk_to_image(
 
     // Render target texture
     let render_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Offscreen Render Target"),
+        label: Some("Landscape Render Target"),
         size: wgpu::Extent3d {
             width,
             height,
@@ -68,7 +72,6 @@ pub async fn render_chunk_to_image(
     let (_depth_tex, depth_view) = create_depth_texture(&device, width, height);
 
     // Staging buffer to read back pixels to CPU
-    // Note: bytes_per_row must be aligned to 256 bytes in wgpu
     let unaligned_bytes_per_row = width * 4;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let bytes_per_row = (unaligned_bytes_per_row + align - 1) & !(align - 1);
@@ -81,26 +84,24 @@ pub async fn render_chunk_to_image(
         mapped_at_creation: false,
     });
 
-    // Generate mesh from chunk
-    let mesher = ChunkMesher::new(registry);
-    let mesh = mesher.mesh_chunk(chunk);
-    log::info!(
-        "Chunk mesh generated: {} vertices, {} faces",
-        mesh.vertices.len(),
-        mesh.face_count()
-    );
-
     let atlas = TextureAtlas::generate_default();
     let pipeline = VoxelPipeline::new(&device, &queue, target_format, &atlas);
-    let gpu_mesh = pipeline
-        .upload_mesh(&device, &mesh)
-        .ok_or("Mesh was empty")?;
 
-    // Position camera to look down at the chunk diagonally
+    let registry = Arc::new(BlockRegistry::new());
+    let mut world_manager = WorldManager::new(seed, render_distance, registry);
+    world_manager.init_spawn_area(&device, &pipeline);
+
+    log::info!(
+        "Rendering landscape with {} visible voxel faces across {} chunks",
+        world_manager.total_visible_faces(),
+        world_manager.gpu_chunks.len()
+    );
+
+    // Position camera overlooking the entire landscape from the edge toward the center
     let camera = Camera::new(
-        Vec3::new(26.0, 24.0, 26.0),
-        (-135.0_f32).to_radians(),
-        (-30.0_f32).to_radians(),
+        Vec3::new(-55.0, 52.0, -55.0),
+        45.0_f32.to_radians(),
+        (-22.0_f32).to_radians(),
     );
     let mut camera_uniform = CameraUniform::default();
     camera.update_uniform(&mut camera_uniform, width as f32 / height as f32);
@@ -108,12 +109,12 @@ pub async fn render_chunk_to_image(
 
     // Encode render commands
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Offscreen Render Encoder"),
+        label: Some("Landscape Render Encoder"),
     });
 
     {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Voxel Render Pass"),
+            label: Some("Voxel Landscape Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &render_view,
                 resolve_target: None,
@@ -142,9 +143,8 @@ pub async fn render_chunk_to_image(
         render_pass.set_pipeline(&pipeline.render_pipeline);
         render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
         render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+
+        world_manager.render(&mut render_pass);
     }
 
     // Copy rendered texture to staging buffer
@@ -201,6 +201,6 @@ pub async fn render_chunk_to_image(
         image::ExtendedColorType::Rgba8,
     )?;
 
-    log::info!("Successfully saved rendered image to {}", output_path);
+    log::info!("Successfully saved rendered landscape image to {}", output_path);
     Ok(())
 }

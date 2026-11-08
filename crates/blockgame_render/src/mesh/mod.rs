@@ -90,7 +90,7 @@ impl<'a> ChunkMesher<'a> {
                         if self.registry.is_transparent(neighbor_id) {
                             let tile_id = self.registry.get_texture(block_id, dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
-                            self.build_face(&mut mesh, ix, iy, iz, dir, uv, &query_block);
+                            self.build_face(&mut mesh, chunk.pos, ix, iy, iz, dir, uv, &query_block);
                         }
                     }
                 }
@@ -103,6 +103,7 @@ impl<'a> ChunkMesher<'a> {
     fn build_face<F>(
         &self,
         mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
         x: i32,
         y: i32,
         z: i32,
@@ -113,9 +114,10 @@ impl<'a> ChunkMesher<'a> {
         F: Fn(i32, i32, i32) -> BlockId,
     {
         let [u_min, v_min, u_max, v_max] = uv_bounds;
-        let fx = x as f32;
-        let fy = y as f32;
-        let fz = z as f32;
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
         let normal = dir.normal_f32();
 
         // 4 corner positions for the quad

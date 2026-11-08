@@ -1,14 +1,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use blockgame_core::{
-    block::BlockRegistry,
-    chunk::Chunk,
-};
+use blockgame_core::block::BlockRegistry;
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, ChunkMesher, GpuMeshBuffers, VoxelPipeline,
+    create_depth_texture, VoxelPipeline,
 };
 use glam::Vec3;
 use winit::{
@@ -20,6 +17,8 @@ use winit::{
     window::{Window, WindowAttributes, WindowId},
 };
 
+use crate::world_manager::WorldManager;
+
 pub struct AppState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -28,7 +27,7 @@ pub struct AppState {
     surface_config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
     pipeline: VoxelPipeline,
-    gpu_mesh: Option<GpuMeshBuffers>,
+    world_manager: WorldManager,
     camera: Camera,
     camera_uniform: CameraUniform,
     // Movement state
@@ -43,15 +42,17 @@ pub struct AppState {
 }
 
 pub struct BlockGameApp {
-    chunk: Chunk,
-    registry: BlockRegistry,
+    seed: u32,
+    render_distance: i32,
+    registry: Arc<BlockRegistry>,
     state: Option<AppState>,
 }
 
 impl BlockGameApp {
-    pub fn new(chunk: Chunk, registry: BlockRegistry) -> Self {
+    pub fn new(seed: u32, render_distance: i32, registry: Arc<BlockRegistry>) -> Self {
         Self {
-            chunk,
+            seed,
+            render_distance,
             registry,
             state: None,
         }
@@ -65,7 +66,7 @@ impl ApplicationHandler for BlockGameApp {
         }
 
         let window_attrs = WindowAttributes::default()
-            .with_title("BlockGame - Milestone 1 (The Cube & The Chunk)")
+            .with_title("BlockGame - Milestone 2 (Infinite Procedural World)")
             .with_inner_size(PhysicalSize::new(1280, 720));
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
@@ -124,14 +125,15 @@ impl ApplicationHandler for BlockGameApp {
         let atlas = TextureAtlas::generate_default();
         let pipeline = VoxelPipeline::new(&device, &queue, surface_format, &atlas);
 
-        let mesher = ChunkMesher::new(&self.registry);
-        let mesh = mesher.mesh_chunk(&self.chunk);
-        let gpu_mesh = pipeline.upload_mesh(&device, &mesh);
+        let mut world_manager =
+            WorldManager::new(self.seed, self.render_distance, self.registry.clone());
+        world_manager.init_spawn_area(&device, &pipeline);
 
+        // Position camera floating above the spawn hills
         let camera = Camera::new(
-            Vec3::new(24.0, 20.0, 24.0),
-            (-135.0_f32).to_radians(),
-            (-25.0_f32).to_radians(),
+            Vec3::new(0.0, 38.0, 0.0),
+            (-90.0_f32).to_radians(),
+            (-15.0_f32).to_radians(),
         );
 
         let mut camera_uniform = CameraUniform::default();
@@ -146,7 +148,7 @@ impl ApplicationHandler for BlockGameApp {
             surface_config,
             depth_view,
             pipeline,
-            gpu_mesh,
+            world_manager,
             camera,
             camera_uniform,
             moving_forward: false,
@@ -216,11 +218,11 @@ impl ApplicationHandler for BlockGameApp {
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
-                let dt = now.duration_since(state.last_frame_time).as_secs_f32();
+                let dt = now.duration_since(state.last_frame_time).as_secs_f32().min(0.1);
                 state.last_frame_time = now;
 
-                // Update Camera movement
-                let speed = 15.0 * dt;
+                // Flying spectator movement speed (22 blocks per second)
+                let speed = 22.0 * dt;
                 let forward = state.camera.forward();
                 let right = state.camera.right();
 
@@ -242,6 +244,13 @@ impl ApplicationHandler for BlockGameApp {
                 if state.moving_down {
                     state.camera.position.y -= speed;
                 }
+
+                // Stream chunks around the player
+                state.world_manager.update(
+                    state.camera.position,
+                    &state.device,
+                    &state.pipeline,
+                );
 
                 let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
                 state.camera.update_uniform(&mut state.camera_uniform, aspect);
@@ -303,17 +312,11 @@ impl ApplicationHandler for BlockGameApp {
                         occlusion_query_set: None,
                     });
 
-                    if let Some(gpu_mesh) = &state.gpu_mesh {
-                        render_pass.set_pipeline(&state.pipeline.render_pipeline);
-                        render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
-                        render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
-                        render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-                        render_pass.set_index_buffer(
-                            gpu_mesh.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint32,
-                        );
-                        render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
-                    }
+                    render_pass.set_pipeline(&state.pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                    render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
+
+                    state.world_manager.render(&mut render_pass);
                 }
 
                 state.queue.submit(Some(encoder.finish()));
@@ -337,7 +340,6 @@ impl ApplicationHandler for BlockGameApp {
                     let sensitivity = 0.003;
                     state.camera.yaw += (dx as f32) * sensitivity;
                     state.camera.pitch -= (dy as f32) * sensitivity;
-                    // Clamp pitch to avoid screen flipping
                     let max_pitch = 89.0_f32.to_radians();
                     state.camera.pitch = state.camera.pitch.clamp(-max_pitch, max_pitch);
                 }
