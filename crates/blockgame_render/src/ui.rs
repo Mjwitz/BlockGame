@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 use crate::atlas::TextureAtlas;
 use blockgame_core::{
     crafting::CraftingGrid,
-    item::{Inventory, ItemRegistry, ItemSlot},
+    item::{Inventory, ItemId, ItemRegistry, ItemSlot},
 };
 
 #[repr(C)]
@@ -445,36 +445,42 @@ impl UiBuilder {
         // =========================================================================
         // CASE 2: Holding an item -> See that item in the bottom right corner
         // =========================================================================
+        // =========================================================================
+        // CASE 2: Holding an item -> See that 3D item in the bottom right corner (no hand visible)
+        // =========================================================================
         let def = def_opt.unwrap();
         let block_registry = blockgame_core::block::BlockRegistry::new();
 
-        // Punch motion for held item: dips down & thrusts forward-inward
-        let item_punch_x = -35.0 * scale * punch_swing;
-        let item_punch_y = 20.0 * scale * punch_swing;
-
         if let Some(block_id) = def.placeable_block {
             if block_id == blockgame_core::block::BlockId::TORCH {
-                // Held Torch in bottom right corner
+                // -----------------------------------------------------------------
+                // 3D HELD TORCH: 3D volumetric wooden shaft and 3D glowing flame head
+                // -----------------------------------------------------------------
+                let torch_punch_x = -45.0 * scale * punch_swing;
+                let torch_punch_y = 35.0 * scale * punch_swing;
+
                 let base = [
-                    screen_w - 45.0 * scale + bob_x + item_punch_x,
-                    screen_h - 15.0 * scale + bob_y + item_punch_y,
+                    screen_w - 55.0 * scale + bob_x + torch_punch_x,
+                    screen_h + 10.0 * scale + bob_y + torch_punch_y,
                 ];
                 let tip = [
-                    screen_w - 130.0 * scale + bob_x + item_punch_x * 1.3,
-                    screen_h - 155.0 * scale + bob_y + item_punch_y * 1.3,
+                    screen_w - 180.0 * scale + bob_x + torch_punch_x * 1.4,
+                    screen_h - 200.0 * scale + bob_y + torch_punch_y * 1.4,
                 ];
 
                 let dir_x = tip[0] - base[0];
                 let dir_y = tip[1] - base[1];
                 let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
-                let norm_x = -dir_y / len;
-                let norm_y = dir_x / len;
+                let dir = [dir_x / len, dir_y / len];
+                let norm = [-dir[1], dir[0]];
 
-                let half_w = 8.0 * scale;
-                let p0 = [base[0] - norm_x * half_w, base[1] - norm_y * half_w];
-                let p1 = [base[0] + norm_x * half_w, base[1] + norm_y * half_w];
-                let p2 = [tip[0] + norm_x * half_w, tip[1] + norm_y * half_w];
-                let p3 = [tip[0] - norm_x * half_w, tip[1] - norm_y * half_w];
+                let half_w = 9.0 * scale;
+                let thick = [-9.0 * scale, -7.0 * scale];
+
+                let p0 = [base[0] - norm[0] * half_w, base[1] - norm[1] * half_w];
+                let p1 = [base[0] + norm[0] * half_w, base[1] + norm[1] * half_w];
+                let p2 = [tip[0] + norm[0] * half_w, tip[1] + norm[1] * half_w];
+                let p3 = [tip[0] - norm[0] * half_w, tip[1] - norm[1] * half_w];
 
                 let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(13);
                 let u_w = u_max - u_min;
@@ -491,28 +497,81 @@ impl UiBuilder {
                     [u_side_left, v_side_top],
                 ];
 
+                // 1. Shaft Front Face
                 mesh.add_quad_vertices(
                     [p0, p1, p2, p3],
                     torch_uvs,
                     [[1.0, 1.0, 1.0, 1.0]; 4],
                 );
 
-                // Glowing Flame Head (extracted top flame region)
-                let flame_size = 28.0 * scale;
-                let flame_x = tip[0] - flame_size * 0.5;
-                let flame_y = tip[1] - flame_size * 0.5;
+                // 2. Shaft Side 3D Thickness Face (extruded back-left)
+                let p3_b = [p3[0] + thick[0], p3[1] + thick[1]];
+                let p0_b = [p0[0] + thick[0], p0[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [p0_b, p0, p3, p3_b],
+                    white_uv,
+                    [[0.46, 0.32, 0.18, 1.0]; 4],
+                );
+
+                // 3. Shaft Top Face (at tip)
+                let p2_b = [p2[0] + thick[0], p2[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [p3, p2, p2_b, p3_b],
+                    white_uv,
+                    [[0.55, 0.40, 0.22, 1.0]; 4],
+                );
+
+                // 4. 3D Flame Head at the tip
+                let flame_size = 36.0 * scale;
+                let fx0 = tip[0] - flame_size * 0.5;
+                let fx1 = tip[0] + flame_size * 0.5;
+                let fy0 = tip[1] - flame_size * 0.5;
+                let fy1 = tip[1] + flame_size * 0.5;
+
                 let u_flame_left = u_min + u_w * (6.0 / 16.0);
                 let u_flame_right = u_min + u_w * (10.0 / 16.0);
                 let v_flame_top = v_min + v_h * (0.0 / 16.0);
                 let v_flame_bottom = v_min + v_h * (5.0 / 16.0);
-                let flame_uv = [u_flame_left, v_flame_top, u_flame_right, v_flame_bottom];
-                mesh.add_quad(
-                    flame_x,
-                    flame_y,
-                    flame_size,
-                    flame_size,
+                let flame_uv = [
+                    [u_flame_left, v_flame_bottom],
+                    [u_flame_right, v_flame_bottom],
+                    [u_flame_right, v_flame_top],
+                    [u_flame_left, v_flame_top],
+                ];
+
+                // Flame Front Face
+                mesh.add_quad_vertices(
+                    [[fx0, fy1], [fx1, fy1], [fx1, fy0], [fx0, fy0]],
                     flame_uv,
-                    [1.0, 0.95, 0.65, 1.0],
+                    [[1.0, 0.95, 0.65, 1.0]; 4],
+                );
+
+                // Flame Side 3D Thickness Face
+                let fx0_b = fx0 + thick[0];
+                let fy0_b = fy0 + thick[1];
+                let fy1_b = fy1 + thick[1];
+                mesh.add_quad_vertices(
+                    [[fx0_b, fy1_b], [fx0, fy1], [fx0, fy0], [fx0_b, fy0_b]],
+                    white_uv,
+                    [[1.0, 0.55, 0.15, 1.0]; 4],
+                );
+
+                // Flame Top 3D Crown Face
+                let fx1_b = fx1 + thick[0];
+                mesh.add_quad_vertices(
+                    [[fx0, fy0], [fx1, fy0], [fx1_b, fy0_b], [fx0_b, fy0_b]],
+                    white_uv,
+                    [[1.0, 1.0, 0.85, 1.0]; 4],
+                );
+
+                // Soft Outer Flame Glow
+                mesh.add_quad(
+                    tip[0] - 32.0 * scale,
+                    tip[1] - 32.0 * scale,
+                    64.0 * scale,
+                    64.0 * scale,
+                    TextureAtlas::get_uv_bounds(0),
+                    [1.0, 0.85, 0.20, 0.22],
                 );
 
                 if active_slot.count > 1 {
@@ -525,12 +584,17 @@ impl UiBuilder {
                     );
                 }
             } else {
-                // Held 3D Isometric Block in bottom right corner
+                // -----------------------------------------------------------------
+                // 3D HELD BLOCK: Prominent isometric 3D block with top and side shading
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
                 let bc = [
-                    screen_w - 95.0 * scale + bob_x + item_punch_x,
-                    screen_h - 95.0 * scale + bob_y + item_punch_y,
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
                 ];
-                let bs = 58.0 * scale;
+                let bs = 90.0 * scale;
 
                 let top_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
                 let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
@@ -539,10 +603,10 @@ impl UiBuilder {
                 let [u0_s, v0_s, u1_s, v1_s] = TextureAtlas::get_uv_bounds(side_tile);
 
                 // Top Face (diamond)
-                let p_top_n = [bc[0], bc[1] - bs * 0.55];
-                let p_top_e = [bc[0] + bs * 0.88, bc[1] - bs * 0.10];
+                let p_top_n = [bc[0], bc[1] - bs * 0.65];
+                let p_top_e = [bc[0] + bs * 1.05, bc[1] - bs * 0.16];
                 let p_top_s = [bc[0], bc[1] + bs * 0.35];
-                let p_top_w = [bc[0] - bs * 0.88, bc[1] - bs * 0.10];
+                let p_top_w = [bc[0] - bs * 1.05, bc[1] - bs * 0.16];
 
                 let uvs_top = [
                     [u0_t, v0_t],
@@ -556,9 +620,10 @@ impl UiBuilder {
                     [[1.0, 1.0, 1.0, 1.0]; 4],
                 );
 
-                // Left Face (parallelogram)
-                let p_left_bot_w = [p_top_w[0], p_top_w[1] + bs * 0.95];
-                let p_left_bot_e = [p_top_s[0], p_top_s[1] + bs * 0.95];
+                // Left Face (parallelogram facing front-left)
+                let h_face = bs * 1.10;
+                let p_left_bot_w = [p_top_w[0], p_top_w[1] + h_face];
+                let p_left_bot_e = [p_top_s[0], p_top_s[1] + h_face];
                 let uvs_left = [
                     [u0_s, v0_s],
                     [u1_s, v0_s],
@@ -571,9 +636,9 @@ impl UiBuilder {
                     [[0.82, 0.82, 0.82, 1.0]; 4],
                 );
 
-                // Right Face (parallelogram)
+                // Right Face (parallelogram facing front-right)
                 let p_right_bot_w = p_left_bot_e;
-                let p_right_bot_e = [p_top_e[0], p_top_e[1] + bs * 0.95];
+                let p_right_bot_e = [p_top_e[0], p_top_e[1] + h_face];
                 let uvs_right = [
                     [u0_s, v0_s],
                     [u1_s, v0_s],
@@ -589,30 +654,405 @@ impl UiBuilder {
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
                         mesh,
-                        bc[0] + 15.0 * scale,
-                        bc[1] + bs * 0.45,
+                        bc[0] + 20.0 * scale,
+                        bc[1] + bs * 0.50,
                         30.0 * scale,
                         active_slot.count,
                     );
                 }
             }
         } else {
-            // Held Tool / Non-block Item (Pickaxe, Stick, Iron Ingot, etc.) in bottom right corner
-            let item_size = 125.0 * scale;
-            let ix = screen_w - item_size - 15.0 * scale + bob_x + item_punch_x;
-            let iy = screen_h - item_size - 15.0 * scale + bob_y + item_punch_y;
+            // =====================================================================
+            // CASE 2B: Non-Block 3D Items (Pickaxe, Stick, Iron Ingot, Coal, etc.)
+            // =====================================================================
+            let is_pickaxe = active_slot.item_id == ItemId::WOODEN_PICKAXE
+                || active_slot.item_id == ItemId::STONE_PICKAXE
+                || active_slot.item_id == ItemId::IRON_PICKAXE;
 
-            let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-            mesh.add_quad(ix, iy, item_size, item_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+            if is_pickaxe {
+                // -----------------------------------------------------------------
+                // 3D HELD PICKAXE: 3D wooden handle and 3D arched crosshead blade
+                // -----------------------------------------------------------------
+                let pick_punch_x = -55.0 * scale * punch_swing;
+                let pick_punch_y = 70.0 * scale * punch_swing;
 
-            if active_slot.count > 1 {
-                Self::draw_stack_number(
-                    mesh,
-                    ix + item_size - 35.0 * scale,
-                    iy + item_size - 25.0 * scale,
-                    30.0 * scale,
-                    active_slot.count,
+                let handle_base = [
+                    screen_w - 55.0 * scale + bob_x + pick_punch_x,
+                    screen_h + 15.0 * scale + bob_y + pick_punch_y,
+                ];
+                let handle_tip = [
+                    screen_w - 200.0 * scale + bob_x + pick_punch_x * 1.4,
+                    screen_h - 220.0 * scale + bob_y + pick_punch_y * 1.4,
+                ];
+
+                let dx = handle_tip[0] - handle_base[0];
+                let dy = handle_tip[1] - handle_base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let half_w = 9.0 * scale;
+                let thick = [-9.0 * scale, -7.0 * scale];
+
+                // 1. 3D Handle Front Face
+                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
+                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
+                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
+                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                mesh.add_quad_vertices(
+                    [h0, h1, h2, h3],
+                    white_uv,
+                    [[0.60, 0.42, 0.24, 1.0]; 4],
                 );
+
+                // 2. 3D Handle Side Thickness Face
+                let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
+                let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [h0_b, h0, h3, h3_b],
+                    white_uv,
+                    [[0.38, 0.25, 0.13, 1.0]; 4],
+                );
+
+                // 3. 3D Pickaxe Head (Arched crosshead)
+                let (col_head_main, col_head_top, col_head_side) = match active_slot.item_id {
+                    ItemId::WOODEN_PICKAXE => (
+                        [0.68, 0.48, 0.28, 1.0],
+                        [0.85, 0.65, 0.42, 1.0],
+                        [0.45, 0.30, 0.16, 1.0],
+                    ),
+                    ItemId::STONE_PICKAXE => (
+                        [0.55, 0.55, 0.58, 1.0],
+                        [0.75, 0.75, 0.78, 1.0],
+                        [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    _ => ( // Iron Pickaxe
+                        [0.82, 0.85, 0.90, 1.0],
+                        [0.96, 0.98, 1.00, 1.0],
+                        [0.55, 0.58, 0.65, 1.0],
+                    ),
+                };
+
+                let head_center = handle_tip;
+                let blade_len = 70.0 * scale;
+                let blade_w = 14.0 * scale;
+
+                let tip_l = [
+                    head_center[0] - norm[0] * blade_len + dir[0] * 22.0 * scale,
+                    head_center[1] - norm[1] * blade_len + dir[1] * 22.0 * scale,
+                ];
+                let tip_r = [
+                    head_center[0] + norm[0] * blade_len - dir[0] * 22.0 * scale,
+                    head_center[1] + norm[1] * blade_len - dir[1] * 22.0 * scale,
+                ];
+                let head_top = [
+                    head_center[0] + dir[0] * blade_w,
+                    head_center[1] + dir[1] * blade_w,
+                ];
+                let head_bot = [
+                    head_center[0] - dir[0] * blade_w,
+                    head_center[1] - dir[1] * blade_w,
+                ];
+
+                // Left Blade Quad
+                let tip_l_in = [tip_l[0] - dir[0] * 8.0 * scale, tip_l[1] - dir[1] * 8.0 * scale];
+                mesh.add_quad_vertices(
+                    [head_bot, tip_l_in, tip_l, head_top],
+                    white_uv,
+                    [col_head_main; 4],
+                );
+
+                // Right Blade Quad
+                let tip_r_in = [tip_r[0] - dir[0] * 8.0 * scale, tip_r[1] - dir[1] * 8.0 * scale];
+                mesh.add_quad_vertices(
+                    [head_bot, head_top, tip_r, tip_r_in],
+                    white_uv,
+                    [col_head_main; 4],
+                );
+
+                // 3D Top Spine Bevel (Top Highlight)
+                let head_top_b = [head_top[0] + thick[0], head_top[1] + thick[1]];
+                let tip_l_b = [tip_l[0] + thick[0], tip_l[1] + thick[1]];
+                let tip_r_b = [tip_r[0] + thick[0], tip_r[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [tip_l, head_top, head_top_b, tip_l_b],
+                    white_uv,
+                    [col_head_top; 4],
+                );
+                mesh.add_quad_vertices(
+                    [head_top, tip_r, tip_r_b, head_top_b],
+                    white_uv,
+                    [col_head_top; 4],
+                );
+
+                // 3D Underside Bevel (Side Shadow)
+                let head_bot_b = [head_bot[0] + thick[0], head_bot[1] + thick[1]];
+                let tip_l_in_b = [tip_l_in[0] + thick[0], tip_l_in[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [tip_l_in_b, head_bot_b, head_bot, tip_l_in],
+                    white_uv,
+                    [col_head_side; 4],
+                );
+
+                // Center Socket Collar (Dark steel/band)
+                let c0 = [head_center[0] - norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] - norm[1] * 14.0 * scale - dir[1] * 12.0 * scale];
+                let c1 = [head_center[0] + norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] + norm[1] * 14.0 * scale - dir[1] * 12.0 * scale];
+                let c2 = [head_center[0] + norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] + norm[1] * 14.0 * scale + dir[1] * 12.0 * scale];
+                let c3 = [head_center[0] - norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] - norm[1] * 14.0 * scale + dir[1] * 12.0 * scale];
+                mesh.add_quad_vertices(
+                    [c0, c1, c2, c3],
+                    white_uv,
+                    [[0.30, 0.30, 0.34, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if active_slot.item_id == ItemId::STICK {
+                // -----------------------------------------------------------------
+                // 3D HELD STICK: 3D carved wooden shaft with top and side depth
+                // -----------------------------------------------------------------
+                let stick_punch_x = -50.0 * scale * punch_swing;
+                let stick_punch_y = 60.0 * scale * punch_swing;
+
+                let base = [
+                    screen_w - 55.0 * scale + bob_x + stick_punch_x,
+                    screen_h + 15.0 * scale + bob_y + stick_punch_y,
+                ];
+                let tip = [
+                    screen_w - 200.0 * scale + bob_x + stick_punch_x * 1.4,
+                    screen_h - 220.0 * scale + bob_y + stick_punch_y * 1.4,
+                ];
+
+                let dx = tip[0] - base[0];
+                let dy = tip[1] - base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let half_w = 9.0 * scale;
+                let thick = [-9.0 * scale, -7.0 * scale];
+
+                let s0 = [base[0] - norm[0] * half_w, base[1] - norm[1] * half_w];
+                let s1 = [base[0] + norm[0] * half_w, base[1] + norm[1] * half_w];
+                let s2 = [tip[0] + norm[0] * half_w, tip[1] + norm[1] * half_w];
+                let s3 = [tip[0] - norm[0] * half_w, tip[1] - norm[1] * half_w];
+
+                // 1. Stick Front Face
+                mesh.add_quad_vertices(
+                    [s0, s1, s2, s3],
+                    white_uv,
+                    [[0.62, 0.44, 0.25, 1.0]; 4],
+                );
+
+                // 2. Stick Side 3D Thickness Face
+                let s0_b = [s0[0] + thick[0], s0[1] + thick[1]];
+                let s3_b = [s3[0] + thick[0], s3[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [s0_b, s0, s3, s3_b],
+                    white_uv,
+                    [[0.40, 0.26, 0.14, 1.0]; 4],
+                );
+
+                // 3. Stick Top Face (cut end cap)
+                let s2_b = [s2[0] + thick[0], s2[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [s3, s2, s2_b, s3_b],
+                    white_uv,
+                    [[0.75, 0.55, 0.34, 1.0]; 4],
+                );
+
+                // 4. Carved Notches along the shaft
+                for i in 1..=3 {
+                    let t = i as f32 * 0.25;
+                    let nx = base[0] + dir[0] * len * t;
+                    let ny = base[1] + dir[1] * len * t;
+                    let n0 = [nx - norm[0] * half_w, ny - norm[1] * half_w];
+                    let n1 = [nx + norm[0] * half_w, ny + norm[1] * half_w];
+                    let n2 = [n1[0] + dir[0] * 4.0 * scale, n1[1] + dir[1] * 4.0 * scale];
+                    let n3 = [n0[0] + dir[0] * 4.0 * scale, n0[1] + dir[1] * 4.0 * scale];
+                    mesh.add_quad_vertices(
+                        [n0, n1, n2, n3],
+                        white_uv,
+                        [[0.45, 0.30, 0.16, 1.0]; 4],
+                    );
+                }
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if active_slot.item_id == ItemId::IRON_INGOT {
+                // -----------------------------------------------------------------
+                // 3D HELD IRON INGOT: 3D metallic ingot bar with specular top face
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let ic = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 120.0 * scale + bob_y + item_punch_y,
+                ];
+                let iw = 65.0 * scale;
+                let ih = 35.0 * scale;
+                let id = 45.0 * scale;
+
+                // Top Face (trapezoid with brilliant metallic sheen)
+                let t_nw = [ic[0] - iw * 0.70, ic[1] - id * 0.60];
+                let t_ne = [ic[0] + iw * 0.70, ic[1] - id * 0.60];
+                let t_se = [ic[0] + iw, ic[1] + id * 0.20];
+                let t_sw = [ic[0] - iw, ic[1] + id * 0.20];
+                mesh.add_quad_vertices(
+                    [t_sw, t_nw, t_ne, t_se],
+                    white_uv,
+                    [[0.94, 0.96, 1.00, 1.0]; 4],
+                );
+
+                // Front Face (polished silver-steel)
+                let f_bl = [t_sw[0], t_sw[1] + ih];
+                let f_br = [t_se[0], t_se[1] + ih];
+                mesh.add_quad_vertices(
+                    [t_sw, t_se, f_br, f_bl],
+                    white_uv,
+                    [[0.78, 0.81, 0.88, 1.0]; 4],
+                );
+
+                // Right Face (shaded steel)
+                let r_br = [t_ne[0], t_ne[1] + ih];
+                mesh.add_quad_vertices(
+                    [t_se, t_ne, r_br, f_br],
+                    white_uv,
+                    [[0.60, 0.62, 0.70, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        ic[0] + 15.0 * scale,
+                        ic[1] + ih * 0.5,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if active_slot.item_id == ItemId::COAL {
+                // -----------------------------------------------------------------
+                // 3D HELD COAL: 3D faceted mineral chunk with specular highlights
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let cc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 120.0 * scale + bob_y + item_punch_y,
+                ];
+                let cs = 45.0 * scale;
+
+                // Facet 1: Top facet (specular highlight)
+                let c_top = [cc[0], cc[1] - cs * 0.90];
+                let c_tl = [cc[0] - cs * 0.75, cc[1] - cs * 0.30];
+                let c_tr = [cc[0] + cs * 0.75, cc[1] - cs * 0.30];
+                let c_mid = [cc[0] + cs * 0.10, cc[1] + cs * 0.10];
+                mesh.add_quad_vertices(
+                    [c_tl, c_top, c_tr, c_mid],
+                    white_uv,
+                    [[0.34, 0.34, 0.38, 1.0]; 4],
+                );
+
+                // Facet 2: Front-left facet
+                let c_bl = [cc[0] - cs * 0.60, cc[1] + cs * 0.75];
+                let c_bm = [cc[0], cc[1] + cs * 0.95];
+                mesh.add_quad_vertices(
+                    [c_tl, c_mid, c_bm, c_bl],
+                    white_uv,
+                    [[0.22, 0.22, 0.26, 1.0]; 4],
+                );
+
+                // Facet 3: Front-right facet
+                let c_br = [cc[0] + cs * 0.70, cc[1] + cs * 0.65];
+                mesh.add_quad_vertices(
+                    [c_mid, c_tr, c_br, c_bm],
+                    white_uv,
+                    [[0.16, 0.16, 0.19, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        cc[0] + 15.0 * scale,
+                        cc[1] + cs * 0.40,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else {
+                // -----------------------------------------------------------------
+                // GENERIC / FALLBACK ITEM: Extruded 3D isometric token with thickness
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let size = 110.0 * scale;
+                let ix = screen_w - size - 40.0 * scale + bob_x + item_punch_x;
+                let iy = screen_h - size - 40.0 * scale + bob_y + item_punch_y;
+                let thick = [-12.0 * scale, -10.0 * scale];
+
+                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let icon_uvs = [
+                    [u0, v1],
+                    [u1, v1],
+                    [u1, v0],
+                    [u0, v0],
+                ];
+
+                let p0 = [ix, iy + size];
+                let p1 = [ix + size, iy + size];
+                let p2 = [ix + size, iy];
+                let p3 = [ix, iy];
+
+                // 1. 3D Side Thickness Face (shadow bevel)
+                let p0_b = [p0[0] + thick[0], p0[1] + thick[1]];
+                let p3_b = [p3[0] + thick[0], p3[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [p0_b, p0, p3, p3_b],
+                    white_uv,
+                    [[0.55, 0.55, 0.58, 1.0]; 4],
+                );
+
+                // 2. 3D Top Thickness Face (highlight bevel)
+                let p2_b = [p2[0] + thick[0], p2[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [p3, p2, p2_b, p3_b],
+                    white_uv,
+                    [[0.85, 0.85, 0.88, 1.0]; 4],
+                );
+
+                // 3. Front Face with item texture
+                mesh.add_quad_vertices(
+                    [p0, p1, p2, p3],
+                    icon_uvs,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        ix + size - 35.0 * scale,
+                        iy + size - 25.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
             }
         }
     }
@@ -947,5 +1387,54 @@ mod tests {
         // Empty hand draws the player's arm and fist
         UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 1.5, 0.2);
         assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_held_3d_block() {
+        let mut mesh = UiMesh::new();
+        let mut inv = Inventory::new(36);
+        inv.set(0, ItemSlot::new(ItemId::WOOD_LOG, 16));
+        let registry = ItemRegistry::new();
+
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_held_3d_pickaxe() {
+        let mut mesh = UiMesh::new();
+        let mut inv = Inventory::new(36);
+        inv.set(0, ItemSlot::new(ItemId::IRON_PICKAXE, 1));
+        let registry = ItemRegistry::new();
+
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.3);
+        assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_held_3d_stick() {
+        let mut mesh = UiMesh::new();
+        let mut inv = Inventory::new(36);
+        inv.set(0, ItemSlot::new(ItemId::STICK, 4));
+        let registry = ItemRegistry::new();
+
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_held_3d_ingot_and_coal() {
+        let mut mesh = UiMesh::new();
+        let mut inv = Inventory::new(36);
+        inv.set(0, ItemSlot::new(ItemId::IRON_INGOT, 5));
+        let registry = ItemRegistry::new();
+
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        assert!(mesh.indices.len() > 0);
+
+        let mut mesh_coal = UiMesh::new();
+        inv.set(0, ItemSlot::new(ItemId::COAL, 3));
+        UiBuilder::build_hud(&mut mesh_coal, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        assert!(mesh_coal.indices.len() > 0);
     }
 }
