@@ -351,14 +351,16 @@ impl UiBuilder {
         );
     }
 
-    /// Renders the first-person hand and held item in Minecraft style, extending from the lower-right.
+    /// Renders first-person view: bare hand if empty, or the held item in the bottom right corner.
+    /// Hand and items move only when walking and perform a punch animation on left click.
     pub fn draw_held_item(
         mesh: &mut UiMesh,
         screen_w: f32,
         screen_h: f32,
         active_slot: ItemSlot,
         registry: &ItemRegistry,
-        walk_time: f32,
+        walk_distance: f32,
+        punch_time: f32,
     ) {
         let white_uv_bounds = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
         let white_uv = [
@@ -369,60 +371,69 @@ impl UiBuilder {
         ];
 
         let scale = (screen_h / 720.0).clamp(0.7, 1.5);
-        let bob_x = (walk_time * 4.0).sin() * 8.0 * scale;
-        let bob_y = (walk_time * 8.0).cos().abs() * 9.0 * scale;
+        // Bobbing & sway: occurs ONLY when walking (walk_distance increases while walking)
+        let bob_x = (walk_distance * 3.5).sin() * 7.0 * scale;
+        let bob_y = (walk_distance * 7.0).cos().abs() * 8.0 * scale;
 
-        // Arm key geometry points reaching up from bottom-right
-        let p_arm_bot_r = [screen_w + 40.0 * scale + bob_x, screen_h + 30.0 * scale];
-        let p_arm_bot_l = [screen_w - 95.0 * scale + bob_x, screen_h + 30.0 * scale];
-        let p_arm_bot_m = [(p_arm_bot_l[0] + p_arm_bot_r[0]) * 0.5, (p_arm_bot_l[1] + p_arm_bot_r[1]) * 0.5];
-
-        let p_sleeve_r = [screen_w - 20.0 * scale + bob_x, screen_h - 130.0 * scale + bob_y];
-        let p_sleeve_l = [screen_w - 145.0 * scale + bob_x, screen_h - 85.0 * scale + bob_y];
-        let p_sleeve_m = [(p_sleeve_l[0] + p_sleeve_r[0]) * 0.5, (p_sleeve_l[1] + p_sleeve_r[1]) * 0.5];
-
-        let p_wrist_r = [screen_w - 80.0 * scale + bob_x, screen_h - 195.0 * scale + bob_y];
-        let p_wrist_l = [screen_w - 185.0 * scale + bob_x, screen_h - 150.0 * scale + bob_y];
-        let p_wrist_m = [(p_wrist_l[0] + p_wrist_r[0]) * 0.5, (p_wrist_l[1] + p_wrist_r[1]) * 0.5];
-
-        let p_hand = [screen_w - 155.0 * scale + bob_x, screen_h - 200.0 * scale + bob_y];
-
-        let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
-        let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
-        let col_skin_top = [0.88, 0.64, 0.48, 1.0];
-        let col_skin_side = [0.72, 0.48, 0.35, 1.0];
-        let col_skin_light = [0.93, 0.69, 0.53, 1.0];
-
-        // 1. Draw sleeve quads (side face and top face)
-        mesh.add_quad_vertices(
-            [p_arm_bot_l, p_arm_bot_m, p_sleeve_m, p_sleeve_l],
-            white_uv,
-            [col_sleeve_side; 4],
-        );
-        mesh.add_quad_vertices(
-            [p_arm_bot_m, p_arm_bot_r, p_sleeve_r, p_sleeve_m],
-            white_uv,
-            [col_sleeve_top; 4],
-        );
-
-        // 2. Draw forearm quads (side face and top face)
-        mesh.add_quad_vertices(
-            [p_sleeve_l, p_sleeve_m, p_wrist_m, p_wrist_l],
-            white_uv,
-            [col_skin_side; 4],
-        );
-        mesh.add_quad_vertices(
-            [p_sleeve_m, p_sleeve_r, p_wrist_r, p_wrist_m],
-            white_uv,
-            [col_skin_top; 4],
-        );
+        // Punch swing animation (0.0 -> 1.0 -> 0.0)
+        let punch_swing = (punch_time * std::f32::consts::PI).sin();
 
         let def_opt = registry.get(active_slot.item_id);
 
         if active_slot.is_empty() || def_opt.is_none() {
-            // Empty hand: draw clenched rectangular fist
-            let p_fist_tip_l = [p_hand[0] - 25.0 * scale, p_hand[1] - 25.0 * scale];
-            let p_fist_tip_r = [p_hand[0] + 40.0 * scale, p_hand[1] - 45.0 * scale];
+            // =========================================================================
+            // CASE 1: Empty hand -> See your hand and fist in the lower right
+            // =========================================================================
+            let punch_x = -45.0 * scale * punch_swing;
+            let punch_y = -35.0 * scale * punch_swing;
+
+            let p_arm_bot_r = [screen_w + 40.0 * scale + bob_x + punch_x * 0.3, screen_h + 30.0 * scale];
+            let p_arm_bot_l = [screen_w - 95.0 * scale + bob_x + punch_x * 0.3, screen_h + 30.0 * scale];
+            let p_arm_bot_m = [(p_arm_bot_l[0] + p_arm_bot_r[0]) * 0.5, (p_arm_bot_l[1] + p_arm_bot_r[1]) * 0.5];
+
+            let p_sleeve_r = [screen_w - 20.0 * scale + bob_x + punch_x * 0.6, screen_h - 130.0 * scale + bob_y + punch_y * 0.6];
+            let p_sleeve_l = [screen_w - 145.0 * scale + bob_x + punch_x * 0.6, screen_h - 85.0 * scale + bob_y + punch_y * 0.6];
+            let p_sleeve_m = [(p_sleeve_l[0] + p_sleeve_r[0]) * 0.5, (p_sleeve_l[1] + p_sleeve_r[1]) * 0.5];
+
+            let p_wrist_r = [screen_w - 75.0 * scale + bob_x + punch_x, screen_h - 195.0 * scale + bob_y + punch_y];
+            let p_wrist_l = [screen_w - 180.0 * scale + bob_x + punch_x, screen_h - 150.0 * scale + bob_y + punch_y];
+            let p_wrist_m = [(p_wrist_l[0] + p_wrist_r[0]) * 0.5, (p_wrist_l[1] + p_wrist_r[1]) * 0.5];
+
+            let p_hand = [screen_w - 155.0 * scale + bob_x + punch_x * 1.1, screen_h - 200.0 * scale + bob_y + punch_y * 1.1];
+
+            let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
+            let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
+            let col_skin_top = [0.88, 0.64, 0.48, 1.0];
+            let col_skin_side = [0.72, 0.48, 0.35, 1.0];
+            let col_skin_light = [0.93, 0.69, 0.53, 1.0];
+
+            // 1. Sleeve quads (side facet and top facet)
+            mesh.add_quad_vertices(
+                [p_arm_bot_l, p_arm_bot_m, p_sleeve_m, p_sleeve_l],
+                white_uv,
+                [col_sleeve_side; 4],
+            );
+            mesh.add_quad_vertices(
+                [p_arm_bot_m, p_arm_bot_r, p_sleeve_r, p_sleeve_m],
+                white_uv,
+                [col_sleeve_top; 4],
+            );
+
+            // 2. Forearm quads (side facet and top facet)
+            mesh.add_quad_vertices(
+                [p_sleeve_l, p_sleeve_m, p_wrist_m, p_wrist_l],
+                white_uv,
+                [col_skin_side; 4],
+            );
+            mesh.add_quad_vertices(
+                [p_sleeve_m, p_sleeve_r, p_wrist_r, p_wrist_m],
+                white_uv,
+                [col_skin_top; 4],
+            );
+
+            // 3. Clenched fist punching forward
+            let p_fist_tip_l = [p_hand[0] - 25.0 * scale + punch_x * 0.2, p_hand[1] - 25.0 * scale + punch_y * 0.2];
+            let p_fist_tip_r = [p_hand[0] + 40.0 * scale + punch_x * 0.2, p_hand[1] - 45.0 * scale + punch_y * 0.2];
             mesh.add_quad_vertices(
                 [p_wrist_l, p_wrist_r, p_fist_tip_r, p_fist_tip_l],
                 white_uv,
@@ -431,21 +442,35 @@ impl UiBuilder {
             return;
         }
 
+        // =========================================================================
+        // CASE 2: Holding an item -> See that item in the bottom right corner
+        // =========================================================================
         let def = def_opt.unwrap();
         let block_registry = blockgame_core::block::BlockRegistry::new();
 
+        // Punch motion for held item: dips down & thrusts forward-inward
+        let item_punch_x = -35.0 * scale * punch_swing;
+        let item_punch_y = 20.0 * scale * punch_swing;
+
         if let Some(block_id) = def.placeable_block {
             if block_id == blockgame_core::block::BlockId::TORCH {
-                // Held Torch: 3D slender torch angled forward-inward with glowing flame
-                let base = [p_hand[0] + 15.0 * scale, p_hand[1] + 35.0 * scale];
-                let tip = [p_hand[0] - 45.0 * scale, p_hand[1] - 85.0 * scale];
+                // Held Torch in bottom right corner
+                let base = [
+                    screen_w - 45.0 * scale + bob_x + item_punch_x,
+                    screen_h - 15.0 * scale + bob_y + item_punch_y,
+                ];
+                let tip = [
+                    screen_w - 130.0 * scale + bob_x + item_punch_x * 1.3,
+                    screen_h - 155.0 * scale + bob_y + item_punch_y * 1.3,
+                ];
+
                 let dir_x = tip[0] - base[0];
                 let dir_y = tip[1] - base[1];
                 let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
                 let norm_x = -dir_y / len;
                 let norm_y = dir_x / len;
 
-                let half_w = 7.0 * scale;
+                let half_w = 8.0 * scale;
                 let p0 = [base[0] - norm_x * half_w, base[1] - norm_y * half_w];
                 let p1 = [base[0] + norm_x * half_w, base[1] + norm_y * half_w];
                 let p2 = [tip[0] + norm_x * half_w, tip[1] + norm_y * half_w];
@@ -473,7 +498,7 @@ impl UiBuilder {
                 );
 
                 // Glowing Flame Head (extracted top flame region)
-                let flame_size = 24.0 * scale;
+                let flame_size = 28.0 * scale;
                 let flame_x = tip[0] - flame_size * 0.5;
                 let flame_y = tip[1] - flame_size * 0.5;
                 let u_flame_left = u_min + u_w * (6.0 / 16.0);
@@ -490,20 +515,22 @@ impl UiBuilder {
                     [1.0, 0.95, 0.65, 1.0],
                 );
 
-                // Fingers clasping the torch handle
-                let p_grasp_0 = [p_hand[0] - 12.0 * scale, p_hand[1] + 10.0 * scale];
-                let p_grasp_1 = [p_hand[0] + 28.0 * scale, p_hand[1] + 2.0 * scale];
-                let p_grasp_2 = [p_hand[0] + 22.0 * scale, p_hand[1] + 28.0 * scale];
-                let p_grasp_3 = [p_hand[0] - 18.0 * scale, p_hand[1] + 32.0 * scale];
-                mesh.add_quad_vertices(
-                    [p_grasp_0, p_grasp_1, p_grasp_2, p_grasp_3],
-                    white_uv,
-                    [col_skin_light; 4],
-                );
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
             } else {
-                // Held Block: 3D isometric cube
-                let bc = [p_hand[0] - 15.0 * scale, p_hand[1] - 45.0 * scale];
-                let bs = 55.0 * scale;
+                // Held 3D Isometric Block in bottom right corner
+                let bc = [
+                    screen_w - 95.0 * scale + bob_x + item_punch_x,
+                    screen_h - 95.0 * scale + bob_y + item_punch_y,
+                ];
+                let bs = 58.0 * scale;
 
                 let top_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
                 let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
@@ -559,47 +586,34 @@ impl UiBuilder {
                     [[0.68, 0.68, 0.68, 1.0]; 4],
                 );
 
-                // Thumb/fingers grasping the block's right edge
-                let p_thumb_0 = [p_top_s[0] + 12.0 * scale, p_top_s[1] + bs * 0.35];
-                let p_thumb_1 = [p_thumb_0[0] + 28.0 * scale, p_thumb_0[1] - 8.0 * scale];
-                let p_thumb_2 = [p_thumb_1[0] + 8.0 * scale, p_thumb_1[1] + 24.0 * scale];
-                let p_thumb_3 = [p_thumb_0[0] - 8.0 * scale, p_thumb_0[1] + 26.0 * scale];
-                mesh.add_quad_vertices(
-                    [p_thumb_0, p_thumb_1, p_thumb_2, p_thumb_3],
-                    white_uv,
-                    [col_skin_light; 4],
-                );
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 15.0 * scale,
+                        bc[1] + bs * 0.45,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
             }
         } else {
-            // Held Tool / Non-block Item (Pickaxe, Stick, Iron Ingot, etc.): Angled equipped item
-            let item_size = 95.0 * scale;
-            let ix = p_hand[0] - item_size * 0.75;
-            let iy = p_hand[1] - item_size * 0.80;
+            // Held Tool / Non-block Item (Pickaxe, Stick, Iron Ingot, etc.) in bottom right corner
+            let item_size = 125.0 * scale;
+            let ix = screen_w - item_size - 15.0 * scale + bob_x + item_punch_x;
+            let iy = screen_h - item_size - 15.0 * scale + bob_y + item_punch_y;
 
             let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
             mesh.add_quad(ix, iy, item_size, item_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
 
-            // Hand fingers clasping the tool handle
-            let p_grasp_0 = [p_hand[0] - 15.0 * scale, p_hand[1] - 10.0 * scale];
-            let p_grasp_1 = [p_hand[0] + 30.0 * scale, p_hand[1] - 22.0 * scale];
-            let p_grasp_2 = [p_hand[0] + 22.0 * scale, p_hand[1] + 12.0 * scale];
-            let p_grasp_3 = [p_hand[0] - 20.0 * scale, p_hand[1] + 18.0 * scale];
-            mesh.add_quad_vertices(
-                [p_grasp_0, p_grasp_1, p_grasp_2, p_grasp_3],
-                white_uv,
-                [col_skin_light; 4],
-            );
-        }
-
-        // Draw stack count if count > 1
-        if active_slot.count > 1 {
-            Self::draw_stack_number(
-                mesh,
-                p_hand[0] + 55.0 * scale,
-                p_hand[1] - 15.0 * scale,
-                30.0 * scale,
-                active_slot.count,
-            );
+            if active_slot.count > 1 {
+                Self::draw_stack_number(
+                    mesh,
+                    ix + item_size - 35.0 * scale,
+                    iy + item_size - 25.0 * scale,
+                    30.0 * scale,
+                    active_slot.count,
+                );
+            }
         }
     }
 
@@ -611,7 +625,8 @@ impl UiBuilder {
         inventory: &Inventory,
         active_slot: usize,
         registry: &ItemRegistry,
-        walk_time: f32,
+        walk_distance: f32,
+        punch_time: f32,
     ) {
         mesh.clear();
 
@@ -622,9 +637,9 @@ impl UiBuilder {
         let ch_uv = TextureAtlas::get_uv_bounds(Self::CROSSHAIR_TILE);
         mesh.add_quad(ch_x, ch_y, ch_size, ch_size, ch_uv, [1.0, 1.0, 1.0, 1.0]);
 
-        // 2. First-Person Held Item in lower-right hand
+        // 2. First-Person Hand or Held Item in lower-right corner
         let held_slot = inventory.get(active_slot);
-        Self::draw_held_item(mesh, screen_w, screen_h, held_slot, registry, walk_time);
+        Self::draw_held_item(mesh, screen_w, screen_h, held_slot, registry, walk_distance, punch_time);
 
         // 3. Hotbar Slots (9 slots, each 44x44 px with 4px gap)
         let slot_size = 44.0;
@@ -919,8 +934,18 @@ mod tests {
         inv.set(0, ItemSlot::new(ItemId::TORCH, 16));
         let registry = ItemRegistry::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0);
-        // Crosshair (1) + Held item (1) + Held stack number (2) + 9 slot bgs (9) + 1 highlight (1) + 1 slot item icon (1) + 1 slot stack number (2) = 17 quads = 102 indices
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_empty_hand() {
+        let mut mesh = UiMesh::new();
+        let inv = Inventory::new(36);
+        let registry = ItemRegistry::new();
+
+        // Empty hand draws the player's arm and fist
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 1.5, 0.2);
         assert!(mesh.indices.len() > 0);
     }
 }

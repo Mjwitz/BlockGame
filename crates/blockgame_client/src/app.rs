@@ -60,6 +60,8 @@ pub struct AppState {
     pub ui_index_count: u32,
     pub item_drop_gpu_mesh: Option<blockgame_render::GpuMeshBuffers>,
     pub total_time: f32,
+    pub walk_distance: f32,
+    pub punch_timer: f32,
     // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
@@ -220,6 +222,8 @@ impl ApplicationHandler for BlockGameApp {
             ui_index_count: 0,
             item_drop_gpu_mesh: None,
             total_time: 0.0,
+            walk_distance: 0.0,
+            punch_timer: 0.0,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
@@ -285,6 +289,7 @@ impl ApplicationHandler for BlockGameApp {
 
                 match button {
                     MouseButton::Left => {
+                        state.punch_timer = 0.25; // Trigger punch animation
                         // Break targeted block
                         if let Some(hit) = state.targeted_block {
                             if let Some(broken) = state.world_manager.break_block(
@@ -429,6 +434,22 @@ impl ApplicationHandler for BlockGameApp {
                     );
                 }
 
+                // Update walking distance (advances ONLY when moving)
+                let is_moving = (state.moving_forward || state.moving_backward || state.moving_left || state.moving_right)
+                    && (state.player.on_ground || state.player.flying);
+                let horiz_speed = (state.player.velocity.x * state.player.velocity.x + state.player.velocity.z * state.player.velocity.z).sqrt();
+                if is_moving && horiz_speed > 0.1 {
+                    state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
+                }
+
+                // Update punch animation timer
+                let punch_time = if state.punch_timer > 0.0 {
+                    state.punch_timer = (state.punch_timer - dt).max(0.0);
+                    1.0 - (state.punch_timer / 0.25)
+                } else {
+                    0.0
+                };
+
                 // 3. Update Item Drops & Magnetism Pickup
                 let collected = state.world_manager.update_item_drops(dt, state.player.position);
                 for item in collected {
@@ -515,7 +536,8 @@ impl ApplicationHandler for BlockGameApp {
                         &state.inventory,
                         state.active_hotbar_slot,
                         &state.item_registry,
-                        state.total_time,
+                        state.walk_distance,
+                        punch_time,
                     );
                 }
 
