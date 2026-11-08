@@ -5,8 +5,9 @@ use std::sync::{
 };
 
 use blockgame_core::{
-    block::BlockRegistry,
+    block::{BlockId, BlockRegistry},
     chunk::{Chunk, ChunkPos},
+    physics::AABB,
     world::{world_to_chunk_coords, World},
 };
 use blockgame_gen::TerrainGenerator;
@@ -238,6 +239,136 @@ impl WorldManager {
             );
             render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
+    }
+
+    pub fn world(&self) -> &Arc<Mutex<World>> {
+        &self.world
+    }
+
+    pub fn break_block(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
+        let mut chunks_to_rebuild = vec![chunk_pos];
+
+        if lx == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x - 1, chunk_pos.0.y, chunk_pos.0.z));
+        } else if lx == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x + 1, chunk_pos.0.y, chunk_pos.0.z));
+        }
+        if ly == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y - 1, chunk_pos.0.z));
+        } else if ly == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y + 1, chunk_pos.0.z));
+        }
+        if lz == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z - 1));
+        } else if lz == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
+        }
+
+        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            if current.is_air() {
+                return false;
+            }
+            world.set_block(pos, BlockId::AIR);
+
+            let mesher = ChunkMesher::new(&self.registry);
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let mesh = mesher.mesh_chunk_with_neighbors(chunk, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
+                self.gpu_chunks.insert(cpos, gpu_mesh);
+            } else {
+                self.gpu_chunks.remove(&cpos);
+            }
+        }
+
+        true
+    }
+
+    pub fn place_block(
+        &mut self,
+        pos: IVec3,
+        block_id: BlockId,
+        player_aabb: &AABB,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        // Prevent placing inside player collider
+        let block_box = AABB::from_block(pos);
+        if player_aabb.intersects(&block_box) {
+            return false;
+        }
+
+        let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
+        let mut chunks_to_rebuild = vec![chunk_pos];
+
+        if lx == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x - 1, chunk_pos.0.y, chunk_pos.0.z));
+        } else if lx == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x + 1, chunk_pos.0.y, chunk_pos.0.z));
+        }
+        if ly == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y - 1, chunk_pos.0.z));
+        } else if ly == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y + 1, chunk_pos.0.z));
+        }
+        if lz == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z - 1));
+        } else if lz == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
+        }
+
+        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            if !current.is_air() {
+                return false;
+            }
+            world.set_block(pos, block_id);
+
+            let mesher = ChunkMesher::new(&self.registry);
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let mesh = mesher.mesh_chunk_with_neighbors(chunk, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
+                self.gpu_chunks.insert(cpos, gpu_mesh);
+            } else {
+                self.gpu_chunks.remove(&cpos);
+            }
+        }
+
+        true
     }
 
     pub fn total_visible_faces(&self) -> usize {

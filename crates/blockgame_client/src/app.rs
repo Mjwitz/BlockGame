@@ -1,11 +1,15 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use blockgame_core::block::BlockRegistry;
+use blockgame_core::{
+    block::{BlockId, BlockRegistry},
+    physics::PlayerPhysics,
+    raycast::{raycast_voxel, RaycastHit},
+};
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, VoxelPipeline,
+    create_depth_texture, VoxelPipeline, WireframePipeline,
 };
 use glam::Vec3;
 use winit::{
@@ -27,16 +31,21 @@ pub struct AppState {
     surface_config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
     pipeline: VoxelPipeline,
+    wireframe_pipeline: WireframePipeline,
     world_manager: WorldManager,
+    player: PlayerPhysics,
     camera: Camera,
     camera_uniform: CameraUniform,
-    // Movement state
+    targeted_block: Option<RaycastHit>,
+    wireframe_buffer: Option<wgpu::Buffer>,
+    active_block: BlockId,
+    // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
     moving_left: bool,
     moving_right: bool,
-    moving_up: bool,
-    moving_down: bool,
+    jumping: bool,
+    sprinting: bool,
     mouse_captured: bool,
     last_frame_time: Instant,
 }
@@ -66,7 +75,7 @@ impl ApplicationHandler for BlockGameApp {
         }
 
         let window_attrs = WindowAttributes::default()
-            .with_title("BlockGame - Milestone 2 (Infinite Procedural World)")
+            .with_title("BlockGame - Milestone 3 (Player Physics & Voxel Interaction)")
             .with_inner_size(PhysicalSize::new(1280, 720));
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
@@ -124,16 +133,23 @@ impl ApplicationHandler for BlockGameApp {
 
         let atlas = TextureAtlas::generate_default();
         let pipeline = VoxelPipeline::new(&device, &queue, surface_format, &atlas);
+        let wireframe_pipeline = WireframePipeline::new(
+            &device,
+            surface_format,
+            &pipeline.camera_bind_group_layout,
+        );
 
         let mut world_manager =
             WorldManager::new(self.seed, self.render_distance, self.registry.clone());
         world_manager.init_spawn_area(&device, &pipeline);
 
-        // Position camera floating above the spawn hills
+        // Spawn player atop the surface
+        let player = PlayerPhysics::new(Vec3::new(0.0, 32.0, 0.0));
+
         let camera = Camera::new(
-            Vec3::new(0.0, 38.0, 0.0),
+            player.eye_position(),
             (-90.0_f32).to_radians(),
-            (-15.0_f32).to_radians(),
+            (-10.0_f32).to_radians(),
         );
 
         let mut camera_uniform = CameraUniform::default();
@@ -148,15 +164,20 @@ impl ApplicationHandler for BlockGameApp {
             surface_config,
             depth_view,
             pipeline,
+            wireframe_pipeline,
             world_manager,
+            player,
             camera,
             camera_uniform,
+            targeted_block: None,
+            wireframe_buffer: None,
+            active_block: BlockId::WOOD_LOG,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
             moving_right: false,
-            moving_up: false,
-            moving_down: false,
+            jumping: false,
+            sprinting: false,
             mouse_captured: false,
             last_frame_time: Instant::now(),
         });
@@ -183,13 +204,48 @@ impl ApplicationHandler for BlockGameApp {
                 }
             }
             WindowEvent::MouseInput {
-                button: MouseButton::Left,
+                button,
                 state: ElementState::Pressed,
                 ..
             } => {
-                state.mouse_captured = true;
-                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                state.window.set_cursor_visible(false);
+                if !state.mouse_captured {
+                    state.mouse_captured = true;
+                    let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                    state.window.set_cursor_visible(false);
+                    return;
+                }
+
+                match button {
+                    MouseButton::Left => {
+                        // Break targeted block
+                        if let Some(hit) = state.targeted_block {
+                            log::info!("Breaking block at {:?}", hit.hit_voxel);
+                            state.world_manager.break_block(
+                                hit.hit_voxel,
+                                &state.device,
+                                &state.pipeline,
+                            );
+                        }
+                    }
+                    MouseButton::Right => {
+                        // Place active block on the targeted face
+                        if let Some(hit) = state.targeted_block {
+                            log::info!(
+                                "Placing {:?} at {:?}",
+                                state.active_block,
+                                hit.place_voxel
+                            );
+                            state.world_manager.place_block(
+                                hit.place_voxel,
+                                state.active_block,
+                                &state.player.aabb(),
+                                &state.device,
+                                &state.pipeline,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -206,13 +262,27 @@ impl ApplicationHandler for BlockGameApp {
                     KeyCode::KeyS => state.moving_backward = pressed,
                     KeyCode::KeyA => state.moving_left = pressed,
                     KeyCode::KeyD => state.moving_right = pressed,
-                    KeyCode::Space => state.moving_up = pressed,
-                    KeyCode::ShiftLeft => state.moving_down = pressed,
+                    KeyCode::Space => state.jumping = pressed,
+                    KeyCode::ControlLeft => state.sprinting = pressed,
+                    KeyCode::KeyF if pressed => {
+                        state.player.toggle_flight();
+                        log::info!("Flying mode: {}", state.player.flying);
+                    }
                     KeyCode::Escape if pressed => {
                         state.mouse_captured = false;
                         let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
                         state.window.set_cursor_visible(true);
                     }
+                    // Hotbar block selection
+                    KeyCode::Digit1 if pressed => state.active_block = BlockId::STONE,
+                    KeyCode::Digit2 if pressed => state.active_block = BlockId::DIRT,
+                    KeyCode::Digit3 if pressed => state.active_block = BlockId::GRASS,
+                    KeyCode::Digit4 if pressed => state.active_block = BlockId::COBBLESTONE,
+                    KeyCode::Digit5 if pressed => state.active_block = BlockId::WOOD_LOG,
+                    KeyCode::Digit6 if pressed => state.active_block = BlockId::LEAVES,
+                    KeyCode::Digit7 if pressed => state.active_block = BlockId::SAND,
+                    KeyCode::Digit8 if pressed => state.active_block = BlockId::PLANKS,
+                    KeyCode::Digit9 if pressed => state.active_block = BlockId::GLASS,
                     _ => {}
                 }
             }
@@ -221,42 +291,76 @@ impl ApplicationHandler for BlockGameApp {
                 let dt = now.duration_since(state.last_frame_time).as_secs_f32().min(0.1);
                 state.last_frame_time = now;
 
-                // Flying spectator movement speed (22 blocks per second)
-                let speed = 22.0 * dt;
-                let forward = state.camera.forward();
-                let right = state.camera.right();
+                // 1. Calculate player wish direction relative to camera yaw
+                let forward = Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
+                let right = Vec3::new(-state.camera.yaw.sin(), 0.0, state.camera.yaw.cos()).normalize();
 
-                if state.moving_forward {
-                    state.camera.position += forward * speed;
-                }
-                if state.moving_backward {
-                    state.camera.position -= forward * speed;
-                }
-                if state.moving_right {
-                    state.camera.position += right * speed;
-                }
-                if state.moving_left {
-                    state.camera.position -= right * speed;
-                }
-                if state.moving_up {
-                    state.camera.position.y += speed;
-                }
-                if state.moving_down {
-                    state.camera.position.y -= speed;
+                let mut wish_dir = Vec3::ZERO;
+                if state.moving_forward { wish_dir += forward; }
+                if state.moving_backward { wish_dir -= forward; }
+                if state.moving_right { wish_dir += right; }
+                if state.moving_left { wish_dir -= right; }
+                if wish_dir.length_squared() > 0.0 {
+                    wish_dir = wish_dir.normalize();
                 }
 
-                // Stream chunks around the player
-                state.world_manager.update(
-                    state.camera.position,
-                    &state.device,
-                    &state.pipeline,
-                );
+                // If flying, vertical movement with Space / Shift
+                if state.player.flying {
+                    if state.jumping { wish_dir.y += 1.0; }
+                }
 
+                // 2. Step player physics against voxel world
+                {
+                    let world_guard = state.world_manager.world().lock().unwrap();
+                    state.player.update(
+                        dt,
+                        wish_dir,
+                        state.sprinting,
+                        state.jumping,
+                        &world_guard,
+                        &self.registry,
+                    );
+                }
+
+                // 3. Update Camera position to match player eye position
+                state.camera.position = state.player.eye_position();
                 let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
                 state.camera.update_uniform(&mut state.camera_uniform, aspect);
                 state.pipeline.update_camera(&state.queue, &state.camera_uniform);
 
-                // Render frame
+                // 4. Perform Fast Voxel Traversal (DDA) raycast from crosshair
+                {
+                    let world_guard = state.world_manager.world().lock().unwrap();
+                    let hit = raycast_voxel(
+                        state.camera.position,
+                        state.camera.forward(),
+                        5.0, // 5 blocks reach
+                        &world_guard,
+                        &self.registry,
+                    );
+
+                    if let Some(h) = hit {
+                        // Recreate wireframe buffer if target voxel changed
+                        if state.targeted_block.map(|t| t.hit_voxel) != Some(h.hit_voxel) {
+                            state.wireframe_buffer = Some(
+                                WireframePipeline::create_box_buffer(&state.device, h.hit_voxel),
+                            );
+                        }
+                        state.targeted_block = Some(h);
+                    } else {
+                        state.targeted_block = None;
+                        state.wireframe_buffer = None;
+                    }
+                }
+
+                // 5. Update chunk streaming around player
+                state.world_manager.update(
+                    state.player.position,
+                    &state.device,
+                    &state.pipeline,
+                );
+
+                // 6. Render frame
                 let output = match state.surface.get_current_texture() {
                     Ok(frame) => frame,
                     Err(wgpu::SurfaceError::Lost) => {
@@ -284,7 +388,7 @@ impl ApplicationHandler for BlockGameApp {
 
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Voxel Main Render Pass"),
+                        label: Some("Main Render Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
                             resolve_target: None,
@@ -312,11 +416,19 @@ impl ApplicationHandler for BlockGameApp {
                         occlusion_query_set: None,
                     });
 
+                    // 1. Render voxel terrain meshes
                     render_pass.set_pipeline(&state.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
                     render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
-
                     state.world_manager.render(&mut render_pass);
+
+                    // 2. Render targeted block selection wireframe
+                    if let Some(wireframe_buf) = &state.wireframe_buffer {
+                        render_pass.set_pipeline(&state.wireframe_pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, wireframe_buf.slice(..));
+                        render_pass.draw(0..24, 0..1);
+                    }
                 }
 
                 state.queue.submit(Some(encoder.finish()));

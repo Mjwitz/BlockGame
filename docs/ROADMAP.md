@@ -47,21 +47,21 @@ This document outlines the 5 development milestones for **BlockGame**, with clea
 ## 🚩 Milestone 3: Player Physics & Interaction
 **Objective:** First-person player controller with AABB voxel physics, gravity, jumping, DDA raycasting, and real-time block breaking/placing.
 
-- [ ] **Player Controller & AABB Physics**
-  - [ ] First-person camera with mouse look (pitch & yaw clamping).
-  - [ ] Player AABB ($0.6 \times 1.8 \times 0.6$ blocks) with velocity and gravity.
-  - [ ] Axis-separated swept AABB collision resolution against world voxels.
-  - [ ] Ground detection, jumping, and friction/damping.
-- [ ] **Voxel Raycasting (DDA)**
-  - [ ] Fast Voxel Traversal algorithm implementation.
-  - [ ] Target block detection up to reach distance (5 blocks).
-  - [ ] Target face normal calculation (identifies which face the player aims at).
-  - [ ] Wireframe bounding box overlay on targeted block.
-- [ ] **Block Modification**
-  - [ ] Left-click: Destroy targeted block (set to Air).
-  - [ ] Right-click: Place active block at target face position (with player collision check).
-  - [ ] Immediate dirty chunk marking and synchronous/fast mesh rebuild.
-  - [ ] Rebuild adjacent chunks if the modified block is on a chunk boundary ($x=0, 15$, etc.).
+- [x] **Player Controller & AABB Physics**
+  - [x] First-person camera with mouse look (pitch & yaw clamping).
+  - [x] Player AABB ($0.6 \times 1.8 \times 0.6$ blocks) with velocity and gravity.
+  - [x] Axis-separated swept AABB collision resolution against world voxels.
+  - [x] Ground detection, jumping, and friction/damping.
+- [x] **Voxel Raycasting (DDA)**
+  - [x] Fast Voxel Traversal algorithm implementation.
+  - [x] Target block detection up to reach distance (5 blocks).
+  - [x] Target face normal calculation (identifies which face the player aims at).
+  - [x] Wireframe bounding box overlay on targeted block.
+- [x] **Block Modification**
+  - [x] Left-click: Destroy targeted block (set to Air).
+  - [x] Right-click: Place active block at target face position (with player collision check).
+  - [x] Immediate dirty chunk marking and synchronous/fast mesh rebuild.
+  - [x] Rebuild adjacent chunks if the modified block is on a chunk boundary ($x=0, 15$, etc.).
 
 ---
 

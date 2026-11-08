@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
-use blockgame_core::block::BlockRegistry;
+use blockgame_core::{
+    block::{BlockId, BlockRegistry},
+    physics::AABB,
+    raycast::raycast_voxel,
+};
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, VoxelPipeline,
+    create_depth_texture, VoxelPipeline, WireframePipeline,
 };
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 
 use crate::world_manager::WorldManager;
 
@@ -34,9 +38,6 @@ pub async fn render_world_to_image(
         .await
         .ok_or("Failed to find suitable wgpu adapter")?;
 
-    let info = adapter.get_info();
-    log::info!("Using graphics adapter: {:?} ({:?})", info.name, info.backend);
-
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
@@ -51,14 +52,9 @@ pub async fn render_world_to_image(
 
     let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-    // Render target texture
     let render_texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Landscape Render Target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -67,11 +63,8 @@ pub async fn render_world_to_image(
         view_formats: &[],
     });
     let render_view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-    // Depth texture
     let (_depth_tex, depth_view) = create_depth_texture(&device, width, height);
 
-    // Staging buffer to read back pixels to CPU
     let unaligned_bytes_per_row = width * 4;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let bytes_per_row = (unaligned_bytes_per_row + align - 1) & !(align - 1);
@@ -86,28 +79,71 @@ pub async fn render_world_to_image(
 
     let atlas = TextureAtlas::generate_default();
     let pipeline = VoxelPipeline::new(&device, &queue, target_format, &atlas);
-
-    let registry = Arc::new(BlockRegistry::new());
-    let mut world_manager = WorldManager::new(seed, render_distance, registry);
-    world_manager.init_spawn_area(&device, &pipeline);
-
-    log::info!(
-        "Rendering landscape with {} visible voxel faces across {} chunks",
-        world_manager.total_visible_faces(),
-        world_manager.gpu_chunks.len()
+    let wireframe_pipeline = WireframePipeline::new(
+        &device,
+        target_format,
+        &pipeline.camera_bind_group_layout,
     );
 
-    // Position camera overlooking the entire landscape from the edge toward the center
+    let registry = Arc::new(BlockRegistry::new());
+    let mut world_manager = WorldManager::new(seed, render_distance, registry.clone());
+    world_manager.init_spawn_area(&device, &pipeline);
+
+    // 1. Build a player outpost structure using place_block & break_block to demonstrate interaction!
+    let dummy_player_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+    let base_x = 0;
+    let base_z = 0;
+    let base_y = 24;
+
+    // Build Cobblestone foundation & Planks walls
+    for dy in 0_i32..4_i32 {
+        let y = base_y + dy;
+        for dx in -3_i32..=3_i32 {
+            for dz in -3_i32..=3_i32 {
+                let is_wall = dx == -3 || dx == 3 || dz == -3 || dz == 3;
+                let is_corner = (dx.abs() == 3) && (dz.abs() == 3);
+                let is_door = (dx == 0 && dz == 3) && (dy == 0 || dy == 1);
+                let is_window = (dx.abs() == 3 || dz == -3) && (dy == 1 || dy == 2) && (dx % 2 == 0);
+
+                let pos = IVec3::new(base_x + dx, y, base_z + dz);
+
+                if is_door {
+                    world_manager.break_block(pos, &device, &pipeline);
+                } else if is_corner {
+                    world_manager.place_block(pos, BlockId::WOOD_LOG, &dummy_player_box, &device, &pipeline);
+                } else if is_window {
+                    world_manager.place_block(pos, BlockId::GLASS, &dummy_player_box, &device, &pipeline);
+                } else if is_wall {
+                    if dy == 0 {
+                        world_manager.place_block(pos, BlockId::COBBLESTONE, &dummy_player_box, &device, &pipeline);
+                    } else {
+                        world_manager.place_block(pos, BlockId::PLANKS, &dummy_player_box, &device, &pipeline);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Position camera close to the outpost looking at the doorway and targeted block
+    let eye = Vec3::new(0.0, (base_y + 1) as f32 + 1.62, 7.5);
     let camera = Camera::new(
-        Vec3::new(-55.0, 52.0, -55.0),
-        45.0_f32.to_radians(),
-        (-22.0_f32).to_radians(),
+        eye,
+        (-90.0_f32).to_radians(),
+        (-12.0_f32).to_radians(),
     );
     let mut camera_uniform = CameraUniform::default();
     camera.update_uniform(&mut camera_uniform, width as f32 / height as f32);
     pipeline.update_camera(&queue, &camera_uniform);
 
-    // Encode render commands
+    // 3. Perform DDA raycast from crosshair
+    let hit = {
+        let world_guard = world_manager.world().lock().unwrap();
+        raycast_voxel(camera.position, camera.forward(), 6.0, &world_guard, &registry)
+    };
+
+    let wireframe_buffer = hit.map(|h| WireframePipeline::create_box_buffer(&device, h.hit_voxel));
+
+    // 4. Encode render commands
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Landscape Render Encoder"),
     });
@@ -143,11 +179,16 @@ pub async fn render_world_to_image(
         render_pass.set_pipeline(&pipeline.render_pipeline);
         render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
         render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
-
         world_manager.render(&mut render_pass);
+
+        if let Some(buf) = &wireframe_buffer {
+            render_pass.set_pipeline(&wireframe_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, buf.slice(..));
+            render_pass.draw(0..24, 0..1);
+        }
     }
 
-    // Copy rendered texture to staging buffer
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &render_texture,
@@ -163,16 +204,11 @@ pub async fn render_world_to_image(
                 rows_per_image: Some(height),
             },
         },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
     );
 
     queue.submit(Some(encoder.finish()));
 
-    // Map staging buffer to CPU
     let buffer_slice = staging_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
@@ -192,7 +228,6 @@ pub async fn render_world_to_image(
     drop(data);
     staging_buffer.unmap();
 
-    // Save PNG image
     image::save_buffer(
         output_path,
         &image_bytes,
@@ -201,6 +236,6 @@ pub async fn render_world_to_image(
         image::ExtendedColorType::Rgba8,
     )?;
 
-    log::info!("Successfully saved rendered landscape image to {}", output_path);
+    log::info!("Successfully saved rendered interaction image to {}", output_path);
     Ok(())
 }
