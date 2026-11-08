@@ -318,7 +318,37 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
                     MouseButton::Right if pressed => {
-                        // Place active block from hotbar slot
+                        // 1. Check if targeting an interactive block (e.g. Crafting Table)
+                        if let Some(hit) = state.targeted_block {
+                            let block_id = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                world_guard.get_block(hit.hit_voxel)
+                            };
+                            if block_id == BlockId::CRAFTING_TABLE {
+                                state.mouse_left_down = false;
+                                state.break_progress = 0.0;
+                                state.breaking_voxel = None;
+                                state.cracking_buffer = None;
+
+                                // Return any items left in current grid
+                                for slot in state.crafting_grid.slots.drain(..) {
+                                    if !slot.is_empty() {
+                                        if let Some(rem) = state.inventory.add_item(slot, &state.item_registry) {
+                                            state.world_manager.spawn_item_drop(state.player.position, rem);
+                                        }
+                                    }
+                                }
+
+                                state.crafting_grid = CraftingGrid::new_3x3();
+                                state.inventory_open = true;
+                                state.mouse_captured = false;
+                                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
+                                return;
+                            }
+                        }
+
+                        // 2. Otherwise place active block from hotbar slot
                         let slot = state.inventory.get(state.active_hotbar_slot);
                         if !slot.is_empty() {
                             if let Some(def) = state.item_registry.get(slot.item_id) {
@@ -368,15 +398,32 @@ impl ApplicationHandler for BlockGameApp {
                         state.break_progress = 0.0;
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
-                        state.inventory_open = !state.inventory_open;
                         if state.inventory_open {
-                            state.mouse_captured = false;
-                            let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
-                            state.window.set_cursor_visible(true);
-                        } else {
+                            // Safely return crafting grid items and cursor held item to inventory
+                            for slot in state.crafting_grid.slots.drain(..) {
+                                if !slot.is_empty() {
+                                    if let Some(rem) = state.inventory.add_item(slot, &state.item_registry) {
+                                        state.world_manager.spawn_item_drop(state.player.position, rem);
+                                    }
+                                }
+                            }
+                            if !state.cursor_held.is_empty() {
+                                let held = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                                if let Some(rem) = state.inventory.add_item(held, &state.item_registry) {
+                                    state.world_manager.spawn_item_drop(state.player.position, rem);
+                                }
+                            }
+                            state.inventory_open = false;
                             state.mouse_captured = true;
                             let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
                             state.window.set_cursor_visible(false);
+                        } else {
+                            // Open 2x2 backpack inventory
+                            state.crafting_grid = CraftingGrid::new_2x2();
+                            state.inventory_open = true;
+                            state.mouse_captured = false;
+                            let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                            state.window.set_cursor_visible(true);
                         }
                     }
                     KeyCode::Escape if pressed => {
@@ -385,6 +432,19 @@ impl ApplicationHandler for BlockGameApp {
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
                         if state.inventory_open {
+                            for slot in state.crafting_grid.slots.drain(..) {
+                                if !slot.is_empty() {
+                                    if let Some(rem) = state.inventory.add_item(slot, &state.item_registry) {
+                                        state.world_manager.spawn_item_drop(state.player.position, rem);
+                                    }
+                                }
+                            }
+                            if !state.cursor_held.is_empty() {
+                                let held = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                                if let Some(rem) = state.inventory.add_item(held, &state.item_registry) {
+                                    state.world_manager.spawn_item_drop(state.player.position, rem);
+                                }
+                            }
                             state.inventory_open = false;
                             state.mouse_captured = true;
                             let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
@@ -822,12 +882,15 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     let slot_size = 40.0;
     let slot_gap = 4.0;
 
-    // 1. Crafting 2x2 grid
-    let craft_x = (screen_w - (4.0 * (slot_size + slot_gap) + 40.0)) * 0.5;
-    let craft_y = screen_h * 0.5 - 160.0;
+    // 1. Dynamic Crafting Grid (2x2 or 3x3)
+    let grid_w = state.crafting_grid.width;
+    let grid_h = state.crafting_grid.height;
 
-    for gy in 0..2 {
-        for gx in 0..2 {
+    let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 20.0)) * 0.5;
+    let craft_y = screen_h * 0.5 - (if grid_h == 3 { 185.0 } else { 160.0 });
+
+    for gy in 0..grid_h {
+        for gx in 0..grid_w {
             let sx = craft_x + (gx as f32) * (slot_size + slot_gap);
             let sy = craft_y + (gy as f32) * (slot_size + slot_gap);
             if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
@@ -840,8 +903,8 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     }
 
     // 2. Crafting Result Slot
-    let result_x = craft_x + 2.0 * (slot_size + slot_gap) + 32.0;
-    let result_y = craft_y + (slot_size * 0.5);
+    let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 28.0;
+    let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
     let result_size = slot_size + 6.0;
 
     if cx >= result_x && cx < result_x + result_size && cy >= result_y && cy < result_y + result_size {
@@ -860,7 +923,7 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     // 3. Backpack Storage Grid (3 rows x 9 columns)
     let inv_w = 9.0 * (slot_size + slot_gap);
     let inv_start_x = (screen_w - inv_w) * 0.5;
-    let inv_start_y = craft_y + 110.0;
+    let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
 
     for row in 0..3 {
         for col in 0..9 {

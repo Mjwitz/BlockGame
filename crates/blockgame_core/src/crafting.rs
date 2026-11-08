@@ -308,6 +308,104 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::STONE_PICKAXE, 1),
         });
+
+        // 8. Iron Pickaxe: 3 Iron Ingots top row, 2 Sticks center column (Shaped 3x3)
+        self.register(Recipe::Shaped {
+            name: "Iron Pickaxe",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),
+                None,                    Some(ItemId::STICK),      None,
+                None,                    Some(ItemId::STICK),      None,
+            ],
+            output: ItemSlot::new(ItemId::IRON_PICKAXE, 1),
+        });
+
+        // 9. Diamond Pickaxe: 3 Diamonds top row, 2 Sticks center column (Shaped 3x3)
+        self.register(Recipe::Shaped {
+            name: "Diamond Pickaxe",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::DIAMOND), Some(ItemId::DIAMOND), Some(ItemId::DIAMOND),
+                None,                  Some(ItemId::STICK),   None,
+                None,                  Some(ItemId::STICK),   None,
+            ],
+            output: ItemSlot::new(ItemId::DIAMOND_PICKAXE, 1),
+        });
+
+        // Axes (2x3 trimmed pattern, both left and right orientations)
+        let register_axe = |cm: &mut CraftingManager, name_left: &'static str, name_right: &'static str, mat: ItemId, out: ItemId| {
+            // Left orientation
+            cm.register(Recipe::Shaped {
+                name: name_left,
+                width: 2,
+                height: 3,
+                pattern: vec![
+                    Some(mat),  Some(mat),
+                    Some(mat),  Some(ItemId::STICK),
+                    None,       Some(ItemId::STICK),
+                ],
+                output: ItemSlot::new(out, 1),
+            });
+            // Right orientation
+            cm.register(Recipe::Shaped {
+                name: name_right,
+                width: 2,
+                height: 3,
+                pattern: vec![
+                    Some(mat),           Some(mat),
+                    Some(ItemId::STICK), Some(mat),
+                    Some(ItemId::STICK), None,
+                ],
+                output: ItemSlot::new(out, 1),
+            });
+        };
+
+        register_axe(self, "Wooden Axe (Left)", "Wooden Axe (Right)", ItemId::PLANKS, ItemId::WOODEN_AXE);
+        register_axe(self, "Stone Axe (Left)", "Stone Axe (Right)", ItemId::COBBLESTONE, ItemId::STONE_AXE);
+        register_axe(self, "Iron Axe (Left)", "Iron Axe (Right)", ItemId::IRON_INGOT, ItemId::IRON_AXE);
+        register_axe(self, "Diamond Axe (Left)", "Diamond Axe (Right)", ItemId::DIAMOND, ItemId::DIAMOND_AXE);
+
+        // Shovels (1x3 trimmed pattern)
+        let register_shovel = |cm: &mut CraftingManager, name: &'static str, mat: ItemId, out: ItemId| {
+            cm.register(Recipe::Shaped {
+                name,
+                width: 1,
+                height: 3,
+                pattern: vec![
+                    Some(mat),
+                    Some(ItemId::STICK),
+                    Some(ItemId::STICK),
+                ],
+                output: ItemSlot::new(out, 1),
+            });
+        };
+
+        register_shovel(self, "Wooden Shovel", ItemId::PLANKS, ItemId::WOODEN_SHOVEL);
+        register_shovel(self, "Stone Shovel", ItemId::COBBLESTONE, ItemId::STONE_SHOVEL);
+        register_shovel(self, "Iron Shovel", ItemId::IRON_INGOT, ItemId::IRON_SHOVEL);
+        register_shovel(self, "Diamond Shovel", ItemId::DIAMOND, ItemId::DIAMOND_SHOVEL);
+
+        // Smelting Substitute Recipes (1 Raw Ore -> 1 Ingot)
+        self.register(Recipe::Shapeless {
+            name: "Iron Ingot from Raw Iron",
+            inputs: vec![ItemId::RAW_IRON],
+            output: ItemSlot::new(ItemId::IRON_INGOT, 1),
+        });
+
+        self.register(Recipe::Shapeless {
+            name: "Copper Ingot from Raw Copper",
+            inputs: vec![ItemId::RAW_COPPER],
+            output: ItemSlot::new(ItemId::COPPER_INGOT, 1),
+        });
+
+        self.register(Recipe::Shapeless {
+            name: "Gold Ingot from Raw Gold",
+            inputs: vec![ItemId::RAW_GOLD],
+            output: ItemSlot::new(ItemId::GOLD_INGOT, 1),
+        });
     }
 }
 
@@ -373,4 +471,45 @@ mod tests {
         assert_eq!(out.item_id, ItemId::CRAFTING_TABLE);
         assert_eq!(out.count, 1);
     }
+
+    #[test]
+    fn test_shaped_recipe_iron_pickaxe_in_3x3() {
+        let cm = CraftingManager::new();
+        let mut grid = CraftingGrid::new_3x3();
+
+        // Top row: 3 Iron Ingots
+        grid.set(0, 0, ItemSlot::new(ItemId::IRON_INGOT, 1));
+        grid.set(1, 0, ItemSlot::new(ItemId::IRON_INGOT, 1));
+        grid.set(2, 0, ItemSlot::new(ItemId::IRON_INGOT, 1));
+        // Center column: 2 Sticks
+        grid.set(1, 1, ItemSlot::new(ItemId::STICK, 1));
+        grid.set(1, 2, ItemSlot::new(ItemId::STICK, 1));
+
+        let res = cm.find_match(&grid);
+        assert!(res.is_some(), "3x3 Iron Pickaxe recipe must match");
+        let (_, out) = res.unwrap();
+        assert_eq!(out.item_id, ItemId::IRON_PICKAXE);
+        assert_eq!(out.count, 1);
+
+        let crafted = cm.craft(&mut grid).unwrap();
+        assert_eq!(crafted.item_id, ItemId::IRON_PICKAXE);
+        assert!(grid.is_empty());
+    }
+
+    #[test]
+    fn test_shapeless_recipe_raw_ore_smelting() {
+        let cm = CraftingManager::new();
+        let mut grid = CraftingGrid::new_2x2();
+
+        grid.set(1, 1, ItemSlot::new(ItemId::RAW_IRON, 3));
+        let res = cm.find_match(&grid);
+        assert!(res.is_some());
+        let (_, out) = res.unwrap();
+        assert_eq!(out.item_id, ItemId::IRON_INGOT);
+
+        let crafted = cm.craft(&mut grid).unwrap();
+        assert_eq!(crafted.item_id, ItemId::IRON_INGOT);
+        assert_eq!(grid.get(1, 1).count, 2);
+    }
 }
+

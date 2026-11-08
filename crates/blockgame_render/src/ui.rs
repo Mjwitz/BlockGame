@@ -1158,12 +1158,19 @@ impl UiBuilder {
         let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
 
-        // 2. Crafting 2x2 Grid + Result Slot (Top center)
-        let craft_x = (screen_w - (4.0 * (slot_size + slot_gap) + 40.0)) * 0.5;
-        let craft_y = screen_h * 0.5 - 160.0;
+        // 2. Dynamic Crafting Grid (2x2 Player Crafting or 3x3 Crafting Table) + Result Slot
+        let grid_w = crafting_grid.width;
+        let grid_h = crafting_grid.height;
 
-        for cy in 0..2 {
-            for cx in 0..2 {
+        let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 20.0)) * 0.5;
+        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 185.0 } else { 160.0 });
+
+        // Header text above crafting grid
+        let title = if grid_w == 3 { "Crafting Table (3x3)" } else { "Crafting (2x2)" };
+        Self::draw_string(mesh, craft_x, craft_y - 18.0, title, 8.0, 10.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+
+        for cy in 0..grid_h {
+            for cx in 0..grid_w {
                 let sx = craft_x + (cx as f32) * (slot_size + slot_gap);
                 let sy = craft_y + (cy as f32) * (slot_size + slot_gap);
                 mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 1.0]);
@@ -1195,9 +1202,9 @@ impl UiBuilder {
             }
         }
 
-        // Crafting Result Slot (separated by gap)
-        let result_x = craft_x + 2.0 * (slot_size + slot_gap) + 32.0;
-        let result_y = craft_y + (slot_size * 0.5);
+        // Crafting Result Slot (vertically centered next to grid)
+        let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 28.0;
+        let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
         mesh.add_quad(
             result_x,
             result_y,
@@ -1234,7 +1241,7 @@ impl UiBuilder {
         // 3. Backpack Storage Grid (3 rows x 9 columns)
         let inv_w = 9.0 * (slot_size + slot_gap);
         let inv_start_x = (screen_w - inv_w) * 0.5;
-        let inv_start_y = craft_y + 110.0;
+        let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
 
         for row in 0..3 {
             for col in 0..9 {

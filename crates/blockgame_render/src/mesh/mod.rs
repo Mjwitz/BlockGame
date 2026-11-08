@@ -603,6 +603,66 @@ pub fn build_item_drops_mesh(
         let light = [1.0, 0.6]; // Brightly lit dropped item
         let ao = 1.0;
 
+        // Non-block items (Coal, Raw Iron, Raw Copper, Ingots, Diamonds, Sticks, Tools)
+        // render as a flat 2D floating item sprite spinning around the Y-axis (like Minecraft items).
+        if def.placeable_block.is_none() {
+            let iw = 0.15;
+            let ih = 0.15;
+
+            let mut add_flat_quad = |p: [[f32; 3]; 4], quad_uvs: [[f32; 2]; 4], n: [f32; 3]| {
+                let start_idx = mesh.vertices.len() as u32;
+                for i in 0..4 {
+                    mesh.vertices.push(VoxelVertex {
+                        position: p[i],
+                        uv: quad_uvs[i],
+                        normal: n,
+                        ao,
+                        light,
+                    });
+                }
+                mesh.indices.extend_from_slice(&[
+                    start_idx + 0,
+                    start_idx + 1,
+                    start_idx + 2,
+                    start_idx + 2,
+                    start_idx + 3,
+                    start_idx + 0,
+                ]);
+            };
+
+            // Front side (+Z)
+            add_flat_quad(
+                [
+                    rotate_point(-iw, -ih, 0.0),
+                    rotate_point(iw, -ih, 0.0),
+                    rotate_point(iw, ih, 0.0),
+                    rotate_point(-iw, ih, 0.0),
+                ],
+                uvs,
+                rotate_normal(0.0, 0.0, 1.0),
+            );
+
+            // Back side (-Z, reversed winding and flipped horizontal UV so it's not mirrored)
+            let back_uvs = [
+                [u_max, v_max],
+                [u_min, v_max],
+                [u_min, v_min],
+                [u_max, v_min],
+            ];
+            add_flat_quad(
+                [
+                    rotate_point(iw, -ih, 0.0),
+                    rotate_point(-iw, -ih, 0.0),
+                    rotate_point(-iw, ih, 0.0),
+                    rotate_point(iw, ih, 0.0),
+                ],
+                back_uvs,
+                rotate_normal(0.0, 0.0, -1.0),
+            );
+
+            continue;
+        }
+
         let mut add_face = |p: [[f32; 3]; 4], n: [f32; 3]| {
             let start_idx = mesh.vertices.len() as u32;
             for i in 0..4 {
@@ -793,5 +853,17 @@ mod tests {
         assert_eq!(torch_mesh.indices.len(), 36);
         // Torch drop is self-illuminated: light == [1.0, 1.0]
         assert_eq!(torch_mesh.vertices[0].light, [1.0, 1.0]);
+
+        // Flat item drops (e.g. Coal, Raw Iron) have 2 faces (front & back: 8 vertices, 12 indices)
+        let coal_drops = vec![
+            blockgame_core::entity::ItemDrop::new(
+                glam::Vec3::new(10.0, 5.0, 10.0),
+                blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 1),
+            ),
+        ];
+        let coal_mesh = build_item_drops_mesh(&coal_drops, &item_registry);
+        assert_eq!(coal_mesh.face_count(), 2);
+        assert_eq!(coal_mesh.vertices.len(), 8);
+        assert_eq!(coal_mesh.indices.len(), 12);
     }
 }
