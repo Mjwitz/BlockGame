@@ -143,12 +143,8 @@ impl TerrainGenerator {
                                 _ => BlockId::DIRT,
                             }
                         } else {
-                            // Subsurface stone with occasional cobblestone deposits
-                            if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23)) % 19 == 0 {
-                                BlockId::COBBLESTONE
-                            } else {
-                                BlockId::STONE
-                            }
+                            // Subsurface stone with ore veins
+                            self.get_subsurface_block(wx, wy, wz)
                         }
                     } else {
                         BlockId::AIR
@@ -160,6 +156,92 @@ impl TerrainGenerator {
         }
 
         chunk
+    }
+
+    /// Evaluates underground voxel coordinate to place ore veins (Diamond, Gold, Iron, Copper, Coal)
+    /// clustered deterministically into natural underground deposits.
+    #[inline]
+    pub fn get_subsurface_block(&self, wx: i32, wy: i32, wz: i32) -> BlockId {
+        let cx = wx >> 2;
+        let cy = wy >> 2;
+        let cz = wz >> 2;
+
+        // Diamond Ore: Deep layer (y: 1..12), rare
+        if wy >= 1 && wy <= 12 {
+            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9901));
+            if h % 31 == 0 {
+                let vx = (cx << 2) + ((h & 3) as i32);
+                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
+                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
+                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                if dist_sq <= 2 {
+                    return BlockId::DIAMOND_ORE;
+                }
+            }
+        }
+
+        // Gold Ore: Mid-deep layer (y: 2..18)
+        if wy >= 2 && wy <= 18 {
+            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9907));
+            if h % 23 == 0 {
+                let vx = (cx << 2) + ((h & 3) as i32);
+                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
+                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
+                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                if dist_sq <= 3 {
+                    return BlockId::GOLD_ORE;
+                }
+            }
+        }
+
+        // Iron Ore: Broad subsurface range (y: 4..34)
+        if wy >= 4 && wy <= 34 {
+            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9923));
+            if h % 15 == 0 {
+                let vx = (cx << 2) + ((h & 3) as i32);
+                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
+                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
+                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                if dist_sq <= 4 {
+                    return BlockId::IRON_ORE;
+                }
+            }
+        }
+
+        // Copper Ore: (y: 8..38)
+        if wy >= 8 && wy <= 38 {
+            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9931));
+            if h % 13 == 0 {
+                let vx = (cx << 2) + ((h & 3) as i32);
+                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
+                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
+                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                if dist_sq <= 4 {
+                    return BlockId::COPPER_ORE;
+                }
+            }
+        }
+
+        // Coal Ore: Abundant across upper & middle underground (y: 10..48)
+        if wy >= 10 && wy <= 48 {
+            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9941));
+            if h % 9 == 0 {
+                let vx = (cx << 2) + ((h & 3) as i32);
+                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
+                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
+                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                if dist_sq <= 5 {
+                    return BlockId::COAL_ORE;
+                }
+            }
+        }
+
+        // Cobblestone patches
+        if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23)) % 23 == 0 {
+            BlockId::COBBLESTONE
+        } else {
+            BlockId::STONE
+        }
     }
 
     /// Populates foliage and trees on chunks where the ground exists.
@@ -242,6 +324,16 @@ fn tree_hash(x: i32, z: i32, seed: u32) -> u32 {
     h
 }
 
+#[inline]
+fn hash3d(x: i32, y: i32, z: i32, seed: u32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(374761393)
+        ^ (y as u32).wrapping_mul(668265263)
+        ^ (z as u32).wrapping_mul(1274126177)
+        ^ seed;
+    h = (h ^ (h >> 13)).wrapping_mul(1274126177);
+    h ^ (h >> 16)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +360,37 @@ mod tests {
         // Ensure chunk contains non-air blocks
         let has_blocks = chunk.raw_blocks().iter().any(|b| !b.is_air());
         assert!(has_blocks);
+    }
+
+    #[test]
+    fn test_ore_vein_generation() {
+        let gen = TerrainGenerator::new(42);
+        let mut found_coal = false;
+        let mut found_iron = false;
+        let mut found_copper = false;
+        let mut found_gold = false;
+        let mut found_diamond = false;
+
+        // Sample underground across a 4x4 area of chunks at bottom layers
+        for cx in 0..4 {
+            for cz in 0..4 {
+                for cy in 0..3 {
+                    let chunk = gen.generate_chunk(ChunkPos::new(cx, cy, cz));
+                    for b in chunk.raw_blocks() {
+                        if *b == BlockId::COAL_ORE { found_coal = true; }
+                        if *b == BlockId::IRON_ORE { found_iron = true; }
+                        if *b == BlockId::COPPER_ORE { found_copper = true; }
+                        if *b == BlockId::GOLD_ORE { found_gold = true; }
+                        if *b == BlockId::DIAMOND_ORE { found_diamond = true; }
+                    }
+                }
+            }
+        }
+
+        assert!(found_coal, "Expected coal ore to generate underground");
+        assert!(found_iron, "Expected iron ore to generate underground");
+        assert!(found_copper, "Expected copper ore to generate underground");
+        assert!(found_gold, "Expected gold ore to generate underground");
+        assert!(found_diamond, "Expected diamond ore to generate underground");
     }
 }

@@ -1,4 +1,6 @@
 use crate::direction::Direction;
+use crate::item::ItemId;
+use crate::tool::{ToolTier, ToolType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -18,6 +20,11 @@ impl BlockId {
     pub const BEDROCK: Self = Self(10);
     pub const TORCH: Self = Self(13);
     pub const CRAFTING_TABLE: Self = Self(14);
+    pub const COAL_ORE: Self = Self(15);
+    pub const COPPER_ORE: Self = Self(16);
+    pub const IRON_ORE: Self = Self(17);
+    pub const GOLD_ORE: Self = Self(18);
+    pub const DIAMOND_ORE: Self = Self(19);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -42,6 +49,11 @@ pub struct BlockDefinition {
     /// Texture index on the texture atlas for each face:
     /// [PosY, NegY, PosZ, NegZ, PosX, NegX]
     pub textures: [u16; 6],
+    pub hardness: f32,
+    pub required_tool: Option<ToolType>,
+    pub min_tier: ToolTier,
+    pub drop_item: Option<ItemId>,
+    pub drop_count: (u16, u16),
 }
 
 pub struct BlockRegistry {
@@ -75,6 +87,14 @@ impl BlockRegistry {
         // 10: Planks
         // 11: Glass
         // 12: Bedrock
+        // 13: Torch
+        // 17: Crafting Table Top
+        // 128: Crafting Table Side (with tools)
+        // 129: Coal Ore
+        // 130: Copper Ore
+        // 131: Iron Ore
+        // 132: Gold Ore
+        // 133: Diamond Ore
 
         registry.register(BlockDefinition {
             id: BlockId::AIR,
@@ -83,6 +103,11 @@ impl BlockRegistry {
             is_transparent: true,
             luminance: 0,
             textures: [0; 6],
+            hardness: 0.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
         });
 
         registry.register(BlockDefinition {
@@ -92,6 +117,11 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [1; 6],
+            hardness: 1.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COBBLESTONE),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -101,6 +131,11 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [2; 6],
+            hardness: 0.5,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DIRT),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -111,6 +146,11 @@ impl BlockRegistry {
             luminance: 0,
             // PosY: Grass Top (3), NegY: Dirt (2), Sides: Grass Side (4)
             textures: [3, 2, 4, 4, 4, 4],
+            hardness: 0.6,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DIRT),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -120,6 +160,11 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [5; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COBBLESTONE),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -130,6 +175,11 @@ impl BlockRegistry {
             luminance: 0,
             // PosY, NegY: Wood Log Top (7), Sides: Wood Log Side (6)
             textures: [7, 7, 6, 6, 6, 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::WOOD_LOG),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -139,6 +189,11 @@ impl BlockRegistry {
             is_transparent: true, // Alpha cutout
             luminance: 0,
             textures: [8; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
         });
 
         registry.register(BlockDefinition {
@@ -148,6 +203,11 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [9; 6],
+            hardness: 0.5,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SAND),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -157,6 +217,11 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [10; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::PLANKS),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -166,6 +231,11 @@ impl BlockRegistry {
             is_transparent: true,
             luminance: 0,
             textures: [11; 6],
+            hardness: 0.3,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
         });
 
         registry.register(BlockDefinition {
@@ -175,6 +245,11 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [12; 6],
+            hardness: -1.0, // Unbreakable
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
         });
 
         registry.register(BlockDefinition {
@@ -184,6 +259,11 @@ impl BlockRegistry {
             is_transparent: true,
             luminance: 14,
             textures: [13; 6],
+            hardness: 0.05,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::TORCH),
+            drop_count: (1, 1),
         });
 
         registry.register(BlockDefinition {
@@ -192,7 +272,83 @@ impl BlockRegistry {
             is_solid: true,
             is_transparent: false,
             luminance: 0,
-            textures: [17, 10, 17, 17, 17, 17],
+            // Top: 17, Bottom: 10, Sides: 128 (Crafting Table side with tools)
+            textures: [17, 10, 128, 128, 128, 128],
+            hardness: 2.5,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::CRAFTING_TABLE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::COAL_ORE,
+            name: "Coal Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [129; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COAL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::COPPER_ORE,
+            name: "Copper Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [130; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Stone,
+            drop_item: Some(ItemId::RAW_COPPER),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::IRON_ORE,
+            name: "Iron Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [131; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Stone,
+            drop_item: Some(ItemId::RAW_IRON),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::GOLD_ORE,
+            name: "Gold Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [132; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::RAW_GOLD),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DIAMOND_ORE,
+            name: "Diamond Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [133; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::DIAMOND),
+            drop_count: (1, 1),
         });
 
         registry
@@ -231,4 +387,107 @@ impl BlockRegistry {
             None => 0,
         }
     }
+
+    #[inline]
+    pub fn get_hardness(&self, id: BlockId) -> f32 {
+        self.get(id).map(|d| d.hardness).unwrap_or(1.0)
+    }
+
+    #[inline]
+    pub fn can_harvest(&self, id: BlockId, held_tool_type: Option<ToolType>, held_tier: ToolTier) -> bool {
+        if let Some(def) = self.get(id) {
+            if def.hardness < 0.0 {
+                return false;
+            }
+            if def.min_tier == ToolTier::None {
+                return true;
+            }
+            if let Some(req_tool) = def.required_tool {
+                if held_tool_type == Some(req_tool) && held_tier >= def.min_tier {
+                    return true;
+                }
+            }
+            false
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn get_break_time(&self, id: BlockId, held_tool_type: Option<ToolType>, held_tier: ToolTier) -> f32 {
+        if let Some(def) = self.get(id) {
+            if def.hardness < 0.0 {
+                return f32::INFINITY;
+            }
+            let is_effective_tool = def.required_tool.is_some() && def.required_tool == held_tool_type;
+            let speed = if is_effective_tool {
+                held_tier.speed_multiplier()
+            } else {
+                1.0
+            };
+            let can_harvest = self.can_harvest(id, held_tool_type, held_tier);
+            let time = if can_harvest {
+                (def.hardness * 1.5) / speed
+            } else {
+                (def.hardness * 5.0) / 1.0
+            };
+            time.max(0.05)
+        } else {
+            1.0
+        }
+    }
+
+    #[inline]
+    pub fn get_drop(&self, id: BlockId, held_tool_type: Option<ToolType>, held_tier: ToolTier) -> Option<(ItemId, u16)> {
+        if let Some(def) = self.get(id) {
+            if self.can_harvest(id, held_tool_type, held_tier) {
+                def.drop_item.map(|item_id| (item_id, def.drop_count.0))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_harvesting_and_hardness_rules() {
+        let reg = BlockRegistry::new();
+
+        // 1. Bedrock is unbreakable
+        assert_eq!(reg.get_hardness(BlockId::BEDROCK), -1.0);
+        assert!(!reg.can_harvest(BlockId::BEDROCK, Some(ToolType::Pickaxe), ToolTier::Diamond));
+        assert!(reg.get_break_time(BlockId::BEDROCK, Some(ToolType::Pickaxe), ToolTier::Diamond).is_infinite());
+
+        // 2. Dirt can be harvested with hand or shovel
+        assert!(reg.can_harvest(BlockId::DIRT, None, ToolTier::None));
+        assert_eq!(reg.get_drop(BlockId::DIRT, None, ToolTier::None), Some((ItemId::DIRT, 1)));
+
+        // 3. Stone requires Wood Pickaxe or better
+        assert!(!reg.can_harvest(BlockId::STONE, None, ToolTier::None));
+        assert_eq!(reg.get_drop(BlockId::STONE, None, ToolTier::None), None);
+        assert!(reg.can_harvest(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood));
+        assert_eq!(reg.get_drop(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood), Some((ItemId::COBBLESTONE, 1)));
+
+        // 4. Diamond Ore requires Iron Pickaxe or better
+        assert!(!reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Wood));
+        assert!(!reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Stone));
+        assert_eq!(reg.get_drop(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Stone), None);
+        assert!(reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Iron));
+        assert_eq!(reg.get_drop(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Iron), Some((ItemId::DIAMOND, 1)));
+        assert!(reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Diamond));
+        assert_eq!(reg.get_drop(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Diamond), Some((ItemId::DIAMOND, 1)));
+
+        // 5. Tool speed reduces break time
+        let wood_time = reg.get_break_time(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood);
+        let diamond_time = reg.get_break_time(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Diamond);
+        assert!(diamond_time < wood_time);
+    }
+}
+
+

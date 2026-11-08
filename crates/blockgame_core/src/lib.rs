@@ -7,6 +7,7 @@ pub mod item;
 pub mod lighting;
 pub mod physics;
 pub mod raycast;
+pub mod tool;
 pub mod world;
 
 pub use block::{BlockDefinition, BlockId, BlockRegistry};
@@ -14,8 +15,9 @@ pub use chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, CHUNK
 pub use crafting::{CraftingGrid, CraftingManager, Recipe};
 pub use direction::Direction;
 pub use entity::{ItemDrop, ItemDropStatus};
-pub use item::{Inventory, ItemDef, ItemId, ItemRegistry, ItemSlot, ToolTier};
+pub use item::{Inventory, ItemDef, ItemId, ItemRegistry, ItemSlot};
 pub use lighting::{calculate_chunk_lighting, ChunkLightMap, LightValue};
 pub use physics::{PlayerPhysics, AABB};
 pub use raycast::{raycast_voxel, RaycastHit};
+pub use tool::{ToolTier, ToolType};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};

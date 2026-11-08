@@ -7,6 +7,7 @@ use blockgame_core::{
     item::{Inventory, ItemRegistry, ItemSlot},
     physics::PlayerPhysics,
     raycast::{raycast_voxel, RaycastHit},
+    tool::ToolTier,
 };
 use blockgame_render::{
     atlas::TextureAtlas,
@@ -14,7 +15,7 @@ use blockgame_render::{
     create_depth_texture, DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline,
     WireframePipeline,
 };
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
@@ -62,6 +63,11 @@ pub struct AppState {
     pub total_time: f32,
     pub walk_distance: f32,
     pub punch_timer: f32,
+    // Hold-to-break mining state
+    pub mouse_left_down: bool,
+    pub breaking_voxel: Option<IVec3>,
+    pub break_progress: f32,
+    pub cracking_buffer: Option<(wgpu::Buffer, u32)>,
     // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
@@ -224,6 +230,10 @@ impl ApplicationHandler for BlockGameApp {
             total_time: 0.0,
             walk_distance: 0.0,
             punch_timer: 0.0,
+            mouse_left_down: false,
+            breaking_voxel: None,
+            break_progress: 0.0,
+            cracking_buffer: None,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
@@ -271,42 +281,43 @@ impl ApplicationHandler for BlockGameApp {
             }
             WindowEvent::MouseInput {
                 button,
-                state: ElementState::Pressed,
+                state: mouse_btn_state,
                 ..
             } => {
+                let pressed = mouse_btn_state == ElementState::Pressed;
+                if button == MouseButton::Left {
+                    state.mouse_left_down = pressed;
+                    if !pressed {
+                        state.break_progress = 0.0;
+                        state.breaking_voxel = None;
+                        state.cracking_buffer = None;
+                    }
+                }
+
                 if state.inventory_open {
-                    let is_right = button == MouseButton::Right;
-                    handle_inventory_click(state, is_right);
+                    if pressed {
+                        let is_right = button == MouseButton::Right;
+                        handle_inventory_click(state, is_right);
+                    }
                     return;
                 }
 
                 if !state.mouse_captured {
-                    state.mouse_captured = true;
-                    let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                    state.window.set_cursor_visible(false);
+                    if pressed {
+                        state.mouse_captured = true;
+                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        state.window.set_cursor_visible(false);
+                    }
                     return;
                 }
 
                 match button {
                     MouseButton::Left => {
-                        state.punch_timer = 0.25; // Trigger punch animation
-                        // Break targeted block
-                        if let Some(hit) = state.targeted_block {
-                            if let Some(broken) = state.world_manager.break_block(
-                                hit.hit_voxel,
-                                &state.device,
-                                &state.pipeline,
-                            ) {
-                                if let Some(item_id) = state.item_registry.item_for_block(broken) {
-                                    state.world_manager.spawn_item_drop(
-                                        hit.hit_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
-                                        ItemSlot::new(item_id, 1),
-                                    );
-                                }
-                            }
+                        if pressed {
+                            state.punch_timer = 0.25; // Trigger punch animation
                         }
                     }
-                    MouseButton::Right => {
+                    MouseButton::Right if pressed => {
                         // Place active block from hotbar slot
                         let slot = state.inventory.get(state.active_hotbar_slot);
                         if !slot.is_empty() {
@@ -353,6 +364,10 @@ impl ApplicationHandler for BlockGameApp {
                         log::info!("Flying mode: {}", state.player.flying);
                     }
                     KeyCode::KeyE if pressed => {
+                        state.mouse_left_down = false;
+                        state.break_progress = 0.0;
+                        state.breaking_voxel = None;
+                        state.cracking_buffer = None;
                         state.inventory_open = !state.inventory_open;
                         if state.inventory_open {
                             state.mouse_captured = false;
@@ -365,6 +380,10 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
                     KeyCode::Escape if pressed => {
+                        state.mouse_left_down = false;
+                        state.break_progress = 0.0;
+                        state.breaking_voxel = None;
+                        state.cracking_buffer = None;
                         if state.inventory_open {
                             state.inventory_open = false;
                             state.mouse_captured = true;
@@ -497,6 +516,82 @@ impl ApplicationHandler for BlockGameApp {
                         state.targeted_block = None;
                         state.wireframe_buffer = None;
                     }
+                }
+
+                // 5b. Process hold-to-break mining mechanics
+                if state.mouse_left_down && state.mouse_captured && !state.inventory_open {
+                    if state.punch_timer <= 0.05 {
+                        state.punch_timer = 0.25; // Continuous swing loop while holding down break
+                    }
+
+                    if let Some(hit) = state.targeted_block {
+                        let target_voxel = hit.hit_voxel;
+                        if state.breaking_voxel != Some(target_voxel) {
+                            state.breaking_voxel = Some(target_voxel);
+                            state.break_progress = 0.0;
+                            state.cracking_buffer = None;
+                        }
+
+                        let block_at_voxel = {
+                            let world_guard = state.world_manager.world().lock().unwrap();
+                            world_guard.get_block(target_voxel)
+                        };
+
+                        if block_at_voxel.is_air() {
+                            state.breaking_voxel = None;
+                            state.break_progress = 0.0;
+                            state.cracking_buffer = None;
+                        } else {
+                            let held_slot = state.inventory.get(state.active_hotbar_slot);
+                            let (held_tool_type, held_tool_tier) = if let Some(def) = state.item_registry.get(held_slot.item_id) {
+                                (def.tool_type, def.tool_tier.unwrap_or(ToolTier::None))
+                            } else {
+                                (None, ToolTier::None)
+                            };
+
+                            let break_time = self.registry.get_break_time(block_at_voxel, held_tool_type, held_tool_tier);
+                            if break_time.is_infinite() {
+                                state.break_progress = 0.0;
+                                state.cracking_buffer = None;
+                            } else {
+                                state.break_progress += dt / break_time;
+                                if state.break_progress >= 1.0 {
+                                    // Block break completed!
+                                    if let Some(broken) = state.world_manager.break_block(
+                                        target_voxel,
+                                        &state.device,
+                                        &state.pipeline,
+                                    ) {
+                                        if let Some((drop_item, drop_count)) = self.registry.get_drop(broken, held_tool_type, held_tool_tier) {
+                                            state.world_manager.spawn_item_drop(
+                                                target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                                ItemSlot::new(drop_item, drop_count),
+                                            );
+                                        }
+                                    }
+                                    state.breaking_voxel = None;
+                                    state.break_progress = 0.0;
+                                    state.cracking_buffer = None;
+                                } else {
+                                    let stage = ((state.break_progress * 10.0).floor() as usize).min(9);
+                                    let (crack_buf, count) = WireframePipeline::create_cracking_box_buffer(
+                                        &state.device,
+                                        target_voxel,
+                                        stage,
+                                    );
+                                    state.cracking_buffer = Some((crack_buf, count));
+                                }
+                            }
+                        }
+                    } else {
+                        state.breaking_voxel = None;
+                        state.break_progress = 0.0;
+                        state.cracking_buffer = None;
+                    }
+                } else if state.breaking_voxel.is_some() {
+                    state.breaking_voxel = None;
+                    state.break_progress = 0.0;
+                    state.cracking_buffer = None;
                 }
 
                 // 6. Update chunk streaming around player
@@ -640,8 +735,13 @@ impl ApplicationHandler for BlockGameApp {
                         drop_mesh.draw(&mut render_pass);
                     }
 
-                    // Render targeted block selection wireframe
-                    if let Some(wireframe_buf) = &state.wireframe_buffer {
+                    // Render targeted block selection wireframe or progressive cracking overlay
+                    if let Some((crack_buf, vertex_count)) = &state.cracking_buffer {
+                        render_pass.set_pipeline(&state.wireframe_pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, crack_buf.slice(..));
+                        render_pass.draw(0..*vertex_count, 0..1);
+                    } else if let Some(wireframe_buf) = &state.wireframe_buffer {
                         render_pass.set_pipeline(&state.wireframe_pipeline.render_pipeline);
                         render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
                         render_pass.set_vertex_buffer(0, wireframe_buf.slice(..));

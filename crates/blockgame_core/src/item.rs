@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::block::BlockId;
+use crate::tool::{ToolTier, ToolType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ItemId(pub u16);
@@ -24,19 +25,31 @@ impl ItemId {
     pub const COAL: Self = Self(15);
     pub const IRON_INGOT: Self = Self(16);
     pub const IRON_PICKAXE: Self = Self(17);
+    pub const COAL_ORE: Self = Self(18);
+    pub const COPPER_ORE: Self = Self(19);
+    pub const IRON_ORE: Self = Self(20);
+    pub const GOLD_ORE: Self = Self(21);
+    pub const DIAMOND_ORE: Self = Self(22);
+    pub const RAW_COPPER: Self = Self(23);
+    pub const COPPER_INGOT: Self = Self(24);
+    pub const RAW_IRON: Self = Self(25);
+    pub const RAW_GOLD: Self = Self(26);
+    pub const GOLD_INGOT: Self = Self(27);
+    pub const DIAMOND: Self = Self(28);
+    pub const DIAMOND_PICKAXE: Self = Self(29);
+    pub const WOODEN_AXE: Self = Self(30);
+    pub const STONE_AXE: Self = Self(31);
+    pub const IRON_AXE: Self = Self(32);
+    pub const DIAMOND_AXE: Self = Self(33);
+    pub const WOODEN_SHOVEL: Self = Self(34);
+    pub const STONE_SHOVEL: Self = Self(35);
+    pub const IRON_SHOVEL: Self = Self(36);
+    pub const DIAMOND_SHOVEL: Self = Self(37);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolTier {
-    Wood,
-    Stone,
-    Iron,
-    Diamond,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +60,7 @@ pub struct ItemDef {
     pub max_stack: u16,
     pub placeable_block: Option<BlockId>,
     pub durability: Option<u16>,
+    pub tool_type: Option<ToolType>,
     pub tool_tier: Option<ToolTier>,
     pub icon_tile: u32,
 }
@@ -188,6 +202,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::STONE),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 1,
         });
@@ -199,6 +214,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::DIRT),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 2,
         });
@@ -210,6 +226,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::GRASS),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 4,
         });
@@ -221,6 +238,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::COBBLESTONE),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 5,
         });
@@ -232,6 +250,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::WOOD_LOG),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 6,
         });
@@ -243,6 +262,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::LEAVES),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 8,
         });
@@ -254,6 +274,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::SAND),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 9,
         });
@@ -265,6 +286,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::PLANKS),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 10,
         });
@@ -276,6 +298,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::GLASS),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 11,
         });
@@ -287,6 +310,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::TORCH),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 13,
         });
@@ -299,6 +323,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: None,
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 14,
         });
@@ -310,6 +335,7 @@ impl ItemRegistry {
             max_stack: 1,
             placeable_block: None,
             durability: Some(59),
+            tool_type: Some(ToolType::Pickaxe),
             tool_tier: Some(ToolTier::Wood),
             icon_tile: 15,
         });
@@ -321,6 +347,7 @@ impl ItemRegistry {
             max_stack: 1,
             placeable_block: None,
             durability: Some(131),
+            tool_type: Some(ToolType::Pickaxe),
             tool_tier: Some(ToolTier::Stone),
             icon_tile: 16,
         });
@@ -332,6 +359,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: Some(BlockId::CRAFTING_TABLE),
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 17,
         });
@@ -343,6 +371,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: None,
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 18,
         });
@@ -354,6 +383,7 @@ impl ItemRegistry {
             max_stack: 64,
             placeable_block: None,
             durability: None,
+            tool_type: None,
             tool_tier: None,
             icon_tile: 19,
         });
@@ -365,8 +395,254 @@ impl ItemRegistry {
             max_stack: 1,
             placeable_block: None,
             durability: Some(250),
+            tool_type: Some(ToolType::Pickaxe),
             tool_tier: Some(ToolTier::Iron),
             icon_tile: 20,
+        });
+
+        // Placeable Ore Items
+        self.register(ItemDef {
+            id: ItemId::COAL_ORE,
+            name: "blockgame:coal_ore",
+            display_name: "Coal Ore",
+            max_stack: 64,
+            placeable_block: Some(BlockId::COAL_ORE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 129,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COPPER_ORE,
+            name: "blockgame:copper_ore",
+            display_name: "Copper Ore",
+            max_stack: 64,
+            placeable_block: Some(BlockId::COPPER_ORE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 130,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::IRON_ORE,
+            name: "blockgame:iron_ore",
+            display_name: "Iron Ore",
+            max_stack: 64,
+            placeable_block: Some(BlockId::IRON_ORE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 131,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GOLD_ORE,
+            name: "blockgame:gold_ore",
+            display_name: "Gold Ore",
+            max_stack: 64,
+            placeable_block: Some(BlockId::GOLD_ORE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 132,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DIAMOND_ORE,
+            name: "blockgame:diamond_ore",
+            display_name: "Diamond Ore",
+            max_stack: 64,
+            placeable_block: Some(BlockId::DIAMOND_ORE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 133,
+        });
+
+        // Raw metals, ingots, gems
+        self.register(ItemDef {
+            id: ItemId::RAW_COPPER,
+            name: "blockgame:raw_copper",
+            display_name: "Raw Copper",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 134,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COPPER_INGOT,
+            name: "blockgame:copper_ingot",
+            display_name: "Copper Ingot",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 135,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::RAW_IRON,
+            name: "blockgame:raw_iron",
+            display_name: "Raw Iron",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 136,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::RAW_GOLD,
+            name: "blockgame:raw_gold",
+            display_name: "Raw Gold",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 137,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GOLD_INGOT,
+            name: "blockgame:gold_ingot",
+            display_name: "Gold Ingot",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 138,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DIAMOND,
+            name: "blockgame:diamond",
+            display_name: "Diamond",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 139,
+        });
+
+        // Diamond Pickaxe
+        self.register(ItemDef {
+            id: ItemId::DIAMOND_PICKAXE,
+            name: "blockgame:diamond_pickaxe",
+            display_name: "Diamond Pickaxe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(1561),
+            tool_type: Some(ToolType::Pickaxe),
+            tool_tier: Some(ToolTier::Diamond),
+            icon_tile: 140,
+        });
+
+        // Axes
+        self.register(ItemDef {
+            id: ItemId::WOODEN_AXE,
+            name: "blockgame:wooden_axe",
+            display_name: "Wooden Axe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(59),
+            tool_type: Some(ToolType::Axe),
+            tool_tier: Some(ToolTier::Wood),
+            icon_tile: 141,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::STONE_AXE,
+            name: "blockgame:stone_axe",
+            display_name: "Stone Axe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(131),
+            tool_type: Some(ToolType::Axe),
+            tool_tier: Some(ToolTier::Stone),
+            icon_tile: 142,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::IRON_AXE,
+            name: "blockgame:iron_axe",
+            display_name: "Iron Axe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(250),
+            tool_type: Some(ToolType::Axe),
+            tool_tier: Some(ToolTier::Iron),
+            icon_tile: 143,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DIAMOND_AXE,
+            name: "blockgame:diamond_axe",
+            display_name: "Diamond Axe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(1561),
+            tool_type: Some(ToolType::Axe),
+            tool_tier: Some(ToolTier::Diamond),
+            icon_tile: 144,
+        });
+
+        // Shovels
+        self.register(ItemDef {
+            id: ItemId::WOODEN_SHOVEL,
+            name: "blockgame:wooden_shovel",
+            display_name: "Wooden Shovel",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(59),
+            tool_type: Some(ToolType::Shovel),
+            tool_tier: Some(ToolTier::Wood),
+            icon_tile: 145,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::STONE_SHOVEL,
+            name: "blockgame:stone_shovel",
+            display_name: "Stone Shovel",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(131),
+            tool_type: Some(ToolType::Shovel),
+            tool_tier: Some(ToolTier::Stone),
+            icon_tile: 146,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::IRON_SHOVEL,
+            name: "blockgame:iron_shovel",
+            display_name: "Iron Shovel",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(250),
+            tool_type: Some(ToolType::Shovel),
+            tool_tier: Some(ToolTier::Iron),
+            icon_tile: 147,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DIAMOND_SHOVEL,
+            name: "blockgame:diamond_shovel",
+            display_name: "Diamond Shovel",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(1561),
+            tool_type: Some(ToolType::Shovel),
+            tool_tier: Some(ToolTier::Diamond),
+            icon_tile: 148,
         });
     }
 }
