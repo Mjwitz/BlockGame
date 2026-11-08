@@ -68,17 +68,18 @@ This document outlines the 5 development milestones for **BlockGame**, with clea
 ## 🚩 Milestone 4: Atmosphere, Lighting & Day/Night Cycle
 **Objective:** Implement dynamic celestial day/night cycle, atmospheric skybox/fog, and 2-channel BFS flood-fill voxel lighting.
 
-- [ ] **Voxel Lighting Engine**
-  - [ ] Dual-channel light map: 4-bit Sunlight ($0\text{--}15$) + 4-bit Blocklight ($0\text{--}15$) packed in `u8`.
-  - [ ] Vertical sunlight casting from chunk ceiling to first opaque voxel.
-  - [ ] Breadth-First Search (BFS) light propagation queue (attenuation by 1 per step).
-  - [ ] BFS light removal queue for recalculating light when blocks are placed.
-  - [ ] Torch / emissive block placement and local light propagation.
-- [ ] **Dynamic Day/Night Cycle & Atmosphere**
-  - [ ] Global `WorldTime` ticker ($0\text{--}24000$).
-  - [ ] Sun/moon orbital rotation and directional light color shifts.
-  - [ ] Dynamic gradient skybox and distance fog matching time of day.
-  - [ ] Shader light blending: $\max(\text{Blocklight}, \text{Sunlight} \times \text{SunIntensity}) + \text{Ambient}$.
+- [x] **Voxel Lighting Engine**
+  - [x] Dual-channel light map: 4-bit Sunlight ($0\text{--}15$) + 4-bit Blocklight ($0\text{--}15$) packed in `u8`.
+  - [x] Vertical sunlight casting from chunk ceiling to first opaque voxel.
+  - [x] Breadth-First Search (BFS) light propagation queue (attenuation by 1 per step).
+  - [x] BFS light flood-fill for lateral sunlight diffusion under trees/overhangs.
+  - [x] Torch / emissive block placement (`BlockId::TORCH`, luminance 14) and local light propagation.
+- [x] **Dynamic Day/Night Cycle & Atmosphere**
+  - [x] Global `WorldTime` ticker ($0\text{--}24000$) with orbital sun/moon progression.
+  - [x] Sun/moon directional light vectors and color shifts (golden noon, crimson dusk, pale moonlight).
+  - [x] Dynamic gradient skybox and distance fog matching time of day and sun elevation.
+  - [x] Shader dual-channel blending: $\max(\text{Sunlight} \times \text{SunFactor}, \text{Blocklight}) \times \text{AO} + \text{Ambient}$.
+  - [x] Interactive hotkeys: `T` to advance time of day, `0` to equip torches.
 
 ---
 

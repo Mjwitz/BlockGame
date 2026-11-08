@@ -9,7 +9,7 @@ use blockgame_core::{
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, VoxelPipeline, WireframePipeline,
+    create_depth_texture, DayNightCycle, VoxelPipeline, WireframePipeline,
 };
 use glam::Vec3;
 use winit::{
@@ -36,6 +36,7 @@ pub struct AppState {
     player: PlayerPhysics,
     camera: Camera,
     camera_uniform: CameraUniform,
+    pub day_night: DayNightCycle,
     targeted_block: Option<RaycastHit>,
     wireframe_buffer: Option<wgpu::Buffer>,
     active_block: BlockId,
@@ -75,7 +76,7 @@ impl ApplicationHandler for BlockGameApp {
         }
 
         let window_attrs = WindowAttributes::default()
-            .with_title("BlockGame - Milestone 3 (Player Physics & Voxel Interaction)")
+            .with_title("BlockGame - Milestone 4 (Atmosphere, Day/Night Cycle & Dual-Channel Lighting)")
             .with_inner_size(PhysicalSize::new(1280, 720));
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
@@ -152,8 +153,9 @@ impl ApplicationHandler for BlockGameApp {
             (-10.0_f32).to_radians(),
         );
 
+        let day_night = DayNightCycle::new();
         let mut camera_uniform = CameraUniform::default();
-        camera.update_uniform(&mut camera_uniform, width as f32 / height as f32);
+        camera.update_uniform_with_atmosphere(&mut camera_uniform, width as f32 / height as f32, &day_night);
         pipeline.update_camera(&queue, &camera_uniform);
 
         self.state = Some(AppState {
@@ -169,6 +171,7 @@ impl ApplicationHandler for BlockGameApp {
             player,
             camera,
             camera_uniform,
+            day_night,
             targeted_block: None,
             wireframe_buffer: None,
             active_block: BlockId::WOOD_LOG,
@@ -273,6 +276,11 @@ impl ApplicationHandler for BlockGameApp {
                         let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
                         state.window.set_cursor_visible(true);
                     }
+                    KeyCode::KeyT if pressed => {
+                        // Advance time of day by 3 hours (3000 ticks)
+                        state.day_night.time = (state.day_night.time + 3000.0).rem_euclid(24000.0);
+                        log::info!("Time of day advanced to: {:.1} ticks", state.day_night.time);
+                    }
                     // Hotbar block selection
                     KeyCode::Digit1 if pressed => state.active_block = BlockId::STONE,
                     KeyCode::Digit2 if pressed => state.active_block = BlockId::DIRT,
@@ -283,6 +291,7 @@ impl ApplicationHandler for BlockGameApp {
                     KeyCode::Digit7 if pressed => state.active_block = BlockId::SAND,
                     KeyCode::Digit8 if pressed => state.active_block = BlockId::PLANKS,
                     KeyCode::Digit9 if pressed => state.active_block = BlockId::GLASS,
+                    KeyCode::Digit0 if pressed => state.active_block = BlockId::TORCH,
                     _ => {}
                 }
             }
@@ -290,6 +299,9 @@ impl ApplicationHandler for BlockGameApp {
                 let now = Instant::now();
                 let dt = now.duration_since(state.last_frame_time).as_secs_f32().min(0.1);
                 state.last_frame_time = now;
+
+                // Update dynamic Day/Night celestial cycle
+                state.day_night.update(dt);
 
                 // 1. Calculate player wish direction relative to camera yaw
                 let forward = Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
@@ -322,10 +334,10 @@ impl ApplicationHandler for BlockGameApp {
                     );
                 }
 
-                // 3. Update Camera position to match player eye position
+                // 3. Update Camera position and atmosphere uniform
                 state.camera.position = state.player.eye_position();
                 let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
-                state.camera.update_uniform(&mut state.camera_uniform, aspect);
+                state.camera.update_uniform_with_atmosphere(&mut state.camera_uniform, aspect, &state.day_night);
                 state.pipeline.update_camera(&state.queue, &state.camera_uniform);
 
                 // 4. Perform Fast Voxel Traversal (DDA) raycast from crosshair
@@ -386,6 +398,8 @@ impl ApplicationHandler for BlockGameApp {
                         label: Some("Frame Command Encoder"),
                     });
 
+                let sky = state.day_night.sky_color();
+
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Main Render Pass"),
@@ -394,9 +408,9 @@ impl ApplicationHandler for BlockGameApp {
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.53,
-                                    g: 0.81,
-                                    b: 0.98,
+                                    r: sky[0] as f64,
+                                    g: sky[1] as f64,
+                                    b: sky[2] as f64,
                                     a: 1.0,
                                 }),
                                 store: wgpu::StoreOp::Store,

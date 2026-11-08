@@ -8,7 +8,7 @@ use blockgame_core::{
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, VoxelPipeline, WireframePipeline,
+    create_depth_texture, DayNightCycle, VoxelPipeline, WireframePipeline,
 };
 use glam::{IVec3, Vec3};
 
@@ -89,7 +89,7 @@ pub async fn render_world_to_image(
     let mut world_manager = WorldManager::new(seed, render_distance, registry.clone());
     world_manager.init_spawn_area(&device, &pipeline);
 
-    // 1. Build a player outpost structure using place_block & break_block to demonstrate interaction!
+    // 1. Build a player outpost structure with torches demonstrating dual-channel lighting!
     let dummy_player_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
     let base_x = 0;
     let base_z = 0;
@@ -124,15 +124,43 @@ pub async fn render_world_to_image(
         }
     }
 
-    // 2. Position camera close to the outpost looking at the doorway and targeted block
-    let eye = Vec3::new(0.0, (base_y + 1) as f32 + 1.62, 7.5);
+    // Place entrance torches flanking the door on the outside ground and one inside the cabin
+    world_manager.place_block(
+        IVec3::new(base_x - 1, base_y + 1, base_z + 4),
+        BlockId::TORCH,
+        &dummy_player_box,
+        &device,
+        &pipeline,
+    );
+    world_manager.place_block(
+        IVec3::new(base_x + 1, base_y + 1, base_z + 4),
+        BlockId::TORCH,
+        &dummy_player_box,
+        &device,
+        &pipeline,
+    );
+    world_manager.place_block(
+        IVec3::new(base_x, base_y + 1, base_z),
+        BlockId::TORCH,
+        &dummy_player_box,
+        &device,
+        &pipeline,
+    );
+
+    // 2. Configure sunset/dusk atmosphere
+    let mut day_night = DayNightCycle::new();
+    day_night.set_time(12200.0); // Rich sunset / dusk transition
+    let sky = day_night.sky_color();
+
+    // Position camera with a 3/4 perspective showing cabin, glowing torches, and sunset landscape
+    let eye = Vec3::new(-3.5, (base_y + 2) as f32 + 0.8, 9.0);
     let camera = Camera::new(
         eye,
-        (-90.0_f32).to_radians(),
-        (-12.0_f32).to_radians(),
+        (-72.0_f32).to_radians(),
+        (-10.0_f32).to_radians(),
     );
     let mut camera_uniform = CameraUniform::default();
-    camera.update_uniform(&mut camera_uniform, width as f32 / height as f32);
+    camera.update_uniform_with_atmosphere(&mut camera_uniform, width as f32 / height as f32, &day_night);
     pipeline.update_camera(&queue, &camera_uniform);
 
     // 3. Perform DDA raycast from crosshair
@@ -156,9 +184,9 @@ pub async fn render_world_to_image(
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.53,
-                        g: 0.81,
-                        b: 0.98,
+                        r: sky[0] as f64,
+                        g: sky[1] as f64,
+                        b: sky[2] as f64,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,

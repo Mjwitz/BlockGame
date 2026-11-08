@@ -16,6 +16,7 @@ impl BlockId {
     pub const PLANKS: Self = Self(8);
     pub const GLASS: Self = Self(9);
     pub const BEDROCK: Self = Self(10);
+    pub const TORCH: Self = Self(13);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -173,6 +174,15 @@ impl BlockRegistry {
             is_transparent: false,
             luminance: 0,
             textures: [12; 6],
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TORCH,
+            name: "Torch",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 14,
+            textures: [13; 6],
         });
 
         registry

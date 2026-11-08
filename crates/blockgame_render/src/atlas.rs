@@ -192,6 +192,23 @@ impl TextureAtlas {
             Rgba([val, val, val, 255])
         });
 
+        // 13: Torch
+        atlas.paint_tile(13, |x, y| {
+            let is_stick = (x == 7 || x == 8) && y >= 6;
+            let is_flame_core = (x == 7 || x == 8) && (y >= 2 && y <= 4);
+            let is_flame_outer = (x >= 6 && x <= 9) && (y >= 1 && y <= 5);
+
+            if is_flame_core {
+                Rgba([255, 255, 180, 255])
+            } else if is_flame_outer {
+                Rgba([255, 140, 20, 255])
+            } else if is_stick {
+                Rgba([115, 84, 45, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
         atlas
     }
 

@@ -7,6 +7,7 @@ pub struct VoxelVertex {
     pub uv: [f32; 2],
     pub normal: [f32; 3],
     pub ao: f32, // Ambient occlusion factor (0.4 to 1.0)
+    pub light: [f32; 2], // [sunlight, blocklight] normalized 0.0 to 1.0
 }
 
 impl VoxelVertex {
@@ -42,6 +43,16 @@ impl VoxelVertex {
                         as wgpu::BufferAddress,
                     shader_location: 3,
                     format: wgpu::VertexFormat::Float32,
+                },
+                // Light: Float32x2
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>()
+                        + std::mem::size_of::<[f32; 2]>()
+                        + std::mem::size_of::<[f32; 3]>()
+                        + std::mem::size_of::<f32>())
+                        as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }

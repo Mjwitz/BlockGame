@@ -51,6 +51,7 @@ impl<'a> ChunkMesher<'a> {
         F: Fn(i32, i32, i32) -> BlockId,
     {
         let mut mesh = ChunkMesh::new();
+        let light_map = blockgame_core::lighting::calculate_chunk_lighting(chunk, self.registry);
 
         let query_block = |x: i32, y: i32, z: i32| -> BlockId {
             if x >= 0
@@ -90,7 +91,19 @@ impl<'a> ChunkMesher<'a> {
                         if self.registry.is_transparent(neighbor_id) {
                             let tile_id = self.registry.get_texture(block_id, dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
-                            self.build_face(&mut mesh, chunk.pos, ix, iy, iz, dir, uv, &query_block);
+                            
+                            // Sample light from adjacent air block
+                            let light = if nx >= 0 && nx < CHUNK_SIZE_X as i32
+                                && ny >= 0 && ny < CHUNK_SIZE_Y as i32
+                                && nz >= 0 && nz < CHUNK_SIZE_Z as i32 {
+                                let lv = light_map.get(nx as usize, ny as usize, nz as usize);
+                                [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
+                            } else {
+                                // Default sunlight for boundary exterior faces
+                                [1.0, 0.0]
+                            };
+
+                            self.build_face(&mut mesh, chunk.pos, ix, iy, iz, dir, uv, light, &query_block);
                         }
                     }
                 }
@@ -109,6 +122,7 @@ impl<'a> ChunkMesher<'a> {
         z: i32,
         dir: Direction,
         uv_bounds: [f32; 4],
+        light: [f32; 2],
         query: &F,
     ) where
         F: Fn(i32, i32, i32) -> BlockId,
@@ -177,6 +191,7 @@ impl<'a> ChunkMesher<'a> {
                 uv: uvs[i],
                 normal,
                 ao: ao[i],
+                light,
             });
         }
 
