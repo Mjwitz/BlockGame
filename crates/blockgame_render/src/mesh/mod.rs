@@ -112,6 +112,11 @@ impl<'a> ChunkMesher<'a> {
 
                         let neighbor_id = query_block(nx, ny, nz);
 
+                        // Adjacent glass blocks should not render the internal face between them
+                        if block_id == BlockId::GLASS && neighbor_id == BlockId::GLASS {
+                            continue;
+                        }
+
                         // Only generate face if the neighbor block is transparent
                         if self.registry.is_transparent(neighbor_id) {
                             let tile_id = self.registry.get_texture(block_id, dir);

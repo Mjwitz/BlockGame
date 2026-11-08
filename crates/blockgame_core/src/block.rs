@@ -17,6 +17,7 @@ impl BlockId {
     pub const GLASS: Self = Self(9);
     pub const BEDROCK: Self = Self(10);
     pub const TORCH: Self = Self(13);
+    pub const CRAFTING_TABLE: Self = Self(14);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -183,6 +184,15 @@ impl BlockRegistry {
             is_transparent: true,
             luminance: 14,
             textures: [13; 6],
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::CRAFTING_TABLE,
+            name: "Crafting Table",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [17, 10, 17, 17, 17, 17],
         });
 
         registry

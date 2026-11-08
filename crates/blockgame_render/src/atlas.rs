@@ -175,13 +175,16 @@ impl TextureAtlas {
         // 11: Glass
         atlas.paint_tile(11, |x, y| {
             let is_border = x == 0 || x == 15 || y == 0 || y == 15;
-            let is_glare = (x + y == 8) || (x + y == 9 && x > 2 && x < 7);
+            let is_glare = (x + y == 6 && x >= 2 && x <= 4)
+                || (x + y == 7 && x >= 3 && x <= 4)
+                || (x == 12 && y == 12)
+                || (x == 13 && y == 11);
             if is_border {
-                Rgba([180, 225, 255, 240])
+                Rgba([200, 230, 255, 255])
             } else if is_glare {
-                Rgba([240, 250, 255, 180])
+                Rgba([245, 250, 255, 255])
             } else {
-                Rgba([200, 230, 255, 40])
+                Rgba([0, 0, 0, 0])
             }
         });
 

@@ -211,7 +211,7 @@ impl ItemRegistry {
             placeable_block: Some(BlockId::GRASS),
             durability: None,
             tool_tier: None,
-            icon_tile: 3,
+            icon_tile: 4,
         });
 
         self.register(ItemDef {
@@ -244,7 +244,7 @@ impl ItemRegistry {
             placeable_block: Some(BlockId::LEAVES),
             durability: None,
             tool_tier: None,
-            icon_tile: 7,
+            icon_tile: 8,
         });
 
         self.register(ItemDef {
@@ -255,7 +255,7 @@ impl ItemRegistry {
             placeable_block: Some(BlockId::SAND),
             durability: None,
             tool_tier: None,
-            icon_tile: 8,
+            icon_tile: 9,
         });
 
         self.register(ItemDef {
@@ -266,7 +266,7 @@ impl ItemRegistry {
             placeable_block: Some(BlockId::PLANKS),
             durability: None,
             tool_tier: None,
-            icon_tile: 9,
+            icon_tile: 10,
         });
 
         self.register(ItemDef {
@@ -277,7 +277,7 @@ impl ItemRegistry {
             placeable_block: Some(BlockId::GLASS),
             durability: None,
             tool_tier: None,
-            icon_tile: 10,
+            icon_tile: 11,
         });
 
         self.register(ItemDef {
@@ -330,7 +330,7 @@ impl ItemRegistry {
             name: "blockgame:crafting_table",
             display_name: "Crafting Table",
             max_stack: 64,
-            placeable_block: Some(BlockId::PLANKS), // placeable as decorative table
+            placeable_block: Some(BlockId::CRAFTING_TABLE),
             durability: None,
             tool_tier: None,
             icon_tile: 17,
