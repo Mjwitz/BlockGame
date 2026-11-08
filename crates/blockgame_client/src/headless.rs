@@ -173,13 +173,40 @@ pub async fn render_world_to_image(
     camera.update_uniform_with_atmosphere(&mut camera_uniform, width as f32 / height as f32, &day_night);
     pipeline.update_camera(&queue, &camera_uniform);
 
+    // Spawn an item drop on the grass in clear view of the camera
+    let mut item_drop = blockgame_core::entity::ItemDrop::new(
+        Vec3::new(-2.8, (base_y + 2) as f32 + 0.15, 7.2),
+        blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 4),
+    );
+    item_drop.age = 1.2;
+    world_manager.item_drops.push(item_drop);
+
+    let drops_mesh = blockgame_render::build_item_drops_mesh(
+        &world_manager.item_drops,
+        &item_registry,
+    );
+    let item_drop_gpu_mesh = pipeline.upload_mesh(&device, &drops_mesh);
+
     // 3. Perform DDA raycast from crosshair
     let hit = {
         let world_guard = world_manager.world().lock().unwrap();
         raycast_voxel(camera.position, camera.forward(), 6.0, &world_guard, &registry)
     };
 
-    let wireframe_buffer = hit.map(|h| WireframePipeline::create_box_buffer(&device, h.hit_voxel));
+    let wireframe_buffer = hit.map(|h| {
+        let world_guard = world_manager.world().lock().unwrap();
+        let block = world_guard.get_block(h.hit_voxel);
+        if block == BlockId::TORCH {
+            WireframePipeline::create_custom_box_buffer(
+                &device,
+                h.hit_voxel,
+                Vec3::new(0.35, 0.0, 0.35),
+                Vec3::new(0.65, 0.65, 0.65),
+            )
+        } else {
+            WireframePipeline::create_box_buffer(&device, h.hit_voxel)
+        }
+    });
 
     // 4. Encode render commands
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -219,6 +246,10 @@ pub async fn render_world_to_image(
         render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
         world_manager.render(&mut render_pass);
 
+        if let Some(drop_mesh) = &item_drop_gpu_mesh {
+            drop_mesh.draw(&mut render_pass);
+        }
+
         if let Some(buf) = &wireframe_buffer {
             render_pass.set_pipeline(&wireframe_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
@@ -227,12 +258,12 @@ pub async fn render_world_to_image(
         }
     }
 
-    // 5. Render 2D UI Overlay Pass (Crosshair & Hotbar with items)
+    // 5. Render 2D UI Overlay Pass (Crosshair, Held Torch Item & Hotbar with stack numbers)
     let mut ui_mesh = UiMesh::new();
     let screen_w = width as f32;
     let screen_h = height as f32;
     ui_pipeline.update_screen_size(&queue, screen_w, screen_h);
-    UiBuilder::build_hud(&mut ui_mesh, screen_w, screen_h, &inventory, 0, &item_registry);
+    UiBuilder::build_hud(&mut ui_mesh, screen_w, screen_h, &inventory, 3, &item_registry, 0.0);
 
     if !ui_mesh.indices.is_empty() {
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -317,5 +348,128 @@ pub async fn render_world_to_image(
     )?;
 
     log::info!("Successfully saved rendered interaction image to {}", output_path);
+
+    // Also render inventory screen overlay with hover tooltip and stack counts
+    let mut inv_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Inventory Render Encoder"),
+    });
+
+    let mut inv_ui_mesh = UiMesh::new();
+    let slot_size = 40.0;
+    let slot_gap = 4.0;
+    let inv_w = 9.0 * (slot_size + slot_gap);
+    let inv_start_x = (screen_w - inv_w) * 0.5;
+    let craft_y = screen_h * 0.5 - 160.0;
+    let inv_start_y = craft_y + 110.0;
+    let hotbar_y = inv_start_y + 3.0 * (slot_size + slot_gap) + 16.0;
+
+    // Place cursor over slot 3 (Torch) to trigger the hover tooltip
+    let cursor_pos = [
+        inv_start_x + 3.0 * (slot_size + slot_gap) + 20.0,
+        hotbar_y + 20.0,
+    ];
+
+    let mut crafting_grid = blockgame_core::crafting::CraftingGrid::new_2x2();
+    crafting_grid.set(0, 0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1));
+    let crafting_result = Some(blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::PLANKS, 4));
+
+    UiBuilder::build_inventory_screen(
+        &mut inv_ui_mesh,
+        screen_w,
+        screen_h,
+        &inventory,
+        3,
+        &crafting_grid,
+        crafting_result,
+        &blockgame_core::item::ItemSlot::EMPTY,
+        cursor_pos,
+        &item_registry,
+    );
+
+    if !inv_ui_mesh.indices.is_empty() {
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Inv UI VB"),
+            contents: bytemuck::cast_slice(&inv_ui_mesh.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Inv UI IB"),
+            contents: bytemuck::cast_slice(&inv_ui_mesh.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        {
+            let mut ui_pass = inv_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Inv UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..inv_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        inv_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(inv_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut inv_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            inv_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "inventory_render.png",
+            &inv_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved inventory interaction image to inventory_render.png");
+    }
+
     Ok(())
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use blockgame_core::{
-    block::BlockRegistry,
+    block::{BlockId, BlockRegistry},
     crafting::{CraftingGrid, CraftingManager},
     item::{Inventory, ItemRegistry, ItemSlot},
     physics::PlayerPhysics,
@@ -58,6 +58,8 @@ pub struct AppState {
     pub ui_vertex_buffer: Option<wgpu::Buffer>,
     pub ui_index_buffer: Option<wgpu::Buffer>,
     pub ui_index_count: u32,
+    pub item_drop_gpu_mesh: Option<blockgame_render::GpuMeshBuffers>,
+    pub total_time: f32,
     // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
@@ -216,6 +218,8 @@ impl ApplicationHandler for BlockGameApp {
             ui_vertex_buffer: None,
             ui_index_buffer: None,
             ui_index_count: 0,
+            item_drop_gpu_mesh: None,
+            total_time: 0.0,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
@@ -392,6 +396,7 @@ impl ApplicationHandler for BlockGameApp {
 
                 // Update dynamic Day/Night celestial cycle
                 state.day_night.update(dt);
+                state.total_time += dt;
 
                 // 1. Calculate player wish direction relative to camera yaw
                 let forward = Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
@@ -453,9 +458,18 @@ impl ApplicationHandler for BlockGameApp {
                     if let Some(h) = hit {
                         // Recreate wireframe buffer if target voxel changed
                         if state.targeted_block.map(|t| t.hit_voxel) != Some(h.hit_voxel) {
-                            state.wireframe_buffer = Some(
-                                WireframePipeline::create_box_buffer(&state.device, h.hit_voxel),
-                            );
+                            let block = world_guard.get_block(h.hit_voxel);
+                            let wire_buf = if block == BlockId::TORCH {
+                                WireframePipeline::create_custom_box_buffer(
+                                    &state.device,
+                                    h.hit_voxel,
+                                    Vec3::new(0.35, 0.0, 0.35),
+                                    Vec3::new(0.65, 0.65, 0.65),
+                                )
+                            } else {
+                                WireframePipeline::create_box_buffer(&state.device, h.hit_voxel)
+                            };
+                            state.wireframe_buffer = Some(wire_buf);
                         }
                         state.targeted_block = Some(h);
                     } else {
@@ -501,6 +515,7 @@ impl ApplicationHandler for BlockGameApp {
                         &state.inventory,
                         state.active_hotbar_slot,
                         &state.item_registry,
+                        state.total_time,
                     );
                 }
 
@@ -520,6 +535,17 @@ impl ApplicationHandler for BlockGameApp {
                     state.ui_index_count = state.ui_mesh.indices.len() as u32;
                 } else {
                     state.ui_index_count = 0;
+                }
+
+                // Upload dynamic 3D Item Drops mesh
+                if !state.world_manager.item_drops.is_empty() {
+                    let drops_mesh = blockgame_render::build_item_drops_mesh(
+                        &state.world_manager.item_drops,
+                        &state.item_registry,
+                    );
+                    state.item_drop_gpu_mesh = state.pipeline.upload_mesh(&state.device, &drops_mesh);
+                } else {
+                    state.item_drop_gpu_mesh = None;
                 }
 
                 // 8. Render frame
@@ -586,6 +612,11 @@ impl ApplicationHandler for BlockGameApp {
                     render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
                     render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
                     state.world_manager.render(&mut render_pass);
+
+                    // Render floating 3D item drops
+                    if let Some(drop_mesh) = &state.item_drop_gpu_mesh {
+                        drop_mesh.draw(&mut render_pass);
+                    }
 
                     // Render targeted block selection wireframe
                     if let Some(wireframe_buf) = &state.wireframe_buffer {

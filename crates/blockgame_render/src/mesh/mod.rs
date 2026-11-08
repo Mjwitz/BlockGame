@@ -79,6 +79,11 @@ impl<'a> ChunkMesher<'a> {
                     let iy = y as i32;
                     let iz = z as i32;
 
+                    if block_id == BlockId::TORCH {
+                        self.build_torch(&mut mesh, chunk.pos, ix, iy, iz);
+                        continue;
+                    }
+
                     for dir in Direction::ALL {
                         let normal = dir.normal_ivec();
                         let nx = ix + normal.x;
@@ -218,6 +223,108 @@ impl<'a> ChunkMesher<'a> {
         }
     }
 
+    /// Generates slender 3D post mesh for torches centered in the block.
+    fn build_torch(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let x0 = fx + 7.0 / 16.0;
+        let x1 = fx + 9.0 / 16.0;
+        let z0 = fz + 7.0 / 16.0;
+        let z1 = fz + 9.0 / 16.0;
+        let y0 = fy;
+        let y1 = fy + 10.0 / 16.0;
+
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(13);
+        let u_width = u_max - u_min;
+        let v_height = v_max - v_min;
+
+        let u_side_left = u_min + u_width * (7.0 / 16.0);
+        let u_side_right = u_min + u_width * (9.0 / 16.0);
+        let v_side_top = v_min + v_height * (1.0 / 16.0);
+        let v_side_bottom = v_min + v_height * (16.0 / 16.0);
+
+        let u_top_left = u_min + u_width * (7.0 / 16.0);
+        let u_top_right = u_min + u_width * (9.0 / 16.0);
+        let v_top_min = v_min + v_height * (2.0 / 16.0);
+        let v_top_max = v_min + v_height * (4.0 / 16.0);
+
+        let light = [1.0, 1.0]; // Self-illuminating warm torch glow
+        let ao = 1.0;
+
+        let mut add_quad = |positions: [[f32; 3]; 4], uvs: [[f32; 2]; 4], normal: [f32; 3]| {
+            let start_idx = mesh.vertices.len() as u32;
+            for i in 0..4 {
+                mesh.vertices.push(VoxelVertex {
+                    position: positions[i],
+                    uv: uvs[i],
+                    normal,
+                    ao,
+                    light,
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                start_idx + 0,
+                start_idx + 1,
+                start_idx + 2,
+                start_idx + 2,
+                start_idx + 3,
+                start_idx + 0,
+            ]);
+        };
+
+        // 1. South Face (+Z)
+        add_quad(
+            [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            [[u_side_left, v_side_bottom], [u_side_right, v_side_bottom], [u_side_right, v_side_top], [u_side_left, v_side_top]],
+            [0.0, 0.0, 1.0],
+        );
+
+        // 2. North Face (-Z)
+        add_quad(
+            [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
+            [[u_side_right, v_side_bottom], [u_side_left, v_side_bottom], [u_side_left, v_side_top], [u_side_right, v_side_top]],
+            [0.0, 0.0, -1.0],
+        );
+
+        // 3. East Face (+X)
+        add_quad(
+            [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
+            [[u_side_left, v_side_bottom], [u_side_right, v_side_bottom], [u_side_right, v_side_top], [u_side_left, v_side_top]],
+            [1.0, 0.0, 0.0],
+        );
+
+        // 4. West Face (-X)
+        add_quad(
+            [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
+            [[u_side_left, v_side_bottom], [u_side_right, v_side_bottom], [u_side_right, v_side_top], [u_side_left, v_side_top]],
+            [-1.0, 0.0, 0.0],
+        );
+
+        // 5. Top Face (+Y)
+        add_quad(
+            [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]],
+            [[u_top_left, v_top_max], [u_top_right, v_top_max], [u_top_right, v_top_min], [u_top_left, v_top_min]],
+            [0.0, 1.0, 0.0],
+        );
+
+        // 6. Bottom Face (-Y)
+        add_quad(
+            [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            [[u_top_left, v_top_min], [u_top_right, v_top_min], [u_top_right, v_top_max], [u_top_left, v_top_max]],
+            [0.0, -1.0, 0.0],
+        );
+    }
+
     fn calculate_face_ao<F>(
         &self,
         x: i32,
@@ -303,6 +410,135 @@ fn ao_factor(ao_level: u8) -> f32 {
     }
 }
 
+/// Builds a dynamic 3D mesh for dropped items floating and spinning in the world.
+pub fn build_item_drops_mesh(
+    item_drops: &[blockgame_core::entity::ItemDrop],
+    item_registry: &blockgame_core::item::ItemRegistry,
+) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+
+    for drop in item_drops {
+        let def = match item_registry.get(drop.item.item_id) {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let center = drop.position + glam::Vec3::new(0.0, 0.15 + drop.visual_bob_y(), 0.0);
+        let s = 0.13; // half size -> 0.26 block size
+        let angle = drop.age * 2.5;
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+
+        // Rotate (dx, dz) around Y
+        let rotate_point = |dx: f32, dy: f32, dz: f32| -> [f32; 3] {
+            let rx = dx * cos_a - dz * sin_a;
+            let rz = dx * sin_a + dz * cos_a;
+            [center.x + rx, center.y + dy, center.z + rz]
+        };
+
+        let rotate_normal = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
+            let rx = nx * cos_a - nz * sin_a;
+            let rz = nx * sin_a + nz * cos_a;
+            [rx, ny, rz]
+        };
+
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+        let uvs = [
+            [u_min, v_max],
+            [u_max, v_max],
+            [u_max, v_min],
+            [u_min, v_min],
+        ];
+
+        let light = [1.0, 0.6]; // Brightly lit dropped item
+        let ao = 1.0;
+
+        let mut add_face = |p: [[f32; 3]; 4], n: [f32; 3]| {
+            let start_idx = mesh.vertices.len() as u32;
+            for i in 0..4 {
+                mesh.vertices.push(VoxelVertex {
+                    position: p[i],
+                    uv: uvs[i],
+                    normal: n,
+                    ao,
+                    light,
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                start_idx + 0,
+                start_idx + 1,
+                start_idx + 2,
+                start_idx + 2,
+                start_idx + 3,
+                start_idx + 0,
+            ]);
+        };
+
+        // PosZ
+        add_face(
+            [
+                rotate_point(-s, -s, s),
+                rotate_point(s, -s, s),
+                rotate_point(s, s, s),
+                rotate_point(-s, s, s),
+            ],
+            rotate_normal(0.0, 0.0, 1.0),
+        );
+        // NegZ
+        add_face(
+            [
+                rotate_point(s, -s, -s),
+                rotate_point(-s, -s, -s),
+                rotate_point(-s, s, -s),
+                rotate_point(s, s, -s),
+            ],
+            rotate_normal(0.0, 0.0, -1.0),
+        );
+        // PosX
+        add_face(
+            [
+                rotate_point(s, -s, s),
+                rotate_point(s, -s, -s),
+                rotate_point(s, s, -s),
+                rotate_point(s, s, s),
+            ],
+            rotate_normal(1.0, 0.0, 0.0),
+        );
+        // NegX
+        add_face(
+            [
+                rotate_point(-s, -s, -s),
+                rotate_point(-s, -s, s),
+                rotate_point(-s, s, s),
+                rotate_point(-s, s, -s),
+            ],
+            rotate_normal(-1.0, 0.0, 0.0),
+        );
+        // PosY
+        add_face(
+            [
+                rotate_point(-s, s, s),
+                rotate_point(s, s, s),
+                rotate_point(s, s, -s),
+                rotate_point(-s, s, -s),
+            ],
+            rotate_normal(0.0, 1.0, 0.0),
+        );
+        // NegY
+        add_face(
+            [
+                rotate_point(-s, -s, -s),
+                rotate_point(s, -s, -s),
+                rotate_point(s, -s, s),
+                rotate_point(-s, -s, s),
+            ],
+            rotate_normal(0.0, -1.0, 0.0),
+        );
+    }
+
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +590,44 @@ mod tests {
         assert_eq!(mesh.face_count(), 1536);
         assert_eq!(mesh.vertices.len(), 1536 * 4);
         assert_eq!(mesh.indices.len(), 1536 * 6);
+    }
+
+    #[test]
+    fn test_torch_slender_geometry() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        chunk.set(4, 4, 4, BlockId::TORCH);
+        let mesh = mesher.mesh_chunk(&chunk);
+
+        // Torch has 6 quads (24 vertices, 36 indices)
+        assert_eq!(mesh.face_count(), 6);
+        assert_eq!(mesh.vertices.len(), 24);
+        assert_eq!(mesh.indices.len(), 36);
+
+        // Verify vertices are slender and centered around (4.5, 4.5), not reaching unit cube borders (4.0 or 5.0) on X or Z
+        for v in &mesh.vertices {
+            assert!(v.position[0] >= 4.4 && v.position[0] <= 4.6);
+            assert!(v.position[2] >= 4.4 && v.position[2] <= 4.6);
+            assert!(v.position[1] >= 4.0 && v.position[1] <= 4.7);
+        }
+    }
+
+    #[test]
+    fn test_build_item_drops_mesh() {
+        let item_registry = blockgame_core::item::ItemRegistry::new();
+        let drops = vec![
+            blockgame_core::entity::ItemDrop::new(
+                glam::Vec3::new(10.0, 5.0, 10.0),
+                blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 3),
+            ),
+        ];
+
+        let mesh = build_item_drops_mesh(&drops, &item_registry);
+        // Mini cube has 6 faces (24 vertices, 36 indices)
+        assert_eq!(mesh.face_count(), 6);
+        assert_eq!(mesh.vertices.len(), 24);
+        assert_eq!(mesh.indices.len(), 36);
     }
 }

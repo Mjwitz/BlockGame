@@ -20,7 +20,7 @@ pub fn raycast_voxel(
     direction: Vec3,
     max_distance: f32,
     world: &World,
-    registry: &BlockRegistry,
+    _registry: &BlockRegistry,
 ) -> Option<RaycastHit> {
     let dir = direction.normalize();
 
@@ -30,9 +30,9 @@ pub fn raycast_voxel(
         origin.z.floor() as i32,
     );
 
-    // If starting inside a solid block
+    // If starting inside a block
     let start_block = world.get_block(current);
-    if registry.is_solid(start_block) {
+    if !start_block.is_air() {
         return Some(RaycastHit {
             hit_voxel: current,
             hit_face: Direction::PosY,
@@ -93,7 +93,7 @@ pub fn raycast_voxel(
         }
 
         let block = world.get_block(current);
-        if registry.is_solid(block) {
+        if !block.is_air() {
             let place_voxel = current + hit_face.normal_ivec();
             return Some(RaycastHit {
                 hit_voxel: current,
@@ -163,5 +163,28 @@ mod tests {
         // Hit the West (-X) face
         assert_eq!(hit.hit_face, Direction::NegX);
         assert_eq!(hit.place_voxel, IVec3::new(9, 5, 5));
+    }
+
+    #[test]
+    fn test_raycast_hitting_torch() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        // Place a non-solid torch at (3, 3, 3)
+        chunk.set(3, 3, 3, crate::block::BlockId::TORCH);
+        world.insert_chunk(chunk);
+
+        let hit = raycast_voxel(
+            Vec3::new(3.5, 5.0, 3.5),
+            Vec3::new(0.0, -1.0, 0.0),
+            5.0,
+            &world,
+            &registry,
+        );
+
+        assert!(hit.is_some());
+        let hit = hit.unwrap();
+        assert_eq!(hit.hit_voxel, IVec3::new(3, 3, 3));
     }
 }

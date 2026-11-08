@@ -90,14 +90,19 @@ impl WireframePipeline {
         Self { render_pipeline }
     }
 
-    /// Builds a vertex buffer for the 12 bounding box wireframe edges around a voxel coordinate.
-    pub fn create_box_buffer(device: &wgpu::Device, voxel: IVec3) -> wgpu::Buffer {
-        let x0 = voxel.x as f32 - 0.002;
-        let y0 = voxel.y as f32 - 0.002;
-        let z0 = voxel.z as f32 - 0.002;
-        let x1 = voxel.x as f32 + 1.002;
-        let y1 = voxel.y as f32 + 1.002;
-        let z1 = voxel.z as f32 + 1.002;
+    /// Builds a vertex buffer for the 12 bounding box wireframe edges around a voxel coordinate with custom bounds.
+    pub fn create_custom_box_buffer(
+        device: &wgpu::Device,
+        voxel: IVec3,
+        min_offset: glam::Vec3,
+        max_offset: glam::Vec3,
+    ) -> wgpu::Buffer {
+        let x0 = voxel.x as f32 + min_offset.x - 0.002;
+        let y0 = voxel.y as f32 + min_offset.y - 0.002;
+        let z0 = voxel.z as f32 + min_offset.z - 0.002;
+        let x1 = voxel.x as f32 + max_offset.x + 0.002;
+        let y1 = voxel.y as f32 + max_offset.y + 0.002;
+        let z1 = voxel.z as f32 + max_offset.z + 0.002;
 
         let vertices: [LineVertex; 24] = [
             // Bottom 4 edges
@@ -122,5 +127,10 @@ impl WireframePipeline {
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         })
+    }
+
+    /// Builds a vertex buffer for the 12 bounding box wireframe edges around a standard 1x1x1 voxel coordinate.
+    pub fn create_box_buffer(device: &wgpu::Device, voxel: IVec3) -> wgpu::Buffer {
+        Self::create_custom_box_buffer(device, voxel, glam::Vec3::ZERO, glam::Vec3::ONE)
     }
 }

@@ -359,6 +359,34 @@ impl TextureAtlas {
             }
         });
 
+        // 24: Solid White Quad (for UI boxes, tooltip backgrounds, tinted overlays)
+        atlas.paint_tile(24, |_x, _y| Rgba([255, 255, 255, 255]));
+
+        // 32..=126: ASCII Pixel Font (Tile index == ASCII byte code)
+        for c in crate::font::FONT_FIRST_CHAR..=crate::font::FONT_LAST_CHAR {
+            let glyph = crate::font::get_char_glyph(c);
+            atlas.paint_tile(c as u16, |x, y| {
+                let gx = (x / 2).min(7) as usize;
+                let gy = (y / 2).min(7) as usize;
+                let is_fg = ((glyph[gy] >> (7 - gx)) & 1) == 1;
+
+                if is_fg {
+                    Rgba([255, 255, 255, 255])
+                } else if x >= 1 && y >= 1 {
+                    let sx = ((x - 1) / 2).min(7) as usize;
+                    let sy = ((y - 1) / 2).min(7) as usize;
+                    let is_shadow = ((glyph[sy] >> (7 - sx)) & 1) == 1;
+                    if is_shadow {
+                        Rgba([35, 35, 35, 230])
+                    } else {
+                        Rgba([0, 0, 0, 0])
+                    }
+                } else {
+                    Rgba([0, 0, 0, 0])
+                }
+            });
+        }
+
         atlas
     }
 

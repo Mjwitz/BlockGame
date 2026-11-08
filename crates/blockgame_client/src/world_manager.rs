@@ -402,6 +402,7 @@ impl WorldManager {
         true
     }
 
+    #[allow(dead_code)]
     pub fn total_visible_faces(&self) -> usize {
         self.gpu_chunks.values().map(|g| (g.index_count / 6) as usize).sum()
     }
