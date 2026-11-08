@@ -2,6 +2,8 @@
 
 A high-performance procedural voxel sandbox engine inspired by Minecraft, engineered in **Rust** with **wgpu** for modern graphics and cross-platform native + WebAssembly execution.
 
+![BlockGame Procedural Landscape](assets/screenshots/landscape_render.png)
+
 ---
 
 ## 🌟 Architectural Highlights
