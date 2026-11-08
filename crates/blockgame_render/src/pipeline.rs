@@ -20,6 +20,7 @@ pub struct VoxelPipeline {
     pub camera_bind_group: wgpu::BindGroup,
     pub camera_bind_group_layout: wgpu::BindGroupLayout,
     pub texture_bind_group: wgpu::BindGroup,
+    pub texture_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl VoxelPipeline {
@@ -210,6 +211,7 @@ impl VoxelPipeline {
             camera_bind_group,
             camera_bind_group_layout,
             texture_bind_group,
+            texture_bind_group_layout,
         }
     }
 

@@ -209,6 +209,156 @@ impl TextureAtlas {
             }
         });
 
+        // 14: Stick
+        atlas.paint_tile(14, |x, y| {
+            let on_diag = (x + y == 14) || (x + y == 15);
+            let in_bounds = x >= 3 && x <= 12 && y >= 3 && y <= 12;
+            if on_diag && in_bounds {
+                Rgba([130, 95, 50, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 15: Wooden Pickaxe
+        atlas.paint_tile(15, |x, y| {
+            let is_handle = (x + y == 15 || x + y == 16) && x <= 10 && y >= 5;
+            let is_head = (y <= 4 && x >= 3 && x <= 13) || (x == 3 && y <= 6) || (x == 13 && y <= 6);
+            if is_head {
+                Rgba([160, 120, 70, 255]) // Wood head
+            } else if is_handle {
+                Rgba([100, 70, 35, 255]) // Stick handle
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 16: Stone Pickaxe
+        atlas.paint_tile(16, |x, y| {
+            let is_handle = (x + y == 15 || x + y == 16) && x <= 10 && y >= 5;
+            let is_head = (y <= 4 && x >= 3 && x <= 13) || (x == 3 && y <= 6) || (x == 13 && y <= 6);
+            if is_head {
+                let n = simple_noise(x, y, 77);
+                let val = (130.0 + n * 30.0) as u8;
+                Rgba([val, val, val, 255]) // Stone head
+            } else if is_handle {
+                Rgba([100, 70, 35, 255]) // Stick handle
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 17: Crafting Table
+        atlas.paint_tile(17, |x, y| {
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_grid = x == 7 || x == 8 || y == 7 || y == 8;
+            if is_border {
+                Rgba([90, 60, 30, 255])
+            } else if is_grid {
+                Rgba([120, 85, 45, 255])
+            } else {
+                let n = simple_noise(x, y, 117);
+                let r = (165.0 + n * 15.0) as u8;
+                let g = (125.0 + n * 12.0) as u8;
+                let b = (75.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            }
+        });
+
+        // 18: Coal
+        atlas.paint_tile(18, |x, y| {
+            let dx = (x as f32) - 7.5;
+            let dy = (y as f32) - 7.5;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist < 5.5 {
+                let n = simple_noise(x, y, 18);
+                let val = (35.0 + n * 20.0).max(10.0) as u8;
+                Rgba([val, val, (val as f32 * 1.1) as u8, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 19: Iron Ingot
+        atlas.paint_tile(19, |x, y| {
+            let in_bar = x >= 3 && x <= 12 && y >= 6 && y <= 10;
+            let is_highlight = y == 6 && x >= 4 && x <= 11;
+            if is_highlight {
+                Rgba([240, 245, 255, 255])
+            } else if in_bar {
+                let n = simple_noise(x, y, 19);
+                let val = (190.0 + n * 20.0) as u8;
+                Rgba([val, val, (val as f32 * 1.05).min(255.0) as u8, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 20: Iron Pickaxe
+        atlas.paint_tile(20, |x, y| {
+            let is_handle = (x + y == 15 || x + y == 16) && x <= 10 && y >= 5;
+            let is_head = (y <= 4 && x >= 3 && x <= 13) || (x == 3 && y <= 6) || (x == 13 && y <= 6);
+            if is_head {
+                let is_shine = y == 1 || (x == 3 && y == 2);
+                if is_shine {
+                    Rgba([245, 250, 255, 255])
+                } else {
+                    Rgba([190, 195, 205, 255])
+                }
+            } else if is_handle {
+                Rgba([100, 70, 35, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 21: Crosshair UI
+        atlas.paint_tile(21, |x, y| {
+            let is_center = (x >= 7 && x <= 8 && y >= 4 && y <= 11)
+                || (y >= 7 && y <= 8 && x >= 4 && x <= 11);
+            let is_border = (x >= 6 && x <= 9 && y >= 3 && y <= 12)
+                || (y >= 6 && y <= 9 && x >= 3 && x <= 12);
+
+            if is_center {
+                Rgba([245, 245, 245, 230])
+            } else if is_border {
+                Rgba([20, 20, 20, 140])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 22: Hotbar Slot Frame
+        atlas.paint_tile(22, |x, y| {
+            let is_outer = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_inset = x == 1 || y == 1;
+            let is_shadow = x == 14 || y == 14;
+
+            if is_outer {
+                Rgba([35, 35, 35, 230])
+            } else if is_inset {
+                Rgba([140, 140, 140, 200])
+            } else if is_shadow {
+                Rgba([50, 50, 50, 200])
+            } else {
+                Rgba([85, 85, 85, 180])
+            }
+        });
+
+        // 23: Hotbar Selected Highlight Frame
+        atlas.paint_tile(23, |x, y| {
+            let is_border_outer = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_border_inner = x == 1 || x == 14 || y == 1 || y == 14;
+
+            if is_border_outer {
+                Rgba([255, 255, 255, 255])
+            } else if is_border_inner {
+                Rgba([255, 220, 50, 255]) // Gold inner glow
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
         atlas
     }
 

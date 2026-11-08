@@ -7,6 +7,8 @@ use std::sync::{
 use blockgame_core::{
     block::{BlockId, BlockRegistry},
     chunk::{Chunk, ChunkPos},
+    entity::{ItemDrop, ItemDropStatus},
+    item::ItemSlot,
     physics::AABB,
     world::{world_to_chunk_coords, World},
 };
@@ -27,6 +29,7 @@ pub struct WorldManager {
     mesh_rx: Receiver<(ChunkPos, ChunkMesh)>,
     mesh_tx: Sender<(ChunkPos, ChunkMesh)>,
     last_player_chunk: ChunkPos,
+    pub item_drops: Vec<ItemDrop>,
 }
 
 impl WorldManager {
@@ -49,6 +52,7 @@ impl WorldManager {
             mesh_rx,
             mesh_tx,
             last_player_chunk: ChunkPos::new(i32::MAX, i32::MAX, i32::MAX),
+            item_drops: Vec::new(),
         }
     }
 
@@ -250,7 +254,7 @@ impl WorldManager {
         pos: IVec3,
         device: &wgpu::Device,
         pipeline: &VoxelPipeline,
-    ) -> bool {
+    ) -> Option<BlockId> {
         let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
         let mut chunks_to_rebuild = vec![chunk_pos];
 
@@ -270,16 +274,16 @@ impl WorldManager {
             chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
         }
 
-        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+        let (broken_block, new_meshes): (BlockId, Vec<(ChunkPos, ChunkMesh)>) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             if current.is_air() {
-                return false;
+                return None;
             }
             world.set_block(pos, BlockId::AIR);
 
             let mesher = ChunkMesher::new(&self.registry);
-            chunks_to_rebuild
+            let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
                     world.get_chunk(cpos).map(|chunk| {
@@ -290,7 +294,8 @@ impl WorldManager {
                         (cpos, mesh)
                     })
                 })
-                .collect()
+                .collect();
+            (current, meshes)
         };
 
         for (cpos, mesh) in new_meshes {
@@ -301,7 +306,33 @@ impl WorldManager {
             }
         }
 
-        true
+        Some(broken_block)
+    }
+
+    /// Spawns a floating item drop at the given world position
+    pub fn spawn_item_drop(&mut self, pos: Vec3, item: ItemSlot) {
+        if !item.is_empty() {
+            self.item_drops.push(ItemDrop::new(pos, item));
+        }
+    }
+
+    /// Updates item drops with gravity, collision, player magnetism, and returns any collected item slots
+    pub fn update_item_drops(&mut self, dt: f32, player_pos: Vec3) -> Vec<ItemSlot> {
+        let mut collected = Vec::new();
+        let world_guard = self.world.lock().unwrap();
+
+        self.item_drops.retain_mut(|drop| {
+            match drop.update(dt, &world_guard, &self.registry, player_pos) {
+                ItemDropStatus::Alive => true,
+                ItemDropStatus::Collected(item) => {
+                    collected.push(item);
+                    false
+                }
+                ItemDropStatus::Despawned => false,
+            }
+        });
+
+        collected
     }
 
     pub fn place_block(

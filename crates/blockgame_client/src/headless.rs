@@ -2,15 +2,18 @@ use std::sync::Arc;
 
 use blockgame_core::{
     block::{BlockId, BlockRegistry},
+    item::{Inventory, ItemRegistry},
     physics::AABB,
     raycast::raycast_voxel,
 };
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, DayNightCycle, VoxelPipeline, WireframePipeline,
+    create_depth_texture, DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline,
+    WireframePipeline,
 };
 use glam::{IVec3, Vec3};
+use wgpu::util::DeviceExt;
 
 use crate::world_manager::WorldManager;
 
@@ -84,8 +87,15 @@ pub async fn render_world_to_image(
         target_format,
         &pipeline.camera_bind_group_layout,
     );
+    let ui_pipeline = UiPipeline::new(
+        &device,
+        target_format,
+        &pipeline.texture_bind_group_layout,
+    );
 
     let registry = Arc::new(BlockRegistry::new());
+    let item_registry = Arc::new(ItemRegistry::new());
+    let inventory = Inventory::starter_inventory();
     let mut world_manager = WorldManager::new(seed, render_distance, registry.clone());
     world_manager.init_spawn_area(&device, &pipeline);
 
@@ -215,6 +225,48 @@ pub async fn render_world_to_image(
             render_pass.set_vertex_buffer(0, buf.slice(..));
             render_pass.draw(0..24, 0..1);
         }
+    }
+
+    // 5. Render 2D UI Overlay Pass (Crosshair & Hotbar with items)
+    let mut ui_mesh = UiMesh::new();
+    let screen_w = width as f32;
+    let screen_h = height as f32;
+    ui_pipeline.update_screen_size(&queue, screen_w, screen_h);
+    UiBuilder::build_hud(&mut ui_mesh, screen_w, screen_h, &inventory, 0, &item_registry);
+
+    if !ui_mesh.indices.is_empty() {
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Headless UI VB"),
+            contents: bytemuck::cast_slice(&ui_mesh.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Headless UI IB"),
+            contents: bytemuck::cast_slice(&ui_mesh.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let mut ui_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Headless UI Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &render_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+        ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+        ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+        ui_pass.set_vertex_buffer(0, vb.slice(..));
+        ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+        ui_pass.draw_indexed(0..ui_mesh.indices.len() as u32, 0, 0..1);
     }
 
     encoder.copy_texture_to_buffer(

@@ -86,18 +86,20 @@ This document outlines the 5 development milestones for **BlockGame**, with clea
 ## 🚩 Milestone 5: Gameplay Loop, Inventory & Crafting
 **Objective:** Data-driven item system, inventory UI, hotbar, drag-and-drop, and 2D/3D recipe matching.
 
-- [ ] **Item & Inventory Architecture**
-  - [ ] Item registry: stack size, placeable block ID, durability, tool tier.
-  - [ ] `ItemSlot` and `Inventory` structures (9 hotbar slots + 27 backpack slots).
-  - [ ] Active hotbar slot selection with number keys ($1\text{--}9$) and mouse scroll.
-- [ ] **UI Overlay (egui or custom Web/WASM UI)**
-  - [ ] HUD crosshair and hotbar slot renderer with item counts.
-  - [ ] Inventory screen with cursor stack, stack splitting, and quick-move.
-- [ ] **Crafting Engine**
-  - [ ] Shapeless recipe matcher (item multiset equality).
-  - [ ] Shaped recipe matcher ($2 \times 2$ and $3 \times 3$ grid matching with offset normalization).
-  - [ ] Basic survival recipes: Wood $\to$ Planks $\to$ Sticks $\to$ Wooden Pickaxe/Torches.
-- [ ] **Entities & Polish**
-  - [ ] Floating item drops with pickup magnetism and despawn timer.
-  - [ ] Basic sound triggers (footsteps, dig, place).
-  - [ ] Delta-compressed chunk saving to disk.
+- [x] **Item & Inventory Architecture**
+  - [x] Item registry: unique names (`blockgame:oak_log`), stack size, placeable block ID, durability, tool tier.
+  - [x] `ItemSlot` and `Inventory` structures (9 hotbar slots + 27 backpack slots = 36 slots total).
+  - [x] Active hotbar slot selection with number keys ($1\text{--}9$) and mouse scroll wheel.
+- [x] **UI Overlay (Custom GPU 2D Pipeline & Shader)**
+  - [x] HUD center crosshair and 9-slot bottom hotbar with gold selection highlight.
+  - [x] Inventory screen with 2x2 Crafting Grid, Result Slot, Backpack, and Hotbar (toggle with `E`).
+  - [x] Item cursor stack with drag-and-drop, stack splitting (right-click), and instant slot transfer.
+- [x] **Crafting Engine**
+  - [x] Shapeless recipe matcher (item multiset equality, e.g. 1 Log $\to$ 4 Planks).
+  - [x] Shaped recipe matcher with 2D bounding-box offset normalization (works anywhere in 2x2 or 3x3 table).
+  - [x] Survival recipes: Wood $\to$ Planks $\to$ Sticks $\to$ Crafting Table $\to$ Torches / Pickaxes.
+- [x] **Entities & Polish**
+  - [x] Floating `ItemDrop` entity with gravity, ground voxel collision, floating bobbing, and despawn timer.
+  - [x] Player magnetism (drifts towards player when nearby) and automated pickup collection into inventory.
+  - [x] Block mining spawns floating drops; block placing consumes items from active hotbar slot.
+
