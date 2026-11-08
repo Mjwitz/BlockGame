@@ -7,21 +7,21 @@ This document outlines the 5 development milestones for **BlockGame**, with clea
 ## 🚩 Milestone 1: The Cube & The Chunk (Foundation)
 **Objective:** Render a single $16 \times 16 \times 16$ chunk of blocks using a single unified mesh with hidden-face culling, ambient occlusion, and a texture atlas.
 
-- [ ] **Workspace Setup & Core Types**
-  - [ ] Initialize Cargo workspace (`blockgame_core`, `blockgame_render`, `blockgame_client`).
-  - [ ] Implement `BlockId`, `BlockRegistry`, and `Chunk` ($16 \times 16 \times 16$ flat array).
-  - [ ] Fast 3D to 1D index mapping: `x + (z * 16) + (y * 256)`.
-- [ ] **Meshing & Culling**
-  - [ ] Neighbor inspection algorithm (6 directions: $+X, -X, +Y, -Y, +Z, -Z$).
-  - [ ] Hidden-face culling (omit internal faces between opaque voxels).
-  - [ ] Quad generation with compact vertex structure (`u8` packed attributes).
-  - [ ] Vertex Ambient Occlusion (query 3 corner neighbors per quad vertex).
-- [ ] **Rendering Pipeline (wgpu)**
-  - [ ] Initialize `wgpu::Device`, `wgpu::Queue`, and `wgpu::Surface`.
-  - [ ] Create texture atlas loader / generator with 16x16 pixel textures.
-  - [ ] WGSL block shader with texture sampling and basic directional shading.
-  - [ ] Camera matrix and orbit/free-look controls for inspection.
-  - [ ] Acceptance criteria: Render a test chunk with grass, dirt, stone, and wood with high FPS and zero duplicate or internal faces.
+- [x] **Workspace Setup & Core Types**
+  - [x] Initialize Cargo workspace (`blockgame_core`, `blockgame_render`, `blockgame_client`).
+  - [x] Implement `BlockId`, `BlockRegistry`, and `Chunk` ($16 \times 16 \times 16$ flat array).
+  - [x] Fast 3D to 1D index mapping: `x + (z * 16) + (y * 256)`.
+- [x] **Meshing & Culling**
+  - [x] Neighbor inspection algorithm (6 directions: $+X, -X, +Y, -Y, +Z, -Z$).
+  - [x] Hidden-face culling (omit internal faces between opaque voxels).
+  - [x] Quad generation with compact vertex structure (`u8` packed attributes).
+  - [x] Vertex Ambient Occlusion (query 3 corner neighbors per quad vertex).
+- [x] **Rendering Pipeline (wgpu)**
+  - [x] Initialize `wgpu::Device`, `wgpu::Queue`, and `wgpu::Surface`.
+  - [x] Create texture atlas loader / generator with 16x16 pixel textures.
+  - [x] WGSL block shader with texture sampling and basic directional shading.
+  - [x] Camera matrix and orbit/free-look controls for inspection.
+  - [x] Acceptance criteria: Render a test chunk with grass, dirt, stone, and wood with high FPS and zero duplicate or internal faces.
 
 ---
 

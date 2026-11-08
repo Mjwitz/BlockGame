@@ -1,0 +1,21 @@
+[package]
+name = "blockgame_client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "blockgame_client"
+path = "src/main.rs"
+
+[dependencies]
+blockgame_core = { path = "../blockgame_core" }
+blockgame_render = { path = "../blockgame_render" }
+glam.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+log.workspace = true
+env_logger.workspace = true
+pollster = "1.0"
+winit = "0.30.9"
+wgpu = "24.0.0"

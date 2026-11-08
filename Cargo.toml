@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/blockgame_core",
+    "crates/blockgame_render",
+    "crates/blockgame_client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["BlockGame Contributors"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+glam = "0.34.3"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2.0"
