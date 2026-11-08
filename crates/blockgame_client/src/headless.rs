@@ -173,13 +173,20 @@ pub async fn render_world_to_image(
     camera.update_uniform_with_atmosphere(&mut camera_uniform, width as f32 / height as f32, &day_night);
     pipeline.update_camera(&queue, &camera_uniform);
 
-    // Spawn an item drop on the grass in clear view of the camera
+    // Spawn item drops on the grass in clear view of the camera: wood log and slender glowing torch
     let mut item_drop = blockgame_core::entity::ItemDrop::new(
         Vec3::new(-2.8, (base_y + 2) as f32 + 0.15, 7.2),
         blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 4),
     );
     item_drop.age = 1.2;
     world_manager.item_drops.push(item_drop);
+
+    let mut torch_drop = blockgame_core::entity::ItemDrop::new(
+        Vec3::new(-2.2, (base_y + 2) as f32 + 0.15, 6.7),
+        blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TORCH, 2),
+    );
+    torch_drop.age = 0.8;
+    world_manager.item_drops.push(torch_drop);
 
     let drops_mesh = blockgame_render::build_item_drops_mesh(
         &world_manager.item_drops,
@@ -348,6 +355,138 @@ pub async fn render_world_to_image(
     )?;
 
     log::info!("Successfully saved rendered interaction image to {}", output_path);
+
+    // Also render first-person view with a held 3D block (Wood Log)
+    {
+        let mut block_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Block Held Encoder"),
+        });
+
+        {
+            let mut render_pass = block_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Voxel Block Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: sky[0] as f64,
+                            g: sky[1] as f64,
+                            b: sky[2] as f64,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            if let Some(drop_mesh) = &item_drop_gpu_mesh {
+                drop_mesh.draw(&mut render_pass);
+            }
+        }
+
+        let mut block_ui_mesh = UiMesh::new();
+        // Slot 1 is Wood Log!
+        UiBuilder::build_hud(&mut block_ui_mesh, screen_w, screen_h, &inventory, 1, &item_registry, 0.0);
+
+        if !block_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Block UI VB"),
+                contents: bytemuck::cast_slice(&block_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Block UI IB"),
+                contents: bytemuck::cast_slice(&block_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = block_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Block UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..block_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        block_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(block_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut block_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            block_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "block_held_render.png",
+            &block_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved block held render image to block_held_render.png");
+    }
 
     // Also render inventory screen overlay with hover tooltip and stack counts
     let mut inv_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

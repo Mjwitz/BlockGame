@@ -41,6 +41,7 @@ impl<'a> ChunkMesher<'a> {
     }
 
     /// Meshes a single standalone chunk (out-of-bounds voxels are treated as Air).
+    /// Meshes a single standalone chunk (out-of-bounds voxels are treated as Air).
     pub fn mesh_chunk(&self, chunk: &Chunk) -> ChunkMesh {
         self.mesh_chunk_with_neighbors(chunk, |_, _, _| BlockId::AIR)
     }
@@ -50,8 +51,20 @@ impl<'a> ChunkMesher<'a> {
     where
         F: Fn(i32, i32, i32) -> BlockId,
     {
+        self.mesh_chunk_with_lighting(chunk, &[], get_neighbor)
+    }
+
+    /// Meshes a chunk with external light sources for cross-chunk flood fill lighting.
+    pub fn mesh_chunk_with_lighting<F>(
+        &self,
+        chunk: &Chunk,
+        light_sources_rel: &[(glam::IVec3, u8)],
+        get_neighbor: F,
+    ) -> ChunkMesh
+    where
+        F: Fn(i32, i32, i32) -> BlockId,
+    {
         let mut mesh = ChunkMesh::new();
-        let light_map = blockgame_core::lighting::calculate_chunk_lighting(chunk, self.registry);
 
         let query_block = |x: i32, y: i32, z: i32| -> BlockId {
             if x >= 0
@@ -66,6 +79,13 @@ impl<'a> ChunkMesher<'a> {
                 get_neighbor(x, y, z)
             }
         };
+
+        let light_map = blockgame_core::lighting::calculate_chunk_lighting_with_sources(
+            chunk,
+            self.registry,
+            light_sources_rel,
+            &query_block,
+        );
 
         for y in 0..CHUNK_SIZE_Y {
             for z in 0..CHUNK_SIZE_Z {
@@ -97,15 +117,15 @@ impl<'a> ChunkMesher<'a> {
                             let tile_id = self.registry.get_texture(block_id, dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
                             
-                            // Sample light from adjacent air block
+                            // Sample light from adjacent air block (supports boundary voxels from [-1..16])
                             let light = if nx >= 0 && nx < CHUNK_SIZE_X as i32
                                 && ny >= 0 && ny < CHUNK_SIZE_Y as i32
                                 && nz >= 0 && nz < CHUNK_SIZE_Z as i32 {
                                 let lv = light_map.get(nx as usize, ny as usize, nz as usize);
                                 [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
                             } else {
-                                // Default sunlight for boundary exterior faces
-                                [1.0, 0.0]
+                                let blk = light_map.get_block_rel(nx, ny, nz);
+                                [1.0, blk as f32 / 15.0]
                             };
 
                             self.build_face(&mut mesh, chunk.pos, ix, iy, iz, dir, uv, light, &query_block);
@@ -442,6 +462,131 @@ pub fn build_item_drops_mesh(
             [rx, ny, rz]
         };
 
+        if drop.item.item_id == blockgame_core::item::ItemId::TORCH {
+            // Slender 3D Torch Model
+            let rw = 0.035; // width radius
+            let rh = 0.12;  // height radius (total height ~0.24)
+            let light = [1.0, 1.0]; // Self-illuminated warm torch glow
+            let ao = 1.0;
+
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(13);
+            let u_width = u_max - u_min;
+            let v_height = v_max - v_min;
+
+            let u_side_left = u_min + u_width * (7.0 / 16.0);
+            let u_side_right = u_min + u_width * (9.0 / 16.0);
+            let v_side_top = v_min + v_height * (1.0 / 16.0);
+            let v_side_bottom = v_min + v_height * (16.0 / 16.0);
+
+            let side_uvs = [
+                [u_side_left, v_side_bottom],
+                [u_side_right, v_side_bottom],
+                [u_side_right, v_side_top],
+                [u_side_left, v_side_top],
+            ];
+
+            let u_top_left = u_min + u_width * (7.0 / 16.0);
+            let u_top_right = u_min + u_width * (9.0 / 16.0);
+            let v_top_min = v_min + v_height * (2.0 / 16.0);
+            let v_top_max = v_min + v_height * (4.0 / 16.0);
+
+            let top_uvs = [
+                [u_top_left, v_top_max],
+                [u_top_right, v_top_max],
+                [u_top_right, v_top_min],
+                [u_top_left, v_top_min],
+            ];
+
+            let mut add_torch_quad = |p: [[f32; 3]; 4], uvs: [[f32; 2]; 4], n: [f32; 3]| {
+                let start_idx = mesh.vertices.len() as u32;
+                for i in 0..4 {
+                    mesh.vertices.push(VoxelVertex {
+                        position: p[i],
+                        uv: uvs[i],
+                        normal: n,
+                        ao,
+                        light,
+                    });
+                }
+                mesh.indices.extend_from_slice(&[
+                    start_idx + 0,
+                    start_idx + 1,
+                    start_idx + 2,
+                    start_idx + 2,
+                    start_idx + 3,
+                    start_idx + 0,
+                ]);
+            };
+
+            // South (+Z)
+            add_torch_quad(
+                [
+                    rotate_point(-rw, -rh, rw),
+                    rotate_point(rw, -rh, rw),
+                    rotate_point(rw, rh, rw),
+                    rotate_point(-rw, rh, rw),
+                ],
+                side_uvs,
+                rotate_normal(0.0, 0.0, 1.0),
+            );
+            // North (-Z)
+            add_torch_quad(
+                [
+                    rotate_point(rw, -rh, -rw),
+                    rotate_point(-rw, -rh, -rw),
+                    rotate_point(-rw, rh, -rw),
+                    rotate_point(rw, rh, -rw),
+                ],
+                side_uvs,
+                rotate_normal(0.0, 0.0, -1.0),
+            );
+            // East (+X)
+            add_torch_quad(
+                [
+                    rotate_point(rw, -rh, rw),
+                    rotate_point(rw, -rh, -rw),
+                    rotate_point(rw, rh, -rw),
+                    rotate_point(rw, rh, rw),
+                ],
+                side_uvs,
+                rotate_normal(1.0, 0.0, 0.0),
+            );
+            // West (-X)
+            add_torch_quad(
+                [
+                    rotate_point(-rw, -rh, -rw),
+                    rotate_point(-rw, -rh, rw),
+                    rotate_point(-rw, rh, rw),
+                    rotate_point(-rw, rh, -rw),
+                ],
+                side_uvs,
+                rotate_normal(-1.0, 0.0, 0.0),
+            );
+            // Top (+Y)
+            add_torch_quad(
+                [
+                    rotate_point(-rw, rh, rw),
+                    rotate_point(rw, rh, rw),
+                    rotate_point(rw, rh, -rw),
+                    rotate_point(-rw, rh, -rw),
+                ],
+                top_uvs,
+                rotate_normal(0.0, 1.0, 0.0),
+            );
+            // Bottom (-Y)
+            add_torch_quad(
+                [
+                    rotate_point(-rw, -rh, -rw),
+                    rotate_point(rw, -rh, -rw),
+                    rotate_point(rw, -rh, rw),
+                    rotate_point(-rw, -rh, rw),
+                ],
+                top_uvs,
+                rotate_normal(0.0, -1.0, 0.0),
+            );
+            continue;
+        }
+
         let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
         let uvs = [
             [u_min, v_max],
@@ -629,5 +774,19 @@ mod tests {
         assert_eq!(mesh.face_count(), 6);
         assert_eq!(mesh.vertices.len(), 24);
         assert_eq!(mesh.indices.len(), 36);
+
+        // Torch drop
+        let torch_drops = vec![
+            blockgame_core::entity::ItemDrop::new(
+                glam::Vec3::new(10.0, 5.0, 10.0),
+                blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TORCH, 1),
+            ),
+        ];
+        let torch_mesh = build_item_drops_mesh(&torch_drops, &item_registry);
+        assert_eq!(torch_mesh.face_count(), 6);
+        assert_eq!(torch_mesh.vertices.len(), 24);
+        assert_eq!(torch_mesh.indices.len(), 36);
+        // Torch drop is self-illuminated: light == [1.0, 1.0]
+        assert_eq!(torch_mesh.vertices[0].light, [1.0, 1.0]);
     }
 }

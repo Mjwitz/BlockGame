@@ -102,7 +102,8 @@ impl WorldManager {
             .filter_map(|&pos| {
                 world_guard.get_chunk(pos).map(|chunk| {
                     let origin = pos.to_world_origin();
-                    let mesh = mesher.mesh_chunk_with_neighbors(chunk, |lx, ly, lz| {
+                    let sources = world_guard.get_light_sources_near(origin, 15);
+                    let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
                         world_guard.get_block(origin + IVec3::new(lx, ly, lz))
                     });
                     (pos, mesh)
@@ -208,7 +209,8 @@ impl WorldManager {
                 for &pos in &to_generate {
                     if let Some(chunk) = world.get_chunk(pos) {
                         let origin = pos.to_world_origin();
-                        let mesh = mesher.mesh_chunk_with_neighbors(chunk, |lx, ly, lz| {
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
                             world.get_block(origin + IVec3::new(lx, ly, lz))
                         });
                         let _ = tx.send((pos, mesh));
@@ -280,7 +282,24 @@ impl WorldManager {
             if current.is_air() {
                 return None;
             }
+            let is_torch = current == BlockId::TORCH;
             world.set_block(pos, BlockId::AIR);
+
+            if is_torch {
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            chunks_to_rebuild.push(ChunkPos::new(
+                                chunk_pos.0.x + dx,
+                                chunk_pos.0.y + dy,
+                                chunk_pos.0.z + dz,
+                            ));
+                        }
+                    }
+                }
+            }
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
 
             let mesher = ChunkMesher::new(&self.registry);
             let meshes = chunks_to_rebuild
@@ -288,7 +307,8 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world.get_chunk(cpos).map(|chunk| {
                         let origin = cpos.to_world_origin();
-                        let mesh = mesher.mesh_chunk_with_neighbors(chunk, |x, y, z| {
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
                             world.get_block(origin + IVec3::new(x, y, z))
                         });
                         (cpos, mesh)
@@ -374,7 +394,24 @@ impl WorldManager {
             if !current.is_air() {
                 return false;
             }
+            let is_torch = block_id == BlockId::TORCH;
             world.set_block(pos, block_id);
+
+            if is_torch {
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            chunks_to_rebuild.push(ChunkPos::new(
+                                chunk_pos.0.x + dx,
+                                chunk_pos.0.y + dy,
+                                chunk_pos.0.z + dz,
+                            ));
+                        }
+                    }
+                }
+            }
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
 
             let mesher = ChunkMesher::new(&self.registry);
             chunks_to_rebuild
@@ -382,7 +419,8 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world.get_chunk(cpos).map(|chunk| {
                         let origin = cpos.to_world_origin();
-                        let mesh = mesher.mesh_chunk_with_neighbors(chunk, |x, y, z| {
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
                             world.get_block(origin + IVec3::new(x, y, z))
                         });
                         (cpos, mesh)

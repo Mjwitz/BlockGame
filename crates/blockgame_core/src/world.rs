@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::IVec3;
 
@@ -35,12 +35,14 @@ pub fn chunk_to_world_coords(chunk_pos: ChunkPos, lx: usize, ly: usize, lz: usiz
 #[derive(Default)]
 pub struct World {
     chunks: HashMap<ChunkPos, Chunk>,
+    pub light_sources: HashSet<IVec3>,
 }
 
 impl World {
     pub fn new() -> Self {
         Self {
             chunks: HashMap::new(),
+            light_sources: HashSet::new(),
         }
     }
 
@@ -57,7 +59,15 @@ impl World {
     pub fn set_block(&mut self, world_pos: IVec3, block_id: BlockId) -> bool {
         let (cpos, lx, ly, lz) = world_to_chunk_coords(world_pos);
         if let Some(chunk) = self.chunks.get_mut(&cpos) {
-            chunk.set(lx, ly, lz, block_id)
+            let ok = chunk.set(lx, ly, lz, block_id);
+            if ok {
+                if block_id == BlockId::TORCH {
+                    self.light_sources.insert(world_pos);
+                } else {
+                    self.light_sources.remove(&world_pos);
+                }
+            }
+            ok
         } else {
             false
         }
@@ -75,12 +85,49 @@ impl World {
 
     #[inline]
     pub fn insert_chunk(&mut self, chunk: Chunk) -> Option<Chunk> {
+        // Index any light sources in this chunk
+        let origin = chunk.pos.to_world_origin();
+        for y in 0..CHUNK_SIZE_Y {
+            for z in 0..CHUNK_SIZE_Z {
+                for x in 0..CHUNK_SIZE_X {
+                    if chunk.get_unchecked(x, y, z) == BlockId::TORCH {
+                        self.light_sources.insert(origin + IVec3::new(x as i32, y as i32, z as i32));
+                    }
+                }
+            }
+        }
         self.chunks.insert(chunk.pos, chunk)
     }
 
     #[inline]
     pub fn remove_chunk(&mut self, pos: ChunkPos) -> Option<Chunk> {
+        self.light_sources.retain(|p| {
+            let (cp, _, _, _) = world_to_chunk_coords(*p);
+            cp != pos
+        });
         self.chunks.remove(&pos)
+    }
+
+    /// Returns relative coordinates and luminance for all light sources within reach of a chunk.
+    pub fn get_light_sources_near(&self, origin: IVec3, max_reach: i32) -> Vec<(IVec3, u8)> {
+        let mut sources = Vec::new();
+        let min_x = origin.x - max_reach;
+        let max_x = origin.x + CHUNK_SIZE_X as i32 + max_reach;
+        let min_y = origin.y - max_reach;
+        let max_y = origin.y + CHUNK_SIZE_Y as i32 + max_reach;
+        let min_z = origin.z - max_reach;
+        let max_z = origin.z + CHUNK_SIZE_Z as i32 + max_reach;
+
+        for &pos in &self.light_sources {
+            if pos.x >= min_x && pos.x <= max_x
+                && pos.y >= min_y && pos.y <= max_y
+                && pos.z >= min_z && pos.z <= max_z
+            {
+                let rel = pos - origin;
+                sources.push((rel, 14));
+            }
+        }
+        sources
     }
 
     #[inline]

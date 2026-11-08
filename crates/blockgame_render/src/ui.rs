@@ -106,6 +106,30 @@ impl UiMesh {
             base_idx, base_idx + 2, base_idx + 3,
         ]);
     }
+
+    pub fn add_quad_vertices(
+        &mut self,
+        positions: [[f32; 2]; 4],
+        uvs: [[f32; 2]; 4],
+        colors: [[f32; 4]; 4],
+    ) {
+        let base_idx = self.vertices.len() as u32;
+        for i in 0..4 {
+            self.vertices.push(UiVertex {
+                position: positions[i],
+                uv: uvs[i],
+                color: colors[i],
+            });
+        }
+        self.indices.extend_from_slice(&[
+            base_idx,
+            base_idx + 1,
+            base_idx + 2,
+            base_idx,
+            base_idx + 2,
+            base_idx + 3,
+        ]);
+    }
 }
 
 pub struct UiPipeline {
@@ -327,7 +351,7 @@ impl UiBuilder {
         );
     }
 
-    /// Renders the first-person held item in the lower-right corner of the player's view.
+    /// Renders the first-person hand and held item in Minecraft style, extending from the lower-right.
     pub fn draw_held_item(
         mesh: &mut UiMesh,
         screen_w: f32,
@@ -336,39 +360,244 @@ impl UiBuilder {
         registry: &ItemRegistry,
         walk_time: f32,
     ) {
-        if active_slot.is_empty() {
+        let white_uv_bounds = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let white_uv = [
+            [white_uv_bounds[0], white_uv_bounds[1]],
+            [white_uv_bounds[2], white_uv_bounds[1]],
+            [white_uv_bounds[2], white_uv_bounds[3]],
+            [white_uv_bounds[0], white_uv_bounds[3]],
+        ];
+
+        let scale = (screen_h / 720.0).clamp(0.7, 1.5);
+        let bob_x = (walk_time * 4.0).sin() * 8.0 * scale;
+        let bob_y = (walk_time * 8.0).cos().abs() * 9.0 * scale;
+
+        // Arm key geometry points reaching up from bottom-right
+        let p_arm_bot_r = [screen_w + 40.0 * scale + bob_x, screen_h + 30.0 * scale];
+        let p_arm_bot_l = [screen_w - 95.0 * scale + bob_x, screen_h + 30.0 * scale];
+        let p_arm_bot_m = [(p_arm_bot_l[0] + p_arm_bot_r[0]) * 0.5, (p_arm_bot_l[1] + p_arm_bot_r[1]) * 0.5];
+
+        let p_sleeve_r = [screen_w - 20.0 * scale + bob_x, screen_h - 130.0 * scale + bob_y];
+        let p_sleeve_l = [screen_w - 145.0 * scale + bob_x, screen_h - 85.0 * scale + bob_y];
+        let p_sleeve_m = [(p_sleeve_l[0] + p_sleeve_r[0]) * 0.5, (p_sleeve_l[1] + p_sleeve_r[1]) * 0.5];
+
+        let p_wrist_r = [screen_w - 80.0 * scale + bob_x, screen_h - 195.0 * scale + bob_y];
+        let p_wrist_l = [screen_w - 185.0 * scale + bob_x, screen_h - 150.0 * scale + bob_y];
+        let p_wrist_m = [(p_wrist_l[0] + p_wrist_r[0]) * 0.5, (p_wrist_l[1] + p_wrist_r[1]) * 0.5];
+
+        let p_hand = [screen_w - 155.0 * scale + bob_x, screen_h - 200.0 * scale + bob_y];
+
+        let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
+        let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
+        let col_skin_top = [0.88, 0.64, 0.48, 1.0];
+        let col_skin_side = [0.72, 0.48, 0.35, 1.0];
+        let col_skin_light = [0.93, 0.69, 0.53, 1.0];
+
+        // 1. Draw sleeve quads (side face and top face)
+        mesh.add_quad_vertices(
+            [p_arm_bot_l, p_arm_bot_m, p_sleeve_m, p_sleeve_l],
+            white_uv,
+            [col_sleeve_side; 4],
+        );
+        mesh.add_quad_vertices(
+            [p_arm_bot_m, p_arm_bot_r, p_sleeve_r, p_sleeve_m],
+            white_uv,
+            [col_sleeve_top; 4],
+        );
+
+        // 2. Draw forearm quads (side face and top face)
+        mesh.add_quad_vertices(
+            [p_sleeve_l, p_sleeve_m, p_wrist_m, p_wrist_l],
+            white_uv,
+            [col_skin_side; 4],
+        );
+        mesh.add_quad_vertices(
+            [p_sleeve_m, p_sleeve_r, p_wrist_r, p_wrist_m],
+            white_uv,
+            [col_skin_top; 4],
+        );
+
+        let def_opt = registry.get(active_slot.item_id);
+
+        if active_slot.is_empty() || def_opt.is_none() {
+            // Empty hand: draw clenched rectangular fist
+            let p_fist_tip_l = [p_hand[0] - 25.0 * scale, p_hand[1] - 25.0 * scale];
+            let p_fist_tip_r = [p_hand[0] + 40.0 * scale, p_hand[1] - 45.0 * scale];
+            mesh.add_quad_vertices(
+                [p_wrist_l, p_wrist_r, p_fist_tip_r, p_fist_tip_l],
+                white_uv,
+                [col_skin_light; 4],
+            );
             return;
         }
 
-        let def = match registry.get(active_slot.item_id) {
-            Some(d) => d,
-            None => return,
-        };
+        let def = def_opt.unwrap();
+        let block_registry = blockgame_core::block::BlockRegistry::new();
 
-        // Gentle walking sway
-        let bob_x = (walk_time * 4.0).sin() * 7.0;
-        let bob_y = (walk_time * 8.0).cos().abs() * 9.0;
+        if let Some(block_id) = def.placeable_block {
+            if block_id == blockgame_core::block::BlockId::TORCH {
+                // Held Torch: 3D slender torch angled forward-inward with glowing flame
+                let base = [p_hand[0] + 15.0 * scale, p_hand[1] + 35.0 * scale];
+                let tip = [p_hand[0] - 45.0 * scale, p_hand[1] - 85.0 * scale];
+                let dir_x = tip[0] - base[0];
+                let dir_y = tip[1] - base[1];
+                let len = (dir_x * dir_x + dir_y * dir_y).sqrt().max(0.001);
+                let norm_x = -dir_y / len;
+                let norm_y = dir_x / len;
 
-        let hand_size = 140.0;
-        let hand_x = screen_w - hand_size - 10.0 + bob_x;
-        let hand_y = screen_h - hand_size - 10.0 + bob_y;
+                let half_w = 7.0 * scale;
+                let p0 = [base[0] - norm_x * half_w, base[1] - norm_y * half_w];
+                let p1 = [base[0] + norm_x * half_w, base[1] + norm_y * half_w];
+                let p2 = [tip[0] + norm_x * half_w, tip[1] + norm_y * half_w];
+                let p3 = [tip[0] - norm_x * half_w, tip[1] - norm_y * half_w];
 
-        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-        mesh.add_quad(
-            hand_x,
-            hand_y,
-            hand_size,
-            hand_size,
-            icon_uv,
-            [1.0, 1.0, 1.0, 1.0],
-        );
+                let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(13);
+                let u_w = u_max - u_min;
+                let v_h = v_max - v_min;
+                let u_side_left = u_min + u_w * (7.0 / 16.0);
+                let u_side_right = u_min + u_w * (9.0 / 16.0);
+                let v_side_top = v_min + v_h * (1.0 / 16.0);
+                let v_side_bottom = v_min + v_h * (16.0 / 16.0);
 
+                let torch_uvs = [
+                    [u_side_left, v_side_bottom],
+                    [u_side_right, v_side_bottom],
+                    [u_side_right, v_side_top],
+                    [u_side_left, v_side_top],
+                ];
+
+                mesh.add_quad_vertices(
+                    [p0, p1, p2, p3],
+                    torch_uvs,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
+                );
+
+                // Glowing Flame Head (extracted top flame region)
+                let flame_size = 24.0 * scale;
+                let flame_x = tip[0] - flame_size * 0.5;
+                let flame_y = tip[1] - flame_size * 0.5;
+                let u_flame_left = u_min + u_w * (6.0 / 16.0);
+                let u_flame_right = u_min + u_w * (10.0 / 16.0);
+                let v_flame_top = v_min + v_h * (0.0 / 16.0);
+                let v_flame_bottom = v_min + v_h * (5.0 / 16.0);
+                let flame_uv = [u_flame_left, v_flame_top, u_flame_right, v_flame_bottom];
+                mesh.add_quad(
+                    flame_x,
+                    flame_y,
+                    flame_size,
+                    flame_size,
+                    flame_uv,
+                    [1.0, 0.95, 0.65, 1.0],
+                );
+
+                // Fingers clasping the torch handle
+                let p_grasp_0 = [p_hand[0] - 12.0 * scale, p_hand[1] + 10.0 * scale];
+                let p_grasp_1 = [p_hand[0] + 28.0 * scale, p_hand[1] + 2.0 * scale];
+                let p_grasp_2 = [p_hand[0] + 22.0 * scale, p_hand[1] + 28.0 * scale];
+                let p_grasp_3 = [p_hand[0] - 18.0 * scale, p_hand[1] + 32.0 * scale];
+                mesh.add_quad_vertices(
+                    [p_grasp_0, p_grasp_1, p_grasp_2, p_grasp_3],
+                    white_uv,
+                    [col_skin_light; 4],
+                );
+            } else {
+                // Held Block: 3D isometric cube
+                let bc = [p_hand[0] - 15.0 * scale, p_hand[1] - 45.0 * scale];
+                let bs = 55.0 * scale;
+
+                let top_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
+                let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+
+                let [u0_t, v0_t, u1_t, v1_t] = TextureAtlas::get_uv_bounds(top_tile);
+                let [u0_s, v0_s, u1_s, v1_s] = TextureAtlas::get_uv_bounds(side_tile);
+
+                // Top Face (diamond)
+                let p_top_n = [bc[0], bc[1] - bs * 0.55];
+                let p_top_e = [bc[0] + bs * 0.88, bc[1] - bs * 0.10];
+                let p_top_s = [bc[0], bc[1] + bs * 0.35];
+                let p_top_w = [bc[0] - bs * 0.88, bc[1] - bs * 0.10];
+
+                let uvs_top = [
+                    [u0_t, v0_t],
+                    [u1_t, v0_t],
+                    [u1_t, v1_t],
+                    [u0_t, v1_t],
+                ];
+                mesh.add_quad_vertices(
+                    [p_top_w, p_top_n, p_top_e, p_top_s],
+                    uvs_top,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
+                );
+
+                // Left Face (parallelogram)
+                let p_left_bot_w = [p_top_w[0], p_top_w[1] + bs * 0.95];
+                let p_left_bot_e = [p_top_s[0], p_top_s[1] + bs * 0.95];
+                let uvs_left = [
+                    [u0_s, v0_s],
+                    [u1_s, v0_s],
+                    [u1_s, v1_s],
+                    [u0_s, v1_s],
+                ];
+                mesh.add_quad_vertices(
+                    [p_top_w, p_top_s, p_left_bot_e, p_left_bot_w],
+                    uvs_left,
+                    [[0.82, 0.82, 0.82, 1.0]; 4],
+                );
+
+                // Right Face (parallelogram)
+                let p_right_bot_w = p_left_bot_e;
+                let p_right_bot_e = [p_top_e[0], p_top_e[1] + bs * 0.95];
+                let uvs_right = [
+                    [u0_s, v0_s],
+                    [u1_s, v0_s],
+                    [u1_s, v1_s],
+                    [u0_s, v1_s],
+                ];
+                mesh.add_quad_vertices(
+                    [p_top_s, p_top_e, p_right_bot_e, p_right_bot_w],
+                    uvs_right,
+                    [[0.68, 0.68, 0.68, 1.0]; 4],
+                );
+
+                // Thumb/fingers grasping the block's right edge
+                let p_thumb_0 = [p_top_s[0] + 12.0 * scale, p_top_s[1] + bs * 0.35];
+                let p_thumb_1 = [p_thumb_0[0] + 28.0 * scale, p_thumb_0[1] - 8.0 * scale];
+                let p_thumb_2 = [p_thumb_1[0] + 8.0 * scale, p_thumb_1[1] + 24.0 * scale];
+                let p_thumb_3 = [p_thumb_0[0] - 8.0 * scale, p_thumb_0[1] + 26.0 * scale];
+                mesh.add_quad_vertices(
+                    [p_thumb_0, p_thumb_1, p_thumb_2, p_thumb_3],
+                    white_uv,
+                    [col_skin_light; 4],
+                );
+            }
+        } else {
+            // Held Tool / Non-block Item (Pickaxe, Stick, Iron Ingot, etc.): Angled equipped item
+            let item_size = 95.0 * scale;
+            let ix = p_hand[0] - item_size * 0.75;
+            let iy = p_hand[1] - item_size * 0.80;
+
+            let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+            mesh.add_quad(ix, iy, item_size, item_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+
+            // Hand fingers clasping the tool handle
+            let p_grasp_0 = [p_hand[0] - 15.0 * scale, p_hand[1] - 10.0 * scale];
+            let p_grasp_1 = [p_hand[0] + 30.0 * scale, p_hand[1] - 22.0 * scale];
+            let p_grasp_2 = [p_hand[0] + 22.0 * scale, p_hand[1] + 12.0 * scale];
+            let p_grasp_3 = [p_hand[0] - 20.0 * scale, p_hand[1] + 18.0 * scale];
+            mesh.add_quad_vertices(
+                [p_grasp_0, p_grasp_1, p_grasp_2, p_grasp_3],
+                white_uv,
+                [col_skin_light; 4],
+            );
+        }
+
+        // Draw stack count if count > 1
         if active_slot.count > 1 {
             Self::draw_stack_number(
                 mesh,
-                hand_x + 10.0,
-                hand_y + 10.0,
-                hand_size - 20.0,
+                p_hand[0] + 55.0 * scale,
+                p_hand[1] - 15.0 * scale,
+                30.0 * scale,
                 active_slot.count,
             );
         }
