@@ -2,3 +2,4 @@
 **/*.rs.bk
 Cargo.lock
 *.png
+!crates/blockgame_render/assets/**

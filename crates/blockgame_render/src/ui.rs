@@ -283,16 +283,50 @@ impl UiBuilder {
     pub const JEI_COLS: usize = 6;
     pub const JEI_ROWS: usize = 8;
 
+    /// Returns the proportional width ratio (normalized around 1.0 for typical letters)
+    /// based on authentic Minecraft glyph geometry in the Faithful 32x ascii font.
+    pub fn get_char_width_ratio(c: u8) -> f32 {
+        if c == b' ' {
+            return 0.45;
+        }
+        if !(33..=126).contains(&c) {
+            return 1.0;
+        }
+        const WIDTHS: [u8; 94] = [
+            2, 6, 10, 10, 10, 10, 2, 6, 6, 6, 10, 2, 10, 2, 10, // 33..47
+            10, 8, 10, 10, 10, 10, 10, 10, 10, 10, 2, 2, 8, 10, 8, 10, // 48..63
+            12, 10, 10, 10, 10, 10, 10, 10, 10, 6, 10, 10, 10, 10, 10, 10, // 64..79
+            10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 6, 10, 6, 10, 10, // 80..95
+            4, 10, 10, 10, 10, 10, 8, 10, 10, 2, 10, 8, 4, 10, 10, 10, // 96..111
+            10, 10, 10, 10, 6, 10, 10, 10, 10, 10, 10, 6, 2, 6, 12 // 112..126
+        ];
+        let raw_w = WIDTHS[(c - 33) as usize];
+        (raw_w + 2) as f32 / 12.0
+    }
+
+    /// Computes the total rendered width of an ASCII string under the specified font scaling.
+    pub fn string_width(text: &str, char_w: f32, spacing: f32) -> f32 {
+        let mut total = 0.0;
+        for b in text.bytes() {
+            let cw = char_w * Self::get_char_width_ratio(b);
+            total += cw + spacing;
+        }
+        total
+    }
+
     /// Draws a single character glyph using the pixel font in the atlas.
     pub fn draw_char(mesh: &mut UiMesh, x: f32, y: f32, w: f32, h: f32, c: u8, color: [f32; 4]) {
         if c == b' ' {
             return;
         }
-        let uv = TextureAtlas::get_uv_bounds(c as u16);
-        mesh.add_quad(x, y, w, h, uv, color);
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(c as u16);
+        let ratio = Self::get_char_width_ratio(c).clamp(0.2, 1.2);
+        let uv_span = (ratio * (12.0 / 16.0)).min(1.0);
+        let char_u_max = u_min + (u_max - u_min) * uv_span;
+        mesh.add_quad(x, y, w, h, [u_min, v_min, char_u_max, v_max], color);
     }
 
-    /// Draws an ASCII string using the pixel font.
+    /// Draws an ASCII string using the pixel font with proportional kerning.
     pub fn draw_string(
         mesh: &mut UiMesh,
         mut x: f32,
@@ -304,8 +338,9 @@ impl UiBuilder {
         color: [f32; 4],
     ) {
         for b in text.bytes() {
-            Self::draw_char(mesh, x, y, char_w, char_h, b, color);
-            x += char_w + spacing;
+            let cw = char_w * Self::get_char_width_ratio(b);
+            Self::draw_char(mesh, x, y, cw, char_h, b, color);
+            x += cw + spacing;
         }
     }
 
@@ -323,8 +358,8 @@ impl UiBuilder {
         let text = count.to_string();
         let char_w = 10.0;
         let char_h = 14.0;
-        let spacing = -1.0;
-        let total_w = text.len() as f32 * (char_w + spacing);
+        let spacing = 0.5;
+        let total_w = Self::string_width(&text, char_w, spacing);
         let x = slot_x + slot_size - total_w - 4.0;
         let y = slot_y + slot_size - char_h - 3.0;
         Self::draw_string(mesh, x, y, &text, char_w, char_h, spacing, [1.0, 1.0, 1.0, 1.0]);
@@ -341,8 +376,8 @@ impl UiBuilder {
     ) {
         let char_w = 9.0;
         let char_h = 13.0;
-        let spacing = 0.0;
-        let text_w = text.len() as f32 * (char_w + spacing);
+        let spacing = 1.0;
+        let text_w = Self::string_width(text, char_w, spacing);
         let box_w = text_w + 16.0;
         let box_h = 24.0;
 
