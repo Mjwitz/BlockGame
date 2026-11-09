@@ -4,8 +4,9 @@ use std::time::Instant;
 use blockgame_core::{
     block::{BlockId, BlockRegistry},
     crafting::{CraftingGrid, CraftingManager},
-    item::{Inventory, ItemRegistry, ItemSlot},
+    item::{Inventory, ItemId, ItemRegistry, ItemSlot},
     physics::PlayerPhysics,
+    player::PlayerStats,
     raycast::{raycast_voxel, RaycastHit},
     tool::ToolTier,
 };
@@ -39,6 +40,8 @@ pub struct AppState {
     wireframe_pipeline: WireframePipeline,
     world_manager: WorldManager,
     player: PlayerPhysics,
+    pub player_stats: PlayerStats,
+    pub death_handled: bool,
     camera: Camera,
     camera_uniform: CameraUniform,
     pub day_night: DayNightCycle,
@@ -77,6 +80,39 @@ pub struct AppState {
     sprinting: bool,
     mouse_captured: bool,
     last_frame_time: Instant,
+}
+
+impl AppState {
+    pub fn respawn_player(&mut self) {
+        self.player_stats.reset();
+        self.death_handled = false;
+        self.player.velocity = Vec3::ZERO;
+        self.player.fall_distance = 0.0;
+        self.mouse_left_down = false;
+        self.break_progress = 0.0;
+        self.breaking_voxel = None;
+        self.cracking_buffer = None;
+
+        // Find safe surface spawn height at (0, 0)
+        let spawn_y = {
+            let world_guard = self.world_manager.world().lock().unwrap();
+            let mut y = 60;
+            while y > 1 {
+                let block = world_guard.get_block(IVec3::new(0, y, 0));
+                if !block.is_air() {
+                    break;
+                }
+                y -= 1;
+            }
+            (y + 2) as f32
+        };
+        self.player.position = Vec3::new(0.5, spawn_y, 0.5);
+        self.camera.position = self.player.eye_position();
+        self.camera.pitch = 0.0;
+        self.mouse_captured = true;
+        let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+        self.window.set_cursor_visible(false);
+    }
 }
 
 pub struct BlockGameApp {
@@ -207,6 +243,8 @@ impl ApplicationHandler for BlockGameApp {
             wireframe_pipeline,
             world_manager,
             player,
+            player_stats: PlayerStats::new(),
+            death_handled: false,
             camera,
             camera_uniform,
             day_night,
@@ -285,6 +323,25 @@ impl ApplicationHandler for BlockGameApp {
                 ..
             } => {
                 let pressed = mouse_btn_state == ElementState::Pressed;
+
+                // If player is dead, left click on Respawn button respawns
+                if state.player_stats.is_dead {
+                    if pressed && button == MouseButton::Left {
+                        let screen_w = state.surface_config.width as f32;
+                        let screen_h = state.surface_config.height as f32;
+                        let btn_w = 200.0;
+                        let btn_h = 44.0;
+                        let btn_x = (screen_w - btn_w) * 0.5;
+                        let btn_y = screen_h * 0.50;
+                        if state.cursor_pos[0] >= btn_x && state.cursor_pos[0] <= btn_x + btn_w
+                            && state.cursor_pos[1] >= btn_y && state.cursor_pos[1] <= btn_y + btn_h
+                        {
+                            state.respawn_player();
+                        }
+                    }
+                    return;
+                }
+
                 if button == MouseButton::Left {
                     state.mouse_left_down = pressed;
                     if !pressed {
@@ -348,7 +405,19 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
-                        // 2. Otherwise place active block from hotbar slot
+                        // 2. Check if holding food and hungry or hurt (eat food!)
+                        let held_slot = state.inventory.get(state.active_hotbar_slot);
+                        if !held_slot.is_empty() {
+                            if let Some(food) = state.item_registry.get_food(held_slot.item_id) {
+                                if state.player_stats.eat(food.food_points, food.saturation) {
+                                    state.inventory.slots[state.active_hotbar_slot].take(1);
+                                    state.punch_timer = 0.2; // Eating bite animation
+                                    return;
+                                }
+                            }
+                        }
+
+                        // 3. Otherwise place active block from hotbar slot
                         let slot = state.inventory.get(state.active_hotbar_slot);
                         if !slot.is_empty() {
                             if let Some(def) = state.item_registry.get(slot.item_id) {
@@ -382,6 +451,15 @@ impl ApplicationHandler for BlockGameApp {
                 ..
             } => {
                 let pressed = key_state == ElementState::Pressed;
+
+                // When dead, Space or Enter triggers respawn
+                if state.player_stats.is_dead {
+                    if pressed && (key == KeyCode::Space || key == KeyCode::Enter) {
+                        state.respawn_player();
+                    }
+                    return;
+                }
+
                 match key {
                     KeyCode::KeyW => state.moving_forward = pressed,
                     KeyCode::KeyS => state.moving_backward = pressed,
@@ -487,21 +565,23 @@ impl ApplicationHandler for BlockGameApp {
                 let right = Vec3::new(-state.camera.yaw.sin(), 0.0, state.camera.yaw.cos()).normalize();
 
                 let mut wish_dir = Vec3::ZERO;
-                if state.moving_forward { wish_dir += forward; }
-                if state.moving_backward { wish_dir -= forward; }
-                if state.moving_right { wish_dir += right; }
-                if state.moving_left { wish_dir -= right; }
-                if wish_dir.length_squared() > 0.0 {
-                    wish_dir = wish_dir.normalize();
-                }
+                if !state.player_stats.is_dead {
+                    if state.moving_forward { wish_dir += forward; }
+                    if state.moving_backward { wish_dir -= forward; }
+                    if state.moving_right { wish_dir += right; }
+                    if state.moving_left { wish_dir -= right; }
+                    if wish_dir.length_squared() > 0.0 {
+                        wish_dir = wish_dir.normalize();
+                    }
 
-                // If flying, vertical movement with Space / Shift
-                if state.player.flying {
-                    if state.jumping { wish_dir.y += 1.0; }
+                    // If flying, vertical movement with Space / Shift
+                    if state.player.flying {
+                        if state.jumping { wish_dir.y += 1.0; }
+                    }
                 }
 
                 // 2. Step player physics against voxel world
-                {
+                let fall_damage = {
                     let world_guard = state.world_manager.world().lock().unwrap();
                     state.player.update(
                         dt,
@@ -510,15 +590,65 @@ impl ApplicationHandler for BlockGameApp {
                         state.jumping,
                         &world_guard,
                         &self.registry,
-                    );
+                    )
+                };
+
+                // Apply fall damage if landed on ground
+                if fall_damage > 0.0 && !state.player_stats.is_dead {
+                    state.player_stats.take_damage(fall_damage);
                 }
 
-                // Update walking distance (advances ONLY when moving)
+                // Update walking distance & movement exhaustion (advances ONLY when moving)
                 let is_moving = (state.moving_forward || state.moving_backward || state.moving_left || state.moving_right)
                     && (state.player.on_ground || state.player.flying);
                 let horiz_speed = (state.player.velocity.x * state.player.velocity.x + state.player.velocity.z * state.player.velocity.z).sqrt();
-                if is_moving && horiz_speed > 0.1 {
+                if is_moving && horiz_speed > 0.1 && !state.player_stats.is_dead {
                     state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
+                    if state.player.on_ground {
+                        state.player_stats.add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
+                    }
+                }
+
+                // Update player stats (regeneration, starvation, void damage at y < -25.0)
+                state.player_stats.update(dt, state.player.position.y);
+
+                // Handle death transition and item scattering
+                if state.player_stats.is_dead {
+                    if !state.death_handled {
+                        state.death_handled = true;
+                        state.inventory_open = false;
+                        state.mouse_left_down = false;
+                        state.break_progress = 0.0;
+                        state.breaking_voxel = None;
+                        state.cracking_buffer = None;
+
+                        // Scatter all 36 inventory slots as item drops in world
+                        for slot in state.inventory.slots.iter_mut() {
+                            if !slot.is_empty() {
+                                let drop_slot = std::mem::replace(slot, ItemSlot::EMPTY);
+                                state.world_manager.spawn_item_drop(state.player.position, drop_slot);
+                            }
+                        }
+                        // Scatter crafting grid items
+                        for slot in state.crafting_grid.slots.drain(..) {
+                            if !slot.is_empty() {
+                                state.world_manager.spawn_item_drop(state.player.position, slot);
+                            }
+                        }
+                        // Scatter cursor held item
+                        if !state.cursor_held.is_empty() {
+                            let drop_slot = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                            state.world_manager.spawn_item_drop(state.player.position, drop_slot);
+                        }
+
+                        // Unlock mouse so user can click the Respawn button
+                        state.mouse_captured = false;
+                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                        state.window.set_cursor_visible(true);
+                    }
+                    // Cinematic death camera tilt
+                    let target_pitch = 28.0_f32.to_radians();
+                    state.camera.pitch = (state.camera.pitch + dt * 0.8).min(target_pitch);
                 }
 
                 // Update punch animation timer
@@ -529,13 +659,17 @@ impl ApplicationHandler for BlockGameApp {
                     0.0
                 };
 
-                // 3. Update Item Drops & Magnetism Pickup
-                let collected = state.world_manager.update_item_drops(dt, state.player.position);
-                for item in collected {
-                    let overflow = state.inventory.add_item(item, &state.item_registry);
-                    if let Some(remaining) = overflow {
-                        state.world_manager.spawn_item_drop(state.player.position, remaining);
+                // 3. Update Item Drops & Magnetism Pickup (only when alive)
+                if !state.player_stats.is_dead {
+                    let collected = state.world_manager.update_item_drops(dt, state.player.position);
+                    for item in collected {
+                        let overflow = state.inventory.add_item(item, &state.item_registry);
+                        if let Some(remaining) = overflow {
+                            state.world_manager.spawn_item_drop(state.player.position, remaining);
+                        }
                     }
+                } else {
+                    let _ = state.world_manager.update_item_drops(dt, state.player.position);
                 }
 
                 // 4. Update Camera position and atmosphere uniform
@@ -579,7 +713,7 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 // 5b. Process hold-to-break mining mechanics
-                if state.mouse_left_down && state.mouse_captured && !state.inventory_open {
+                if state.mouse_left_down && state.mouse_captured && !state.inventory_open && !state.player_stats.is_dead {
                     if state.punch_timer <= 0.05 {
                         state.punch_timer = 0.25; // Continuous swing loop while holding down break
                     }
@@ -622,11 +756,22 @@ impl ApplicationHandler for BlockGameApp {
                                         &state.device,
                                         &state.pipeline,
                                     ) {
+                                        state.player_stats.add_exhaustion(0.025);
                                         if let Some((drop_item, drop_count)) = self.registry.get_drop(broken, held_tool_type, held_tool_tier) {
                                             state.world_manager.spawn_item_drop(
                                                 target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
                                                 ItemSlot::new(drop_item, drop_count),
                                             );
+                                        }
+                                        // 15% chance to drop Apple from Leaves
+                                        if broken == BlockId::LEAVES {
+                                            let hash = (target_voxel.x.wrapping_mul(73856093) ^ target_voxel.y.wrapping_mul(19349663) ^ target_voxel.z.wrapping_mul(83492791)) % 100;
+                                            if hash.abs() < 15 {
+                                                state.world_manager.spawn_item_drop(
+                                                    target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                                    ItemSlot::new(ItemId::APPLE, 1),
+                                                );
+                                            }
                                         }
                                     }
                                     state.breaking_voxel = None;
@@ -693,6 +838,7 @@ impl ApplicationHandler for BlockGameApp {
                         &state.item_registry,
                         state.walk_distance,
                         punch_time,
+                        &state.player_stats,
                     );
                 }
 
@@ -854,7 +1000,7 @@ impl ApplicationHandler for BlockGameApp {
         event: DeviceEvent,
     ) {
         if let Some(state) = &mut self.state {
-            if state.mouse_captured {
+            if state.mouse_captured && !state.player_stats.is_dead {
                 if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
                     let sensitivity = 0.003;
                     state.camera.yaw += (dx as f32) * sensitivity;

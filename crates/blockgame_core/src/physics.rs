@@ -68,6 +68,7 @@ pub struct PlayerPhysics {
     pub eye_offset: f32, // 1.62
     pub on_ground: bool,
     pub flying: bool,
+    pub fall_distance: f32,
 }
 
 impl PlayerPhysics {
@@ -80,6 +81,7 @@ impl PlayerPhysics {
             eye_offset: 1.62,
             on_ground: false,
             flying: false,
+            fall_distance: 0.0,
         }
     }
 
@@ -98,10 +100,12 @@ impl PlayerPhysics {
         self.flying = !self.flying;
         if self.flying {
             self.velocity = Vec3::ZERO;
+            self.fall_distance = 0.0;
         }
     }
 
     /// Updates player physics over a delta time `dt` against the voxel `world`.
+    /// Returns any fall damage incurred upon landing.
     pub fn update(
         &mut self,
         dt: f32,
@@ -110,15 +114,19 @@ impl PlayerPhysics {
         jumping: bool,
         world: &World,
         registry: &BlockRegistry,
-    ) {
+    ) -> f32 {
         if self.flying {
             // Free flight mode
             let speed = if sprinting { 30.0 } else { 15.0 };
             self.position += wish_dir * speed * dt;
             self.velocity = Vec3::ZERO;
             self.on_ground = false;
-            return;
+            self.fall_distance = 0.0;
+            return 0.0;
         }
+
+        let prev_y = self.position.y;
+        let was_on_ground = self.on_ground;
 
         // Apply gravity
         let gravity = -28.0;
@@ -128,6 +136,7 @@ impl PlayerPhysics {
         if self.on_ground && jumping {
             self.velocity.y = 8.5; // Jump velocity
             self.on_ground = false;
+            self.fall_distance = 0.0;
         }
 
         // Horizontal movement & acceleration
@@ -140,6 +149,23 @@ impl PlayerPhysics {
 
         // Swept axis-separated collision resolution
         self.resolve_movement(dt, world, registry);
+
+        // Calculate fall distance and landing damage
+        let mut fall_damage = 0.0;
+        if self.on_ground {
+            if !was_on_ground && self.fall_distance > 3.0 {
+                fall_damage = self.fall_distance - 3.0;
+            }
+            self.fall_distance = 0.0;
+        } else {
+            if self.position.y < prev_y {
+                self.fall_distance += prev_y - self.position.y;
+            } else if self.velocity.y > 0.0 {
+                self.fall_distance = 0.0;
+            }
+        }
+
+        fall_damage
     }
 
     fn resolve_movement(&mut self, dt: f32, world: &World, registry: &BlockRegistry) {
@@ -282,4 +308,39 @@ mod tests {
         assert!((player.position.y - 1.0).abs() < 0.01);
         assert_eq!(player.velocity.y, 0.0);
     }
+
+    #[test]
+    fn test_player_fall_damage() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        for z in 0..16 {
+            for x in 0..16 {
+                chunk.set(x, 0, z, crate::block::BlockId::STONE);
+            }
+        }
+        world.insert_chunk(chunk);
+
+        // Drop player from y = 10.0 (falls 9.0 blocks down to y = 1.0)
+        let mut player = PlayerPhysics::new(Vec3::new(8.0, 10.0, 8.0));
+        let mut total_fall_damage = 0.0;
+
+        for _ in 0..60 {
+            let dmg = player.update(
+                1.0 / 60.0,
+                Vec3::ZERO,
+                false,
+                false,
+                &world,
+                &registry,
+            );
+            total_fall_damage += dmg;
+        }
+
+        assert!(player.on_ground);
+        // Fell 9.0 blocks, threshold is 3.0 blocks -> ~6.0 damage (3 hearts)
+        assert!(total_fall_damage > 5.5 && total_fall_damage < 6.5, "Expected ~6.0 fall damage, got {}", total_fall_damage);
+    }
 }
+

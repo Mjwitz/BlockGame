@@ -45,6 +45,7 @@ impl ItemId {
     pub const STONE_SHOVEL: Self = Self(35);
     pub const IRON_SHOVEL: Self = Self(36);
     pub const DIAMOND_SHOVEL: Self = Self(37);
+    pub const APPLE: Self = Self(38);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -142,10 +143,26 @@ impl ItemSlot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FoodDef {
+    pub food_points: u16,
+    pub saturation: f32,
+}
+
+impl FoodDef {
+    pub const fn new(food_points: u16, saturation: f32) -> Self {
+        Self {
+            food_points,
+            saturation,
+        }
+    }
+}
+
 pub struct ItemRegistry {
     items: Vec<Option<ItemDef>>,
     by_name: HashMap<String, ItemId>,
     block_to_item: HashMap<BlockId, ItemId>,
+    food_properties: HashMap<ItemId, FoodDef>,
 }
 
 impl Default for ItemRegistry {
@@ -160,6 +177,7 @@ impl ItemRegistry {
             items: Vec::new(),
             by_name: HashMap::new(),
             block_to_item: HashMap::new(),
+            food_properties: HashMap::new(),
         };
         reg.register_default_items();
         reg
@@ -175,6 +193,18 @@ impl ItemRegistry {
             self.block_to_item.insert(block_id, def.id);
         }
         self.items[idx] = Some(def);
+    }
+
+    pub fn register_food(&mut self, id: ItemId, food: FoodDef) {
+        self.food_properties.insert(id, food);
+    }
+
+    pub fn get_food(&self, id: ItemId) -> Option<FoodDef> {
+        self.food_properties.get(&id).copied()
+    }
+
+    pub fn is_food(&self, id: ItemId) -> bool {
+        self.food_properties.contains_key(&id)
     }
 
     pub fn get(&self, id: ItemId) -> Option<&ItemDef> {
@@ -644,6 +674,19 @@ impl ItemRegistry {
             tool_tier: Some(ToolTier::Diamond),
             icon_tile: 148,
         });
+
+        self.register(ItemDef {
+            id: ItemId::APPLE,
+            name: "blockgame:apple",
+            display_name: "Apple",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 31,
+        });
+        self.register_food(ItemId::APPLE, FoodDef::new(4, 2.4));
     }
 }
 

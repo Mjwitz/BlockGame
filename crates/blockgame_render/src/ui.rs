@@ -248,6 +248,12 @@ impl UiBuilder {
     pub const SLOT_BG_TILE: u16 = 22;
     pub const SLOT_HIGHLIGHT_TILE: u16 = 23;
     pub const WHITE_TILE: u16 = 24;
+    pub const HEART_CONTAINER_TILE: u16 = 25;
+    pub const HEART_FULL_TILE: u16 = 26;
+    pub const HEART_HALF_TILE: u16 = 27;
+    pub const HUNGER_CONTAINER_TILE: u16 = 28;
+    pub const HUNGER_FULL_TILE: u16 = 29;
+    pub const HUNGER_HALF_TILE: u16 = 30;
 
     /// Draws a single character glyph using the pixel font in the atlas.
     pub fn draw_char(mesh: &mut UiMesh, x: f32, y: f32, w: f32, h: f32, c: u8, color: [f32; 4]) {
@@ -1057,7 +1063,8 @@ impl UiBuilder {
         }
     }
 
-    /// Builds the standard gameplay HUD: center crosshair, held item, and 9-slot bottom hotbar.
+    /// Builds the standard gameplay HUD: center crosshair, held item, bottom hotbar,
+    /// player health hearts, hunger drumsticks, damage flash, and death screen overlay.
     pub fn build_hud(
         mesh: &mut UiMesh,
         screen_w: f32,
@@ -1067,19 +1074,24 @@ impl UiBuilder {
         registry: &ItemRegistry,
         walk_distance: f32,
         punch_time: f32,
+        stats: &blockgame_core::player::PlayerStats,
     ) {
         mesh.clear();
 
-        // 1. Center Crosshair (24x24 px)
-        let ch_size = 24.0;
-        let ch_x = (screen_w - ch_size) * 0.5;
-        let ch_y = (screen_h - ch_size) * 0.5;
-        let ch_uv = TextureAtlas::get_uv_bounds(Self::CROSSHAIR_TILE);
-        mesh.add_quad(ch_x, ch_y, ch_size, ch_size, ch_uv, [1.0, 1.0, 1.0, 1.0]);
+        // 1. Center Crosshair (24x24 px) - only when alive
+        if !stats.is_dead {
+            let ch_size = 24.0;
+            let ch_x = (screen_w - ch_size) * 0.5;
+            let ch_y = (screen_h - ch_size) * 0.5;
+            let ch_uv = TextureAtlas::get_uv_bounds(Self::CROSSHAIR_TILE);
+            mesh.add_quad(ch_x, ch_y, ch_size, ch_size, ch_uv, [1.0, 1.0, 1.0, 1.0]);
+        }
 
-        // 2. First-Person Hand or Held Item in lower-right corner
-        let held_slot = inventory.get(active_slot);
-        Self::draw_held_item(mesh, screen_w, screen_h, held_slot, registry, walk_distance, punch_time);
+        // 2. First-Person Hand or Held Item in lower-right corner - only when alive
+        if !stats.is_dead {
+            let held_slot = inventory.get(active_slot);
+            Self::draw_held_item(mesh, screen_w, screen_h, held_slot, registry, walk_distance, punch_time);
+        }
 
         // 3. Hotbar Slots (9 slots, each 44x44 px with 4px gap)
         let slot_size = 44.0;
@@ -1099,7 +1111,7 @@ impl UiBuilder {
             mesh.add_quad(x, y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
 
             // Selected Slot Highlight Box
-            if i == active_slot {
+            if i == active_slot && !stats.is_dead {
                 let hl_pad = 3.0;
                 mesh.add_quad(
                     x - hl_pad,
@@ -1129,6 +1141,90 @@ impl UiBuilder {
                     Self::draw_stack_number(mesh, x, y, slot_size, item_slot.count);
                 }
             }
+        }
+
+        // 4. Player Health Hearts (10 hearts immediately above the left hotbar)
+        let icon_size = 16.0;
+        let icon_spacing = 15.0;
+        let bars_y = start_y - 20.0;
+
+        let heart_bg_uv = TextureAtlas::get_uv_bounds(Self::HEART_CONTAINER_TILE);
+        let heart_full_uv = TextureAtlas::get_uv_bounds(Self::HEART_FULL_TILE);
+        let heart_half_uv = TextureAtlas::get_uv_bounds(Self::HEART_HALF_TILE);
+
+        for i in 0..10 {
+            let hx = start_x + (i as f32) * icon_spacing;
+            // Always draw heart container background
+            mesh.add_quad(hx, bars_y, icon_size, icon_size, heart_bg_uv, [1.0, 1.0, 1.0, 1.0]);
+
+            let hp_val = (i as f32 + 1.0) * 2.0;
+            if stats.health >= hp_val {
+                mesh.add_quad(hx, bars_y, icon_size, icon_size, heart_full_uv, [1.0, 1.0, 1.0, 1.0]);
+            } else if stats.health >= hp_val - 1.0 {
+                mesh.add_quad(hx, bars_y, icon_size, icon_size, heart_half_uv, [1.0, 1.0, 1.0, 1.0]);
+            }
+        }
+
+        // 5. Player Hunger Drumsticks (10 drumsticks immediately above the right hotbar)
+        let hunger_bg_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_CONTAINER_TILE);
+        let hunger_full_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_FULL_TILE);
+        let hunger_half_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_HALF_TILE);
+
+        let hotbar_right = start_x + total_w;
+        for i in 0..10 {
+            let dx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
+            // Always draw drumstick container background
+            mesh.add_quad(dx, bars_y, icon_size, icon_size, hunger_bg_uv, [1.0, 1.0, 1.0, 1.0]);
+
+            let hunger_val = (i as f32 + 1.0) * 2.0;
+            if stats.hunger >= hunger_val {
+                mesh.add_quad(dx, bars_y, icon_size, icon_size, hunger_full_uv, [1.0, 1.0, 1.0, 1.0]);
+            } else if stats.hunger >= hunger_val - 1.0 {
+                mesh.add_quad(dx, bars_y, icon_size, icon_size, hunger_half_uv, [1.0, 1.0, 1.0, 1.0]);
+            }
+        }
+
+        // 6. Full-screen Red Damage Flash
+        if stats.damage_flash > 0.0 {
+            let flash_alpha = ((stats.damage_flash / 0.5) * 0.40).clamp(0.0, 0.40);
+            let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+            mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.85, 0.08, 0.08, flash_alpha]);
+        }
+
+        // 7. Full-screen Death Screen Overlay (When Player is Dead)
+        if stats.is_dead {
+            let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+            // Deep red backdrop
+            mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.55, 0.06, 0.06, 0.76]);
+
+            // Big "You Died!" Title
+            let title = "You Died!";
+            let title_w = title.len() as f32 * 20.0;
+            let title_x = (screen_w - title_w) * 0.5;
+            let title_y = screen_h * 0.32;
+            Self::draw_string(mesh, title_x, title_y, title, 16.0, 22.0, 4.0, [1.0, 0.95, 0.95, 1.0]);
+
+            // Subtitle
+            let subtitle = "Score: 0";
+            let sub_w = subtitle.len() as f32 * 10.0;
+            let sub_x = (screen_w - sub_w) * 0.5;
+            Self::draw_string(mesh, sub_x, title_y + 36.0, subtitle, 9.0, 13.0, 1.0, [0.85, 0.85, 0.85, 0.95]);
+
+            // "Respawn" Button
+            let btn_w = 200.0;
+            let btn_h = 44.0;
+            let btn_x = (screen_w - btn_w) * 0.5;
+            let btn_y = screen_h * 0.50;
+
+            let border_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
+            mesh.add_quad(btn_x - 2.0, btn_y - 2.0, btn_w + 4.0, btn_h + 4.0, border_uv, [1.0, 1.0, 1.0, 1.0]);
+            mesh.add_quad(btn_x, btn_y, btn_w, btn_h, white_uv, [0.22, 0.22, 0.24, 0.95]);
+
+            let respawn_text = "Respawn";
+            let respawn_w = respawn_text.len() as f32 * 11.0;
+            let text_x = btn_x + (btn_w - respawn_w) * 0.5;
+            let text_y = btn_y + 14.0;
+            Self::draw_string(mesh, text_x, text_y, respawn_text, 10.0, 15.0, 1.0, [1.0, 1.0, 1.0, 1.0]);
         }
     }
 
@@ -1353,6 +1449,7 @@ impl UiBuilder {
 mod tests {
     use super::*;
     use blockgame_core::item::ItemId;
+    use blockgame_core::player::PlayerStats;
 
     #[test]
     fn test_draw_stack_number_generates_quads() {
@@ -1380,8 +1477,9 @@ mod tests {
         let mut inv = Inventory::new(36);
         inv.set(0, ItemSlot::new(ItemId::TORCH, 16));
         let registry = ItemRegistry::new();
+        let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
         assert!(mesh.indices.len() > 0);
     }
 
@@ -1390,9 +1488,10 @@ mod tests {
         let mut mesh = UiMesh::new();
         let inv = Inventory::new(36);
         let registry = ItemRegistry::new();
+        let stats = PlayerStats::new();
 
         // Empty hand draws the player's arm and fist
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 1.5, 0.2);
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 1.5, 0.2, &stats);
         assert!(mesh.indices.len() > 0);
     }
 
@@ -1402,8 +1501,9 @@ mod tests {
         let mut inv = Inventory::new(36);
         inv.set(0, ItemSlot::new(ItemId::WOOD_LOG, 16));
         let registry = ItemRegistry::new();
+        let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
         assert!(mesh.indices.len() > 0);
     }
 
@@ -1413,8 +1513,9 @@ mod tests {
         let mut inv = Inventory::new(36);
         inv.set(0, ItemSlot::new(ItemId::IRON_PICKAXE, 1));
         let registry = ItemRegistry::new();
+        let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.3);
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.3, &stats);
         assert!(mesh.indices.len() > 0);
     }
 
@@ -1424,8 +1525,9 @@ mod tests {
         let mut inv = Inventory::new(36);
         inv.set(0, ItemSlot::new(ItemId::STICK, 4));
         let registry = ItemRegistry::new();
+        let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
         assert!(mesh.indices.len() > 0);
     }
 
@@ -1435,13 +1537,41 @@ mod tests {
         let mut inv = Inventory::new(36);
         inv.set(0, ItemSlot::new(ItemId::IRON_INGOT, 5));
         let registry = ItemRegistry::new();
+        let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
         assert!(mesh.indices.len() > 0);
 
         let mut mesh_coal = UiMesh::new();
         inv.set(0, ItemSlot::new(ItemId::COAL, 3));
-        UiBuilder::build_hud(&mut mesh_coal, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut mesh_coal, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
         assert!(mesh_coal.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_hearts_and_hunger() {
+        let mut mesh = UiMesh::new();
+        let inv = Inventory::new(36);
+        let registry = ItemRegistry::new();
+        let mut stats = PlayerStats::new();
+        stats.health = 15.0; // 7 full hearts + 1 half heart + 2 empty hearts
+        stats.hunger = 17.0; // 8 full drumsticks + 1 half drumstick + 1 empty drumstick
+
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_death_screen() {
+        let mut mesh = UiMesh::new();
+        let inv = Inventory::new(36);
+        let registry = ItemRegistry::new();
+        let mut stats = PlayerStats::new();
+        stats.health = 0.0;
+        stats.is_dead = true;
+
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        // Generates death screen quads (red backdrop, You Died text, Score text, Respawn button)
+        assert!(mesh.indices.len() > 0);
     }
 }

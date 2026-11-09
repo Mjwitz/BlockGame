@@ -365,6 +365,188 @@ impl TextureAtlas {
         // 24: Solid White Quad (for UI boxes, tooltip backgrounds, tinted overlays)
         atlas.paint_tile(24, |_x, _y| Rgba([255, 255, 255, 255]));
 
+        // -------------------------------------------------------------
+        // 25..27: Player Health Hearts (Empty Container, Full, Half)
+        // -------------------------------------------------------------
+        let heart_grid = [
+            "................",
+            "................",
+            "...##......##...",
+            "..#XX#....#XX#..",
+            ".#XXXX#..#XXXX#.",
+            ".#XXXXXXXXXXXX#.",
+            ".#XXXXXXXXXXXX#.",
+            "..#XXXXXXXXXX#..",
+            "...#XXXXXXXX#...",
+            "....#XXXXXX#....",
+            ".....#XXXX#.....",
+            "......#XX#......",
+            ".......##.......",
+            "................",
+            "................",
+            "................",
+        ];
+
+        // 25: HEART_CONTAINER
+        atlas.paint_tile(25, |x, y| {
+            let row = heart_grid[y as usize].as_bytes();
+            match row[x as usize] {
+                b'#' => Rgba([35, 12, 12, 255]),
+                b'X' => Rgba([65, 40, 40, 220]),
+                _ => Rgba([0, 0, 0, 0]),
+            }
+        });
+
+        // 26: HEART_FULL
+        atlas.paint_tile(26, |x, y| {
+            let row = heart_grid[y as usize].as_bytes();
+            match row[x as usize] {
+                b'#' => Rgba([35, 12, 12, 255]),
+                b'X' => {
+                    let is_shine = (x == 4 && (y == 3 || y == 4)) || (x == 5 && y == 4);
+                    let is_shadow = x >= 9 && y >= 7;
+                    if is_shine {
+                        Rgba([255, 255, 255, 255])
+                    } else if is_shadow {
+                        Rgba([160, 15, 15, 255])
+                    } else {
+                        Rgba([230, 25, 25, 255])
+                    }
+                }
+                _ => Rgba([0, 0, 0, 0]),
+            }
+        });
+
+        // 27: HEART_HALF
+        atlas.paint_tile(27, |x, y| {
+            let row = heart_grid[y as usize].as_bytes();
+            match row[x as usize] {
+                b'#' => Rgba([35, 12, 12, 255]),
+                b'X' => {
+                    if x <= 7 {
+                        let is_shine = (x == 4 && (y == 3 || y == 4)) || (x == 5 && y == 4);
+                        if is_shine {
+                            Rgba([255, 255, 255, 255])
+                        } else {
+                            Rgba([230, 25, 25, 255])
+                        }
+                    } else {
+                        Rgba([65, 40, 40, 220])
+                    }
+                }
+                _ => Rgba([0, 0, 0, 0]),
+            }
+        });
+
+        // -------------------------------------------------------------
+        // 28..30: Player Hunger Drumsticks (Empty Container, Full, Half)
+        // -------------------------------------------------------------
+        let drumstick_grid = [
+            "................",
+            "..........####..",
+            "........##MMMM#.",
+            ".......#MMMMMM#.",
+            "......#MMMMMMM#.",
+            ".....#MMMMMMMM#.",
+            "....#MMMMMMMM#..",
+            "....#MMMMMMM#...",
+            "...#SMMMMMM#....",
+            "...#SSMMM##.....",
+            "..#BSS###.......",
+            ".#BB##..........",
+            ".#B#............",
+            "..#.............",
+            "................",
+            "................",
+        ];
+
+        // 28: HUNGER_CONTAINER
+        atlas.paint_tile(28, |x, y| {
+            let row = drumstick_grid[y as usize].as_bytes();
+            match row[x as usize] {
+                b'#' => Rgba([40, 25, 15, 255]),
+                b'B' => Rgba([90, 80, 75, 200]),
+                b'M' | b'S' => Rgba([60, 42, 32, 220]),
+                _ => Rgba([0, 0, 0, 0]),
+            }
+        });
+
+        // 29: HUNGER_FULL
+        atlas.paint_tile(29, |x, y| {
+            let row = drumstick_grid[y as usize].as_bytes();
+            match row[x as usize] {
+                b'#' => Rgba([40, 25, 15, 255]),
+                b'B' => Rgba([235, 230, 220, 255]),
+                b'M' => {
+                    let is_highlight = y <= 4 || (x >= 9 && y <= 6);
+                    if is_highlight {
+                        Rgba([235, 155, 75, 255])
+                    } else {
+                        Rgba([185, 95, 30, 255])
+                    }
+                }
+                b'S' => Rgba([125, 55, 18, 255]),
+                _ => Rgba([0, 0, 0, 0]),
+            }
+        });
+
+        // 30: HUNGER_HALF
+        atlas.paint_tile(30, |x, y| {
+            let row = drumstick_grid[y as usize].as_bytes();
+            match row[x as usize] {
+                b'#' => Rgba([40, 25, 15, 255]),
+                b'B' => Rgba([235, 230, 220, 255]),
+                b'M' => {
+                    if x >= 8 {
+                        let is_highlight = y <= 4 || (x >= 9 && y <= 6);
+                        if is_highlight {
+                            Rgba([235, 155, 75, 255])
+                        } else {
+                            Rgba([185, 95, 30, 255])
+                        }
+                    } else {
+                        Rgba([60, 42, 32, 220])
+                    }
+                }
+                b'S' => {
+                    if x >= 8 {
+                        Rgba([125, 55, 18, 255])
+                    } else {
+                        Rgba([60, 42, 32, 220])
+                    }
+                }
+                _ => Rgba([0, 0, 0, 0]),
+            }
+        });
+
+        // 31: Apple Food Item
+        atlas.paint_tile(31, |x, y| {
+            let is_stem = (x == 7 || x == 8) && (y >= 1 && y <= 3);
+            let is_leaf = (x >= 9 && x <= 11) && (y >= 1 && y <= 3);
+            let dx = (x as f32) - 7.5;
+            let dy = (y as f32) - 8.5;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let is_apple_body = dist <= 5.2 && y >= 4;
+
+            if is_leaf {
+                Rgba([65, 185, 45, 255]) // Green leaf
+            } else if is_stem {
+                Rgba([115, 75, 35, 255]) // Brown stem
+            } else if is_apple_body {
+                let is_shine = (x == 5 && y == 6) || (x == 6 && (y == 6 || y == 7));
+                let is_shadow = y >= 11 || x >= 11;
+                if is_shine {
+                    Rgba([255, 130, 130, 255])
+                } else if is_shadow {
+                    Rgba([160, 15, 15, 255])
+                } else {
+                    Rgba([225, 25, 25, 255])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
         // 32..=126: ASCII Pixel Font (Tile index == ASCII byte code)
         for c in crate::font::FONT_FIRST_CHAR..=crate::font::FONT_LAST_CHAR {
             let glyph = crate::font::get_char_glyph(c);

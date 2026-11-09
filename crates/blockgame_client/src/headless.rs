@@ -270,7 +270,8 @@ pub async fn render_world_to_image(
     let screen_w = width as f32;
     let screen_h = height as f32;
     ui_pipeline.update_screen_size(&queue, screen_w, screen_h);
-    UiBuilder::build_hud(&mut ui_mesh, screen_w, screen_h, &inventory, 3, &item_registry, 0.0, 0.0);
+    let stats = blockgame_core::PlayerStats::new();
+    UiBuilder::build_hud(&mut ui_mesh, screen_w, screen_h, &inventory, 3, &item_registry, 0.0, 0.0, &stats);
 
     if !ui_mesh.indices.is_empty() {
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -402,7 +403,7 @@ pub async fn render_world_to_image(
 
         let mut block_ui_mesh = UiMesh::new();
         // Slot 1 is Wood Log!
-        UiBuilder::build_hud(&mut block_ui_mesh, screen_w, screen_h, &inventory, 1, &item_registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut block_ui_mesh, screen_w, screen_h, &inventory, 1, &item_registry, 0.0, 0.0, &stats);
 
         if !block_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -534,7 +535,7 @@ pub async fn render_world_to_image(
 
         let mut pick_ui_mesh = UiMesh::new();
         // Slot 0 is Stone Pickaxe!
-        UiBuilder::build_hud(&mut pick_ui_mesh, screen_w, screen_h, &inventory, 0, &item_registry, 0.0, 0.0);
+        UiBuilder::build_hud(&mut pick_ui_mesh, screen_w, screen_h, &inventory, 0, &item_registry, 0.0, 0.0, &stats);
 
         if !pick_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -668,7 +669,7 @@ pub async fn render_world_to_image(
         empty_inventory.slots[8] = blockgame_core::item::ItemSlot::EMPTY;
         let mut hand_ui_mesh = UiMesh::new();
         // Slot 8 is empty! punch_time = 0.5 (peak punch swing)
-        UiBuilder::build_hud(&mut hand_ui_mesh, screen_w, screen_h, &empty_inventory, 8, &item_registry, 0.0, 0.5);
+        UiBuilder::build_hud(&mut hand_ui_mesh, screen_w, screen_h, &empty_inventory, 8, &item_registry, 0.0, 0.5, &stats);
 
         if !hand_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
