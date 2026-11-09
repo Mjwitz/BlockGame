@@ -673,7 +673,23 @@ impl UiBuilder {
             // =====================================================================
             let is_pickaxe = active_slot.item_id == ItemId::WOODEN_PICKAXE
                 || active_slot.item_id == ItemId::STONE_PICKAXE
-                || active_slot.item_id == ItemId::IRON_PICKAXE;
+                || active_slot.item_id == ItemId::IRON_PICKAXE
+                || active_slot.item_id == ItemId::DIAMOND_PICKAXE;
+
+            let is_hoe = active_slot.item_id == ItemId::WOODEN_HOE
+                || active_slot.item_id == ItemId::STONE_HOE
+                || active_slot.item_id == ItemId::IRON_HOE
+                || active_slot.item_id == ItemId::DIAMOND_HOE;
+
+            let is_axe = active_slot.item_id == ItemId::WOODEN_AXE
+                || active_slot.item_id == ItemId::STONE_AXE
+                || active_slot.item_id == ItemId::IRON_AXE
+                || active_slot.item_id == ItemId::DIAMOND_AXE;
+
+            let is_shovel = active_slot.item_id == ItemId::WOODEN_SHOVEL
+                || active_slot.item_id == ItemId::STONE_SHOVEL
+                || active_slot.item_id == ItemId::IRON_SHOVEL
+                || active_slot.item_id == ItemId::DIAMOND_SHOVEL;
 
             if is_pickaxe {
                 // -----------------------------------------------------------------
@@ -731,6 +747,11 @@ impl UiBuilder {
                         [0.55, 0.55, 0.58, 1.0],
                         [0.75, 0.75, 0.78, 1.0],
                         [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    ItemId::DIAMOND_PICKAXE => (
+                        [0.25, 0.88, 0.92, 1.0],
+                        [0.55, 1.00, 1.00, 1.0],
+                        [0.15, 0.60, 0.65, 1.0],
                     ),
                     _ => ( // Iron Pickaxe
                         [0.82, 0.85, 0.90, 1.0],
@@ -802,9 +823,9 @@ impl UiBuilder {
 
                 // Center Socket Collar (Dark steel/band)
                 let c0 = [head_center[0] - norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] - norm[1] * 14.0 * scale - dir[1] * 12.0 * scale];
-                let c1 = [head_center[0] + norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] + norm[1] * 14.0 * scale - dir[1] * 12.0 * scale];
-                let c2 = [head_center[0] + norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] + norm[1] * 14.0 * scale + dir[1] * 12.0 * scale];
-                let c3 = [head_center[0] - norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] - norm[1] * 14.0 * scale + dir[1] * 12.0 * scale];
+                let c1 = [head_center[0] + norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] + norm[0] * 14.0 * scale - dir[1] * 12.0 * scale];
+                let c2 = [head_center[0] + norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] + norm[0] * 14.0 * scale + dir[1] * 12.0 * scale];
+                let c3 = [head_center[0] - norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] - norm[0] * 14.0 * scale + dir[1] * 12.0 * scale];
                 mesh.add_quad_vertices(
                     [c0, c1, c2, c3],
                     white_uv,
@@ -819,6 +840,236 @@ impl UiBuilder {
                         30.0 * scale,
                         active_slot.count,
                     );
+                }
+            } else if is_hoe {
+                // -----------------------------------------------------------------
+                // 3D HELD HOE: 3D wooden handle and angled hoe blade
+                // -----------------------------------------------------------------
+                let hoe_punch_x = -55.0 * scale * punch_swing;
+                let hoe_punch_y = 70.0 * scale * punch_swing;
+
+                let handle_base = [
+                    screen_w - 55.0 * scale + bob_x + hoe_punch_x,
+                    screen_h + 15.0 * scale + bob_y + hoe_punch_y,
+                ];
+                let handle_tip = [
+                    screen_w - 200.0 * scale + bob_x + hoe_punch_x * 1.4,
+                    screen_h - 220.0 * scale + bob_y + hoe_punch_y * 1.4,
+                ];
+
+                let dx = handle_tip[0] - handle_base[0];
+                let dy = handle_tip[1] - handle_base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let half_w = 9.0 * scale;
+                let thick = [-9.0 * scale, -7.0 * scale];
+
+                // 1. 3D Handle Front Face
+                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
+                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
+                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
+                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                mesh.add_quad_vertices(
+                    [h0, h1, h2, h3],
+                    white_uv,
+                    [[0.60, 0.42, 0.24, 1.0]; 4],
+                );
+
+                // 2. 3D Handle Side Thickness Face
+                let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
+                let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [h0_b, h0, h3, h3_b],
+                    white_uv,
+                    [[0.38, 0.25, 0.13, 1.0]; 4],
+                );
+
+                // 3. 3D Hoe Blade (angled forward)
+                let (col_head_main, col_head_top, col_head_side) = match active_slot.item_id {
+                    ItemId::WOODEN_HOE => (
+                        [0.68, 0.48, 0.28, 1.0],
+                        [0.85, 0.65, 0.42, 1.0],
+                        [0.45, 0.30, 0.16, 1.0],
+                    ),
+                    ItemId::STONE_HOE => (
+                        [0.55, 0.55, 0.58, 1.0],
+                        [0.75, 0.75, 0.78, 1.0],
+                        [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    ItemId::DIAMOND_HOE => (
+                        [0.25, 0.88, 0.92, 1.0],
+                        [0.55, 1.00, 1.00, 1.0],
+                        [0.15, 0.60, 0.65, 1.0],
+                    ),
+                    _ => ( // Iron Hoe
+                        [0.82, 0.85, 0.90, 1.0],
+                        [0.96, 0.98, 1.00, 1.0],
+                        [0.55, 0.58, 0.65, 1.0],
+                    ),
+                };
+
+                let head_center = handle_tip;
+                let blade_len = 55.0 * scale;
+                let blade_w = 15.0 * scale;
+
+                let tip_l = [
+                    head_center[0] - norm[0] * blade_len + dir[0] * 8.0 * scale,
+                    head_center[1] - norm[1] * blade_len + dir[1] * 8.0 * scale,
+                ];
+                let head_top = [
+                    head_center[0] + dir[0] * blade_w,
+                    head_center[1] + dir[1] * blade_w,
+                ];
+                let head_bot = [
+                    head_center[0] - dir[0] * blade_w,
+                    head_center[1] - dir[1] * blade_w,
+                ];
+                let tip_l_in = [tip_l[0] - dir[0] * 8.0 * scale, tip_l[1] - dir[1] * 8.0 * scale];
+
+                mesh.add_quad_vertices(
+                    [head_bot, tip_l_in, tip_l, head_top],
+                    white_uv,
+                    [col_head_main; 4],
+                );
+
+                let head_top_b = [head_top[0] + thick[0], head_top[1] + thick[1]];
+                let tip_l_b = [tip_l[0] + thick[0], tip_l[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [tip_l, head_top, head_top_b, tip_l_b],
+                    white_uv,
+                    [col_head_top; 4],
+                );
+
+                let head_bot_b = [head_bot[0] + thick[0], head_bot[1] + thick[1]];
+                let tip_l_in_b = [tip_l_in[0] + thick[0], tip_l_in[1] + thick[1]];
+                mesh.add_quad_vertices(
+                    [tip_l_in_b, head_bot_b, head_bot, tip_l_in],
+                    white_uv,
+                    [col_head_side; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_axe {
+                // -----------------------------------------------------------------
+                // 3D HELD AXE: 3D wooden handle and broad axe head
+                // -----------------------------------------------------------------
+                let axe_punch_x = -55.0 * scale * punch_swing;
+                let axe_punch_y = 70.0 * scale * punch_swing;
+
+                let handle_base = [
+                    screen_w - 55.0 * scale + bob_x + axe_punch_x,
+                    screen_h + 15.0 * scale + bob_y + axe_punch_y,
+                ];
+                let handle_tip = [
+                    screen_w - 200.0 * scale + bob_x + axe_punch_x * 1.4,
+                    screen_h - 220.0 * scale + bob_y + axe_punch_y * 1.4,
+                ];
+
+                let dx = handle_tip[0] - handle_base[0];
+                let dy = handle_tip[1] - handle_base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let half_w = 9.0 * scale;
+                let thick = [-9.0 * scale, -7.0 * scale];
+
+                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
+                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
+                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
+                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.60, 0.42, 0.24, 1.0]; 4]);
+                let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
+                let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
+                mesh.add_quad_vertices([h0_b, h0, h3, h3_b], white_uv, [[0.38, 0.25, 0.13, 1.0]; 4]);
+
+                let (col_head_main, col_head_top, _col_head_side) = match active_slot.item_id {
+                    ItemId::WOODEN_AXE => ([0.68, 0.48, 0.28, 1.0], [0.85, 0.65, 0.42, 1.0], [0.45, 0.30, 0.16, 1.0]),
+                    ItemId::STONE_AXE => ([0.55, 0.55, 0.58, 1.0], [0.75, 0.75, 0.78, 1.0], [0.35, 0.35, 0.38, 1.0]),
+                    ItemId::DIAMOND_AXE => ([0.25, 0.88, 0.92, 1.0], [0.55, 1.00, 1.00, 1.0], [0.15, 0.60, 0.65, 1.0]),
+                    _ => ([0.82, 0.85, 0.90, 1.0], [0.96, 0.98, 1.00, 1.0], [0.55, 0.58, 0.65, 1.0]),
+                };
+
+                let head_center = handle_tip;
+                let blade_len = 50.0 * scale;
+                let p_top_tip = [head_center[0] - norm[0] * blade_len + dir[0] * 20.0 * scale, head_center[1] - norm[1] * blade_len + dir[1] * 20.0 * scale];
+                let p_bot_tip = [head_center[0] - norm[0] * (blade_len - 10.0 * scale) - dir[0] * 35.0 * scale, head_center[1] - norm[1] * (blade_len - 10.0 * scale) - dir[1] * 35.0 * scale];
+                let p_top_back = [head_center[0] + norm[0] * 15.0 * scale + dir[0] * 12.0 * scale, head_center[1] + norm[0] * 15.0 * scale + dir[1] * 12.0 * scale];
+                let p_bot_back = [head_center[0] + norm[0] * 15.0 * scale - dir[0] * 20.0 * scale, head_center[1] + norm[0] * 15.0 * scale - dir[1] * 20.0 * scale];
+
+                mesh.add_quad_vertices([p_bot_tip, p_bot_back, p_top_back, p_top_tip], white_uv, [col_head_main; 4]);
+                let p_top_tip_b = [p_top_tip[0] + thick[0], p_top_tip[1] + thick[1]];
+                let p_top_back_b = [p_top_back[0] + thick[0], p_top_back[1] + thick[1]];
+                mesh.add_quad_vertices([p_top_tip, p_top_back, p_top_back_b, p_top_tip_b], white_uv, [col_head_top; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(mesh, screen_w - 75.0 * scale, screen_h - 45.0 * scale, 30.0 * scale, active_slot.count);
+                }
+            } else if is_shovel {
+                // -----------------------------------------------------------------
+                // 3D HELD SHOVEL: 3D wooden handle and spade blade
+                // -----------------------------------------------------------------
+                let shovel_punch_x = -55.0 * scale * punch_swing;
+                let shovel_punch_y = 70.0 * scale * punch_swing;
+
+                let handle_base = [
+                    screen_w - 55.0 * scale + bob_x + shovel_punch_x,
+                    screen_h + 15.0 * scale + bob_y + shovel_punch_y,
+                ];
+                let handle_tip = [
+                    screen_w - 200.0 * scale + bob_x + shovel_punch_x * 1.4,
+                    screen_h - 220.0 * scale + bob_y + shovel_punch_y * 1.4,
+                ];
+
+                let dx = handle_tip[0] - handle_base[0];
+                let dy = handle_tip[1] - handle_base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let half_w = 9.0 * scale;
+                let thick = [-9.0 * scale, -7.0 * scale];
+
+                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
+                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
+                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
+                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.60, 0.42, 0.24, 1.0]; 4]);
+                let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
+                let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
+                mesh.add_quad_vertices([h0_b, h0, h3, h3_b], white_uv, [[0.38, 0.25, 0.13, 1.0]; 4]);
+
+                let (col_head_main, col_head_top, _col_head_side) = match active_slot.item_id {
+                    ItemId::WOODEN_SHOVEL => ([0.68, 0.48, 0.28, 1.0], [0.85, 0.65, 0.42, 1.0], [0.45, 0.30, 0.16, 1.0]),
+                    ItemId::STONE_SHOVEL => ([0.55, 0.55, 0.58, 1.0], [0.75, 0.75, 0.78, 1.0], [0.35, 0.35, 0.38, 1.0]),
+                    ItemId::DIAMOND_SHOVEL => ([0.25, 0.88, 0.92, 1.0], [0.55, 1.00, 1.00, 1.0], [0.15, 0.60, 0.65, 1.0]),
+                    _ => ([0.82, 0.85, 0.90, 1.0], [0.96, 0.98, 1.00, 1.0], [0.55, 0.58, 0.65, 1.0]),
+                };
+
+                let blade_w = 20.0 * scale;
+                let blade_len = 50.0 * scale;
+                let b_base_l = [handle_tip[0] - norm[0] * blade_w, handle_tip[1] - norm[1] * blade_w];
+                let b_base_r = [handle_tip[0] + norm[0] * blade_w, handle_tip[1] + norm[1] * blade_w];
+                let b_tip_l = [b_base_l[0] + dir[0] * blade_len, b_base_l[1] + dir[1] * blade_len];
+                let b_tip_r = [b_base_r[0] + dir[0] * blade_len, b_base_r[1] + dir[1] * blade_len];
+
+                mesh.add_quad_vertices([b_base_l, b_base_r, b_tip_r, b_tip_l], white_uv, [col_head_main; 4]);
+                let b_tip_l_b = [b_tip_l[0] + thick[0], b_tip_l[1] + thick[1]];
+                let b_tip_r_b = [b_tip_r[0] + thick[0], b_tip_r[1] + thick[1]];
+                mesh.add_quad_vertices([b_tip_l, b_tip_r, b_tip_r_b, b_tip_l_b], white_uv, [col_head_top; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(mesh, screen_w - 75.0 * scale, screen_h - 45.0 * scale, 30.0 * scale, active_slot.count);
                 }
             } else if active_slot.item_id == ItemId::STICK {
                 // -----------------------------------------------------------------
@@ -899,9 +1150,12 @@ impl UiBuilder {
                         active_slot.count,
                     );
                 }
-            } else if active_slot.item_id == ItemId::IRON_INGOT {
+            } else if active_slot.item_id == ItemId::IRON_INGOT
+                || active_slot.item_id == ItemId::COPPER_INGOT
+                || active_slot.item_id == ItemId::GOLD_INGOT
+            {
                 // -----------------------------------------------------------------
-                // 3D HELD IRON INGOT: 3D metallic ingot bar with specular top face
+                // 3D HELD INGOT: 3D metallic ingot bar with specular top face
                 // -----------------------------------------------------------------
                 let item_punch_x = -40.0 * scale * punch_swing;
                 let item_punch_y = 25.0 * scale * punch_swing;
@@ -914,6 +1168,24 @@ impl UiBuilder {
                 let ih = 35.0 * scale;
                 let id = 45.0 * scale;
 
+                let (col_top, col_front, col_side) = match active_slot.item_id {
+                    ItemId::COPPER_INGOT => (
+                        [0.96, 0.68, 0.48, 1.0],
+                        [0.85, 0.50, 0.32, 1.0],
+                        [0.65, 0.35, 0.20, 1.0],
+                    ),
+                    ItemId::GOLD_INGOT => (
+                        [1.00, 0.95, 0.45, 1.0],
+                        [0.95, 0.80, 0.20, 1.0],
+                        [0.72, 0.58, 0.12, 1.0],
+                    ),
+                    _ => ( // Iron Ingot
+                        [0.94, 0.96, 1.00, 1.0],
+                        [0.78, 0.81, 0.88, 1.0],
+                        [0.60, 0.62, 0.70, 1.0],
+                    ),
+                };
+
                 // Top Face (trapezoid with brilliant metallic sheen)
                 let t_nw = [ic[0] - iw * 0.70, ic[1] - id * 0.60];
                 let t_ne = [ic[0] + iw * 0.70, ic[1] - id * 0.60];
@@ -922,24 +1194,24 @@ impl UiBuilder {
                 mesh.add_quad_vertices(
                     [t_sw, t_nw, t_ne, t_se],
                     white_uv,
-                    [[0.94, 0.96, 1.00, 1.0]; 4],
+                    [col_top; 4],
                 );
 
-                // Front Face (polished silver-steel)
+                // Front Face
                 let f_bl = [t_sw[0], t_sw[1] + ih];
                 let f_br = [t_se[0], t_se[1] + ih];
                 mesh.add_quad_vertices(
                     [t_sw, t_se, f_br, f_bl],
                     white_uv,
-                    [[0.78, 0.81, 0.88, 1.0]; 4],
+                    [col_front; 4],
                 );
 
-                // Right Face (shaded steel)
+                // Right Face
                 let r_br = [t_ne[0], t_ne[1] + ih];
                 mesh.add_quad_vertices(
                     [t_se, t_ne, r_br, f_br],
                     white_uv,
-                    [[0.60, 0.62, 0.70, 1.0]; 4],
+                    [col_side; 4],
                 );
 
                 if active_slot.count > 1 {
@@ -951,9 +1223,14 @@ impl UiBuilder {
                         active_slot.count,
                     );
                 }
-            } else if active_slot.item_id == ItemId::COAL {
+            } else if active_slot.item_id == ItemId::COAL
+                || active_slot.item_id == ItemId::RAW_IRON
+                || active_slot.item_id == ItemId::RAW_COPPER
+                || active_slot.item_id == ItemId::RAW_GOLD
+                || active_slot.item_id == ItemId::DIAMOND
+            {
                 // -----------------------------------------------------------------
-                // 3D HELD COAL: 3D faceted mineral chunk with specular highlights
+                // 3D HELD MINERAL / CHUNK: 3D faceted mineral chunk with specular highlights
                 // -----------------------------------------------------------------
                 let item_punch_x = -40.0 * scale * punch_swing;
                 let item_punch_y = 25.0 * scale * punch_swing;
@@ -964,6 +1241,34 @@ impl UiBuilder {
                 ];
                 let cs = 45.0 * scale;
 
+                let (col_f1, col_f2, col_f3) = match active_slot.item_id {
+                    ItemId::RAW_IRON => (
+                        [0.80, 0.72, 0.64, 1.0],
+                        [0.68, 0.58, 0.48, 1.0],
+                        [0.55, 0.45, 0.35, 1.0],
+                    ),
+                    ItemId::RAW_COPPER => (
+                        [0.75, 0.55, 0.42, 1.0],
+                        [0.62, 0.42, 0.30, 1.0],
+                        [0.45, 0.55, 0.50, 1.0],
+                    ),
+                    ItemId::RAW_GOLD => (
+                        [0.98, 0.88, 0.40, 1.0],
+                        [0.88, 0.72, 0.20, 1.0],
+                        [0.68, 0.52, 0.12, 1.0],
+                    ),
+                    ItemId::DIAMOND => (
+                        [0.65, 0.98, 1.00, 1.0],
+                        [0.32, 0.88, 0.92, 1.0],
+                        [0.18, 0.65, 0.72, 1.0],
+                    ),
+                    _ => ( // Coal
+                        [0.34, 0.34, 0.38, 1.0],
+                        [0.22, 0.22, 0.26, 1.0],
+                        [0.16, 0.16, 0.19, 1.0],
+                    ),
+                };
+
                 // Facet 1: Top facet (specular highlight)
                 let c_top = [cc[0], cc[1] - cs * 0.90];
                 let c_tl = [cc[0] - cs * 0.75, cc[1] - cs * 0.30];
@@ -972,7 +1277,7 @@ impl UiBuilder {
                 mesh.add_quad_vertices(
                     [c_tl, c_top, c_tr, c_mid],
                     white_uv,
-                    [[0.34, 0.34, 0.38, 1.0]; 4],
+                    [col_f1; 4],
                 );
 
                 // Facet 2: Front-left facet
@@ -981,7 +1286,7 @@ impl UiBuilder {
                 mesh.add_quad_vertices(
                     [c_tl, c_mid, c_bm, c_bl],
                     white_uv,
-                    [[0.22, 0.22, 0.26, 1.0]; 4],
+                    [col_f2; 4],
                 );
 
                 // Facet 3: Front-right facet
@@ -989,7 +1294,7 @@ impl UiBuilder {
                 mesh.add_quad_vertices(
                     [c_mid, c_tr, c_br, c_bm],
                     white_uv,
-                    [[0.16, 0.16, 0.19, 1.0]; 4],
+                    [col_f3; 4],
                 );
 
                 if active_slot.count > 1 {
@@ -1003,7 +1308,7 @@ impl UiBuilder {
                 }
             } else {
                 // -----------------------------------------------------------------
-                // GENERIC / FALLBACK ITEM: Extruded 3D isometric token with thickness
+                // GENERIC / 2D ITEM: Clean sprite quad with NO bounding-box bevels
                 // -----------------------------------------------------------------
                 let item_punch_x = -40.0 * scale * punch_swing;
                 let item_punch_y = 25.0 * scale * punch_swing;
@@ -1011,7 +1316,6 @@ impl UiBuilder {
                 let size = 110.0 * scale;
                 let ix = screen_w - size - 40.0 * scale + bob_x + item_punch_x;
                 let iy = screen_h - size - 40.0 * scale + bob_y + item_punch_y;
-                let thick = [-12.0 * scale, -10.0 * scale];
 
                 let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
                 let icon_uvs = [
@@ -1026,24 +1330,7 @@ impl UiBuilder {
                 let p2 = [ix + size, iy];
                 let p3 = [ix, iy];
 
-                // 1. 3D Side Thickness Face (shadow bevel)
-                let p0_b = [p0[0] + thick[0], p0[1] + thick[1]];
-                let p3_b = [p3[0] + thick[0], p3[1] + thick[1]];
-                mesh.add_quad_vertices(
-                    [p0_b, p0, p3, p3_b],
-                    white_uv,
-                    [[0.55, 0.55, 0.58, 1.0]; 4],
-                );
-
-                // 2. 3D Top Thickness Face (highlight bevel)
-                let p2_b = [p2[0] + thick[0], p2[1] + thick[1]];
-                mesh.add_quad_vertices(
-                    [p3, p2, p2_b, p3_b],
-                    white_uv,
-                    [[0.85, 0.85, 0.88, 1.0]; 4],
-                );
-
-                // 3. Front Face with item texture
+                // Front Face with clean item texture (transparent background, no borders)
                 mesh.add_quad_vertices(
                     [p0, p1, p2, p3],
                     icon_uvs,
