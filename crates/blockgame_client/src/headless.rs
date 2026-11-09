@@ -823,6 +823,8 @@ pub async fn render_world_to_image(
         &blockgame_core::item::ItemSlot::EMPTY,
         cursor_pos,
         &item_registry,
+        None,
+        None,
     );
 
     if !inv_ui_mesh.indices.is_empty() {
@@ -1419,6 +1421,8 @@ pub async fn render_world_to_image(
             &blockgame_core::item::ItemSlot::EMPTY,
             [screen_w * 0.5, screen_h * 0.5],
             &item_registry,
+            None,
+            None,
         );
 
         if !chest_screen_mesh.indices.is_empty() {
@@ -1503,6 +1507,205 @@ pub async fn render_world_to_image(
             image::ExtendedColorType::Rgba8,
         )?;
         log::info!("Successfully saved chest container UI showcase image to chest_ui_render.png");
+    }
+
+    // Also render JEI (Just Enough Items) Item Index & Recipe Modal Showcase
+    {
+        let mut jei_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("JEI UI Render Encoder"),
+        });
+
+        {
+            let mut render_pass = jei_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Voxel JEI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: sky[0] as f64,
+                            g: sky[1] as f64,
+                            b: sky[2] as f64,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+        }
+
+        let mut jei_ui_mesh = UiMesh::new();
+        let all_catalog: Vec<blockgame_core::item::ItemId> = item_registry
+            .all_items()
+            .into_iter()
+            .map(|def| def.id)
+            .collect();
+
+        let jei_params = blockgame_render::ui::JeiParams {
+            catalog_items: &all_catalog,
+            page: 0,
+            total_pages: 1,
+            search_query: "",
+            search_focused: false,
+        };
+
+        let display_recipe = blockgame_core::crafting::DisplayRecipe {
+            name: "Diamond Pickaxe",
+            category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
+            inputs: [
+                Some(blockgame_core::item::ItemId::DIAMOND),
+                Some(blockgame_core::item::ItemId::DIAMOND),
+                Some(blockgame_core::item::ItemId::DIAMOND),
+                None,
+                Some(blockgame_core::item::ItemId::STICK),
+                None,
+                None,
+                Some(blockgame_core::item::ItemId::STICK),
+                None,
+            ],
+            output: blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND_PICKAXE, 1),
+        };
+
+        let modal_params = blockgame_render::ui::RecipeModalParams {
+            target_item: blockgame_core::item::ItemId::DIAMOND_PICKAXE,
+            recipe: &display_recipe,
+            recipe_index: 0,
+            total_recipes: 1,
+            is_usage_mode: false,
+        };
+
+        // Position cursor over the output slot to highlight it and show tooltip
+        let modal_w = 400.0;
+        let modal_h = 300.0;
+        let mx = (screen_w - modal_w) * 0.5;
+        let my = (screen_h - modal_h) * 0.5;
+        let box_x = mx + 20.0;
+        let box_y = my + 76.0;
+        let slot_size = 42.0;
+        let slot_gap = 4.0;
+        let grid_start_x = box_x + 24.0;
+        let grid_start_y = box_y + 24.0;
+        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 20.0;
+        let out_x = arrow_x + 58.0;
+        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 24.0;
+        let cursor_pos = [out_x + 24.0, out_y + 24.0];
+
+        let mut crafting_grid = blockgame_core::crafting::CraftingGrid::new_3x3();
+        crafting_grid.set(0, 0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1));
+        let crafting_result = Some(blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::PLANKS, 4));
+
+        UiBuilder::build_inventory_screen(
+            &mut jei_ui_mesh,
+            screen_w,
+            screen_h,
+            &inventory,
+            0,
+            &crafting_grid,
+            crafting_result,
+            &blockgame_core::item::ItemSlot::EMPTY,
+            cursor_pos,
+            &item_registry,
+            Some(&jei_params),
+            Some(&modal_params),
+        );
+
+        if !jei_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("JEI UI VB"),
+                contents: bytemuck::cast_slice(&jei_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("JEI UI IB"),
+                contents: bytemuck::cast_slice(&jei_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = jei_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("JEI UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..jei_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        jei_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(jei_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut jei_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            jei_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "jei_recipe_browser_render.png",
+            &jei_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved JEI recipe browser showcase image to jei_recipe_browser_render.png");
     }
 
     Ok(())

@@ -83,6 +83,21 @@ impl CraftingGrid {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipeCategory {
+    Crafting3x3,
+    Crafting2x2,
+    Smelting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayRecipe {
+    pub name: &'static str,
+    pub category: RecipeCategory,
+    pub inputs: [Option<ItemId>; 9],
+    pub output: ItemSlot,
+}
+
 #[derive(Debug, Clone)]
 pub enum Recipe {
     Shapeless {
@@ -111,6 +126,64 @@ impl Recipe {
         match self {
             Recipe::Shapeless { name, .. } => name,
             Recipe::Shaped { name, .. } => name,
+        }
+    }
+
+    pub fn to_display_recipe(&self) -> DisplayRecipe {
+        match self {
+            Recipe::Shapeless { name, inputs, output } => {
+                let mut grid = [None; 9];
+                for (i, &inp) in inputs.iter().take(9).enumerate() {
+                    grid[i] = Some(inp);
+                }
+                let is_smelting = inputs.len() == 1
+                    && (output.item_id == ItemId::IRON_INGOT
+                        || output.item_id == ItemId::COPPER_INGOT
+                        || output.item_id == ItemId::GOLD_INGOT
+                        || output.item_id == ItemId::COOKED_STEAK
+                        || output.item_id == ItemId::COOKED_PORKCHOP
+                        || output.item_id == ItemId::COOKED_CHICKEN);
+                let category = if is_smelting {
+                    RecipeCategory::Smelting
+                } else if inputs.len() <= 4 {
+                    RecipeCategory::Crafting2x2
+                } else {
+                    RecipeCategory::Crafting3x3
+                };
+                DisplayRecipe {
+                    name,
+                    category,
+                    inputs: grid,
+                    output: *output,
+                }
+            }
+            Recipe::Shaped {
+                name,
+                width,
+                height,
+                pattern,
+                output,
+            } => {
+                let mut grid = [None; 9];
+                let w = *width;
+                let h = *height;
+                for dy in 0..h.min(3) {
+                    for dx in 0..w.min(3) {
+                        grid[dy * 3 + dx] = pattern[dy * w + dx];
+                    }
+                }
+                let category = if w <= 2 && h <= 2 {
+                    RecipeCategory::Crafting2x2
+                } else {
+                    RecipeCategory::Crafting3x3
+                };
+                DisplayRecipe {
+                    name,
+                    category,
+                    inputs: grid,
+                    output: *output,
+                }
+            }
         }
     }
 
@@ -196,6 +269,36 @@ impl CraftingManager {
 
     pub fn register(&mut self, recipe: Recipe) {
         self.recipes.push(recipe);
+    }
+
+    pub fn recipes(&self) -> &[Recipe] {
+        &self.recipes
+    }
+
+    /// Finds all display recipes that produce `item_id`.
+    pub fn get_recipes_for_output(&self, item_id: ItemId) -> Vec<DisplayRecipe> {
+        self.recipes
+            .iter()
+            .filter(|r| r.output().item_id == item_id)
+            .map(|r| r.to_display_recipe())
+            .collect()
+    }
+
+    /// Finds all display recipes that use `item_id` as an input ingredient.
+    pub fn get_recipes_using_input(&self, item_id: ItemId) -> Vec<DisplayRecipe> {
+        self.recipes
+            .iter()
+            .filter(|r| match r {
+                Recipe::Shapeless { inputs, .. } => inputs.contains(&item_id),
+                Recipe::Shaped { pattern, .. } => pattern.contains(&Some(item_id)),
+            })
+            .map(|r| r.to_display_recipe())
+            .collect()
+    }
+
+    /// Returns all registered recipes in display format.
+    pub fn get_all_display_recipes(&self) -> Vec<DisplayRecipe> {
+        self.recipes.iter().map(|r| r.to_display_recipe()).collect()
     }
 
     /// Finds a matching recipe for the given grid and returns its output.
@@ -639,6 +742,40 @@ mod tests {
         let (_, out) = res.unwrap();
         assert_eq!(out.item_id, ItemId::DIAMOND_HOE);
         assert_eq!(out.count, 1);
+    }
+
+    #[test]
+    fn test_display_recipe_queries() {
+        let cm = CraftingManager::new();
+
+        // 1. Recipes producing Diamond Pickaxe
+        let dia_pick_recipes = cm.get_recipes_for_output(ItemId::DIAMOND_PICKAXE);
+        assert_eq!(dia_pick_recipes.len(), 1);
+        assert_eq!(dia_pick_recipes[0].category, RecipeCategory::Crafting3x3);
+        assert_eq!(dia_pick_recipes[0].inputs[0], Some(ItemId::DIAMOND));
+        assert_eq!(dia_pick_recipes[0].inputs[1], Some(ItemId::DIAMOND));
+        assert_eq!(dia_pick_recipes[0].inputs[2], Some(ItemId::DIAMOND));
+        assert_eq!(dia_pick_recipes[0].inputs[4], Some(ItemId::STICK));
+        assert_eq!(dia_pick_recipes[0].inputs[7], Some(ItemId::STICK));
+
+        // 2. Recipes producing Chest
+        let chest_recipes = cm.get_recipes_for_output(ItemId::CHEST);
+        assert_eq!(chest_recipes.len(), 1);
+        assert_eq!(chest_recipes[0].category, RecipeCategory::Crafting3x3);
+
+        // 3. Recipes producing Planks (from Wood Log)
+        let plank_recipes = cm.get_recipes_for_output(ItemId::PLANKS);
+        assert_eq!(plank_recipes.len(), 1);
+        assert_eq!(plank_recipes[0].output.count, 4);
+
+        // 4. Recipes using Wheat as ingredient
+        let wheat_uses = cm.get_recipes_using_input(ItemId::WHEAT);
+        assert_eq!(wheat_uses.len(), 1);
+        assert_eq!(wheat_uses[0].output.item_id, ItemId::BREAD);
+
+        // 5. Smelting category recognition
+        let iron_ingot_recipes = cm.get_recipes_for_output(ItemId::IRON_INGOT);
+        assert!(iron_ingot_recipes.iter().any(|r| r.category == RecipeCategory::Smelting));
     }
 }
 

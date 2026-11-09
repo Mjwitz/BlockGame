@@ -241,6 +241,24 @@ impl UiPipeline {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct JeiParams<'a> {
+    pub catalog_items: &'a [ItemId],
+    pub page: usize,
+    pub total_pages: usize,
+    pub search_query: &'a str,
+    pub search_focused: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecipeModalParams<'a> {
+    pub target_item: ItemId,
+    pub recipe: &'a blockgame_core::crafting::DisplayRecipe,
+    pub recipe_index: usize,
+    pub total_recipes: usize,
+    pub is_usage_mode: bool,
+}
+
 pub struct UiBuilder;
 
 impl UiBuilder {
@@ -1529,6 +1547,8 @@ impl UiBuilder {
         cursor_held: &ItemSlot,
         cursor_pos: [f32; 2],
         registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
     ) {
         mesh.clear();
 
@@ -1708,7 +1728,33 @@ impl UiBuilder {
             }
         }
 
-        // 5. Cursor Held Item Stack (follows mouse position)
+        // 5. JEI Catalog Panel on right side
+        if let Some(jei) = jei_params {
+            Self::draw_jei_panel(
+                mesh,
+                screen_w,
+                screen_h,
+                jei,
+                cursor_pos,
+                registry,
+                &mut hovered_item_name,
+            );
+        }
+
+        // 6. Recipe Inspector Modal (if open, drawn on top)
+        if let Some(modal) = recipe_modal {
+            Self::draw_recipe_modal(
+                mesh,
+                screen_w,
+                screen_h,
+                modal,
+                cursor_pos,
+                registry,
+                &mut hovered_item_name,
+            );
+        }
+
+        // 7. Cursor Held Item Stack (follows mouse position)
         if !cursor_held.is_empty() {
             if let Some(def) = registry.get(cursor_held.item_id) {
                 let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
@@ -1745,6 +1791,8 @@ impl UiBuilder {
         cursor_held: &ItemSlot,
         cursor_pos: [f32; 2],
         registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
     ) {
         mesh.clear();
 
@@ -1905,7 +1953,33 @@ impl UiBuilder {
             }
         }
 
-        // 5. Cursor Held Item Stack (follows mouse position)
+        // 5. JEI Catalog Panel on right side
+        if let Some(jei) = jei_params {
+            Self::draw_jei_panel(
+                mesh,
+                screen_w,
+                screen_h,
+                jei,
+                cursor_pos,
+                registry,
+                &mut hovered_item_name,
+            );
+        }
+
+        // 6. Recipe Inspector Modal (if open, drawn on top)
+        if let Some(modal) = recipe_modal {
+            Self::draw_recipe_modal(
+                mesh,
+                screen_w,
+                screen_h,
+                modal,
+                cursor_pos,
+                registry,
+                &mut hovered_item_name,
+            );
+        }
+
+        // 7. Cursor Held Item Stack (follows mouse position)
         if !cursor_held.is_empty() {
             if let Some(def) = registry.get(cursor_held.item_id) {
                 let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
@@ -1924,10 +1998,306 @@ impl UiBuilder {
             }
         }
 
-        // 6. Hover Tooltip
+        // 8. Hover Tooltip
         if let Some(name) = hovered_item_name {
             Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
         }
+    }
+
+    /// Draws the JEI (Just Enough Items) Item Index Grid, Pagination, and Search Bar on the right side.
+    pub fn draw_jei_panel(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        params: &JeiParams,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        hovered_item_name: &mut Option<&str>,
+    ) {
+        let slot_size = 36.0;
+        let slot_gap = 4.0;
+        let cols = 6;
+        let rows = 8;
+        let panel_w = (cols as f32) * (slot_size + slot_gap) - slot_gap; // 236.0
+        let start_x = screen_w - panel_w - 24.0;
+        let start_y = screen_h * 0.5 - 190.0;
+
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // 1. Pagination Controls Header
+        let page_y = start_y - 28.0;
+        let btn_w = 26.0;
+        let btn_h = 20.0;
+
+        // Prev Button [<]
+        let prev_x = start_x;
+        let prev_hovered = cursor_pos[0] >= prev_x && cursor_pos[0] <= prev_x + btn_w
+            && cursor_pos[1] >= page_y && cursor_pos[1] <= page_y + btn_h;
+        let prev_color = if prev_hovered { [0.35, 0.35, 0.40, 1.0] } else { [0.20, 0.20, 0.22, 1.0] };
+        mesh.add_quad(prev_x, page_y, btn_w, btn_h, white_uv, prev_color);
+        Self::draw_char(mesh, prev_x + 9.0, page_y + 4.0, 8.0, 12.0, b'<', [0.95, 0.95, 0.95, 1.0]);
+
+        // Page Indicator: "1 / 2"
+        let page_text = format!("{} / {}", params.page + 1, params.total_pages.max(1));
+        let text_w = page_text.len() as f32 * 9.0;
+        let text_x = start_x + (panel_w - text_w) * 0.5;
+        Self::draw_string(mesh, text_x, page_y + 4.0, &page_text, 8.0, 12.0, 1.0, [0.85, 0.85, 0.90, 1.0]);
+
+        // Next Button [>]
+        let next_x = start_x + panel_w - btn_w;
+        let next_hovered = cursor_pos[0] >= next_x && cursor_pos[0] <= next_x + btn_w
+            && cursor_pos[1] >= page_y && cursor_pos[1] <= page_y + btn_h;
+        let next_color = if next_hovered { [0.35, 0.35, 0.40, 1.0] } else { [0.20, 0.20, 0.22, 1.0] };
+        mesh.add_quad(next_x, page_y, btn_w, btn_h, white_uv, next_color);
+        Self::draw_char(mesh, next_x + 9.0, page_y + 4.0, 8.0, 12.0, b'>', [0.95, 0.95, 0.95, 1.0]);
+
+        // 2. 6x8 Item Catalog Grid (48 items per page)
+        let items_per_page = cols * rows;
+        let page_offset = params.page * items_per_page;
+
+        for r in 0..rows {
+            for c in 0..cols {
+                let slot_idx = page_offset + r * cols + c;
+                let sx = start_x + (c as f32) * (slot_size + slot_gap);
+                let sy = start_y + (r as f32) * (slot_size + slot_gap);
+
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.9]);
+
+                if slot_idx < params.catalog_items.len() {
+                    let item_id = params.catalog_items[slot_idx];
+                    if let Some(def) = registry.get(item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        let pad = 5.0;
+                        mesh.add_quad(
+                            sx + pad,
+                            sy + pad,
+                            slot_size - pad * 2.0,
+                            slot_size - pad * 2.0,
+                            icon_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+
+                        if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size
+                        {
+                            mesh.add_quad(
+                                sx - 2.0,
+                                sy - 2.0,
+                                slot_size + 4.0,
+                                slot_size + 4.0,
+                                highlight_uv,
+                                [1.0, 1.0, 1.0, 1.0],
+                            );
+                            *hovered_item_name = Some(def.display_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Search Bar
+        let search_y = start_y + (rows as f32) * (slot_size + slot_gap) + 8.0;
+        let search_h = 24.0;
+        let border_color = if params.search_focused {
+            [0.95, 0.85, 0.30, 1.0]
+        } else {
+            [0.40, 0.40, 0.45, 1.0]
+        };
+        // Outer border
+        mesh.add_quad(start_x - 1.0, search_y - 1.0, panel_w + 2.0, search_h + 2.0, white_uv, border_color);
+        // Inner box
+        mesh.add_quad(start_x, search_y, panel_w, search_h, white_uv, [0.08, 0.08, 0.10, 0.96]);
+
+        if params.search_query.is_empty() && !params.search_focused {
+            Self::draw_string(mesh, start_x + 6.0, search_y + 6.0, "Search...", 8.0, 12.0, 0.0, [0.55, 0.55, 0.60, 1.0]);
+        } else {
+            let display_query = if params.search_focused {
+                format!("{}_", params.search_query)
+            } else {
+                params.search_query.to_string()
+            };
+            Self::draw_string(mesh, start_x + 6.0, search_y + 6.0, &display_query, 8.0, 12.0, 0.0, [1.0, 1.0, 0.95, 1.0]);
+        }
+    }
+
+    /// Draws the JEI Recipe Inspector Modal dialog showing recipes, 3x3 pattern or smelting, and output.
+    pub fn draw_recipe_modal(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        params: &RecipeModalParams,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        hovered_item_name: &mut Option<&str>,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
+
+        // 1. Dark overlay behind modal
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.72]);
+
+        // 2. Modal Window Frame
+        let modal_w = 400.0;
+        let modal_h = 300.0;
+        let mx = (screen_w - modal_w) * 0.5;
+        let my = (screen_h - modal_h) * 0.5;
+
+        // Shadow & outer border
+        mesh.add_quad(mx - 3.0, my - 3.0, modal_w + 6.0, modal_h + 6.0, white_uv, [0.04, 0.04, 0.05, 0.98]);
+        // Main window background
+        mesh.add_quad(mx, my, modal_w, modal_h, white_uv, [0.18, 0.18, 0.20, 0.98]);
+        // Top header banner
+        mesh.add_quad(mx, my, modal_w, 36.0, white_uv, [0.12, 0.12, 0.14, 1.0]);
+
+        // Close Button [X]
+        let close_size = 24.0;
+        let close_x = mx + modal_w - close_size - 6.0;
+        let close_y = my + 6.0;
+        let close_hovered = cursor_pos[0] >= close_x && cursor_pos[0] <= close_x + close_size
+            && cursor_pos[1] >= close_y && cursor_pos[1] <= close_y + close_size;
+        let close_col = if close_hovered { [0.85, 0.25, 0.25, 1.0] } else { [0.65, 0.18, 0.18, 1.0] };
+        mesh.add_quad(close_x, close_y, close_size, close_size, white_uv, close_col);
+        Self::draw_char(mesh, close_x + 8.0, close_y + 6.0, 8.0, 12.0, b'X', [1.0, 1.0, 1.0, 1.0]);
+
+        // Header Title
+        let target_def = registry.get(params.target_item);
+        let target_name = target_def.map(|d| d.display_name).unwrap_or("Item");
+        let header_prefix = if params.is_usage_mode { "Uses: " } else { "Recipe: " };
+        let full_title = format!("{}{}", header_prefix, target_name);
+        Self::draw_string(mesh, mx + 12.0, my + 12.0, &full_title, 8.0, 12.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+
+        // Subheader: Recipe Cycle buttons & Category
+        let sub_y = my + 44.0;
+        if params.total_recipes > 1 {
+            let prev_rx = mx + 20.0;
+            let next_rx = mx + 50.0;
+            let btn_w = 22.0;
+            let btn_h = 20.0;
+
+            let prev_hov = cursor_pos[0] >= prev_rx && cursor_pos[0] <= prev_rx + btn_w
+                && cursor_pos[1] >= sub_y && cursor_pos[1] <= sub_y + btn_h;
+            let prev_col = if prev_hov { [0.35, 0.35, 0.40, 1.0] } else { [0.22, 0.22, 0.25, 1.0] };
+            mesh.add_quad(prev_rx, sub_y, btn_w, btn_h, white_uv, prev_col);
+            Self::draw_char(mesh, prev_rx + 7.0, sub_y + 4.0, 8.0, 12.0, b'<', [0.95, 0.95, 0.95, 1.0]);
+
+            let next_hov = cursor_pos[0] >= next_rx && cursor_pos[0] <= next_rx + btn_w
+                && cursor_pos[1] >= sub_y && cursor_pos[1] <= sub_y + btn_h;
+            let next_col = if next_hov { [0.35, 0.35, 0.40, 1.0] } else { [0.22, 0.22, 0.25, 1.0] };
+            mesh.add_quad(next_rx, sub_y, btn_w, btn_h, white_uv, next_col);
+            Self::draw_char(mesh, next_rx + 7.0, sub_y + 4.0, 8.0, 12.0, b'>', [0.95, 0.95, 0.95, 1.0]);
+
+            let count_text = format!("({} of {})", params.recipe_index + 1, params.total_recipes);
+            Self::draw_string(mesh, next_rx + 30.0, sub_y + 4.0, &count_text, 8.0, 12.0, 1.0, [0.75, 0.75, 0.80, 1.0]);
+        }
+
+        // Category Badge
+        let cat_str = match params.recipe.category {
+            blockgame_core::crafting::RecipeCategory::Crafting3x3 => "[ 3x3 Crafting Table ]",
+            blockgame_core::crafting::RecipeCategory::Crafting2x2 => "[ 2x2 Crafting Grid ]",
+            blockgame_core::crafting::RecipeCategory::Smelting => "[ Smelting / Cooking ]",
+        };
+        let cat_x = mx + modal_w - (cat_str.len() as f32 * 9.0) - 20.0;
+        Self::draw_string(mesh, cat_x, sub_y + 4.0, cat_str, 8.0, 12.0, 1.0, [0.35, 0.85, 0.95, 1.0]);
+
+        // 3. Recipe Content Box
+        let box_x = mx + 20.0;
+        let box_y = my + 76.0;
+        let box_w = modal_w - 40.0;
+        let box_h = modal_h - 96.0;
+        mesh.add_quad(box_x, box_y, box_w, box_h, white_uv, [0.12, 0.12, 0.14, 0.95]);
+
+        let slot_size = 42.0;
+        let slot_gap = 4.0;
+        let grid_start_x = box_x + 24.0;
+        let grid_start_y = box_y + 24.0;
+
+        // 3x3 Input Grid
+        for gy in 0..3 {
+            for gx in 0..3 {
+                let idx = gy * 3 + gx;
+                let sx = grid_start_x + (gx as f32) * (slot_size + slot_gap);
+                let sy = grid_start_y + (gy as f32) * (slot_size + slot_gap);
+
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+
+                if let Some(ing_id) = params.recipe.inputs[idx] {
+                    if let Some(def) = registry.get(ing_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        let pad = 6.0;
+                        mesh.add_quad(
+                            sx + pad,
+                            sy + pad,
+                            slot_size - pad * 2.0,
+                            slot_size - pad * 2.0,
+                            icon_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+
+                        if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size
+                        {
+                            mesh.add_quad(
+                                sx - 2.0,
+                                sy - 2.0,
+                                slot_size + 4.0,
+                                slot_size + 4.0,
+                                highlight_uv,
+                                [1.0, 1.0, 1.0, 1.0],
+                            );
+                            *hovered_item_name = Some(def.display_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Arrow ===>
+        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 20.0;
+        let arrow_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 6.0;
+        Self::draw_string(mesh, arrow_x, arrow_y, "===>", 10.0, 14.0, 1.0, [0.85, 0.85, 0.90, 1.0]);
+
+        // Output Slot
+        let out_x = arrow_x + 58.0;
+        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 24.0;
+        let out_size = 48.0;
+        mesh.add_quad(out_x, out_y, out_size, out_size, slot_uv, [1.0, 1.0, 1.0, 1.0]);
+
+        let out_slot = params.recipe.output;
+        if !out_slot.is_empty() {
+            if let Some(def) = registry.get(out_slot.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let pad = 6.0;
+                mesh.add_quad(
+                    out_x + pad,
+                    out_y + pad,
+                    out_size - pad * 2.0,
+                    out_size - pad * 2.0,
+                    icon_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
+
+                if cursor_pos[0] >= out_x && cursor_pos[0] <= out_x + out_size
+                    && cursor_pos[1] >= out_y && cursor_pos[1] <= out_y + out_size
+                {
+                    mesh.add_quad(
+                        out_x - 2.0,
+                        out_y - 2.0,
+                        out_size + 4.0,
+                        out_size + 4.0,
+                        highlight_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    *hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // Recipe Name at bottom of box
+        Self::draw_string(mesh, box_x + 20.0, box_y + box_h - 22.0, params.recipe.name, 8.0, 12.0, 0.5, [0.70, 0.70, 0.75, 1.0]);
     }
 }
 
@@ -2079,8 +2449,55 @@ mod tests {
             &cursor_held,
             [640.0, 360.0],
             &registry,
+            None,
+            None,
         );
 
+        assert!(mesh.indices.len() > 0);
+        assert!(mesh.vertices.len() > 0);
+    }
+
+    #[test]
+    fn test_draw_jei_panel() {
+        let mut mesh = UiMesh::new();
+        let registry = ItemRegistry::new();
+        let catalog = [ItemId::DIAMOND_PICKAXE, ItemId::IRON_INGOT, ItemId::CHEST];
+        let params = JeiParams {
+            catalog_items: &catalog,
+            page: 0,
+            total_pages: 1,
+            search_query: "pick",
+            search_focused: true,
+        };
+        let mut hovered = None;
+        UiBuilder::draw_jei_panel(&mut mesh, 1280.0, 720.0, &params, [1050.0, 200.0], &registry, &mut hovered);
+        assert!(mesh.indices.len() > 0);
+        assert!(mesh.vertices.len() > 0);
+    }
+
+    #[test]
+    fn test_draw_recipe_modal() {
+        let mut mesh = UiMesh::new();
+        let registry = ItemRegistry::new();
+        let display_recipe = blockgame_core::crafting::DisplayRecipe {
+            name: "Diamond Pickaxe",
+            category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
+            inputs: [
+                Some(ItemId::DIAMOND), Some(ItemId::DIAMOND), Some(ItemId::DIAMOND),
+                None, Some(ItemId::STICK), None,
+                None, Some(ItemId::STICK), None,
+            ],
+            output: ItemSlot::new(ItemId::DIAMOND_PICKAXE, 1),
+        };
+        let params = RecipeModalParams {
+            target_item: ItemId::DIAMOND_PICKAXE,
+            recipe: &display_recipe,
+            recipe_index: 0,
+            total_recipes: 1,
+            is_usage_mode: false,
+        };
+        let mut hovered = None;
+        UiBuilder::draw_recipe_modal(&mut mesh, 1280.0, 720.0, &params, [640.0, 360.0], &registry, &mut hovered);
         assert!(mesh.indices.len() > 0);
         assert!(mesh.vertices.len() > 0);
     }

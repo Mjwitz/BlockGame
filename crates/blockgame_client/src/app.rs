@@ -29,6 +29,13 @@ use winit::{
 
 use crate::world_manager::WorldManager;
 
+#[derive(Debug, Clone)]
+pub struct JeiRecipeModalState {
+    pub target_item: ItemId,
+    pub is_usage_mode: bool,
+    pub recipe_index: usize,
+}
+
 pub struct AppState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -57,6 +64,10 @@ pub struct AppState {
     pub inventory_open: bool,
     pub active_chest_pos: Option<IVec3>,
     pub shift_down: bool,
+    pub jei_search_text: String,
+    pub jei_search_focused: bool,
+    pub jei_page: usize,
+    pub jei_recipe_modal: Option<JeiRecipeModalState>,
     pub cursor_held: ItemSlot,
     pub cursor_pos: [f32; 2],
     pub ui_pipeline: UiPipeline,
@@ -262,6 +273,10 @@ impl ApplicationHandler for BlockGameApp {
             inventory_open: false,
             active_chest_pos: None,
             shift_down: false,
+            jei_search_text: String::new(),
+            jei_search_focused: false,
+            jei_page: 0,
+            jei_recipe_modal: None,
             cursor_held: ItemSlot::EMPTY,
             cursor_pos: [width as f32 * 0.5, height as f32 * 0.5],
             ui_pipeline,
@@ -360,6 +375,13 @@ impl ApplicationHandler for BlockGameApp {
                 if state.inventory_open {
                     if pressed {
                         let is_right = button == MouseButton::Right;
+                        if state.jei_recipe_modal.is_some() {
+                            handle_recipe_modal_click(state, is_right);
+                            return;
+                        }
+                        if handle_jei_panel_click(state, is_right) {
+                            return;
+                        }
                         if state.active_chest_pos.is_some() {
                             handle_chest_click(state, is_right);
                         } else {
@@ -543,6 +565,7 @@ impl ApplicationHandler for BlockGameApp {
                     KeyEvent {
                         physical_key: PhysicalKey::Code(key),
                         state: key_state,
+                        text,
                         ..
                     },
                 ..
@@ -557,8 +580,84 @@ impl ApplicationHandler for BlockGameApp {
                     return;
                 }
 
+                // Search Bar text entry when focused
+                if state.jei_search_focused && state.inventory_open {
+                    if pressed {
+                        if key == KeyCode::Escape || key == KeyCode::Enter {
+                            state.jei_search_focused = false;
+                        } else if key == KeyCode::Backspace {
+                            state.jei_search_text.pop();
+                            state.jei_page = 0;
+                        } else if let Some(t) = text {
+                            for ch in t.chars() {
+                                if !ch.is_control() {
+                                    state.jei_search_text.push(ch);
+                                    state.jei_page = 0;
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Recipe Modal key navigation (Esc / E to close, Left / Right to cycle)
+                if state.jei_recipe_modal.is_some() && state.inventory_open {
+                    if pressed {
+                        if key == KeyCode::Escape || key == KeyCode::KeyE {
+                            state.jei_recipe_modal = None;
+                            return;
+                        }
+                        if key == KeyCode::ArrowLeft {
+                            if let Some(m) = &mut state.jei_recipe_modal {
+                                let total = if m.is_usage_mode {
+                                    state.crafting_manager.get_recipes_using_input(m.target_item).len()
+                                } else {
+                                    state.crafting_manager.get_recipes_for_output(m.target_item).len()
+                                };
+                                if total > 1 {
+                                    m.recipe_index = (m.recipe_index + total - 1) % total;
+                                }
+                            }
+                            return;
+                        }
+                        if key == KeyCode::ArrowRight {
+                            if let Some(m) = &mut state.jei_recipe_modal {
+                                let total = if m.is_usage_mode {
+                                    state.crafting_manager.get_recipes_using_input(m.target_item).len()
+                                } else {
+                                    state.crafting_manager.get_recipes_for_output(m.target_item).len()
+                                };
+                                if total > 1 {
+                                    m.recipe_index = (m.recipe_index + 1) % total;
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+
                 match key {
                     KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
+                    KeyCode::KeyR if pressed && state.inventory_open && !state.jei_search_focused => {
+                        if let Some(id) = find_hovered_item(state) {
+                            state.jei_recipe_modal = Some(JeiRecipeModalState {
+                                target_item: id,
+                                is_usage_mode: false,
+                                recipe_index: 0,
+                            });
+                            return;
+                        }
+                    }
+                    KeyCode::KeyU if pressed && state.inventory_open && !state.jei_search_focused => {
+                        if let Some(id) = find_hovered_item(state) {
+                            state.jei_recipe_modal = Some(JeiRecipeModalState {
+                                target_item: id,
+                                is_usage_mode: true,
+                                recipe_index: 0,
+                            });
+                            return;
+                        }
+                    }
                     KeyCode::KeyW => state.moving_forward = pressed,
                     KeyCode::KeyS => state.moving_backward = pressed,
                     KeyCode::KeyA => state.moving_left = pressed,
@@ -575,6 +674,8 @@ impl ApplicationHandler for BlockGameApp {
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
                         state.active_chest_pos = None;
+                        state.jei_recipe_modal = None;
+                        state.jei_search_focused = false;
                         if state.inventory_open {
                             // Safely return crafting grid items and cursor held item to inventory
                             for slot in state.crafting_grid.slots.drain(..) {
@@ -951,6 +1052,72 @@ impl ApplicationHandler for BlockGameApp {
                 state.ui_pipeline.update_screen_size(&state.queue, screen_w, screen_h);
 
                 if state.inventory_open {
+                    // 1. Prepare JEI Item Index Catalog & Filter
+                    let search_lower = state.jei_search_text.trim().to_lowercase();
+                    let catalog: Vec<ItemId> = state
+                        .item_registry
+                        .all_items()
+                        .into_iter()
+                        .filter(|def| {
+                            if search_lower.is_empty() {
+                                true
+                            } else {
+                                def.display_name.to_lowercase().contains(&search_lower)
+                            }
+                        })
+                        .map(|def| def.id)
+                        .collect();
+                    let items_per_page = 6 * 8;
+                    let total_pages = ((catalog.len() + items_per_page - 1) / items_per_page).max(1);
+                    if state.jei_page >= total_pages {
+                        state.jei_page = total_pages.saturating_sub(1);
+                    }
+
+                    let jei_params = blockgame_render::ui::JeiParams {
+                        catalog_items: &catalog,
+                        page: state.jei_page,
+                        total_pages,
+                        search_query: &state.jei_search_text,
+                        search_focused: state.jei_search_focused,
+                    };
+
+                    // 2. Prepare Recipe Modal State if active
+                    let display_recipe_storage: Option<blockgame_core::crafting::DisplayRecipe>;
+                    let mut modal_params: Option<blockgame_render::ui::RecipeModalParams> = None;
+                    if let Some(m) = &state.jei_recipe_modal {
+                        let recipes = if m.is_usage_mode {
+                            state.crafting_manager.get_recipes_using_input(m.target_item)
+                        } else {
+                            state.crafting_manager.get_recipes_for_output(m.target_item)
+                        };
+                        let total_rec = recipes.len();
+                        if total_rec > 0 {
+                            let clamped_idx = m.recipe_index.min(total_rec - 1);
+                            display_recipe_storage = Some(recipes[clamped_idx].clone());
+                        } else {
+                            let item_name = state
+                                .item_registry
+                                .get(m.target_item)
+                                .map(|d| d.display_name)
+                                .unwrap_or("Item");
+                            display_recipe_storage = Some(blockgame_core::crafting::DisplayRecipe {
+                                name: item_name,
+                                category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
+                                inputs: [None; 9],
+                                output: ItemSlot::new(m.target_item, 1),
+                            });
+                        }
+                        if let Some(ref disp) = display_recipe_storage {
+                            modal_params = Some(blockgame_render::ui::RecipeModalParams {
+                                target_item: m.target_item,
+                                recipe: disp,
+                                recipe_index: m.recipe_index.min(total_rec.max(1) - 1),
+                                total_recipes: total_rec.max(1),
+                                is_usage_mode: m.is_usage_mode,
+                            });
+                        }
+                    }
+
                     if let Some(chest_pos) = state.active_chest_pos {
                         let chest_slots = {
                             let world_guard = state.world_manager.world().lock().unwrap();
@@ -966,6 +1133,8 @@ impl ApplicationHandler for BlockGameApp {
                             &state.cursor_held,
                             state.cursor_pos,
                             &state.item_registry,
+                            Some(&jei_params),
+                            modal_params.as_ref(),
                         );
                     } else {
                         state.crafting_result = state
@@ -983,6 +1152,8 @@ impl ApplicationHandler for BlockGameApp {
                             &state.cursor_held,
                             state.cursor_pos,
                             &state.item_registry,
+                            Some(&jei_params),
+                            modal_params.as_ref(),
                         );
                     }
                 } else {
@@ -1472,5 +1643,367 @@ fn click_slot_raw(
             std::mem::swap(slot, held_cursor);
         }
     }
+}
+
+fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool {
+    let Some(modal) = state.jei_recipe_modal.clone() else {
+        return false;
+    };
+    let screen_w = state.surface_config.width as f32;
+    let screen_h = state.surface_config.height as f32;
+    let cx = state.cursor_pos[0];
+    let cy = state.cursor_pos[1];
+
+    let modal_w = 400.0;
+    let modal_h = 300.0;
+    let mx = (screen_w - modal_w) * 0.5;
+    let my = (screen_h - modal_h) * 0.5;
+
+    // Check if clicked outside modal: close modal!
+    if cx < mx || cx > mx + modal_w || cy < my || cy > my + modal_h {
+        state.jei_recipe_modal = None;
+        return true;
+    }
+
+    // Close button [X]
+    let close_size = 24.0;
+    let close_x = mx + modal_w - close_size - 6.0;
+    let close_y = my + 6.0;
+    if cx >= close_x && cx <= close_x + close_size && cy >= close_y && cy <= close_y + close_size {
+        state.jei_recipe_modal = None;
+        return true;
+    }
+
+    // Recipe cycle controls (< and >)
+    let recipes = if modal.is_usage_mode {
+        state.crafting_manager.get_recipes_using_input(modal.target_item)
+    } else {
+        state.crafting_manager.get_recipes_for_output(modal.target_item)
+    };
+    let total_recipes = recipes.len();
+
+    let sub_y = my + 44.0;
+    let btn_w = 22.0;
+    let btn_h = 20.0;
+    let prev_rx = mx + 20.0;
+    let next_rx = mx + 50.0;
+
+    if total_recipes > 1 {
+        if cx >= prev_rx && cx <= prev_rx + btn_w && cy >= sub_y && cy <= sub_y + btn_h {
+            if let Some(m) = &mut state.jei_recipe_modal {
+                m.recipe_index = (m.recipe_index + total_recipes - 1) % total_recipes;
+            }
+            return true;
+        }
+        if cx >= next_rx && cx <= next_rx + btn_w && cy >= sub_y && cy <= sub_y + btn_h {
+            if let Some(m) = &mut state.jei_recipe_modal {
+                m.recipe_index = (m.recipe_index + 1) % total_recipes;
+            }
+            return true;
+        }
+    }
+
+    // Active recipe slots (3x3 ingredients & output)
+    if let Some(recipe) = recipes.get(modal.recipe_index) {
+        let box_x = mx + 20.0;
+        let box_y = my + 76.0;
+        let slot_size = 42.0;
+        let slot_gap = 4.0;
+        let grid_start_x = box_x + 24.0;
+        let grid_start_y = box_y + 24.0;
+
+        // 3x3 Inputs
+        for gy in 0..3 {
+            for gx in 0..3 {
+                let idx = gy * 3 + gx;
+                let sx = grid_start_x + (gx as f32) * (slot_size + slot_gap);
+                let sy = grid_start_y + (gy as f32) * (slot_size + slot_gap);
+
+                if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                    if let Some(ing_id) = recipe.inputs[idx] {
+                        state.jei_recipe_modal = Some(JeiRecipeModalState {
+                            target_item: ing_id,
+                            is_usage_mode: is_right_click,
+                            recipe_index: 0,
+                        });
+                    }
+                    return true;
+                }
+            }
+        }
+
+        // Output Slot
+        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 20.0;
+        let out_x = arrow_x + 58.0;
+        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 24.0;
+        let out_size = 48.0;
+
+        if cx >= out_x && cx <= out_x + out_size && cy >= out_y && cy <= out_y + out_size {
+            let out_slot = recipe.output;
+            if !out_slot.is_empty() {
+                state.jei_recipe_modal = Some(JeiRecipeModalState {
+                    target_item: out_slot.item_id,
+                    is_usage_mode: is_right_click,
+                    recipe_index: 0,
+                });
+            }
+            return true;
+        }
+    }
+
+    true
+}
+
+fn handle_jei_panel_click(state: &mut AppState, is_right_click: bool) -> bool {
+    let screen_w = state.surface_config.width as f32;
+    let screen_h = state.surface_config.height as f32;
+    let cx = state.cursor_pos[0];
+    let cy = state.cursor_pos[1];
+
+    let slot_size = 36.0;
+    let slot_gap = 4.0;
+    let cols = 6;
+    let rows = 8;
+    let panel_w = (cols as f32) * (slot_size + slot_gap) - slot_gap;
+    let start_x = screen_w - panel_w - 24.0;
+    let start_y = screen_h * 0.5 - 190.0;
+
+    let page_y = start_y - 28.0;
+    let btn_w = 26.0;
+    let btn_h = 20.0;
+    let search_y = start_y + (rows as f32) * (slot_size + slot_gap) + 8.0;
+    let search_h = 24.0;
+
+    // Filter catalog
+    let search_lower = state.jei_search_text.trim().to_lowercase();
+    let catalog: Vec<ItemId> = state
+        .item_registry
+        .all_items()
+        .into_iter()
+        .filter(|def| {
+            if search_lower.is_empty() {
+                true
+            } else {
+                def.display_name.to_lowercase().contains(&search_lower)
+            }
+        })
+        .map(|def| def.id)
+        .collect();
+    let items_per_page = cols * rows;
+    let total_pages = ((catalog.len() + items_per_page - 1) / items_per_page).max(1);
+
+    // Prev Button [<]
+    let prev_x = start_x;
+    if cx >= prev_x && cx <= prev_x + btn_w && cy >= page_y && cy <= page_y + btn_h {
+        if state.jei_page > 0 {
+            state.jei_page -= 1;
+        } else {
+            state.jei_page = total_pages.saturating_sub(1);
+        }
+        return true;
+    }
+
+    // Next Button [>]
+    let next_x = start_x + panel_w - btn_w;
+    if cx >= next_x && cx <= next_x + btn_w && cy >= page_y && cy <= page_y + btn_h {
+        state.jei_page = (state.jei_page + 1) % total_pages;
+        return true;
+    }
+
+    // Search Bar
+    if cx >= start_x && cx <= start_x + panel_w && cy >= search_y && cy <= search_y + search_h {
+        if is_right_click {
+            state.jei_search_text.clear();
+            state.jei_page = 0;
+        }
+        state.jei_search_focused = true;
+        return true;
+    }
+
+    // Item Catalog Grid
+    let page_offset = state.jei_page * items_per_page;
+    for r in 0..rows {
+        for c in 0..cols {
+            let slot_idx = page_offset + r * cols + c;
+            let sx = start_x + (c as f32) * (slot_size + slot_gap);
+            let sy = start_y + (r as f32) * (slot_size + slot_gap);
+
+            if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                if slot_idx < catalog.len() {
+                    let clicked_id = catalog[slot_idx];
+                    state.jei_recipe_modal = Some(JeiRecipeModalState {
+                        target_item: clicked_id,
+                        is_usage_mode: is_right_click,
+                        recipe_index: 0,
+                    });
+                }
+                return true;
+            }
+        }
+    }
+
+    // Check if clicked anywhere inside JEI panel bounding box
+    if cx >= start_x - 6.0 && cx <= start_x + panel_w + 6.0 && cy >= page_y - 6.0 && cy <= search_y + search_h + 6.0 {
+        state.jei_search_focused = false;
+        return true;
+    }
+
+    // Outside JEI panel -> unfocus search bar
+    state.jei_search_focused = false;
+    false
+}
+
+fn find_hovered_item(state: &AppState) -> Option<ItemId> {
+    let screen_w = state.surface_config.width as f32;
+    let screen_h = state.surface_config.height as f32;
+    let cx = state.cursor_pos[0];
+    let cy = state.cursor_pos[1];
+
+    // 1. Check JEI Grid
+    let slot_size_jei = 36.0;
+    let slot_gap_jei = 4.0;
+    let cols = 6;
+    let rows = 8;
+    let panel_w = (cols as f32) * (slot_size_jei + slot_gap_jei) - slot_gap_jei;
+    let start_x_jei = screen_w - panel_w - 24.0;
+    let start_y_jei = screen_h * 0.5 - 190.0;
+
+    let search_lower = state.jei_search_text.trim().to_lowercase();
+    let catalog: Vec<ItemId> = state
+        .item_registry
+        .all_items()
+        .into_iter()
+        .filter(|def| {
+            if search_lower.is_empty() {
+                true
+            } else {
+                def.display_name.to_lowercase().contains(&search_lower)
+            }
+        })
+        .map(|def| def.id)
+        .collect();
+    let items_per_page = cols * rows;
+    let page_offset = state.jei_page * items_per_page;
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let slot_idx = page_offset + r * cols + c;
+            let sx = start_x_jei + (c as f32) * (slot_size_jei + slot_gap_jei);
+            let sy = start_y_jei + (r as f32) * (slot_size_jei + slot_gap_jei);
+
+            if cx >= sx && cx <= sx + slot_size_jei && cy >= sy && cy <= sy + slot_size_jei {
+                if slot_idx < catalog.len() {
+                    return Some(catalog[slot_idx]);
+                }
+            }
+        }
+    }
+
+    // 2. Check Chest Slots if Chest open
+    if let Some(chest_pos) = state.active_chest_pos {
+        let slot_size = 40.0;
+        let slot_gap = 4.0;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let chest_y = screen_h * 0.5 - 190.0;
+
+        for row in 0..3 {
+            for col in 0..9 {
+                let slot_idx = row * 9 + col;
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = chest_y + (row as f32) * (slot_size + slot_gap);
+
+                if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                    let world_guard = state.world_manager.world().lock().unwrap();
+                    if let Some(chest) = world_guard.get_chest(chest_pos) {
+                        if let Some(slot) = chest.get(slot_idx) {
+                            if !slot.is_empty() {
+                                return Some(slot.item_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // 2b. Check Crafting Grid & Result Slot
+        let grid_w = state.crafting_grid.width;
+        let grid_h = state.crafting_grid.height;
+        let slot_size = 40.0;
+        let slot_gap = 4.0;
+        let craft_x = (screen_w - (grid_w as f32) * (slot_size + slot_gap)) * 0.5 - 40.0;
+        let craft_y = screen_h * 0.5 - 160.0;
+
+        for gy in 0..grid_h {
+            for gx in 0..grid_w {
+                let sx = craft_x + (gx as f32) * (slot_size + slot_gap);
+                let sy = craft_y + (gy as f32) * (slot_size + slot_gap);
+
+                if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                    let slot = state.crafting_grid.get(gx, gy);
+                    if !slot.is_empty() {
+                        return Some(slot.item_id);
+                    }
+                }
+            }
+        }
+
+        // Result slot
+        let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 28.0;
+        let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
+        let r_size = slot_size + 6.0;
+        if cx >= result_x && cx <= result_x + r_size && cy >= result_y && cy <= result_y + r_size {
+            if let Some(res) = state.crafting_result {
+                if !res.is_empty() {
+                    return Some(res.item_id);
+                }
+            }
+        }
+    }
+
+    // 3. Check Backpack and Hotbar
+    let slot_size = 40.0;
+    let slot_gap = 4.0;
+    let inv_w = 9.0 * (slot_size + slot_gap);
+    let inv_start_x = (screen_w - inv_w) * 0.5;
+    let craft_y = screen_h * 0.5 - 160.0;
+    let grid_h = state.crafting_grid.height;
+    let inv_start_y = if state.active_chest_pos.is_some() {
+        screen_h * 0.5 - 190.0 + 3.0 * (slot_size + slot_gap) + 18.0
+    } else {
+        craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0
+    };
+
+    // Backpack (3x9)
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = 9 + row * 9 + col;
+            let sx = inv_start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = inv_start_y + (row as f32) * (slot_size + slot_gap);
+
+            if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                let slot = state.inventory.get(slot_idx);
+                if !slot.is_empty() {
+                    return Some(slot.item_id);
+                }
+            }
+        }
+    }
+
+    // Hotbar (1x9)
+    let hotbar_y = inv_start_y + 3.0 * (slot_size + slot_gap) + 16.0;
+    for i in 0..9 {
+        let sx = inv_start_x + (i as f32) * (slot_size + slot_gap);
+        let sy = hotbar_y;
+
+        if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+            let slot = state.inventory.get(i);
+            if !slot.is_empty() {
+                return Some(slot.item_id);
+            }
+        }
+    }
+
+    None
 }
 

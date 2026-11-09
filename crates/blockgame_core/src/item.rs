@@ -239,6 +239,11 @@ impl ItemRegistry {
         self.get(id).map(|d| d.max_stack).unwrap_or(64)
     }
 
+    /// Returns all registered items in definition order.
+    pub fn all_items(&self) -> Vec<&ItemDef> {
+        self.items.iter().filter_map(|d| d.as_ref()).collect()
+    }
+
     fn register_default_items(&mut self) {
         // Blocks as Placeable Items
         self.register(ItemDef {
