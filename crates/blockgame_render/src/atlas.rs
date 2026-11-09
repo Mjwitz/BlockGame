@@ -251,20 +251,34 @@ impl TextureAtlas {
             }
         });
 
-        // 17: Crafting Table
+        // 17: Crafting Table Top (Rich birch/oak carpenter surface with 3x3 grid & markings)
         atlas.paint_tile(17, |x, y| {
-            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
-            let is_grid = x == 7 || x == 8 || y == 7 || y == 8;
-            if is_border {
-                Rgba([90, 60, 30, 255])
-            } else if is_grid {
-                Rgba([120, 85, 45, 255])
+            let is_outer_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_inner_border = x == 1 || x == 14 || y == 1 || y == 14;
+            let is_corner_bracket = (x <= 2 && y <= 2)
+                || (x >= 13 && y <= 2)
+                || (x <= 2 && y >= 13)
+                || (x >= 13 && y >= 13);
+            let is_grid_x = x == 5 || x == 10;
+            let is_grid_y = y == 5 || y == 10;
+            let is_ruler_tick = (y == 1 || y == 2) && (x % 2 == 0);
+
+            if is_corner_bracket {
+                Rgba([60, 40, 20, 255]) // Dark iron/wood corner reinforcement
+            } else if is_outer_border {
+                Rgba([85, 55, 25, 255]) // Outer border frame
+            } else if is_ruler_tick {
+                Rgba([60, 35, 15, 255]) // Carpenter measuring ticks
+            } else if is_inner_border {
+                Rgba([110, 75, 38, 255]) // Beveled border
+            } else if is_grid_x || is_grid_y {
+                Rgba([115, 80, 42, 255]) // Inlaid 3x3 grid lines
             } else {
                 let n = simple_noise(x, y, 117);
-                let r = (165.0 + n * 15.0) as u8;
-                let g = (125.0 + n * 12.0) as u8;
-                let b = (75.0 + n * 10.0) as u8;
-                Rgba([r, g, b, 255])
+                let r = (195.0 + n * 18.0) as u8;
+                let g = (150.0 + n * 15.0) as u8;
+                let b = (95.0 + n * 12.0) as u8;
+                Rgba([r, g, b, 255]) // Rich, bright oak carpenter tabletop
             }
         });
 
@@ -1185,6 +1199,105 @@ impl TextureAtlas {
                 let n = simple_noise(x, y, 172);
                 let val = (235.0 + n * 18.0) as u8;
                 Rgba([val, val, val, 255])
+            }
+        });
+
+        // 173: Chest Top (Dark oak lid with iron corner studs)
+        atlas.paint_tile(173, |x, y| {
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_corner_stud = (x <= 1 && y <= 1) || (x >= 14 && y <= 1) || (x <= 1 && y >= 14) || (x >= 14 && y >= 14);
+            if is_corner_stud {
+                Rgba([45, 45, 50, 255]) // Iron corner stud
+            } else if is_border {
+                Rgba([65, 45, 25, 255]) // Dark oak frame
+            } else {
+                let n = simple_noise(x, y, 173);
+                let r = (160.0 + n * 18.0) as u8;
+                let g = (115.0 + n * 14.0) as u8;
+                let b = (65.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            }
+        });
+
+        // 174: Chest Front (Oak planks, horizontal lid seam, golden latch)
+        atlas.paint_tile(174, |x, y| {
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_lid_seam = y == 5;
+            let is_latch = (x == 7 || x == 8) && (y >= 4 && y <= 7);
+            let is_latch_keyhole = (x == 7 || x == 8) && y == 6;
+
+            if is_latch_keyhole {
+                Rgba([40, 30, 10, 255]) // Keyhole
+            } else if is_latch {
+                Rgba([235, 195, 55, 255]) // Golden lock latch
+            } else if is_lid_seam {
+                Rgba([45, 30, 15, 255]) // Dark lid opening seam
+            } else if is_border {
+                Rgba([65, 45, 25, 255]) // Dark oak frame
+            } else {
+                let n = simple_noise(x, y, 174);
+                let r = (160.0 + n * 18.0) as u8;
+                let g = (115.0 + n * 14.0) as u8;
+                let b = (65.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            }
+        });
+
+        // 175: Chest Side & Back (Oak planks with lid seam and dark frame)
+        atlas.paint_tile(175, |x, y| {
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_lid_seam = y == 5;
+            if is_lid_seam {
+                Rgba([45, 30, 15, 255])
+            } else if is_border {
+                Rgba([65, 45, 25, 255])
+            } else {
+                let n = simple_noise(x, y, 175);
+                let r = (160.0 + n * 18.0) as u8;
+                let g = (115.0 + n * 14.0) as u8;
+                let b = (65.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            }
+        });
+
+        // 176: Chest Bottom (Dark sturdy oak planks)
+        atlas.paint_tile(176, |x, y| {
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            if is_border {
+                Rgba([55, 38, 20, 255])
+            } else {
+                let n = simple_noise(x, y, 176);
+                let r = (140.0 + n * 15.0) as u8;
+                let g = (95.0 + n * 12.0) as u8;
+                let b = (55.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            }
+        });
+
+        // 177: Chest Item Icon (Isometric 3D chest with golden latch)
+        atlas.paint_tile(177, |x, y| {
+            let in_chest = x >= 2 && x <= 13 && y >= 3 && y <= 13;
+            let is_border = (x == 2 || x == 13 || y == 3 || y == 13) && in_chest;
+            let is_lid_seam = y == 7 && in_chest;
+            let is_latch = (x == 7 || x == 8) && (y >= 6 && y <= 9);
+            let is_latch_keyhole = (x == 7 || x == 8) && y == 8;
+
+            if is_latch_keyhole {
+                Rgba([40, 30, 10, 255])
+            } else if is_latch {
+                Rgba([240, 205, 60, 255])
+            } else if is_lid_seam {
+                Rgba([45, 30, 15, 255])
+            } else if is_border {
+                Rgba([65, 45, 25, 255])
+            } else if in_chest {
+                let n = simple_noise(x, y, 177);
+                let r = (165.0 + n * 18.0) as u8;
+                let g = (118.0 + n * 14.0) as u8;
+                let b = (68.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
             }
         });
 

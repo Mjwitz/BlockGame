@@ -61,6 +61,7 @@ impl ItemId {
     pub const COOKED_CHICKEN: Self = Self(51);
     pub const LEATHER: Self = Self(52);
     pub const FEATHER: Self = Self(53);
+    pub const CHEST: Self = Self(54);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -891,6 +892,18 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 169,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::CHEST,
+            name: "blockgame:chest",
+            display_name: "Chest",
+            max_stack: 64,
+            placeable_block: Some(BlockId::CHEST),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 177,
         });
     }
 }

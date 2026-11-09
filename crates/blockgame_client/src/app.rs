@@ -55,6 +55,8 @@ pub struct AppState {
     pub crafting_grid: CraftingGrid,
     pub crafting_result: Option<ItemSlot>,
     pub inventory_open: bool,
+    pub active_chest_pos: Option<IVec3>,
+    pub shift_down: bool,
     pub cursor_held: ItemSlot,
     pub cursor_pos: [f32; 2],
     pub ui_pipeline: UiPipeline,
@@ -258,6 +260,8 @@ impl ApplicationHandler for BlockGameApp {
             crafting_grid,
             crafting_result: None,
             inventory_open: false,
+            active_chest_pos: None,
+            shift_down: false,
             cursor_held: ItemSlot::EMPTY,
             cursor_pos: [width as f32 * 0.5, height as f32 * 0.5],
             ui_pipeline,
@@ -356,7 +360,11 @@ impl ApplicationHandler for BlockGameApp {
                 if state.inventory_open {
                     if pressed {
                         let is_right = button == MouseButton::Right;
-                        handle_inventory_click(state, is_right);
+                        if state.active_chest_pos.is_some() {
+                            handle_chest_click(state, is_right);
+                        } else {
+                            handle_inventory_click(state, is_right);
+                        }
                     }
                     return;
                 }
@@ -402,12 +410,30 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
                     MouseButton::Right if pressed => {
-                        // 1. Check if targeting an interactive block (e.g. Crafting Table)
+                        // 1. Check if targeting an interactive block (e.g. Chest or Crafting Table)
                         if let Some(hit) = state.targeted_block {
                             let block_id = {
                                 let world_guard = state.world_manager.world().lock().unwrap();
                                 world_guard.get_block(hit.hit_voxel)
                             };
+                            if block_id == BlockId::CHEST {
+                                state.mouse_left_down = false;
+                                state.break_progress = 0.0;
+                                state.breaking_voxel = None;
+                                state.cracking_buffer = None;
+
+                                {
+                                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                                    world_guard.get_or_create_chest(hit.hit_voxel);
+                                }
+
+                                state.active_chest_pos = Some(hit.hit_voxel);
+                                state.inventory_open = true;
+                                state.mouse_captured = false;
+                                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
+                                return;
+                            }
                             if block_id == BlockId::CRAFTING_TABLE {
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;
@@ -423,6 +449,7 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                 }
 
+                                state.active_chest_pos = None;
                                 state.crafting_grid = CraftingGrid::new_3x3();
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
@@ -531,6 +558,7 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 match key {
+                    KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
                     KeyCode::KeyW => state.moving_forward = pressed,
                     KeyCode::KeyS => state.moving_backward = pressed,
                     KeyCode::KeyA => state.moving_left = pressed,
@@ -546,6 +574,7 @@ impl ApplicationHandler for BlockGameApp {
                         state.break_progress = 0.0;
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
+                        state.active_chest_pos = None;
                         if state.inventory_open {
                             // Safely return crafting grid items and cursor held item to inventory
                             for slot in state.crafting_grid.slots.drain(..) {
@@ -579,6 +608,7 @@ impl ApplicationHandler for BlockGameApp {
                         state.break_progress = 0.0;
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
+                        state.active_chest_pos = None;
                         if state.inventory_open {
                             for slot in state.crafting_grid.slots.drain(..) {
                                 if !slot.is_empty() {
@@ -904,28 +934,57 @@ impl ApplicationHandler for BlockGameApp {
                     &state.pipeline,
                 );
 
+                if let Some(chest_pos) = state.active_chest_pos {
+                    let dist_sq = (state.player.position - (chest_pos.as_vec3() + Vec3::splat(0.5))).length_squared();
+                    if dist_sq > 36.0 {
+                        state.active_chest_pos = None;
+                        state.inventory_open = false;
+                        state.mouse_captured = true;
+                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        state.window.set_cursor_visible(false);
+                    }
+                }
+
                 // 7. Build 2D UI Overlay (HUD or Inventory/Crafting Screen)
                 let screen_w = state.surface_config.width as f32;
                 let screen_h = state.surface_config.height as f32;
                 state.ui_pipeline.update_screen_size(&state.queue, screen_w, screen_h);
 
                 if state.inventory_open {
-                    state.crafting_result = state
-                        .crafting_manager
-                        .find_match(&state.crafting_grid)
-                        .map(|(_, out)| out);
-                    UiBuilder::build_inventory_screen(
-                        &mut state.ui_mesh,
-                        screen_w,
-                        screen_h,
-                        &state.inventory,
-                        state.active_hotbar_slot,
-                        &state.crafting_grid,
-                        state.crafting_result,
-                        &state.cursor_held,
-                        state.cursor_pos,
-                        &state.item_registry,
-                    );
+                    if let Some(chest_pos) = state.active_chest_pos {
+                        let chest_slots = {
+                            let world_guard = state.world_manager.world().lock().unwrap();
+                            world_guard.get_chest(chest_pos).cloned().unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
+                        };
+                        UiBuilder::build_chest_screen(
+                            &mut state.ui_mesh,
+                            screen_w,
+                            screen_h,
+                            &chest_slots,
+                            &state.inventory,
+                            state.active_hotbar_slot,
+                            &state.cursor_held,
+                            state.cursor_pos,
+                            &state.item_registry,
+                        );
+                    } else {
+                        state.crafting_result = state
+                            .crafting_manager
+                            .find_match(&state.crafting_grid)
+                            .map(|(_, out)| out);
+                        UiBuilder::build_inventory_screen(
+                            &mut state.ui_mesh,
+                            screen_w,
+                            screen_h,
+                            &state.inventory,
+                            state.active_hotbar_slot,
+                            &state.crafting_grid,
+                            state.crafting_result,
+                            &state.cursor_held,
+                            state.cursor_pos,
+                            &state.item_registry,
+                        );
+                    }
                 } else {
                     UiBuilder::build_hud(
                         &mut state.ui_mesh,
@@ -1166,7 +1225,17 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
 
     if cx >= result_x && cx < result_x + result_size && cy >= result_y && cy < result_y + result_size {
         if state.crafting_result.is_some() {
-            if let Some(crafted) = state.crafting_manager.craft(&mut state.crafting_grid) {
+            if state.shift_down {
+                while let Some(crafted) = state.crafting_manager.craft(&mut state.crafting_grid) {
+                    if let Some(rem) = state.inventory.add_item(crafted, &state.item_registry) {
+                        state.world_manager.spawn_item_drop(state.player.position, rem);
+                        break;
+                    }
+                    if state.crafting_manager.find_match(&state.crafting_grid).is_none() {
+                        break;
+                    }
+                }
+            } else if let Some(crafted) = state.crafting_manager.craft(&mut state.crafting_grid) {
                 if state.cursor_held.is_empty() {
                     state.cursor_held = crafted;
                 } else if state.cursor_held.can_stack_with(&crafted) {
@@ -1189,7 +1258,20 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
             let sy = inv_start_y + (row as f32) * (slot_size + slot_gap);
 
             if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
-                state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                if state.shift_down {
+                    let item = state.inventory.get(slot_idx);
+                    if !item.is_empty() {
+                        for h in 0..9 {
+                            if state.inventory.get(h).is_empty() {
+                                state.inventory.set(h, item);
+                                state.inventory.set(slot_idx, ItemSlot::EMPTY);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                }
                 return;
             }
         }
@@ -1202,9 +1284,150 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
         let sy = hotbar_y;
 
         if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
-            state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+            if state.shift_down {
+                let item = state.inventory.get(i);
+                if !item.is_empty() {
+                    for b in 9..36 {
+                        if state.inventory.get(b).is_empty() {
+                            state.inventory.set(b, item);
+                            state.inventory.set(i, ItemSlot::EMPTY);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+            }
             return;
         }
+    }
+}
+
+fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
+    let Some(chest_pos) = state.active_chest_pos else { return };
+    let screen_w = state.surface_config.width as f32;
+    let screen_h = state.surface_config.height as f32;
+    let cx = state.cursor_pos[0];
+    let cy = state.cursor_pos[1];
+
+    let slot_size = 40.0;
+    let slot_gap = 4.0;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+
+    // 1. Chest Container Slots (3 rows x 9 columns = 27 slots)
+    let chest_y = screen_h * 0.5 - 190.0;
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = row * 9 + col;
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = chest_y + (row as f32) * (slot_size + slot_gap);
+
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                let mut world_guard = state.world_manager.world().lock().unwrap();
+                let chest_slots = world_guard.get_or_create_chest(chest_pos);
+                if slot_idx < chest_slots.len() {
+                    if state.shift_down {
+                        let item = chest_slots[slot_idx];
+                        if !item.is_empty() {
+                            if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                                chest_slots[slot_idx] = rem;
+                            } else {
+                                chest_slots[slot_idx] = ItemSlot::EMPTY;
+                            }
+                        }
+                    } else {
+                        click_slot_raw(&mut chest_slots[slot_idx], &mut state.cursor_held, is_right_click, &state.item_registry);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    // 2. Backpack Storage Grid (3 rows x 9 columns)
+    let inv_y = chest_y + 3.0 * (slot_size + slot_gap) + 26.0;
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = 9 + row * 9 + col;
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                if state.shift_down {
+                    let slot_val = state.inventory.slots[slot_idx];
+                    if !slot_val.is_empty() {
+                        let mut world_guard = state.world_manager.world().lock().unwrap();
+                        let chest_slots = world_guard.get_or_create_chest(chest_pos);
+                        let rem = add_to_chest_slots(chest_slots, slot_val, &state.item_registry);
+                        state.inventory.slots[slot_idx] = rem.unwrap_or(ItemSlot::EMPTY);
+                    }
+                } else {
+                    state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                }
+                return;
+            }
+        }
+    }
+
+    // 3. Hotbar Slots
+    let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+    for i in 0..9 {
+        let sx = start_x + (i as f32) * (slot_size + slot_gap);
+        let sy = hotbar_y;
+
+        if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+            if state.shift_down {
+                let slot_val = state.inventory.slots[i];
+                if !slot_val.is_empty() {
+                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                    let chest_slots = world_guard.get_or_create_chest(chest_pos);
+                    let rem = add_to_chest_slots(chest_slots, slot_val, &state.item_registry);
+                    state.inventory.slots[i] = rem.unwrap_or(ItemSlot::EMPTY);
+                }
+            } else {
+                state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+            }
+            return;
+        }
+    }
+}
+
+fn add_to_chest_slots(chest_slots: &mut [ItemSlot], mut item: ItemSlot, registry: &ItemRegistry) -> Option<ItemSlot> {
+    if item.is_empty() {
+        return None;
+    }
+    let max_stack = registry.max_stack_size(item.item_id);
+
+    // 1. Try to merge into existing stacks
+    for slot in chest_slots.iter_mut() {
+        if slot.can_stack_with(&item) && slot.count < max_stack {
+            let space = max_stack - slot.count;
+            let transfer = space.min(item.count);
+            slot.count += transfer;
+            item.count -= transfer;
+            if item.count == 0 {
+                return None;
+            }
+        }
+    }
+
+    // 2. Put remainder into first empty slot
+    for slot in chest_slots.iter_mut() {
+        if slot.is_empty() {
+            let transfer = max_stack.min(item.count);
+            *slot = ItemSlot::new(item.item_id, transfer);
+            item.count -= transfer;
+            if item.count == 0 {
+                return None;
+            }
+        }
+    }
+
+    if item.count > 0 {
+        Some(item)
+    } else {
+        None
     }
 }
 

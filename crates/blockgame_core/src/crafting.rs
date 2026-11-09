@@ -467,12 +467,42 @@ impl CraftingManager {
             inputs: vec![ItemId::RAW_CHICKEN],
             output: ItemSlot::new(ItemId::COOKED_CHICKEN, 1),
         });
+
+        // Chest: 8 Planks in a 3x3 hollow square ring
+        self.register(Recipe::Shaped {
+            name: "Chest",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), None,                 Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::CHEST, 1),
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_chest_crafting() {
+        let cm = CraftingManager::new();
+        let mut grid = CraftingGrid::new_3x3();
+        for y in 0..3 {
+            for x in 0..3 {
+                if x == 1 && y == 1 {
+                    continue;
+                }
+                grid.set(x, y, ItemSlot::new(ItemId::PLANKS, 1));
+            }
+        }
+        let result = cm.craft(&mut grid);
+        assert_eq!(result, Some(ItemSlot::new(ItemId::CHEST, 1)));
+        assert!(grid.is_empty());
+    }
 
     #[test]
     fn test_shapeless_recipe_planks() {

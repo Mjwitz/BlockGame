@@ -604,9 +604,11 @@ impl UiBuilder {
 
                 let top_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
                 let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+                let right_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosX);
 
                 let [u0_t, v0_t, u1_t, v1_t] = TextureAtlas::get_uv_bounds(top_tile);
                 let [u0_s, v0_s, u1_s, v1_s] = TextureAtlas::get_uv_bounds(side_tile);
+                let [u0_r, v0_r, u1_r, v1_r] = TextureAtlas::get_uv_bounds(right_tile);
 
                 // Top Face (diamond)
                 let p_top_n = [bc[0], bc[1] - bs * 0.65];
@@ -646,10 +648,10 @@ impl UiBuilder {
                 let p_right_bot_w = p_left_bot_e;
                 let p_right_bot_e = [p_top_e[0], p_top_e[1] + h_face];
                 let uvs_right = [
-                    [u0_s, v0_s],
-                    [u1_s, v0_s],
-                    [u1_s, v1_s],
-                    [u0_s, v1_s],
+                    [u0_r, v0_r],
+                    [u1_r, v0_r],
+                    [u1_r, v1_r],
+                    [u0_r, v1_r],
                 ];
                 mesh.add_quad_vertices(
                     [p_top_s, p_top_e, p_right_bot_e, p_right_bot_w],
@@ -1730,6 +1732,203 @@ impl UiBuilder {
             Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
         }
     }
+
+    /// Builds the Chest Container Screen: 27 Chest Slots (3x9), 27 Backpack Slots (3x9),
+    /// 9 Hotbar Slots (1x9), Cursor Held Item, and Item Tooltips.
+    pub fn build_chest_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        chest_slots: &[ItemSlot],
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+    ) {
+        mesh.clear();
+
+        let mut hovered_item_name: Option<&str> = None;
+
+        // 1. Semi-transparent backdrop overlay
+        let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = 40.0;
+        let slot_gap = 4.0;
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
+
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+
+        // 2. Chest Container Slots (3 rows of 9 slots = 27 slots)
+        let chest_y = screen_h * 0.5 - 190.0;
+        Self::draw_string(
+            mesh,
+            start_x,
+            chest_y - 18.0,
+            "Chest (27 Slots)",
+            8.0,
+            10.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
+
+        for row in 0..3 {
+            for col in 0..9 {
+                let slot_idx = row * 9 + col;
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = chest_y + (row as f32) * (slot_size + slot_gap);
+
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+
+                if slot_idx < chest_slots.len() {
+                    let slot = chest_slots[slot_idx];
+                    if !slot.is_empty() {
+                        if let Some(def) = registry.get(slot.item_id) {
+                            let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                            let icon_pad = 6.0;
+                            mesh.add_quad(
+                                sx + icon_pad,
+                                sy + icon_pad,
+                                slot_size - icon_pad * 2.0,
+                                slot_size - icon_pad * 2.0,
+                                icon_uv,
+                                [1.0, 1.0, 1.0, 1.0],
+                            );
+                            Self::draw_stack_number(mesh, sx, sy, slot_size, slot.count);
+
+                            if cursor_pos[0] >= sx
+                                && cursor_pos[0] <= sx + slot_size
+                                && cursor_pos[1] >= sy
+                                && cursor_pos[1] <= sy + slot_size
+                            {
+                                hovered_item_name = Some(def.display_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Player Backpack Storage Grid (3 rows x 9 columns)
+        let inv_y = chest_y + 3.0 * (slot_size + slot_gap) + 26.0;
+        Self::draw_string(
+            mesh,
+            start_x,
+            inv_y - 18.0,
+            "Inventory",
+            8.0,
+            10.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
+
+        for row in 0..3 {
+            for col in 0..9 {
+                let slot_idx = 9 + row * 9 + col;
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+
+                let item_slot = inventory.get(slot_idx);
+                if !item_slot.is_empty() {
+                    if let Some(def) = registry.get(item_slot.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        let icon_pad = 6.0;
+                        mesh.add_quad(
+                            sx + icon_pad,
+                            sy + icon_pad,
+                            slot_size - icon_pad * 2.0,
+                            slot_size - icon_pad * 2.0,
+                            icon_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+                        Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+
+                        if cursor_pos[0] >= sx
+                            && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy
+                            && cursor_pos[1] <= sy + slot_size
+                        {
+                            hovered_item_name = Some(def.display_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Hotbar Slots at bottom of chest screen
+        let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+        for i in 0..9 {
+            let sx = start_x + (i as f32) * (slot_size + slot_gap);
+            let sy = hotbar_y;
+
+            mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+            if i == active_hotbar_slot {
+                let hl_pad = 2.0;
+                mesh.add_quad(
+                    sx - hl_pad,
+                    sy - hl_pad,
+                    slot_size + hl_pad * 2.0,
+                    slot_size + hl_pad * 2.0,
+                    highlight_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+            }
+
+            let item_slot = inventory.get(i);
+            if !item_slot.is_empty() {
+                if let Some(def) = registry.get(item_slot.item_id) {
+                    let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                    let icon_pad = 6.0;
+                    mesh.add_quad(
+                        sx + icon_pad,
+                        sy + icon_pad,
+                        slot_size - icon_pad * 2.0,
+                        slot_size - icon_pad * 2.0,
+                        icon_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+
+                    if cursor_pos[0] >= sx
+                        && cursor_pos[0] <= sx + slot_size
+                        && cursor_pos[1] >= sy
+                        && cursor_pos[1] <= sy + slot_size
+                    {
+                        hovered_item_name = Some(def.display_name);
+                    }
+                }
+            }
+        }
+
+        // 5. Cursor Held Item Stack (follows mouse position)
+        if !cursor_held.is_empty() {
+            if let Some(def) = registry.get(cursor_held.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let hold_size = 36.0;
+                let hx = cursor_pos[0] - hold_size * 0.5;
+                let hy = cursor_pos[1] - hold_size * 0.5;
+                mesh.add_quad(
+                    hx,
+                    hy,
+                    hold_size,
+                    hold_size,
+                    icon_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
+            }
+        }
+
+        // 6. Hover Tooltip
+        if let Some(name) = hovered_item_name {
+            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1860,5 +2059,29 @@ mod tests {
         UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
         // Generates death screen quads (red backdrop, You Died text, Score text, Respawn button)
         assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_chest_screen() {
+        let mut mesh = UiMesh::new();
+        let inv = Inventory::new(36);
+        let registry = ItemRegistry::new();
+        let chest_slots = vec![ItemSlot::new(ItemId::DIAMOND, 64); 27];
+        let cursor_held = ItemSlot::EMPTY;
+
+        UiBuilder::build_chest_screen(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &chest_slots,
+            &inv,
+            0,
+            &cursor_held,
+            [640.0, 360.0],
+            &registry,
+        );
+
+        assert!(mesh.indices.len() > 0);
+        assert!(mesh.vertices.len() > 0);
     }
 }

@@ -341,13 +341,18 @@ impl WorldManager {
             chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
         }
 
-        let (broken_block, new_meshes): (BlockId, Vec<(ChunkPos, ChunkMesh)>) = {
+        let (broken_block, new_meshes, dropped_chest_items): (BlockId, Vec<(ChunkPos, ChunkMesh)>, Vec<ItemSlot>) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             if current.is_air() {
                 return None;
             }
             let is_torch = current == BlockId::TORCH;
+            let dropped_chest_items = if current == BlockId::CHEST {
+                world.remove_chest(pos).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             world.set_block(pos, BlockId::AIR);
 
             if is_torch {
@@ -380,7 +385,7 @@ impl WorldManager {
                     })
                 })
                 .collect();
-            (current, meshes)
+            (current, meshes, dropped_chest_items)
         };
 
         for (cpos, mesh) in new_meshes {
@@ -388,6 +393,13 @@ impl WorldManager {
                 self.gpu_chunks.insert(cpos, gpu_mesh);
             } else {
                 self.gpu_chunks.remove(&cpos);
+            }
+        }
+
+        let drop_pos = pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
+        for item in dropped_chest_items {
+            if !item.is_empty() {
+                self.spawn_item_drop(drop_pos, item);
             }
         }
 

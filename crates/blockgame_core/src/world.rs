@@ -36,6 +36,7 @@ pub fn chunk_to_world_coords(chunk_pos: ChunkPos, lx: usize, ly: usize, lz: usiz
 pub struct World {
     chunks: HashMap<ChunkPos, Chunk>,
     pub light_sources: HashSet<IVec3>,
+    pub chest_containers: HashMap<IVec3, Vec<crate::item::ItemSlot>>,
 }
 
 impl World {
@@ -43,7 +44,26 @@ impl World {
         Self {
             chunks: HashMap::new(),
             light_sources: HashSet::new(),
+            chest_containers: HashMap::new(),
         }
+    }
+
+    pub fn get_or_create_chest(&mut self, pos: IVec3) -> &mut Vec<crate::item::ItemSlot> {
+        self.chest_containers
+            .entry(pos)
+            .or_insert_with(|| vec![crate::item::ItemSlot::EMPTY; 27])
+    }
+
+    pub fn get_chest(&self, pos: IVec3) -> Option<&Vec<crate::item::ItemSlot>> {
+        self.chest_containers.get(&pos)
+    }
+
+    pub fn get_chest_mut(&mut self, pos: IVec3) -> Option<&mut Vec<crate::item::ItemSlot>> {
+        self.chest_containers.get_mut(&pos)
+    }
+
+    pub fn remove_chest(&mut self, pos: IVec3) -> Option<Vec<crate::item::ItemSlot>> {
+        self.chest_containers.remove(&pos)
     }
 
     #[inline]
@@ -186,5 +206,24 @@ mod tests {
 
         // Accessing unloaded chunk returns AIR safely
         assert_eq!(world.get_block(IVec3::new(100, 100, 100)), BlockId::AIR);
+    }
+
+    #[test]
+    fn test_world_chest_containers() {
+        let mut world = World::new();
+        let pos = IVec3::new(10, 64, 10);
+
+        assert!(world.get_chest(pos).is_none());
+
+        let chest = world.get_or_create_chest(pos);
+        assert_eq!(chest.len(), 27);
+        chest[0] = crate::item::ItemSlot::new(crate::item::ItemId::DIAMOND, 5);
+
+        assert_eq!(world.get_chest(pos).unwrap()[0].count, 5);
+
+        let removed = world.remove_chest(pos).unwrap();
+        assert_eq!(removed[0].item_id, crate::item::ItemId::DIAMOND);
+        assert_eq!(removed[0].count, 5);
+        assert!(world.get_chest(pos).is_none());
     }
 }

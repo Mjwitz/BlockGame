@@ -157,6 +157,32 @@ pub async fn render_world_to_image(
         &pipeline,
     );
 
+    // Place Crafting Table and Chest outside the cabin
+    world_manager.place_block(
+        IVec3::new(base_x - 2, base_y + 1, base_z + 4),
+        BlockId::CRAFTING_TABLE,
+        &dummy_player_box,
+        &device,
+        &pipeline,
+    );
+    world_manager.place_block(
+        IVec3::new(base_x + 2, base_y + 1, base_z + 4),
+        BlockId::CHEST,
+        &dummy_player_box,
+        &device,
+        &pipeline,
+    );
+
+    {
+        let mut world_guard = world_manager.world().lock().unwrap();
+        let chest = world_guard.get_or_create_chest(IVec3::new(base_x + 2, base_y + 1, base_z + 4));
+        chest[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND, 12);
+        chest[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::GOLD_INGOT, 24);
+        chest[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_INGOT, 32);
+        chest[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 48);
+        chest[4] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 16);
+    }
+
     // 2. Configure sunset/dusk atmosphere
     let mut day_night = DayNightCycle::new();
     day_night.set_time(12200.0); // Rich sunset / dusk transition
@@ -1219,6 +1245,264 @@ pub async fn render_world_to_image(
             image::ExtendedColorType::Rgba8,
         )?;
         log::info!("Successfully saved held bread render to held_bread_render.png");
+    }
+
+    // Render verification of placed Chest and 3x3 Crafting Table, with player holding a 3D Chest block
+    {
+        let chest_cam_pos = Vec3::new(base_x as f32, (base_y + 2) as f32, (base_z + 8) as f32);
+        let chest_cam = Camera::new(
+            chest_cam_pos,
+            -std::f32::consts::FRAC_PI_2,
+            (-12.0_f32).to_radians(),
+        );
+        let mut chest_uniform = CameraUniform::default();
+        chest_cam.update_uniform_with_atmosphere(&mut chest_uniform, width as f32 / height as f32, &day_night);
+        pipeline.update_camera(&queue, &chest_uniform);
+
+        let mut chest_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Chest & Crafting Table Encoder"),
+        });
+
+        {
+            let mut render_pass = chest_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Chest Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: sky[0] as f64,
+                            g: sky[1] as f64,
+                            b: sky[2] as f64,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+        }
+
+        let mut chest_ui_mesh = UiMesh::new();
+        let screen_w = width as f32;
+        let screen_h = height as f32;
+        let mut chest_inv = inventory.clone();
+        chest_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CHEST, 4);
+        UiBuilder::build_hud(&mut chest_ui_mesh, screen_w, screen_h, &chest_inv, 0, &item_registry, 0.0, 0.0, &stats);
+
+        if !chest_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chest UI VB"),
+                contents: bytemuck::cast_slice(&chest_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chest UI IB"),
+                contents: bytemuck::cast_slice(&chest_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = chest_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Chest UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..chest_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        chest_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(chest_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut chest_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            chest_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "chest_and_crafting_table_render.png",
+            &chest_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved chest and crafting table showcase image to chest_and_crafting_table_render.png");
+    }
+
+    // Render verification of Chest Container UI Screen
+    {
+        let mut chest_ui_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Chest UI Screen Encoder"),
+        });
+
+        let mut chest_screen_mesh = UiMesh::new();
+        let screen_w = width as f32;
+        let screen_h = height as f32;
+
+        let chest_slots = {
+            let world_guard = world_manager.world().lock().unwrap();
+            world_guard.get_chest(IVec3::new(base_x + 2, base_y + 1, base_z + 4)).cloned().unwrap()
+        };
+
+        let mut inv_with_items = inventory.clone();
+        inv_with_items.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND_PICKAXE, 1);
+        inv_with_items.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_AXE, 1);
+        inv_with_items.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CHEST, 8);
+        inv_with_items.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 12);
+
+        UiBuilder::build_chest_screen(
+            &mut chest_screen_mesh,
+            screen_w,
+            screen_h,
+            &chest_slots,
+            &inv_with_items,
+            0,
+            &blockgame_core::item::ItemSlot::EMPTY,
+            [screen_w * 0.5, screen_h * 0.5],
+            &item_registry,
+        );
+
+        if !chest_screen_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chest Screen VB"),
+                contents: bytemuck::cast_slice(&chest_screen_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Chest Screen IB"),
+                contents: bytemuck::cast_slice(&chest_screen_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = chest_ui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Chest Screen Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..chest_screen_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        chest_ui_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(chest_ui_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut chest_ui_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            chest_ui_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "chest_ui_render.png",
+            &chest_ui_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved chest container UI showcase image to chest_ui_render.png");
     }
 
     Ok(())

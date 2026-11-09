@@ -30,6 +30,7 @@ impl BlockId {
     pub const WHEAT_1: Self = Self(22);
     pub const WHEAT_2: Self = Self(23);
     pub const WHEAT_3: Self = Self(24);
+    pub const CHEST: Self = Self(25);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -397,6 +398,20 @@ impl BlockRegistry {
                 drop_count: (1, 1),
             });
         }
+        registry.register(BlockDefinition {
+            id: BlockId::CHEST,
+            name: "Chest",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 173, NegY: 176, PosZ (front): 174, NegZ: 175, PosX: 175, NegX: 175
+            textures: [173, 176, 174, 175, 175, 175],
+            hardness: 2.5,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::CHEST),
+            drop_count: (1, 1),
+        });
 
         registry
     }
