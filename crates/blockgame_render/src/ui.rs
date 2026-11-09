@@ -5,6 +5,7 @@ use crate::atlas::TextureAtlas;
 use blockgame_core::{
     crafting::CraftingGrid,
     item::{Inventory, ItemId, ItemRegistry, ItemSlot},
+    world::FurnaceState,
 };
 
 #[repr(C)]
@@ -272,6 +273,15 @@ impl UiBuilder {
     pub const HUNGER_CONTAINER_TILE: u16 = 28;
     pub const HUNGER_FULL_TILE: u16 = 29;
     pub const HUNGER_HALF_TILE: u16 = 30;
+    pub const FLAME_CONTAINER_TILE: u16 = 183;
+    pub const FLAME_FULL_TILE: u16 = 184;
+
+    pub const SLOT_SIZE: f32 = 48.0;
+    pub const SLOT_GAP: f32 = 5.0;
+    pub const JEI_SLOT_SIZE: f32 = 40.0;
+    pub const JEI_SLOT_GAP: f32 = 4.0;
+    pub const JEI_COLS: usize = 6;
+    pub const JEI_ROWS: usize = 8;
 
     /// Draws a single character glyph using the pixel font in the atlas.
     pub fn draw_char(mesh: &mut UiMesh, x: f32, y: f32, w: f32, h: f32, c: u8, color: [f32; 4]) {
@@ -311,12 +321,12 @@ impl UiBuilder {
             return;
         }
         let text = count.to_string();
-        let char_w = 9.0;
-        let char_h = 12.0;
+        let char_w = 10.0;
+        let char_h = 14.0;
         let spacing = -1.0;
         let total_w = text.len() as f32 * (char_w + spacing);
-        let x = slot_x + slot_size - total_w - 3.0;
-        let y = slot_y + slot_size - char_h - 2.0;
+        let x = slot_x + slot_size - total_w - 4.0;
+        let y = slot_y + slot_size - char_h - 3.0;
         Self::draw_string(mesh, x, y, &text, char_w, char_h, spacing, [1.0, 1.0, 1.0, 1.0]);
     }
 
@@ -329,15 +339,15 @@ impl UiBuilder {
         cursor_y: f32,
         text: &str,
     ) {
-        let char_w = 8.0;
-        let char_h = 11.0;
+        let char_w = 9.0;
+        let char_h = 13.0;
         let spacing = 0.0;
         let text_w = text.len() as f32 * (char_w + spacing);
-        let box_w = text_w + 14.0;
-        let box_h = 22.0;
+        let box_w = text_w + 16.0;
+        let box_h = 24.0;
 
-        let tx = (cursor_x + 12.0).clamp(4.0, (screen_w - box_w - 4.0).max(4.0));
-        let ty = (cursor_y - 22.0).clamp(4.0, (screen_h - box_h - 4.0).max(4.0));
+        let tx = (cursor_x + 14.0).clamp(4.0, (screen_w - box_w - 4.0).max(4.0));
+        let ty = (cursor_y - 24.0).clamp(4.0, (screen_h - box_h - 4.0).max(4.0));
 
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
@@ -1400,12 +1410,12 @@ impl UiBuilder {
             Self::draw_held_item(mesh, screen_w, screen_h, held_slot, registry, walk_distance, punch_time);
         }
 
-        // 3. Hotbar Slots (9 slots, each 44x44 px with 4px gap)
-        let slot_size = 44.0;
-        let slot_gap = 4.0;
+        // 3. Hotbar Slots (9 slots, each 50x50 px with 5px gap)
+        let slot_size = 50.0;
+        let slot_gap = 5.0;
         let total_w = 9.0 * slot_size + 8.0 * slot_gap;
         let start_x = (screen_w - total_w) * 0.5;
-        let start_y = screen_h - slot_size - 14.0;
+        let start_y = screen_h - slot_size - 16.0;
 
         let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
@@ -1435,7 +1445,7 @@ impl UiBuilder {
             if !item_slot.is_empty() {
                 if let Some(def) = registry.get(item_slot.item_id) {
                     let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-                    let icon_pad = 7.0;
+                    let icon_pad = 8.0;
                     let icon_size = slot_size - icon_pad * 2.0;
                     mesh.add_quad(
                         x + icon_pad,
@@ -1451,9 +1461,9 @@ impl UiBuilder {
         }
 
         // 4. Player Health Hearts (10 hearts immediately above the left hotbar)
-        let icon_size = 16.0;
-        let icon_spacing = 15.0;
-        let bars_y = start_y - 20.0;
+        let icon_size = 18.0;
+        let icon_spacing = 17.0;
+        let bars_y = start_y - 24.0;
 
         let heart_bg_uv = TextureAtlas::get_uv_bounds(Self::HEART_CONTAINER_TILE);
         let heart_full_uv = TextureAtlas::get_uv_bounds(Self::HEART_FULL_TILE);
@@ -1558,8 +1568,8 @@ impl UiBuilder {
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
         mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
 
-        let slot_size = 40.0;
-        let slot_gap = 4.0;
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
         let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
 
@@ -1567,8 +1577,8 @@ impl UiBuilder {
         let grid_w = crafting_grid.width;
         let grid_h = crafting_grid.height;
 
-        let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 20.0)) * 0.5;
-        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 185.0 } else { 160.0 });
+        let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 24.0)) * 0.5;
+        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
 
         // Header text above crafting grid
         let title = if grid_w == 3 { "Crafting Table (3x3)" } else { "Crafting (2x2)" };
@@ -1608,13 +1618,14 @@ impl UiBuilder {
         }
 
         // Crafting Result Slot (vertically centered next to grid)
-        let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 28.0;
+        let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 32.0;
         let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
+        let r_size = slot_size + 8.0;
         mesh.add_quad(
             result_x,
             result_y,
-            slot_size + 6.0,
-            slot_size + 6.0,
+            r_size,
+            r_size,
             slot_uv,
             [1.0, 0.9, 0.6, 1.0],
         );
@@ -1622,7 +1633,6 @@ impl UiBuilder {
             if let Some(def) = registry.get(res.item_id) {
                 let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
                 let icon_pad = 6.0;
-                let r_size = slot_size + 6.0;
                 mesh.add_quad(
                     result_x + icon_pad,
                     result_y + icon_pad,
@@ -1644,7 +1654,7 @@ impl UiBuilder {
         }
 
         // 3. Backpack Storage Grid (3 rows x 9 columns)
-        let inv_w = 9.0 * (slot_size + slot_gap);
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
         let inv_start_x = (screen_w - inv_w) * 0.5;
         let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
 
@@ -1802,8 +1812,8 @@ impl UiBuilder {
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
         mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
 
-        let slot_size = 40.0;
-        let slot_gap = 4.0;
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
         let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
 
@@ -1811,7 +1821,7 @@ impl UiBuilder {
         let start_x = (screen_w - inv_w) * 0.5;
 
         // 2. Chest Container Slots (3 rows of 9 slots = 27 slots)
-        let chest_y = screen_h * 0.5 - 190.0;
+        let chest_y = screen_h * 0.5 - 220.0;
         Self::draw_string(
             mesh,
             start_x,
@@ -2004,6 +2014,320 @@ impl UiBuilder {
         }
     }
 
+    /// Builds the Furnace Smelting / Cooking Screen:
+    /// - Input slot at top
+    /// - Animated burn flame indicator in the center
+    /// - Fuel slot below the flame
+    /// - Cook progress indicator and larger output slot to the right
+    /// - 27 Backpack slots (3x9) and 9 Hotbar slots (1x9) below
+    /// - JEI panel, Recipe modal, cursor held item, and tooltips
+    pub fn build_furnace_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        furnace: &FurnaceState,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+
+        let mut hovered_item_name: Option<&str> = None;
+
+        // 1. Semi-transparent backdrop overlay
+        let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
+
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+
+        // 2. Furnace Chamber (Upper Section)
+        let furnace_top_y = screen_h * 0.5 - 220.0;
+        Self::draw_string(
+            mesh,
+            start_x,
+            furnace_top_y - 20.0,
+            "Furnace",
+            8.0,
+            10.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
+
+        // Center column for Input & Fuel slots
+        let center_x = start_x + (inv_w - slot_size) * 0.5 - 55.0;
+        let input_y = furnace_top_y + 10.0;
+        let flame_size = 24.0;
+        let flame_x = center_x + (slot_size - flame_size) * 0.5;
+        let flame_y = input_y + slot_size + 8.0;
+        let fuel_y = flame_y + flame_size + 8.0;
+
+        // Input Slot
+        mesh.add_quad(center_x, input_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        let in_slot = furnace.input;
+        if !in_slot.is_empty() {
+            if let Some(def) = registry.get(in_slot.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let icon_pad = 6.0;
+                mesh.add_quad(
+                    center_x + icon_pad,
+                    input_y + icon_pad,
+                    slot_size - icon_pad * 2.0,
+                    slot_size - icon_pad * 2.0,
+                    icon_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                Self::draw_stack_number(mesh, center_x, input_y, slot_size, in_slot.count);
+
+                if cursor_pos[0] >= center_x && cursor_pos[0] <= center_x + slot_size
+                    && cursor_pos[1] >= input_y && cursor_pos[1] <= input_y + slot_size
+                {
+                    hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // Animated Flame (between Input and Fuel)
+        // Background / Empty flame icon
+        let flame_empty_uv = TextureAtlas::get_uv_bounds(Self::FLAME_CONTAINER_TILE);
+        mesh.add_quad(flame_x, flame_y, flame_size, flame_size, flame_empty_uv, [0.35, 0.35, 0.35, 0.85]);
+
+        if furnace.burn_time_remaining > 0.0 && furnace.max_burn_time > 0.0 {
+            let burn_ratio = (furnace.burn_time_remaining / furnace.max_burn_time).clamp(0.0, 1.0);
+            let active_h = flame_size * burn_ratio;
+            let active_y = flame_y + (flame_size - active_h);
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(Self::FLAME_FULL_TILE);
+            let v_active_top = v_max - (v_max - v_min) * burn_ratio;
+            mesh.add_quad(
+                flame_x,
+                active_y,
+                flame_size,
+                active_h,
+                [u_min, v_active_top, u_max, v_max],
+                [1.0, 1.0, 1.0, 1.0],
+            );
+        }
+
+        // Fuel Slot
+        mesh.add_quad(center_x, fuel_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        let fuel_slot = furnace.fuel;
+        if !fuel_slot.is_empty() {
+            if let Some(def) = registry.get(fuel_slot.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let icon_pad = 6.0;
+                mesh.add_quad(
+                    center_x + icon_pad,
+                    fuel_y + icon_pad,
+                    slot_size - icon_pad * 2.0,
+                    slot_size - icon_pad * 2.0,
+                    icon_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                Self::draw_stack_number(mesh, center_x, fuel_y, slot_size, fuel_slot.count);
+
+                if cursor_pos[0] >= center_x && cursor_pos[0] <= center_x + slot_size
+                    && cursor_pos[1] >= fuel_y && cursor_pos[1] <= fuel_y + slot_size
+                {
+                    hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // Cook Progress Arrow & Output Slot to the right
+        let arrow_x = center_x + slot_size + 24.0;
+        let arrow_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 7.0;
+        Self::draw_string(mesh, arrow_x, arrow_y, "===>", 10.0, 14.0, 1.0, [0.45, 0.45, 0.50, 1.0]);
+
+        // Highlight cooking arrow progress
+        let cook_ratio = (furnace.cook_progress / FurnaceState::FURNACE_COOK_TIME).clamp(0.0, 1.0);
+        if cook_ratio > 0.0 {
+            let progress_chars = (cook_ratio * 4.0).ceil() as usize;
+            let full_arrow = "===>";
+            let active_part = &full_arrow[..progress_chars.min(4)];
+            Self::draw_string(mesh, arrow_x, arrow_y, active_part, 10.0, 14.0, 1.0, [1.0, 0.85, 0.20, 1.0]);
+        }
+
+        // Output Slot (enlarged 56x56, warm golden tinted background)
+        let out_x = arrow_x + 64.0;
+        let out_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 28.0;
+        let out_size = 56.0;
+        mesh.add_quad(out_x, out_y, out_size, out_size, slot_uv, [1.0, 0.95, 0.70, 1.0]);
+        let out_slot = furnace.output;
+        if !out_slot.is_empty() {
+            if let Some(def) = registry.get(out_slot.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let icon_pad = 6.0;
+                mesh.add_quad(
+                    out_x + icon_pad,
+                    out_y + icon_pad,
+                    out_size - icon_pad * 2.0,
+                    out_size - icon_pad * 2.0,
+                    icon_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
+
+                if cursor_pos[0] >= out_x && cursor_pos[0] <= out_x + out_size
+                    && cursor_pos[1] >= out_y && cursor_pos[1] <= out_y + out_size
+                {
+                    hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // 3. Player Backpack Storage Grid (3 rows x 9 columns)
+        let inv_y = fuel_y + slot_size + 24.0;
+        Self::draw_string(
+            mesh,
+            start_x,
+            inv_y - 18.0,
+            "Inventory",
+            8.0,
+            10.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
+
+        for row in 0..3 {
+            for col in 0..9 {
+                let slot_idx = 9 + row * 9 + col;
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+
+                let item_slot = inventory.get(slot_idx);
+                if !item_slot.is_empty() {
+                    if let Some(def) = registry.get(item_slot.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        let icon_pad = 6.0;
+                        mesh.add_quad(
+                            sx + icon_pad,
+                            sy + icon_pad,
+                            slot_size - icon_pad * 2.0,
+                            slot_size - icon_pad * 2.0,
+                            icon_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+                        Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+
+                        if cursor_pos[0] >= sx
+                            && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy
+                            && cursor_pos[1] <= sy + slot_size
+                        {
+                            hovered_item_name = Some(def.display_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Hotbar Slots at bottom of furnace screen
+        let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+        for i in 0..9 {
+            let sx = start_x + (i as f32) * (slot_size + slot_gap);
+            let sy = hotbar_y;
+
+            mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+            if i == active_hotbar_slot {
+                let hl_pad = 2.0;
+                mesh.add_quad(
+                    sx - hl_pad,
+                    sy - hl_pad,
+                    slot_size + hl_pad * 2.0,
+                    slot_size + hl_pad * 2.0,
+                    highlight_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+            }
+
+            let item_slot = inventory.get(i);
+            if !item_slot.is_empty() {
+                if let Some(def) = registry.get(item_slot.item_id) {
+                    let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                    let icon_pad = 6.0;
+                    mesh.add_quad(
+                        sx + icon_pad,
+                        sy + icon_pad,
+                        slot_size - icon_pad * 2.0,
+                        slot_size - icon_pad * 2.0,
+                        icon_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+
+                    if cursor_pos[0] >= sx
+                        && cursor_pos[0] <= sx + slot_size
+                        && cursor_pos[1] >= sy
+                        && cursor_pos[1] <= sy + slot_size
+                    {
+                        hovered_item_name = Some(def.display_name);
+                    }
+                }
+            }
+        }
+
+        // 5. JEI Catalog Panel on right side
+        if let Some(jei) = jei_params {
+            Self::draw_jei_panel(
+                mesh,
+                screen_w,
+                screen_h,
+                jei,
+                cursor_pos,
+                registry,
+                &mut hovered_item_name,
+            );
+        }
+
+        // 6. Recipe Inspector Modal (if open, drawn on top)
+        if let Some(modal) = recipe_modal {
+            Self::draw_recipe_modal(
+                mesh,
+                screen_w,
+                screen_h,
+                modal,
+                cursor_pos,
+                registry,
+                &mut hovered_item_name,
+            );
+        }
+
+        // 7. Cursor Held Item Stack (follows mouse position)
+        if !cursor_held.is_empty() {
+            if let Some(def) = registry.get(cursor_held.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let hold_size = 36.0;
+                let hx = cursor_pos[0] - hold_size * 0.5;
+                let hy = cursor_pos[1] - hold_size * 0.5;
+                mesh.add_quad(
+                    hx,
+                    hy,
+                    hold_size,
+                    hold_size,
+                    icon_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
+            }
+        }
+
+        // 8. Hover Tooltip
+        if let Some(name) = hovered_item_name {
+            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
+        }
+    }
+
     /// Draws the JEI (Just Enough Items) Item Index Grid, Pagination, and Search Bar on the right side.
     pub fn draw_jei_panel(
         mesh: &mut UiMesh,
@@ -2014,13 +2338,13 @@ impl UiBuilder {
         registry: &ItemRegistry,
         hovered_item_name: &mut Option<&str>,
     ) {
-        let slot_size = 36.0;
-        let slot_gap = 4.0;
-        let cols = 6;
-        let rows = 8;
-        let panel_w = (cols as f32) * (slot_size + slot_gap) - slot_gap; // 236.0
-        let start_x = screen_w - panel_w - 24.0;
-        let start_y = screen_h * 0.5 - 190.0;
+        let slot_size = Self::JEI_SLOT_SIZE;
+        let slot_gap = Self::JEI_SLOT_GAP;
+        let cols = Self::JEI_COLS;
+        let rows = Self::JEI_ROWS;
+        let panel_w = (cols as f32) * (slot_size + slot_gap) - slot_gap;
+        let start_x = screen_w - panel_w - 20.0;
+        let start_y = screen_h * 0.5 - 210.0;
 
         let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
@@ -2140,8 +2464,8 @@ impl UiBuilder {
         mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.72]);
 
         // 2. Modal Window Frame
-        let modal_w = 400.0;
-        let modal_h = 300.0;
+        let modal_w = 460.0;
+        let modal_h = 340.0;
         let mx = (screen_w - modal_w) * 0.5;
         let my = (screen_h - modal_h) * 0.5;
 
@@ -2209,9 +2533,9 @@ impl UiBuilder {
         let box_h = modal_h - 96.0;
         mesh.add_quad(box_x, box_y, box_w, box_h, white_uv, [0.12, 0.12, 0.14, 0.95]);
 
-        let slot_size = 42.0;
-        let slot_gap = 4.0;
-        let grid_start_x = box_x + 24.0;
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let grid_start_x = box_x + 28.0;
         let grid_start_y = box_y + 24.0;
 
         // 3x3 Input Grid
@@ -2255,14 +2579,14 @@ impl UiBuilder {
         }
 
         // Arrow ===>
-        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 20.0;
+        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 24.0;
         let arrow_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 6.0;
         Self::draw_string(mesh, arrow_x, arrow_y, "===>", 10.0, 14.0, 1.0, [0.85, 0.85, 0.90, 1.0]);
 
         // Output Slot
-        let out_x = arrow_x + 58.0;
-        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 24.0;
-        let out_size = 48.0;
+        let out_x = arrow_x + 64.0;
+        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 28.0;
+        let out_size = 56.0;
         mesh.add_quad(out_x, out_y, out_size, out_size, slot_uv, [1.0, 1.0, 1.0, 1.0]);
 
         let out_slot = params.recipe.output;
@@ -2498,6 +2822,38 @@ mod tests {
         };
         let mut hovered = None;
         UiBuilder::draw_recipe_modal(&mut mesh, 1280.0, 720.0, &params, [640.0, 360.0], &registry, &mut hovered);
+        assert!(mesh.indices.len() > 0);
+        assert!(mesh.vertices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_furnace_screen() {
+        let mut mesh = UiMesh::new();
+        let inv = Inventory::new(36);
+        let registry = ItemRegistry::new();
+        let mut furnace = FurnaceState::new();
+        furnace.input = ItemSlot::new(ItemId::RAW_IRON, 5);
+        furnace.fuel = ItemSlot::new(ItemId::COAL, 3);
+        furnace.output = ItemSlot::new(ItemId::IRON_INGOT, 2);
+        furnace.burn_time_remaining = 40.0;
+        furnace.max_burn_time = 80.0;
+        furnace.cook_progress = 4.0;
+        let cursor_held = ItemSlot::EMPTY;
+
+        UiBuilder::build_furnace_screen(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &furnace,
+            &inv,
+            0,
+            &cursor_held,
+            [640.0, 360.0],
+            &registry,
+            None,
+            None,
+        );
+
         assert!(mesh.indices.len() > 0);
         assert!(mesh.vertices.len() > 0);
     }

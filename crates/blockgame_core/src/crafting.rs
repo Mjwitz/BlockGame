@@ -140,6 +140,8 @@ impl Recipe {
                     && (output.item_id == ItemId::IRON_INGOT
                         || output.item_id == ItemId::COPPER_INGOT
                         || output.item_id == ItemId::GOLD_INGOT
+                        || output.item_id == ItemId::STONE
+                        || output.item_id == ItemId::GLASS
                         || output.item_id == ItemId::COOKED_STEAK
                         || output.item_id == ItemId::COOKED_PORKCHOP
                         || output.item_id == ItemId::COOKED_CHICKEN);
@@ -583,6 +585,60 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::CHEST, 1),
         });
+
+        // Furnace: 8 Cobblestone in a 3x3 hollow square ring
+        self.register(Recipe::Shaped {
+            name: "Furnace",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE), None,                     Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE),
+            ],
+            output: ItemSlot::new(ItemId::FURNACE, 1),
+        });
+
+        // Smelting: Cobblestone -> Stone
+        self.register(Recipe::Shapeless {
+            name: "Stone from Cobblestone",
+            inputs: vec![ItemId::COBBLESTONE],
+            output: ItemSlot::new(ItemId::STONE, 1),
+        });
+
+        // Smelting: Sand -> Glass
+        self.register(Recipe::Shapeless {
+            name: "Glass from Sand",
+            inputs: vec![ItemId::SAND],
+            output: ItemSlot::new(ItemId::GLASS, 1),
+        });
+    }
+}
+
+/// Returns the smelted/cooked output ItemId for a given input item, if smeltable in a Furnace.
+pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
+    match input {
+        ItemId::RAW_IRON | ItemId::IRON_ORE => Some(ItemId::IRON_INGOT),
+        ItemId::RAW_GOLD | ItemId::GOLD_ORE => Some(ItemId::GOLD_INGOT),
+        ItemId::RAW_COPPER | ItemId::COPPER_ORE => Some(ItemId::COPPER_INGOT),
+        ItemId::COBBLESTONE => Some(ItemId::STONE),
+        ItemId::SAND => Some(ItemId::GLASS),
+        ItemId::RAW_BEEF => Some(ItemId::COOKED_STEAK),
+        ItemId::RAW_PORKCHOP => Some(ItemId::COOKED_PORKCHOP),
+        ItemId::RAW_CHICKEN => Some(ItemId::COOKED_CHICKEN),
+        _ => None,
+    }
+}
+
+/// Returns the fuel burn duration (in seconds) for 1 item of the given type.
+/// Returns 0.0 if the item is not a valid furnace fuel.
+pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
+    match fuel {
+        ItemId::COAL => 80.0,
+        ItemId::WOOD_LOG | ItemId::PLANKS | ItemId::CRAFTING_TABLE | ItemId::CHEST | ItemId::FURNACE => 15.0,
+        ItemId::STICK => 5.0,
+        ItemId::WOODEN_PICKAXE | ItemId::WOODEN_AXE | ItemId::WOODEN_SHOVEL | ItemId::WOODEN_HOE => 10.0,
+        _ => 0.0,
     }
 }
 

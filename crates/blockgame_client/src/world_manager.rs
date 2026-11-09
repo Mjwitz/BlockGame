@@ -347,9 +347,19 @@ impl WorldManager {
             if current.is_air() {
                 return None;
             }
-            let is_torch = current == BlockId::TORCH;
+            let is_torch = current == BlockId::TORCH || current == BlockId::FURNACE_LIT;
             let dropped_chest_items = if current == BlockId::CHEST {
                 world.remove_chest(pos).unwrap_or_default()
+            } else if current == BlockId::FURNACE || current == BlockId::FURNACE_LIT {
+                if let Some(f) = world.remove_furnace(pos) {
+                    let mut items = Vec::new();
+                    if !f.input.is_empty() { items.push(f.input); }
+                    if !f.fuel.is_empty() { items.push(f.fuel); }
+                    if !f.output.is_empty() { items.push(f.output); }
+                    items
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             };
@@ -471,8 +481,11 @@ impl WorldManager {
             if !current.is_air() {
                 return false;
             }
-            let is_torch = block_id == BlockId::TORCH;
+            let is_torch = block_id == BlockId::TORCH || block_id == BlockId::FURNACE_LIT;
             world.set_block(pos, block_id);
+            if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
+                world.get_or_create_furnace(pos);
+            }
 
             if is_torch {
                 for dx in -1..=1 {
@@ -675,6 +688,59 @@ impl WorldManager {
                 let b = world.get_block(*pos);
                 b == BlockId::WHEAT_0 || b == BlockId::WHEAT_1 || b == BlockId::WHEAT_2
             });
+        }
+
+        if !changed_chunks.is_empty() {
+            let world = self.world.lock().unwrap();
+            let mesher = ChunkMesher::new(&self.registry);
+            for cpos in changed_chunks {
+                if let Some(chunk) = world.get_chunk(cpos) {
+                    let origin = cpos.to_world_origin();
+                    let sources = world.get_light_sources_near(origin, 15);
+                    let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                        world.get_block(origin + IVec3::new(x, y, z))
+                    });
+                    if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
+                        self.gpu_chunks.insert(cpos, gpu_mesh);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Periodically updates all active furnaces, cooking smeltable items, burning fuels,
+    /// and updating world block states between FURNACE and FURNACE_LIT.
+    pub fn update_furnaces(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut changed_chunks = HashSet::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            let mut lit_changes = Vec::new();
+
+            for (&pos, furnace) in world.furnaces.iter_mut() {
+                let state_changed = furnace.update(dt);
+                if state_changed {
+                    let is_burning = furnace.is_burning();
+                    lit_changes.push((pos, is_burning));
+                }
+            }
+
+            for (pos, is_burning) in lit_changes {
+                let current_block = world.get_block(pos);
+                if is_burning && current_block == BlockId::FURNACE {
+                    world.set_block(pos, BlockId::FURNACE_LIT);
+                    let (cp, _, _, _) = world_to_chunk_coords(pos);
+                    changed_chunks.insert(cp);
+                } else if !is_burning && current_block == BlockId::FURNACE_LIT {
+                    world.set_block(pos, BlockId::FURNACE);
+                    let (cp, _, _, _) = world_to_chunk_coords(pos);
+                    changed_chunks.insert(cp);
+                }
+            }
         }
 
         if !changed_chunks.is_empty() {

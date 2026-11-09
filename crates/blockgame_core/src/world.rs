@@ -5,6 +5,7 @@ use glam::IVec3;
 use crate::{
     block::BlockId,
     chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z},
+    item::ItemSlot,
 };
 
 /// Converts a global integer voxel coordinate into its containing `ChunkPos`
@@ -32,11 +33,112 @@ pub fn chunk_to_world_coords(chunk_pos: ChunkPos, lx: usize, ly: usize, lz: usiz
     )
 }
 
+pub const FURNACE_COOK_TIME: f32 = 8.0;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FurnaceState {
+    pub input: ItemSlot,
+    pub fuel: ItemSlot,
+    pub output: ItemSlot,
+    pub burn_time_remaining: f32,
+    pub max_burn_time: f32,
+    pub cook_progress: f32,
+}
+
+impl Default for FurnaceState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FurnaceState {
+    pub const COOK_TIME: f32 = FURNACE_COOK_TIME;
+    pub const FURNACE_COOK_TIME: f32 = FURNACE_COOK_TIME;
+
+    pub fn new() -> Self {
+        Self {
+            input: ItemSlot::EMPTY,
+            fuel: ItemSlot::EMPTY,
+            output: ItemSlot::EMPTY,
+            burn_time_remaining: 0.0,
+            max_burn_time: 0.0,
+            cook_progress: 0.0,
+        }
+    }
+
+    #[inline]
+    pub fn is_burning(&self) -> bool {
+        self.burn_time_remaining > 0.0
+    }
+
+    /// Ticks the furnace state for elapsed seconds `dt`.
+    /// Returns true if the block's visual lit state changed.
+    pub fn update(&mut self, dt: f32) -> bool {
+        let was_burning = self.is_burning();
+        let smelting_out = crate::crafting::get_smelting_output(self.input.item_id);
+
+        let can_smelt = if let Some(out_id) = smelting_out {
+            if self.input.is_empty() {
+                false
+            } else if self.output.is_empty() {
+                true
+            } else {
+                self.output.item_id == out_id && self.output.count < 64
+            }
+        } else {
+            false
+        };
+
+        // If fire expired but we have a valid recipe and fuel, ignite the next fuel item
+        if !self.is_burning() && can_smelt {
+            let fuel_time = crate::crafting::get_fuel_burn_time(self.fuel.item_id);
+            if fuel_time > 0.0 && self.fuel.count > 0 {
+                self.fuel.count -= 1;
+                if self.fuel.count == 0 {
+                    self.fuel = ItemSlot::EMPTY;
+                }
+                self.burn_time_remaining = fuel_time;
+                self.max_burn_time = fuel_time;
+            }
+        }
+
+        // Process burning
+        if self.burn_time_remaining > 0.0 {
+            self.burn_time_remaining = (self.burn_time_remaining - dt).max(0.0);
+
+            if can_smelt {
+                self.cook_progress += dt;
+                if self.cook_progress >= FURNACE_COOK_TIME {
+                    self.cook_progress = 0.0;
+                    if let Some(out_id) = smelting_out {
+                        if self.output.is_empty() {
+                            self.output = ItemSlot::new(out_id, 1);
+                        } else {
+                            self.output.count += 1;
+                        }
+                        self.input.count -= 1;
+                        if self.input.count == 0 {
+                            self.input = ItemSlot::EMPTY;
+                        }
+                    }
+                }
+            } else {
+                self.cook_progress = (self.cook_progress - dt * 2.0).max(0.0);
+            }
+        } else {
+            self.cook_progress = (self.cook_progress - dt * 2.0).max(0.0);
+        }
+
+        was_burning != self.is_burning()
+    }
+}
+
 #[derive(Default)]
 pub struct World {
     chunks: HashMap<ChunkPos, Chunk>,
     pub light_sources: HashSet<IVec3>,
-    pub chest_containers: HashMap<IVec3, Vec<crate::item::ItemSlot>>,
+    pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
+    pub furnaces: HashMap<IVec3, FurnaceState>,
 }
 
 impl World {
@@ -45,25 +147,42 @@ impl World {
             chunks: HashMap::new(),
             light_sources: HashSet::new(),
             chest_containers: HashMap::new(),
+            furnaces: HashMap::new(),
         }
     }
 
-    pub fn get_or_create_chest(&mut self, pos: IVec3) -> &mut Vec<crate::item::ItemSlot> {
+    pub fn get_or_create_chest(&mut self, pos: IVec3) -> &mut Vec<ItemSlot> {
         self.chest_containers
             .entry(pos)
-            .or_insert_with(|| vec![crate::item::ItemSlot::EMPTY; 27])
+            .or_insert_with(|| vec![ItemSlot::EMPTY; 27])
     }
 
-    pub fn get_chest(&self, pos: IVec3) -> Option<&Vec<crate::item::ItemSlot>> {
+    pub fn get_chest(&self, pos: IVec3) -> Option<&Vec<ItemSlot>> {
         self.chest_containers.get(&pos)
     }
 
-    pub fn get_chest_mut(&mut self, pos: IVec3) -> Option<&mut Vec<crate::item::ItemSlot>> {
+    pub fn get_chest_mut(&mut self, pos: IVec3) -> Option<&mut Vec<ItemSlot>> {
         self.chest_containers.get_mut(&pos)
     }
 
-    pub fn remove_chest(&mut self, pos: IVec3) -> Option<Vec<crate::item::ItemSlot>> {
+    pub fn remove_chest(&mut self, pos: IVec3) -> Option<Vec<ItemSlot>> {
         self.chest_containers.remove(&pos)
+    }
+
+    pub fn get_or_create_furnace(&mut self, pos: IVec3) -> &mut FurnaceState {
+        self.furnaces.entry(pos).or_insert_with(FurnaceState::new)
+    }
+
+    pub fn get_furnace(&self, pos: IVec3) -> Option<&FurnaceState> {
+        self.furnaces.get(&pos)
+    }
+
+    pub fn get_furnace_mut(&mut self, pos: IVec3) -> Option<&mut FurnaceState> {
+        self.furnaces.get_mut(&pos)
+    }
+
+    pub fn remove_furnace(&mut self, pos: IVec3) -> Option<FurnaceState> {
+        self.furnaces.remove(&pos)
     }
 
     #[inline]
@@ -225,5 +344,34 @@ mod tests {
         assert_eq!(removed[0].item_id, crate::item::ItemId::DIAMOND);
         assert_eq!(removed[0].count, 5);
         assert!(world.get_chest(pos).is_none());
+    }
+
+    #[test]
+    fn test_furnace_smelting_and_fuel() {
+        let mut world = World::new();
+        let pos = IVec3::new(12, 64, 12);
+
+        let furnace = world.get_or_create_furnace(pos);
+        // Put 1 Raw Iron as input and 1 Coal as fuel
+        furnace.input = ItemSlot::new(crate::item::ItemId::RAW_IRON, 1);
+        furnace.fuel = ItemSlot::new(crate::item::ItemId::COAL, 1);
+
+        assert!(!furnace.is_burning());
+
+        // Step 1: initial tick starts burning fuel (Coal burns for 80s)
+        let state_changed = furnace.update(0.1);
+        assert!(state_changed); // Lit state changed from unlit to burning
+        assert!(furnace.is_burning());
+        assert_eq!(furnace.fuel.count, 0); // Consumed 1 coal
+        assert!(furnace.burn_time_remaining > 79.0);
+
+        // Step 2: tick for remaining cook time (8.0s total)
+        furnace.update(FURNACE_COOK_TIME);
+
+        // Input should now be empty and output should have 1 Iron Ingot!
+        assert!(furnace.input.is_empty());
+        assert_eq!(furnace.output.item_id, crate::item::ItemId::IRON_INGOT);
+        assert_eq!(furnace.output.count, 1);
+        assert!(furnace.is_burning()); // Coal still has ~71s of burn time left
     }
 }

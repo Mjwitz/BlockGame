@@ -63,6 +63,7 @@ pub struct AppState {
     pub crafting_result: Option<ItemSlot>,
     pub inventory_open: bool,
     pub active_chest_pos: Option<IVec3>,
+    pub active_furnace_pos: Option<IVec3>,
     pub shift_down: bool,
     pub jei_search_text: String,
     pub jei_search_focused: bool,
@@ -272,6 +273,7 @@ impl ApplicationHandler for BlockGameApp {
             crafting_result: None,
             inventory_open: false,
             active_chest_pos: None,
+            active_furnace_pos: None,
             shift_down: false,
             jei_search_text: String::new(),
             jei_search_focused: false,
@@ -382,7 +384,9 @@ impl ApplicationHandler for BlockGameApp {
                         if handle_jei_panel_click(state, is_right) {
                             return;
                         }
-                        if state.active_chest_pos.is_some() {
+                        if state.active_furnace_pos.is_some() {
+                            handle_furnace_click(state, is_right);
+                        } else if state.active_chest_pos.is_some() {
                             handle_chest_click(state, is_right);
                         } else {
                             handle_inventory_click(state, is_right);
@@ -432,12 +436,31 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
                     MouseButton::Right if pressed => {
-                        // 1. Check if targeting an interactive block (e.g. Chest or Crafting Table)
+                        // 1. Check if targeting an interactive block (e.g. Furnace, Chest, or Crafting Table)
                         if let Some(hit) = state.targeted_block {
                             let block_id = {
                                 let world_guard = state.world_manager.world().lock().unwrap();
                                 world_guard.get_block(hit.hit_voxel)
                             };
+                            if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
+                                state.mouse_left_down = false;
+                                state.break_progress = 0.0;
+                                state.breaking_voxel = None;
+                                state.cracking_buffer = None;
+
+                                {
+                                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                                    world_guard.get_or_create_furnace(hit.hit_voxel);
+                                }
+
+                                state.active_chest_pos = None;
+                                state.active_furnace_pos = Some(hit.hit_voxel);
+                                state.inventory_open = true;
+                                state.mouse_captured = false;
+                                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
+                                return;
+                            }
                             if block_id == BlockId::CHEST {
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;
@@ -449,6 +472,7 @@ impl ApplicationHandler for BlockGameApp {
                                     world_guard.get_or_create_chest(hit.hit_voxel);
                                 }
 
+                                state.active_furnace_pos = None;
                                 state.active_chest_pos = Some(hit.hit_voxel);
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
@@ -472,6 +496,7 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 state.active_chest_pos = None;
+                                state.active_furnace_pos = None;
                                 state.crafting_grid = CraftingGrid::new_3x3();
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
@@ -674,6 +699,7 @@ impl ApplicationHandler for BlockGameApp {
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
                         state.active_chest_pos = None;
+                        state.active_furnace_pos = None;
                         state.jei_recipe_modal = None;
                         state.jei_search_focused = false;
                         if state.inventory_open {
@@ -710,6 +736,7 @@ impl ApplicationHandler for BlockGameApp {
                         state.breaking_voxel = None;
                         state.cracking_buffer = None;
                         state.active_chest_pos = None;
+                        state.active_furnace_pos = None;
                         if state.inventory_open {
                             for slot in state.crafting_grid.slots.drain(..) {
                                 if !slot.is_empty() {
@@ -881,6 +908,7 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
                 state.world_manager.update_crops(dt, &state.device, &state.pipeline);
+                state.world_manager.update_furnaces(dt, &state.device, &state.pipeline);
 
                 // 4. Update Camera position and atmosphere uniform
                 state.camera.position = state.player.eye_position();
@@ -1035,6 +1063,17 @@ impl ApplicationHandler for BlockGameApp {
                     &state.pipeline,
                 );
 
+                if let Some(furnace_pos) = state.active_furnace_pos {
+                    let dist_sq = (state.player.position - (furnace_pos.as_vec3() + Vec3::splat(0.5))).length_squared();
+                    if dist_sq > 36.0 {
+                        state.active_furnace_pos = None;
+                        state.inventory_open = false;
+                        state.mouse_captured = true;
+                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        state.window.set_cursor_visible(false);
+                    }
+                }
+
                 if let Some(chest_pos) = state.active_chest_pos {
                     let dist_sq = (state.player.position - (chest_pos.as_vec3() + Vec3::splat(0.5))).length_squared();
                     if dist_sq > 36.0 {
@@ -1118,7 +1157,25 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
 
-                    if let Some(chest_pos) = state.active_chest_pos {
+                    if let Some(furnace_pos) = state.active_furnace_pos {
+                        let furnace = {
+                            let world_guard = state.world_manager.world().lock().unwrap();
+                            world_guard.get_furnace(furnace_pos).cloned().unwrap_or_default()
+                        };
+                        UiBuilder::build_furnace_screen(
+                            &mut state.ui_mesh,
+                            screen_w,
+                            screen_h,
+                            &furnace,
+                            &state.inventory,
+                            state.active_hotbar_slot,
+                            &state.cursor_held,
+                            state.cursor_pos,
+                            &state.item_registry,
+                            Some(&jei_params),
+                            modal_params.as_ref(),
+                        );
+                    } else if let Some(chest_pos) = state.active_chest_pos {
                         let chest_slots = {
                             let world_guard = state.world_manager.world().lock().unwrap();
                             world_guard.get_chest(chest_pos).cloned().unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
@@ -1366,15 +1423,15 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     let cx = state.cursor_pos[0];
     let cy = state.cursor_pos[1];
 
-    let slot_size = 40.0;
-    let slot_gap = 4.0;
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
 
     // 1. Dynamic Crafting Grid (2x2 or 3x3)
     let grid_w = state.crafting_grid.width;
     let grid_h = state.crafting_grid.height;
 
-    let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 20.0)) * 0.5;
-    let craft_y = screen_h * 0.5 - (if grid_h == 3 { 185.0 } else { 160.0 });
+    let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 24.0)) * 0.5;
+    let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
 
     for gy in 0..grid_h {
         for gx in 0..grid_w {
@@ -1390,9 +1447,9 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     }
 
     // 2. Crafting Result Slot
-    let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 28.0;
+    let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 32.0;
     let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
-    let result_size = slot_size + 6.0;
+    let result_size = slot_size + 8.0;
 
     if cx >= result_x && cx < result_x + result_size && cy >= result_y && cy < result_y + result_size {
         if state.crafting_result.is_some() {
@@ -1418,7 +1475,7 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     }
 
     // 3. Backpack Storage Grid (3 rows x 9 columns)
-    let inv_w = 9.0 * (slot_size + slot_gap);
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
     let inv_start_x = (screen_w - inv_w) * 0.5;
     let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
 
@@ -1481,13 +1538,13 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
     let cx = state.cursor_pos[0];
     let cy = state.cursor_pos[1];
 
-    let slot_size = 40.0;
-    let slot_gap = 4.0;
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
     let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
     let start_x = (screen_w - inv_w) * 0.5;
 
     // 1. Chest Container Slots (3 rows x 9 columns = 27 slots)
-    let chest_y = screen_h * 0.5 - 190.0;
+    let chest_y = screen_h * 0.5 - 220.0;
     for row in 0..3 {
         for col in 0..9 {
             let slot_idx = row * 9 + col;
@@ -1555,6 +1612,207 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
                     let chest_slots = world_guard.get_or_create_chest(chest_pos);
                     let rem = add_to_chest_slots(chest_slots, slot_val, &state.item_registry);
                     state.inventory.slots[i] = rem.unwrap_or(ItemSlot::EMPTY);
+                }
+            } else {
+                state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+            }
+            return;
+        }
+    }
+}
+
+fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
+    let Some(furnace_pos) = state.active_furnace_pos else { return };
+    let screen_w = state.surface_config.width as f32;
+    let screen_h = state.surface_config.height as f32;
+    let cx = state.cursor_pos[0];
+    let cy = state.cursor_pos[1];
+
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+
+    let furnace_top_y = screen_h * 0.5 - 220.0;
+    let center_x = start_x + (inv_w - slot_size) * 0.5 - 55.0;
+    let input_y = furnace_top_y + 10.0;
+    let flame_size = 24.0;
+    let flame_y = input_y + slot_size + 8.0;
+    let fuel_y = flame_y + flame_size + 8.0;
+
+    let arrow_x = center_x + slot_size + 24.0;
+    let _arrow_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 7.0;
+    let out_x = arrow_x + 64.0;
+    let out_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 28.0;
+    let out_size = 56.0;
+
+    // 1. Furnace Input Slot
+    if cx >= center_x && cx < center_x + slot_size && cy >= input_y && cy < input_y + slot_size {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        let furnace = world_guard.get_or_create_furnace(furnace_pos);
+        if state.shift_down {
+            let item = furnace.input;
+            if !item.is_empty() {
+                if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                    furnace.input = rem;
+                } else {
+                    furnace.input = ItemSlot::EMPTY;
+                }
+            }
+        } else {
+            click_slot_raw(&mut furnace.input, &mut state.cursor_held, is_right_click, &state.item_registry);
+        }
+        return;
+    }
+
+    // 2. Furnace Fuel Slot
+    if cx >= center_x && cx < center_x + slot_size && cy >= fuel_y && cy < fuel_y + slot_size {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        let furnace = world_guard.get_or_create_furnace(furnace_pos);
+        if state.shift_down {
+            let item = furnace.fuel;
+            if !item.is_empty() {
+                if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                    furnace.fuel = rem;
+                } else {
+                    furnace.fuel = ItemSlot::EMPTY;
+                }
+            }
+        } else {
+            click_slot_raw(&mut furnace.fuel, &mut state.cursor_held, is_right_click, &state.item_registry);
+        }
+        return;
+    }
+
+    // 3. Furnace Output Slot
+    if cx >= out_x && cx < out_x + out_size && cy >= out_y && cy < out_y + out_size {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        let furnace = world_guard.get_or_create_furnace(furnace_pos);
+        if state.shift_down {
+            let item = furnace.output;
+            if !item.is_empty() {
+                if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                    furnace.output = rem;
+                } else {
+                    furnace.output = ItemSlot::EMPTY;
+                }
+            }
+        } else {
+            // Can only TAKE from output slot, cannot place items into it
+            if state.cursor_held.is_empty() {
+                state.cursor_held = furnace.output;
+                furnace.output = ItemSlot::EMPTY;
+            } else if state.cursor_held.can_stack_with(&furnace.output) {
+                let max_stack = state.item_registry.max_stack_size(furnace.output.item_id);
+                let space = max_stack - state.cursor_held.count;
+                let take = space.min(furnace.output.count);
+                state.cursor_held.count += take;
+                furnace.output.count -= take;
+                if furnace.output.count == 0 {
+                    furnace.output = ItemSlot::EMPTY;
+                }
+            }
+        }
+        return;
+    }
+
+    // 4. Backpack Storage Grid (3 rows x 9 columns)
+    let inv_y = fuel_y + slot_size + 24.0;
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = 9 + row * 9 + col;
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                if state.shift_down {
+                    let item = state.inventory.get(slot_idx);
+                    if !item.is_empty() {
+                        let mut world_guard = state.world_manager.world().lock().unwrap();
+                        let furnace = world_guard.get_or_create_furnace(furnace_pos);
+                        // Priority 1: If item is fuel, try transfer into fuel slot
+                        if blockgame_core::crafting::get_fuel_burn_time(item.item_id) > 0.0 {
+                            if furnace.fuel.is_empty() {
+                                furnace.fuel = item;
+                                state.inventory.set(slot_idx, ItemSlot::EMPTY);
+                                return;
+                            } else if furnace.fuel.can_stack_with(&item) {
+                                let max_stack = state.item_registry.max_stack_size(item.item_id);
+                                let space = max_stack - furnace.fuel.count;
+                                let transfer = space.min(item.count);
+                                furnace.fuel.count += transfer;
+                                let remaining = item.count - transfer;
+                                state.inventory.set(slot_idx, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                                return;
+                            }
+                        }
+                        // Priority 2: If item is smeltable, try transfer into input slot
+                        if blockgame_core::crafting::get_smelting_output(item.item_id).is_some() {
+                            if furnace.input.is_empty() {
+                                furnace.input = item;
+                                state.inventory.set(slot_idx, ItemSlot::EMPTY);
+                                return;
+                            } else if furnace.input.can_stack_with(&item) {
+                                let max_stack = state.item_registry.max_stack_size(item.item_id);
+                                let space = max_stack - furnace.input.count;
+                                let transfer = space.min(item.count);
+                                furnace.input.count += transfer;
+                                let remaining = item.count - transfer;
+                                state.inventory.set(slot_idx, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                }
+                return;
+            }
+        }
+    }
+
+    // 5. Hotbar Slots
+    let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+    for i in 0..9 {
+        let sx = start_x + (i as f32) * (slot_size + slot_gap);
+        let sy = hotbar_y;
+
+        if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+            if state.shift_down {
+                let item = state.inventory.get(i);
+                if !item.is_empty() {
+                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                    let furnace = world_guard.get_or_create_furnace(furnace_pos);
+                    if blockgame_core::crafting::get_fuel_burn_time(item.item_id) > 0.0 {
+                        if furnace.fuel.is_empty() {
+                            furnace.fuel = item;
+                            state.inventory.set(i, ItemSlot::EMPTY);
+                            return;
+                        } else if furnace.fuel.can_stack_with(&item) {
+                            let max_stack = state.item_registry.max_stack_size(item.item_id);
+                            let space = max_stack - furnace.fuel.count;
+                            let transfer = space.min(item.count);
+                            furnace.fuel.count += transfer;
+                            let remaining = item.count - transfer;
+                            state.inventory.set(i, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                            return;
+                        }
+                    }
+                    if blockgame_core::crafting::get_smelting_output(item.item_id).is_some() {
+                        if furnace.input.is_empty() {
+                            furnace.input = item;
+                            state.inventory.set(i, ItemSlot::EMPTY);
+                            return;
+                        } else if furnace.input.can_stack_with(&item) {
+                            let max_stack = state.item_registry.max_stack_size(item.item_id);
+                            let space = max_stack - furnace.input.count;
+                            let transfer = space.min(item.count);
+                            furnace.input.count += transfer;
+                            let remaining = item.count - transfer;
+                            state.inventory.set(i, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                            return;
+                        }
+                    }
                 }
             } else {
                 state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
@@ -1654,8 +1912,8 @@ fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool
     let cx = state.cursor_pos[0];
     let cy = state.cursor_pos[1];
 
-    let modal_w = 400.0;
-    let modal_h = 300.0;
+    let modal_w = 460.0;
+    let modal_h = 340.0;
     let mx = (screen_w - modal_w) * 0.5;
     let my = (screen_h - modal_h) * 0.5;
 
@@ -1707,9 +1965,9 @@ fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool
     if let Some(recipe) = recipes.get(modal.recipe_index) {
         let box_x = mx + 20.0;
         let box_y = my + 76.0;
-        let slot_size = 42.0;
-        let slot_gap = 4.0;
-        let grid_start_x = box_x + 24.0;
+        let slot_size = UiBuilder::SLOT_SIZE;
+        let slot_gap = UiBuilder::SLOT_GAP;
+        let grid_start_x = box_x + 28.0;
         let grid_start_y = box_y + 24.0;
 
         // 3x3 Inputs
@@ -1733,10 +1991,10 @@ fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool
         }
 
         // Output Slot
-        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 20.0;
-        let out_x = arrow_x + 58.0;
-        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 24.0;
-        let out_size = 48.0;
+        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 24.0;
+        let out_x = arrow_x + 64.0;
+        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 28.0;
+        let out_size = 56.0;
 
         if cx >= out_x && cx <= out_x + out_size && cy >= out_y && cy <= out_y + out_size {
             let out_slot = recipe.output;
@@ -1760,13 +2018,13 @@ fn handle_jei_panel_click(state: &mut AppState, is_right_click: bool) -> bool {
     let cx = state.cursor_pos[0];
     let cy = state.cursor_pos[1];
 
-    let slot_size = 36.0;
-    let slot_gap = 4.0;
-    let cols = 6;
-    let rows = 8;
+    let slot_size = UiBuilder::JEI_SLOT_SIZE;
+    let slot_gap = UiBuilder::JEI_SLOT_GAP;
+    let cols = UiBuilder::JEI_COLS;
+    let rows = UiBuilder::JEI_ROWS;
     let panel_w = (cols as f32) * (slot_size + slot_gap) - slot_gap;
-    let start_x = screen_w - panel_w - 24.0;
-    let start_y = screen_h * 0.5 - 190.0;
+    let start_x = screen_w - panel_w - 20.0;
+    let start_y = screen_h * 0.5 - 210.0;
 
     let page_y = start_y - 28.0;
     let btn_w = 26.0;
@@ -1860,13 +2118,13 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
     let cy = state.cursor_pos[1];
 
     // 1. Check JEI Grid
-    let slot_size_jei = 36.0;
-    let slot_gap_jei = 4.0;
-    let cols = 6;
-    let rows = 8;
+    let slot_size_jei = UiBuilder::JEI_SLOT_SIZE;
+    let slot_gap_jei = UiBuilder::JEI_SLOT_GAP;
+    let cols = UiBuilder::JEI_COLS;
+    let rows = UiBuilder::JEI_ROWS;
     let panel_w = (cols as f32) * (slot_size_jei + slot_gap_jei) - slot_gap_jei;
-    let start_x_jei = screen_w - panel_w - 24.0;
-    let start_y_jei = screen_h * 0.5 - 190.0;
+    let start_x_jei = screen_w - panel_w - 20.0;
+    let start_y_jei = screen_h * 0.5 - 210.0;
 
     let search_lower = state.jei_search_text.trim().to_lowercase();
     let catalog: Vec<ItemId> = state
@@ -1899,13 +2157,42 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
         }
     }
 
-    // 2. Check Chest Slots if Chest open
-    if let Some(chest_pos) = state.active_chest_pos {
-        let slot_size = 40.0;
-        let slot_gap = 4.0;
-        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
-        let start_x = (screen_w - inv_w) * 0.5;
-        let chest_y = screen_h * 0.5 - 190.0;
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+
+    // 2. Check Furnace Slots if Furnace open
+    if let Some(furnace_pos) = state.active_furnace_pos {
+        let furnace_top_y = screen_h * 0.5 - 220.0;
+        let center_x = start_x + (inv_w - slot_size) * 0.5 - 55.0;
+        let input_y = furnace_top_y + 10.0;
+        let flame_size = 24.0;
+        let flame_y = input_y + slot_size + 8.0;
+        let fuel_y = flame_y + flame_size + 8.0;
+
+        let arrow_x = center_x + slot_size + 24.0;
+        let out_x = arrow_x + 64.0;
+        let out_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 28.0;
+        let out_size = 56.0;
+
+        let world_guard = state.world_manager.world().lock().unwrap();
+        if let Some(furnace) = world_guard.get_furnace(furnace_pos) {
+            // Input
+            if cx >= center_x && cx <= center_x + slot_size && cy >= input_y && cy <= input_y + slot_size {
+                if !furnace.input.is_empty() { return Some(furnace.input.item_id); }
+            }
+            // Fuel
+            if cx >= center_x && cx <= center_x + slot_size && cy >= fuel_y && cy <= fuel_y + slot_size {
+                if !furnace.fuel.is_empty() { return Some(furnace.fuel.item_id); }
+            }
+            // Output
+            if cx >= out_x && cx <= out_x + out_size && cy >= out_y && cy <= out_y + out_size {
+                if !furnace.output.is_empty() { return Some(furnace.output.item_id); }
+            }
+        }
+    } else if let Some(chest_pos) = state.active_chest_pos {
+        let chest_y = screen_h * 0.5 - 220.0;
 
         for row in 0..3 {
             for col in 0..9 {
@@ -1929,10 +2216,8 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
         // 2b. Check Crafting Grid & Result Slot
         let grid_w = state.crafting_grid.width;
         let grid_h = state.crafting_grid.height;
-        let slot_size = 40.0;
-        let slot_gap = 4.0;
-        let craft_x = (screen_w - (grid_w as f32) * (slot_size + slot_gap)) * 0.5 - 40.0;
-        let craft_y = screen_h * 0.5 - 160.0;
+        let craft_x = (screen_w - ((grid_w as f32 + 2.0) * (slot_size + slot_gap) + 24.0)) * 0.5;
+        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
 
         for gy in 0..grid_h {
             for gx in 0..grid_w {
@@ -1949,9 +2234,9 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
         }
 
         // Result slot
-        let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 28.0;
+        let result_x = craft_x + (grid_w as f32) * (slot_size + slot_gap) + 32.0;
         let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
-        let r_size = slot_size + 6.0;
+        let r_size = slot_size + 8.0;
         if cx >= result_x && cx <= result_x + r_size && cy >= result_y && cy <= result_y + r_size {
             if let Some(res) = state.crafting_result {
                 if !res.is_empty() {
@@ -1962,15 +2247,18 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
     }
 
     // 3. Check Backpack and Hotbar
-    let slot_size = 40.0;
-    let slot_gap = 4.0;
-    let inv_w = 9.0 * (slot_size + slot_gap);
-    let inv_start_x = (screen_w - inv_w) * 0.5;
-    let craft_y = screen_h * 0.5 - 160.0;
-    let grid_h = state.crafting_grid.height;
-    let inv_start_y = if state.active_chest_pos.is_some() {
-        screen_h * 0.5 - 190.0 + 3.0 * (slot_size + slot_gap) + 18.0
+    let inv_start_y = if state.active_furnace_pos.is_some() {
+        let furnace_top_y = screen_h * 0.5 - 220.0;
+        let input_y = furnace_top_y + 10.0;
+        let flame_size = 24.0;
+        let flame_y = input_y + slot_size + 8.0;
+        let fuel_y = flame_y + flame_size + 8.0;
+        fuel_y + slot_size + 24.0
+    } else if state.active_chest_pos.is_some() {
+        screen_h * 0.5 - 220.0 + 3.0 * (slot_size + slot_gap) + 26.0
     } else {
+        let grid_h = state.crafting_grid.height;
+        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
         craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0
     };
 
@@ -1978,7 +2266,7 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
     for row in 0..3 {
         for col in 0..9 {
             let slot_idx = 9 + row * 9 + col;
-            let sx = inv_start_x + (col as f32) * (slot_size + slot_gap);
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
             let sy = inv_start_y + (row as f32) * (slot_size + slot_gap);
 
             if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
@@ -1993,7 +2281,7 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
     // Hotbar (1x9)
     let hotbar_y = inv_start_y + 3.0 * (slot_size + slot_gap) + 16.0;
     for i in 0..9 {
-        let sx = inv_start_x + (i as f32) * (slot_size + slot_gap);
+        let sx = start_x + (i as f32) * (slot_size + slot_gap);
         let sy = hotbar_y;
 
         if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {

@@ -62,6 +62,7 @@ impl ItemId {
     pub const LEATHER: Self = Self(52);
     pub const FEATHER: Self = Self(53);
     pub const CHEST: Self = Self(54);
+    pub const FURNACE: Self = Self(55);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -909,6 +910,18 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 177,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::FURNACE,
+            name: "blockgame:furnace",
+            display_name: "Furnace",
+            max_stack: 64,
+            placeable_block: Some(BlockId::FURNACE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 182,
         });
     }
 }

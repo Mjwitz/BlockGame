@@ -31,6 +31,8 @@ impl BlockId {
     pub const WHEAT_2: Self = Self(23);
     pub const WHEAT_3: Self = Self(24);
     pub const CHEST: Self = Self(25);
+    pub const FURNACE: Self = Self(26);
+    pub const FURNACE_LIT: Self = Self(27);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -410,6 +412,36 @@ impl BlockRegistry {
             required_tool: Some(ToolType::Axe),
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::CHEST),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::FURNACE,
+            name: "Furnace",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 178, NegY: 178, PosZ (front): 180, NegZ: 179, PosX: 179, NegX: 179
+            textures: [178, 178, 180, 179, 179, 179],
+            hardness: 3.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::FURNACE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::FURNACE_LIT,
+            name: "Burning Furnace",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 13,
+            // PosY: 178, NegY: 178, PosZ (front lit): 181, NegZ: 179, PosX: 179, NegX: 179
+            textures: [178, 178, 181, 179, 179, 179],
+            hardness: 3.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::FURNACE),
             drop_count: (1, 1),
         });
 

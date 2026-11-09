@@ -1590,20 +1590,20 @@ pub async fn render_world_to_image(
         };
 
         // Position cursor over the output slot to highlight it and show tooltip
-        let modal_w = 400.0;
-        let modal_h = 300.0;
+        let modal_w = 460.0;
+        let modal_h = 340.0;
         let mx = (screen_w - modal_w) * 0.5;
         let my = (screen_h - modal_h) * 0.5;
         let box_x = mx + 20.0;
         let box_y = my + 76.0;
-        let slot_size = 42.0;
-        let slot_gap = 4.0;
-        let grid_start_x = box_x + 24.0;
+        let slot_size = UiBuilder::SLOT_SIZE;
+        let slot_gap = UiBuilder::SLOT_GAP;
+        let grid_start_x = box_x + 28.0;
         let grid_start_y = box_y + 24.0;
-        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 20.0;
-        let out_x = arrow_x + 58.0;
-        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 24.0;
-        let cursor_pos = [out_x + 24.0, out_y + 24.0];
+        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 24.0;
+        let out_x = arrow_x + 64.0;
+        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 28.0;
+        let cursor_pos = [out_x + 28.0, out_y + 28.0];
 
         let mut crafting_grid = blockgame_core::crafting::CraftingGrid::new_3x3();
         crafting_grid.set(0, 0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1));
@@ -1706,6 +1706,198 @@ pub async fn render_world_to_image(
             image::ExtendedColorType::Rgba8,
         )?;
         log::info!("Successfully saved JEI recipe browser showcase image to jei_recipe_browser_render.png");
+    }
+
+    // =========================================================================
+    // 10. FURNACE UI SHOWCASE: Render Furnace Screen with fire flame & cooking
+    // =========================================================================
+    {
+        let mut furnace_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Furnace UI Encoder"),
+        });
+
+        // 1. Draw 3D world scene in background
+        {
+            let mut rpass = furnace_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Furnace UI 3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.52,
+                            g: 0.75,
+                            b: 0.96,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            rpass.set_pipeline(&pipeline.render_pipeline);
+            rpass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            rpass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+
+            for gpu_chunk in world_manager.gpu_chunks.values() {
+                rpass.set_vertex_buffer(0, gpu_chunk.vertex_buffer.slice(..));
+                rpass.set_index_buffer(gpu_chunk.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                rpass.draw_indexed(0..gpu_chunk.index_count, 0, 0..1);
+            }
+        }
+
+        // 2. Build and Render Furnace Screen
+        let mut furnace_ui_mesh = UiMesh::new();
+        let screen_w = width as f32;
+        let screen_h = height as f32;
+        ui_pipeline.update_screen_size(&queue, screen_w, screen_h);
+
+        let mut furnace_inv = Inventory::new(36);
+        furnace_inv.set(0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COBBLESTONE, 64));
+        furnace_inv.set(1, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 32));
+        furnace_inv.set(2, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_COPPER, 18));
+        furnace_inv.set(3, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_GOLD, 8));
+        furnace_inv.set(4, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_BEEF, 10));
+        furnace_inv.set(5, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_PICKAXE, 1));
+        furnace_inv.set(6, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::FURNACE, 2));
+        furnace_inv.set(9, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 48));
+        furnace_inv.set(10, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SAND, 32));
+
+        let mut furnace_state = blockgame_core::world::FurnaceState::new();
+        furnace_state.input = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_IRON, 16);
+        furnace_state.fuel = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 5);
+        furnace_state.output = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_INGOT, 4);
+        furnace_state.burn_time_remaining = 52.0;
+        furnace_state.max_burn_time = 80.0;
+        furnace_state.cook_progress = 5.2;
+
+        let catalog: Vec<blockgame_core::item::ItemId> = item_registry
+            .all_items()
+            .into_iter()
+            .map(|def| def.id)
+            .collect();
+        let jei_params = blockgame_render::ui::JeiParams {
+            catalog_items: &catalog,
+            page: 0,
+            total_pages: ((catalog.len() + 47) / 48).max(1),
+            search_query: "",
+            search_focused: false,
+        };
+
+        let slot_size = UiBuilder::SLOT_SIZE;
+        let slot_gap = UiBuilder::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let center_x = start_x + (inv_w - slot_size) * 0.5 - 55.0;
+        let input_y = screen_h * 0.5 - 220.0 + 10.0;
+        let cursor_pos = [center_x + slot_size * 0.5, input_y + slot_size * 0.5]; // Hovering over Raw Iron input slot
+
+        UiBuilder::build_furnace_screen(
+            &mut furnace_ui_mesh,
+            screen_w,
+            screen_h,
+            &furnace_state,
+            &furnace_inv,
+            0,
+            &blockgame_core::item::ItemSlot::EMPTY,
+            cursor_pos,
+            &item_registry,
+            Some(&jei_params),
+            None,
+        );
+
+        if !furnace_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Furnace UI VB"),
+                contents: bytemuck::cast_slice(&furnace_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Furnace UI IB"),
+                contents: bytemuck::cast_slice(&furnace_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = furnace_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Furnace UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..furnace_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        furnace_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(furnace_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut furnace_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            furnace_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "furnace_ui_render.png",
+            &furnace_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Furnace UI showcase image to furnace_ui_render.png");
     }
 
     Ok(())

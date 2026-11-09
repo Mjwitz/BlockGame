@@ -1301,6 +1301,155 @@ impl TextureAtlas {
             }
         });
 
+        // 178: Furnace Top / Bottom (Stone surface with circular heat rim)
+        atlas.paint_tile(178, |x, y| {
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let dist = ((x as f32 - 7.5).powi(2) + (y as f32 - 7.5).powi(2)).sqrt();
+            let is_rim = dist >= 3.2 && dist <= 5.5;
+            let is_hole = dist < 3.2;
+
+            if is_border {
+                Rgba([70, 70, 75, 255])
+            } else if is_hole {
+                Rgba([45, 45, 50, 255])
+            } else if is_rim {
+                Rgba([85, 85, 90, 255])
+            } else {
+                let n = simple_noise(x, y, 178);
+                let val = (120.0 + n * 25.0) as u8;
+                Rgba([val, val, val, 255])
+            }
+        });
+
+        // 179: Furnace Side & Back (Cobblestone masonry)
+        atlas.paint_tile(179, |x, y| {
+            let is_mortar = (y == 0 || y == 5 || y == 10 || y == 15)
+                || (y < 5 && x == 8)
+                || (y >= 5 && y < 10 && (x == 4 || x == 12))
+                || (y >= 10 && y < 15 && x == 7);
+            if is_mortar {
+                Rgba([60, 60, 65, 255])
+            } else {
+                let n = simple_noise(x, y, 179);
+                let val = (125.0 + n * 30.0) as u8;
+                Rgba([val, val, val, 255])
+            }
+        });
+
+        // 180: Furnace Front (Unlit: Cobblestone frame with dark arched opening and iron grate)
+        atlas.paint_tile(180, |x, y| {
+            let in_arch = (x >= 4 && x <= 11 && y >= 6 && y <= 13)
+                || (x >= 5 && x <= 10 && y == 5);
+            let is_grate = in_arch && (y == 8 || y == 11);
+            let is_arch_rim = (x == 3 || x == 12) && y >= 5 && y <= 13
+                || (y == 4 && x >= 4 && x <= 11);
+
+            if is_grate {
+                Rgba([75, 75, 80, 255])
+            } else if in_arch {
+                Rgba([28, 28, 32, 255]) // Dark interior
+            } else if is_arch_rim {
+                Rgba([55, 55, 60, 255]) // Arch bevel
+            } else {
+                let is_mortar = (y == 0 || y == 15) || (x == 0 || x == 15);
+                if is_mortar {
+                    Rgba([60, 60, 65, 255])
+                } else {
+                    let n = simple_noise(x, y, 180);
+                    let val = (125.0 + n * 30.0) as u8;
+                    Rgba([val, val, val, 255])
+                }
+            }
+        });
+
+        // 181: Furnace Front (Lit: Glowing fire burning inside arch)
+        atlas.paint_tile(181, |x, y| {
+            let in_arch = (x >= 4 && x <= 11 && y >= 6 && y <= 13)
+                || (x >= 5 && x <= 10 && y == 5);
+            let is_arch_rim = (x == 3 || x == 12) && y >= 5 && y <= 13
+                || (y == 4 && x >= 4 && x <= 11);
+
+            if in_arch {
+                let is_core = (x >= 6 && x <= 9 && y >= 8 && y <= 11) || (x >= 7 && x <= 8 && y == 7);
+                let is_spark = (x == 5 && y == 7) || (x == 10 && y == 8) || (y == 12);
+                if is_core {
+                    Rgba([255, 235, 70, 255]) // Bright yellow core
+                } else if is_spark {
+                    Rgba([255, 110, 20, 255]) // Red/orange flame edge
+                } else {
+                    let n = simple_noise(x, y, 181);
+                    let r = (245.0 + n * 10.0) as u8;
+                    let g = (145.0 + n * 20.0) as u8;
+                    Rgba([r, g, 20, 255]) // Warm glowing orange fire
+                }
+            } else if is_arch_rim {
+                Rgba([110, 75, 45, 255]) // Warm firelight reflecting on stone arch
+            } else {
+                let is_mortar = (y == 0 || y == 15) || (x == 0 || x == 15);
+                if is_mortar {
+                    Rgba([65, 55, 50, 255])
+                } else {
+                    let n = simple_noise(x, y, 181);
+                    let val = (125.0 + n * 25.0) as u8;
+                    Rgba([val, (val as f32 * 0.95) as u8, (val as f32 * 0.90) as u8, 255])
+                }
+            }
+        });
+
+        // 182: Furnace Item Icon (Isometric 3D block representation)
+        atlas.paint_tile(182, |x, y| {
+            let in_block = x >= 2 && x <= 13 && y >= 2 && y <= 13;
+            let is_border = in_block && (x == 2 || x == 13 || y == 2 || y == 13);
+            let in_arch = x >= 5 && x <= 10 && y >= 6 && y <= 11;
+            let is_grate = in_arch && (y == 8 || y == 10);
+
+            if is_grate {
+                Rgba([75, 75, 80, 255])
+            } else if in_arch {
+                Rgba([28, 28, 32, 255])
+            } else if is_border {
+                Rgba([55, 55, 60, 255])
+            } else if in_block {
+                let n = simple_noise(x, y, 182);
+                let val = (130.0 + n * 25.0) as u8;
+                Rgba([val, val, val, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 183: Flame Empty Container (UI slot fire silhouette outline)
+        atlas.paint_tile(183, |x, y| {
+            let in_flame = (y >= 5 && y <= 13 && x >= 4 && x <= 11)
+                || (y >= 8 && y <= 14 && x >= 3 && x <= 12)
+                || (y >= 2 && y <= 5 && (x == 7 || x == 8))
+                || (y == 4 && (x == 6 || x == 9));
+            if in_flame {
+                Rgba([60, 60, 65, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 184: Flame Full / Fire (UI active burning flame with orange/yellow gradient)
+        atlas.paint_tile(184, |x, y| {
+            let in_flame = (y >= 5 && y <= 13 && x >= 4 && x <= 11)
+                || (y >= 8 && y <= 14 && x >= 3 && x <= 12)
+                || (y >= 2 && y <= 5 && (x == 7 || x == 8))
+                || (y == 4 && (x == 6 || x == 9));
+            let is_core = y >= 7 && y <= 12 && x >= 6 && x <= 9;
+            if is_core {
+                Rgba([255, 230, 45, 255]) // Bright core
+            } else if in_flame {
+                let ratio = (y as f32 - 2.0) / 12.0;
+                let r = 255;
+                let g = (80.0 + ratio * 80.0) as u8;
+                Rgba([r, g, 15, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
         atlas
     }
 
