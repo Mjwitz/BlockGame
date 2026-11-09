@@ -876,6 +876,318 @@ impl TextureAtlas {
         paint_shovel(&mut atlas, 147, Rgba([190, 195, 205, 255]), Rgba([245, 250, 255, 255])); // Iron Shovel
         paint_shovel(&mut atlas, 148, Rgba([65, 225, 235, 255]), Rgba([215, 255, 255, 255])); // Diamond Shovel
 
+        // 150: Farmland Top (Tilled moist soil with furrows)
+        atlas.paint_tile(150, |x, y| {
+            let is_furrow = y % 4 == 0;
+            let n = simple_noise(x, y, 150);
+            if is_furrow {
+                let r = (65.0 + n * 12.0) as u8;
+                let g = (42.0 + n * 8.0) as u8;
+                let b = (25.0 + n * 6.0) as u8;
+                Rgba([r, g, b, 255])
+            } else {
+                let r = (95.0 + n * 15.0) as u8;
+                let g = (65.0 + n * 10.0) as u8;
+                let b = (40.0 + n * 8.0) as u8;
+                Rgba([r, g, b, 255])
+            }
+        });
+
+        // 151..=154: Wheat stages 0..3
+        // Stage 0: tiny green sprouts (y: 12..15)
+        atlas.paint_tile(151, |x, y| {
+            let is_sprout = y >= 12 && (x == 3 || x == 7 || x == 11 || x == 14);
+            if is_sprout {
+                let n = simple_noise(x, y, 151);
+                let g = (160.0 + n * 25.0) as u8;
+                Rgba([70, g, 40, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // Stage 1: small growing stalks (y: 8..15)
+        atlas.paint_tile(152, |x, y| {
+            let is_stalk = y >= 8 && (x % 3 == 1 || (y >= 10 && x % 2 == 0));
+            if is_stalk {
+                let n = simple_noise(x, y, 152);
+                let g = (175.0 + n * 30.0) as u8;
+                Rgba([85, g, 45, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // Stage 2: taller yellowish-green wheat with small heads (y: 4..15)
+        atlas.paint_tile(153, |x, y| {
+            let is_stem = y >= 4 && (x % 2 == 0 || (y >= 8 && x % 3 == 0));
+            let is_head = y >= 4 && y <= 7 && (x % 2 == 0);
+            if is_head {
+                Rgba([185, 170, 60, 255])
+            } else if is_stem {
+                Rgba([120, 165, 50, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // Stage 3: full golden ripe wheat (y: 1..15)
+        atlas.paint_tile(154, |x, y| {
+            let is_wheat = y >= 1 && (x % 2 == 0 || (y >= 6 && x % 2 == 1));
+            let is_grain = y >= 1 && y <= 6 && (x >= 2 && x <= 14);
+            if is_grain {
+                let n = simple_noise(x, y, 154);
+                let r = (225.0 + n * 20.0) as u8;
+                let g = (185.0 + n * 20.0) as u8;
+                Rgba([r, g, 50, 255])
+            } else if is_wheat {
+                Rgba([190, 155, 45, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 155..=158: Hoes (Wood, Stone, Iron, Diamond)
+        let paint_hoe = |atlas: &mut TextureAtlas, tile_id: u16, blade_color: Rgba<u8>, shine_color: Rgba<u8>| {
+            atlas.paint_tile(tile_id, |x, y| {
+                let is_handle = (x + y == 15 || x + y == 16) && x <= 10 && y >= 5;
+                let is_blade = (y == 3 && x >= 9 && x <= 13) || (y == 4 && x >= 12 && x <= 13);
+                let is_edge = x == 13 && y == 4;
+
+                if is_edge {
+                    shine_color
+                } else if is_blade {
+                    blade_color
+                } else if is_handle {
+                    Rgba([100, 70, 35, 255])
+                } else {
+                    Rgba([0, 0, 0, 0])
+                }
+            });
+        };
+        paint_hoe(&mut atlas, 155, Rgba([155, 115, 65, 255]), Rgba([185, 145, 90, 255])); // Wood Hoe
+        paint_hoe(&mut atlas, 156, Rgba([125, 125, 125, 255]), Rgba([165, 165, 165, 255])); // Stone Hoe
+        paint_hoe(&mut atlas, 157, Rgba([190, 195, 205, 255]), Rgba([245, 250, 255, 255])); // Iron Hoe
+        paint_hoe(&mut atlas, 158, Rgba([65, 225, 235, 255]), Rgba([215, 255, 255, 255])); // Diamond Hoe
+
+        // 159: Wheat Seeds
+        atlas.paint_tile(159, |x, y| {
+            let s1 = (x as i32 - 6).abs() + (y as i32 - 6).abs() <= 2;
+            let s2 = (x as i32 - 10).abs() + (y as i32 - 8).abs() <= 2;
+            let s3 = (x as i32 - 7).abs() + (y as i32 - 11).abs() <= 2;
+            if s1 || s2 || s3 {
+                let is_highlight = (x == 6 && y == 5) || (x == 10 && y == 7) || (x == 7 && y == 10);
+                if is_highlight {
+                    Rgba([190, 215, 110, 255])
+                } else {
+                    Rgba([120, 145, 65, 255])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 160: Wheat (Bundle)
+        atlas.paint_tile(160, |x, y| {
+            let is_sheaf = (x >= 4 && x <= 11 && y >= 3 && y <= 13)
+                || (x >= 3 && x <= 12 && y >= 4 && y <= 8);
+            let is_tie = y == 9 && x >= 4 && x <= 11;
+            let is_top = y <= 5 && is_sheaf;
+            if is_tie {
+                Rgba([140, 70, 30, 255]) // red/brown string tie
+            } else if is_top {
+                Rgba([230, 195, 60, 255])
+            } else if is_sheaf {
+                Rgba([195, 160, 45, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 161: Bread
+        atlas.paint_tile(161, |x, y| {
+            let in_loaf = x >= 2 && x <= 13 && y >= 5 && y <= 11;
+            let is_crust_cut = in_loaf && (x == 5 || x == 8 || x == 11) && y >= 5 && y <= 8;
+            let is_top_crust = in_loaf && y == 5;
+            if is_crust_cut {
+                Rgba([235, 210, 150, 255]) // exposed interior crumb
+            } else if is_top_crust {
+                Rgba([145, 80, 25, 255])   // baked top crust
+            } else if in_loaf {
+                Rgba([190, 120, 45, 255])  // golden loaf
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 162: Raw Beef (Deep red marbling steak)
+        atlas.paint_tile(162, |x, y| {
+            let in_meat = (x >= 3 && x <= 12 && y >= 4 && y <= 12)
+                && !(x == 3 && y == 4) && !(x == 12 && y == 12);
+            let is_fat = in_meat && ((x + y == 10) || (x == 11 && y >= 5 && y <= 9));
+            if is_fat {
+                Rgba([245, 235, 225, 255])
+            } else if in_meat {
+                let n = simple_noise(x, y, 162);
+                let r = (185.0 + n * 20.0) as u8;
+                Rgba([r, 45, 45, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 163: Cooked Steak (Hearty brown steak with grill marks)
+        atlas.paint_tile(163, |x, y| {
+            let in_meat = (x >= 3 && x <= 12 && y >= 4 && y <= 12)
+                && !(x == 3 && y == 4) && !(x == 12 && y == 12);
+            let is_grill = in_meat && (x + y == 10 || x + y == 14 || x + y == 18);
+            if is_grill {
+                Rgba([50, 30, 20, 255])
+            } else if in_meat {
+                let n = simple_noise(x, y, 163);
+                let r = (115.0 + n * 15.0) as u8;
+                let g = (65.0 + n * 10.0) as u8;
+                let b = (40.0 + n * 8.0) as u8;
+                Rgba([r, g, b, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 164: Raw Porkchop (Pink cutlet with white fat rim)
+        atlas.paint_tile(164, |x, y| {
+            let in_meat = (x >= 4 && x <= 12 && y >= 5 && y <= 11)
+                && !(x == 4 && y == 5);
+            let is_fat_rim = in_meat && (x == 12 || y == 5);
+            if is_fat_rim {
+                Rgba([250, 230, 230, 255])
+            } else if in_meat {
+                let n = simple_noise(x, y, 164);
+                let r = (235.0 + n * 15.0) as u8;
+                let g = (145.0 + n * 15.0) as u8;
+                let b = (155.0 + n * 15.0) as u8;
+                Rgba([r, g, b, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 165: Cooked Porkchop (Warm golden-brown porkchop)
+        atlas.paint_tile(165, |x, y| {
+            let in_meat = (x >= 4 && x <= 12 && y >= 5 && y <= 11)
+                && !(x == 4 && y == 5);
+            if in_meat {
+                let n = simple_noise(x, y, 165);
+                let r = (195.0 + n * 20.0) as u8;
+                let g = (130.0 + n * 15.0) as u8;
+                let b = (70.0 + n * 10.0) as u8;
+                Rgba([r, g, b, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 166: Raw Chicken (Pale poultry drumstick)
+        atlas.paint_tile(166, |x, y| {
+            let is_bone = (x == 4 && y == 12) || (x == 5 && y == 11) || (x == 3 && y == 13);
+            let is_drum = (x >= 6 && x <= 12 && y >= 4 && y <= 10)
+                || (x >= 8 && x <= 11 && y >= 3 && y <= 5);
+            if is_bone {
+                Rgba([240, 235, 230, 255])
+            } else if is_drum {
+                Rgba([230, 185, 175, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 167: Cooked Chicken (Crisp roasted drumstick)
+        atlas.paint_tile(167, |x, y| {
+            let is_bone = (x == 4 && y == 12) || (x == 5 && y == 11) || (x == 3 && y == 13);
+            let is_drum = (x >= 6 && x <= 12 && y >= 4 && y <= 10)
+                || (x >= 8 && x <= 11 && y >= 3 && y <= 5);
+            if is_bone {
+                Rgba([240, 235, 230, 255])
+            } else if is_drum {
+                let n = simple_noise(x, y, 167);
+                let r = (180.0 + n * 20.0) as u8;
+                let g = (95.0 + n * 15.0) as u8;
+                Rgba([r, g, 35, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 168: Leather (Hide shape)
+        atlas.paint_tile(168, |x, y| {
+            let in_hide = (x >= 4 && x <= 11 && y >= 4 && y <= 11)
+                || (x >= 2 && x <= 13 && (y == 4 || y == 11));
+            if in_hide {
+                let n = simple_noise(x, y, 168);
+                let r = (145.0 + n * 18.0) as u8;
+                let g = (85.0 + n * 12.0) as u8;
+                let b = (45.0 + n * 8.0) as u8;
+                Rgba([r, g, b, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 169: Feather (White plumage with quill stem)
+        atlas.paint_tile(169, |x, y| {
+            let is_stem = x + y == 15 && x >= 3 && x <= 12;
+            let is_vane = (x + y >= 13 && x + y <= 17) && x >= 5 && x <= 13 && y <= 10;
+            if is_stem {
+                Rgba([200, 195, 185, 255])
+            } else if is_vane {
+                let n = simple_noise(x, y, 169);
+                let val = (235.0 + n * 20.0) as u8;
+                Rgba([val, val, val, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+
+        // 170: Cow Skin (Black and white spotted hide)
+        atlas.paint_tile(170, |x, y| {
+            let is_black_spot = (x >= 3 && x <= 8 && y >= 2 && y <= 6)
+                || (x >= 9 && x <= 14 && y >= 8 && y <= 13)
+                || (x <= 4 && y >= 10);
+            if is_black_spot {
+                let n = simple_noise(x, y, 170);
+                let val = (35.0 + n * 15.0) as u8;
+                Rgba([val, val, val, 255])
+            } else {
+                let n = simple_noise(x, y, 171);
+                let val = (230.0 + n * 20.0) as u8;
+                Rgba([val, val, val, 255])
+            }
+        });
+
+        // 171: Pig Skin (Soft warm pink)
+        atlas.paint_tile(171, |x, y| {
+            let n = simple_noise(x, y, 171);
+            let r = (240.0 + n * 15.0) as u8;
+            let g = (165.0 + n * 15.0) as u8;
+            let b = (175.0 + n * 15.0) as u8;
+            Rgba([r, g, b, 255])
+        });
+
+        // 172: Chicken Skin (White plumage with red wattle / yellow beak accents)
+        atlas.paint_tile(172, |x, y| {
+            let is_wattle = (x == 7 || x == 8) && y >= 11 && y <= 13;
+            let is_beak = (x >= 6 && x <= 9) && y >= 8 && y <= 10;
+            if is_wattle {
+                Rgba([220, 40, 40, 255])
+            } else if is_beak {
+                Rgba([245, 185, 30, 255])
+            } else {
+                let n = simple_noise(x, y, 172);
+                let val = (235.0 + n * 18.0) as u8;
+                Rgba([val, val, val, 255])
+            }
+        });
+
         atlas
     }
 

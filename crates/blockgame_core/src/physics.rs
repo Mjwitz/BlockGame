@@ -58,6 +58,38 @@ impl AABB {
             && point.z >= self.min.z
             && point.z <= self.max.z
     }
+
+    /// Fast slab ray-AABB intersection test returning distance `t` along `ray_dir` if hit.
+    pub fn intersect_ray(&self, ray_origin: Vec3, ray_dir: Vec3, max_dist: f32) -> Option<f32> {
+        let mut tmin = 0.0_f32;
+        let mut tmax = max_dist;
+
+        for i in 0..3 {
+            let origin = ray_origin[i];
+            let dir = ray_dir[i];
+            let min = self.min[i];
+            let max = self.max[i];
+
+            if dir.abs() < 1e-6 {
+                if origin < min || origin > max {
+                    return None;
+                }
+            } else {
+                let ood = 1.0 / dir;
+                let mut t1 = (min - origin) * ood;
+                let mut t2 = (max - origin) * ood;
+                if t1 > t2 {
+                    std::mem::swap(&mut t1, &mut t2);
+                }
+                tmin = tmin.max(t1);
+                tmax = tmax.min(t2);
+                if tmin > tmax {
+                    return None;
+                }
+            }
+        }
+        Some(tmin)
+    }
 }
 
 pub struct PlayerPhysics {

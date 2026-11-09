@@ -1,6 +1,7 @@
 pub mod vertex;
 
 use blockgame_core::{
+    animal::{AnimalEntity, AnimalKind},
     block::{BlockId, BlockRegistry},
     chunk::{Chunk, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z},
     direction::Direction,
@@ -101,6 +102,15 @@ impl<'a> ChunkMesher<'a> {
 
                     if block_id == BlockId::TORCH {
                         self.build_torch(&mut mesh, chunk.pos, ix, iy, iz);
+                        continue;
+                    }
+
+                    if block_id == BlockId::WHEAT_0
+                        || block_id == BlockId::WHEAT_1
+                        || block_id == BlockId::WHEAT_2
+                        || block_id == BlockId::WHEAT_3
+                    {
+                        self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
                         continue;
                     }
 
@@ -348,6 +358,86 @@ impl<'a> ChunkMesher<'a> {
             [[u_top_left, v_top_min], [u_top_right, v_top_min], [u_top_right, v_top_max], [u_top_left, v_top_max]],
             [0.0, -1.0, 0.0],
         );
+    }
+
+    /// Generates crossed diagonal plant quads for wheat crops.
+    fn build_crop(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        block_id: BlockId,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let tile_id = self.registry.get_texture(block_id, Direction::PosY);
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+        let ao = 1.0;
+
+        let mut add_quad = |positions: [[f32; 3]; 4], uvs: [[f32; 2]; 4], normal: [f32; 3]| {
+            let start_idx = mesh.vertices.len() as u32;
+            for i in 0..4 {
+                mesh.vertices.push(VoxelVertex {
+                    position: positions[i],
+                    uv: uvs[i],
+                    normal,
+                    ao,
+                    light,
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                start_idx + 0,
+                start_idx + 1,
+                start_idx + 2,
+                start_idx + 2,
+                start_idx + 3,
+                start_idx + 0,
+            ]);
+        };
+
+        // Crossed diagonal 1 (from (fx, fz) to (fx+1, fz+1))
+        let diag1_front = [
+            [fx, fy, fz],
+            [fx + 1.0, fy, fz + 1.0],
+            [fx + 1.0, fy + 1.0, fz + 1.0],
+            [fx, fy + 1.0, fz],
+        ];
+        let diag1_back = [
+            [fx + 1.0, fy, fz + 1.0],
+            [fx, fy, fz],
+            [fx, fy + 1.0, fz],
+            [fx + 1.0, fy + 1.0, fz + 1.0],
+        ];
+        let uv_front = [[u_min, v_max], [u_max, v_max], [u_max, v_min], [u_min, v_min]];
+        let uv_back = [[u_max, v_max], [u_min, v_max], [u_min, v_min], [u_max, v_min]];
+
+        add_quad(diag1_front, uv_front, [0.707, 0.0, -0.707]);
+        add_quad(diag1_back, uv_back, [-0.707, 0.0, 0.707]);
+
+        // Crossed diagonal 2 (from (fx+1, fz) to (fx, fz+1))
+        let diag2_front = [
+            [fx + 1.0, fy, fz],
+            [fx, fy, fz + 1.0],
+            [fx + 1.0, fy + 1.0, fz + 1.0],
+            [fx, fy + 1.0, fz],
+        ];
+        let diag2_back = [
+            [fx, fy, fz + 1.0],
+            [fx + 1.0, fy, fz],
+            [fx + 1.0, fy + 1.0, fz],
+            [fx, fy + 1.0, fz + 1.0],
+        ];
+        add_quad(diag2_front, uv_front, [0.707, 0.0, 0.707]);
+        add_quad(diag2_back, uv_back, [-0.707, 0.0, -0.707]);
     }
 
     fn calculate_face_ao<F>(
@@ -749,6 +839,281 @@ pub fn build_item_drops_mesh(
     mesh
 }
 
+#[inline]
+fn add_animal_face(
+    mesh: &mut ChunkMesh,
+    p: [[f32; 3]; 4],
+    n: [f32; 3],
+    uvs: &[[f32; 2]; 4],
+    ao: f32,
+    light: [f32; 2],
+) {
+    let start_idx = mesh.vertices.len() as u32;
+    for i in 0..4 {
+        mesh.vertices.push(VoxelVertex {
+            position: p[i],
+            uv: uvs[i],
+            normal: n,
+            ao,
+            light,
+        });
+    }
+    mesh.indices.extend_from_slice(&[
+        start_idx + 0,
+        start_idx + 1,
+        start_idx + 2,
+        start_idx + 2,
+        start_idx + 3,
+        start_idx + 0,
+    ]);
+}
+
+fn add_animal_box(
+    mesh: &mut ChunkMesh,
+    min: [f32; 3],
+    max: [f32; 3],
+    uvs: &[[f32; 2]; 4],
+    ao: f32,
+    light: [f32; 2],
+    pos: glam::Vec3,
+    cos_y: f32,
+    sin_y: f32,
+) {
+    let [x0, y0, z0] = min;
+    let [x1, y1, z1] = max;
+
+    let to_world = |lx: f32, ly: f32, lz: f32| -> [f32; 3] {
+        [
+            pos.x + lx * cos_y + lz * sin_y,
+            pos.y + ly,
+            pos.z - lx * sin_y + lz * cos_y,
+        ]
+    };
+
+    let to_world_normal = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
+        [
+            nx * cos_y + nz * sin_y,
+            ny,
+            -nx * sin_y + nz * cos_y,
+        ]
+    };
+
+    // PosZ
+    add_animal_face(
+        mesh,
+        [to_world(x0, y0, z1), to_world(x1, y0, z1), to_world(x1, y1, z1), to_world(x0, y1, z1)],
+        to_world_normal(0.0, 0.0, 1.0),
+        uvs, ao, light,
+    );
+    // NegZ
+    add_animal_face(
+        mesh,
+        [to_world(x1, y0, z0), to_world(x0, y0, z0), to_world(x0, y1, z0), to_world(x1, y1, z0)],
+        to_world_normal(0.0, 0.0, -1.0),
+        uvs, ao, light,
+    );
+    // PosX
+    add_animal_face(
+        mesh,
+        [to_world(x1, y0, z1), to_world(x1, y0, z0), to_world(x1, y1, z0), to_world(x1, y1, z1)],
+        to_world_normal(1.0, 0.0, 0.0),
+        uvs, ao, light,
+    );
+    // NegX
+    add_animal_face(
+        mesh,
+        [to_world(x0, y0, z0), to_world(x0, y0, z1), to_world(x0, y1, z1), to_world(x0, y1, z0)],
+        to_world_normal(-1.0, 0.0, 0.0),
+        uvs, ao, light,
+    );
+    // PosY
+    add_animal_face(
+        mesh,
+        [to_world(x0, y1, z1), to_world(x1, y1, z1), to_world(x1, y1, z0), to_world(x0, y1, z0)],
+        to_world_normal(0.0, 1.0, 0.0),
+        uvs, ao, light,
+    );
+    // NegY
+    add_animal_face(
+        mesh,
+        [to_world(x0, y0, z0), to_world(x1, y0, z0), to_world(x1, y0, z1), to_world(x0, y0, z1)],
+        to_world_normal(0.0, -1.0, 0.0),
+        uvs, ao, light,
+    );
+}
+
+fn add_animal_leg_box(
+    mesh: &mut ChunkMesh,
+    min: [f32; 3],
+    max: [f32; 3],
+    hip_y: f32,
+    hip_z: f32,
+    angle: f32,
+    uvs: &[[f32; 2]; 4],
+    ao: f32,
+    light: [f32; 2],
+    pos: glam::Vec3,
+    cos_y: f32,
+    sin_y: f32,
+) {
+    let [x0, y0, z0] = min;
+    let [x1, y1, z1] = max;
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+
+    let leg_point = |lx: f32, ly: f32, lz: f32| -> [f32; 3] {
+        let rel_y = ly - hip_y;
+        let rel_z = lz - hip_z;
+        let rot_z = rel_z * cos_a - rel_y * sin_a;
+        let rot_y = rel_z * sin_a + rel_y * cos_a;
+        [
+            pos.x + lx * cos_y + (hip_z + rot_z) * sin_y,
+            pos.y + (hip_y + rot_y),
+            pos.z - lx * sin_y + (hip_z + rot_z) * cos_y,
+        ]
+    };
+
+    let leg_normal = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
+        let rot_z = nz * cos_a - ny * sin_a;
+        let rot_y = nz * sin_a + ny * cos_a;
+        [
+            nx * cos_y + rot_z * sin_y,
+            rot_y,
+            -nx * sin_y + rot_z * cos_y,
+        ]
+    };
+
+    // PosZ
+    add_animal_face(
+        mesh,
+        [leg_point(x0, y0, z1), leg_point(x1, y0, z1), leg_point(x1, y1, z1), leg_point(x0, y1, z1)],
+        leg_normal(0.0, 0.0, 1.0),
+        uvs, ao, light,
+    );
+    // NegZ
+    add_animal_face(
+        mesh,
+        [leg_point(x1, y0, z0), leg_point(x0, y0, z0), leg_point(x0, y1, z0), leg_point(x1, y1, z0)],
+        leg_normal(0.0, 0.0, -1.0),
+        uvs, ao, light,
+    );
+    // PosX
+    add_animal_face(
+        mesh,
+        [leg_point(x1, y0, z1), leg_point(x1, y0, z0), leg_point(x1, y1, z0), leg_point(x1, y1, z1)],
+        leg_normal(1.0, 0.0, 0.0),
+        uvs, ao, light,
+    );
+    // NegX
+    add_animal_face(
+        mesh,
+        [leg_point(x0, y0, z0), leg_point(x0, y0, z1), leg_point(x0, y1, z1), leg_point(x0, y1, z0)],
+        leg_normal(-1.0, 0.0, 0.0),
+        uvs, ao, light,
+    );
+    // PosY
+    add_animal_face(
+        mesh,
+        [leg_point(x0, y1, z1), leg_point(x1, y1, z1), leg_point(x1, y1, z0), leg_point(x0, y1, z0)],
+        leg_normal(0.0, 1.0, 0.0),
+        uvs, ao, light,
+    );
+    // NegY
+    add_animal_face(
+        mesh,
+        [leg_point(x0, y0, z0), leg_point(x1, y0, z0), leg_point(x1, y0, z1), leg_point(x0, y0, z1)],
+        leg_normal(0.0, -1.0, 0.0),
+        uvs, ao, light,
+    );
+}
+
+/// Builds 3D composite blocky models for active animals with walking leg animations.
+pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+
+    for animal in animals {
+        if animal.dead {
+            continue;
+        }
+
+        let tile_id = match animal.kind {
+            AnimalKind::Cow => 170,
+            AnimalKind::Pig => 171,
+            AnimalKind::Chicken => 172,
+        };
+
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+        let uvs = [
+            [u_min, v_max],
+            [u_max, v_max],
+            [u_max, v_min],
+            [u_min, v_min],
+        ];
+
+        // Red/white damage flash when hurt
+        let (light, ao) = if animal.hurt_timer > 0.0 {
+            ([1.0, 1.0], 0.25)
+        } else {
+            ([1.0, 0.0], 1.0)
+        };
+
+        let cos_y = animal.yaw.cos();
+        let sin_y = animal.yaw.sin();
+        let pos = animal.position;
+        let leg_swing = (animal.walk_anim_timer).sin() * 0.45;
+
+        match animal.kind {
+            AnimalKind::Cow => {
+                // Body
+                add_animal_box(&mut mesh, [-0.35, 0.45, -0.55], [0.35, 1.1, 0.55], &uvs, ao, light, pos, cos_y, sin_y);
+                // Head
+                add_animal_box(&mut mesh, [-0.22, 0.85, 0.55], [0.22, 1.3, 1.0], &uvs, ao, light, pos, cos_y, sin_y);
+                // Snout
+                add_animal_box(&mut mesh, [-0.15, 0.85, 1.0], [0.15, 1.08, 1.16], &uvs, ao, light, pos, cos_y, sin_y);
+                // Horns
+                add_animal_box(&mut mesh, [-0.25, 1.3, 0.7], [-0.18, 1.45, 0.76], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(&mut mesh, [0.18, 1.3, 0.7], [0.25, 1.45, 0.76], &uvs, ao, light, pos, cos_y, sin_y);
+                // 4 Legs
+                add_animal_leg_box(&mut mesh, [-0.32, 0.0, 0.3], [-0.14, 0.45, 0.48], 0.45, 0.39, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [0.14, 0.0, 0.3], [0.32, 0.45, 0.48], 0.45, 0.39, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [-0.32, 0.0, -0.48], [-0.14, 0.45, -0.3], 0.45, -0.39, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [0.14, 0.0, -0.48], [0.32, 0.45, -0.3], 0.45, -0.39, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+            }
+            AnimalKind::Pig => {
+                // Body
+                add_animal_box(&mut mesh, [-0.3, 0.32, -0.45], [0.3, 0.82, 0.45], &uvs, ao, light, pos, cos_y, sin_y);
+                // Head
+                add_animal_box(&mut mesh, [-0.2, 0.5, 0.45], [0.2, 0.9, 0.85], &uvs, ao, light, pos, cos_y, sin_y);
+                // Snout
+                add_animal_box(&mut mesh, [-0.12, 0.52, 0.85], [0.12, 0.72, 0.98], &uvs, ao, light, pos, cos_y, sin_y);
+                // 4 Legs
+                add_animal_leg_box(&mut mesh, [-0.28, 0.0, 0.22], [-0.12, 0.32, 0.38], 0.32, 0.3, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [0.12, 0.0, 0.22], [0.28, 0.32, 0.38], 0.32, 0.3, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [-0.28, 0.0, -0.38], [-0.12, 0.32, -0.22], 0.32, -0.3, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [0.12, 0.0, -0.38], [0.28, 0.32, -0.22], 0.32, -0.3, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+            }
+            AnimalKind::Chicken => {
+                // Body
+                add_animal_box(&mut mesh, [-0.18, 0.25, -0.22], [0.18, 0.55, 0.22], &uvs, ao, light, pos, cos_y, sin_y);
+                // Head
+                add_animal_box(&mut mesh, [-0.1, 0.45, 0.15], [0.1, 0.75, 0.35], &uvs, ao, light, pos, cos_y, sin_y);
+                // Beak
+                add_animal_box(&mut mesh, [-0.06, 0.52, 0.35], [0.06, 0.62, 0.48], &uvs, ao, light, pos, cos_y, sin_y);
+                // Wattle
+                add_animal_box(&mut mesh, [-0.03, 0.44, 0.26], [0.03, 0.52, 0.34], &uvs, ao, light, pos, cos_y, sin_y);
+                // Wings
+                add_animal_box(&mut mesh, [-0.22, 0.3, -0.18], [-0.18, 0.52, 0.18], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(&mut mesh, [0.18, 0.3, -0.18], [0.22, 0.52, 0.18], &uvs, ao, light, pos, cos_y, sin_y);
+                // 2 Legs
+                add_animal_leg_box(&mut mesh, [-0.12, 0.0, -0.05], [-0.04, 0.25, 0.05], 0.25, 0.0, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(&mut mesh, [0.04, 0.0, -0.05], [0.12, 0.25, 0.05], 0.25, 0.0, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+            }
+        }
+    }
+
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,4 +1231,34 @@ mod tests {
         assert_eq!(coal_mesh.vertices.len(), 8);
         assert_eq!(coal_mesh.indices.len(), 12);
     }
+
+    #[test]
+    fn test_crop_meshing() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        chunk.set(4, 4, 4, BlockId::WHEAT_3);
+        let mesh = mesher.mesh_chunk(&chunk);
+
+        // 2 double-sided quads = 4 faces (16 vertices, 24 indices)
+        assert_eq!(mesh.face_count(), 4);
+        assert_eq!(mesh.vertices.len(), 16);
+        assert_eq!(mesh.indices.len(), 24);
+    }
+
+    #[test]
+    fn test_build_animals_mesh() {
+        let animals = vec![
+            AnimalEntity::new(1, AnimalKind::Cow, glam::Vec3::new(5.0, 64.0, 5.0)),
+            AnimalEntity::new(2, AnimalKind::Pig, glam::Vec3::new(10.0, 64.0, 10.0)),
+            AnimalEntity::new(3, AnimalKind::Chicken, glam::Vec3::new(15.0, 64.0, 15.0)),
+        ];
+
+        let mesh = build_animals_mesh(&animals);
+        assert!(!mesh.is_empty());
+        assert!(mesh.vertices.len() > 100);
+        assert!(mesh.indices.len() > 100);
+    }
 }
+

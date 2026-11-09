@@ -25,6 +25,11 @@ impl BlockId {
     pub const IRON_ORE: Self = Self(17);
     pub const GOLD_ORE: Self = Self(18);
     pub const DIAMOND_ORE: Self = Self(19);
+    pub const FARMLAND: Self = Self(20);
+    pub const WHEAT_0: Self = Self(21);
+    pub const WHEAT_1: Self = Self(22);
+    pub const WHEAT_2: Self = Self(23);
+    pub const WHEAT_3: Self = Self(24);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -350,6 +355,48 @@ impl BlockRegistry {
             drop_item: Some(ItemId::DIAMOND),
             drop_count: (1, 1),
         });
+
+        registry.register(BlockDefinition {
+            id: BlockId::FARMLAND,
+            name: "Farmland",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: Farmland Top (150), NegY: Dirt (2), Sides: Dirt (2)
+            textures: [150, 2, 2, 2, 2, 2],
+            hardness: 0.6,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DIRT),
+            drop_count: (1, 1),
+        });
+
+        let wheat_stages = [
+            (BlockId::WHEAT_0, "Wheat Crop Stage 0", 151),
+            (BlockId::WHEAT_1, "Wheat Crop Stage 1", 152),
+            (BlockId::WHEAT_2, "Wheat Crop Stage 2", 153),
+            (BlockId::WHEAT_3, "Wheat Crop Stage 3", 154),
+        ];
+
+        for (id, name, tex) in wheat_stages {
+            registry.register(BlockDefinition {
+                id,
+                name,
+                is_solid: false,
+                is_transparent: true,
+                luminance: 0,
+                textures: [tex; 6],
+                hardness: 0.0,
+                required_tool: None,
+                min_tier: ToolTier::None,
+                drop_item: if id == BlockId::WHEAT_3 {
+                    Some(ItemId::WHEAT)
+                } else {
+                    Some(ItemId::WHEAT_SEEDS)
+                },
+                drop_count: (1, 1),
+            });
+        }
 
         registry
     }

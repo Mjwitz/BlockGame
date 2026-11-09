@@ -5,6 +5,7 @@ use std::sync::{
 };
 
 use blockgame_core::{
+    animal::{AnimalEntity, AnimalKind},
     block::{BlockId, BlockRegistry},
     chunk::{Chunk, ChunkPos},
     entity::{ItemDrop, ItemDropStatus},
@@ -30,6 +31,9 @@ pub struct WorldManager {
     mesh_tx: Sender<(ChunkPos, ChunkMesh)>,
     last_player_chunk: ChunkPos,
     pub item_drops: Vec<ItemDrop>,
+    pub animals: Vec<AnimalEntity>,
+    pub next_animal_id: u32,
+    pub planted_crops: Vec<(IVec3, f32)>,
 }
 
 impl WorldManager {
@@ -53,6 +57,9 @@ impl WorldManager {
             mesh_tx,
             last_player_chunk: ChunkPos::new(i32::MAX, i32::MAX, i32::MAX),
             item_drops: Vec::new(),
+            animals: Vec::new(),
+            next_animal_id: 1,
+            planted_crops: Vec::new(),
         }
     }
 
@@ -126,6 +133,36 @@ impl WorldManager {
             self.gpu_chunks.len(),
             face_count
         );
+
+        // Spawn initial passive animals on the surface near spawn
+        {
+            let world_guard = self.world.lock().unwrap();
+            let mut spawn_animal_at = |kind: AnimalKind, x: i32, z: i32| {
+                let mut y = 50;
+                while y > 1 {
+                    let b = world_guard.get_block(IVec3::new(x, y, z));
+                    if b == BlockId::GRASS || b == BlockId::DIRT {
+                        break;
+                    }
+                    y -= 1;
+                }
+                if y > 1 {
+                    self.animals.push(AnimalEntity::new(
+                        self.next_animal_id,
+                        kind,
+                        Vec3::new(x as f32 + 0.5, (y + 1) as f32, z as f32 + 0.5),
+                    ));
+                    self.next_animal_id += 1;
+                }
+            };
+
+            spawn_animal_at(AnimalKind::Cow, 6, 6);
+            spawn_animal_at(AnimalKind::Cow, 8, 4);
+            spawn_animal_at(AnimalKind::Pig, -6, 5);
+            spawn_animal_at(AnimalKind::Pig, -8, 7);
+            spawn_animal_at(AnimalKind::Chicken, 4, -6);
+            spawn_animal_at(AnimalKind::Chicken, 6, -8);
+        }
     }
 
     /// Periodic update called every frame: streams chunks and uploads completed background meshes.
@@ -466,6 +503,184 @@ impl WorldManager {
         }
 
         true
+    }
+
+    /// Updates all active animals, applies physics and AI, and generates drops for any that died.
+    pub fn update_animals(&mut self, dt: f32) -> Vec<(Vec3, Vec<ItemSlot>)> {
+        let mut drops = Vec::new();
+        let world_guard = self.world.lock().unwrap();
+
+        for animal in self.animals.iter_mut() {
+            animal.update(dt, &world_guard, &self.registry);
+        }
+
+        self.animals.retain(|animal| {
+            if animal.dead {
+                let animal_drops = animal.generate_drops();
+                drops.push((animal.position, animal_drops));
+                false
+            } else {
+                true
+            }
+        });
+
+        drops
+    }
+
+    /// Performs raycast attack against closest animal within reach.
+    pub fn attack_animal(&mut self, ray_origin: Vec3, ray_dir: Vec3, reach: f32, damage: f32) -> bool {
+        let mut closest_dist = reach;
+        let mut hit_idx = None;
+
+        for (idx, animal) in self.animals.iter().enumerate() {
+            if animal.dead {
+                continue;
+            }
+            let bbox = animal.aabb();
+            if let Some(dist) = bbox.intersect_ray(ray_origin, ray_dir, reach) {
+                if dist < closest_dist {
+                    closest_dist = dist;
+                    hit_idx = Some(idx);
+                }
+            }
+        }
+
+        if let Some(idx) = hit_idx {
+            let knockback = ray_dir.normalize_or_zero();
+            self.animals[idx].take_damage(damage, knockback);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Tills Grass or Dirt into Farmland using a Hoe.
+    pub fn till_block(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
+        let mut chunks_to_rebuild = vec![chunk_pos];
+
+        if lx == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x - 1, chunk_pos.0.y, chunk_pos.0.z));
+        } else if lx == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x + 1, chunk_pos.0.y, chunk_pos.0.z));
+        }
+        if ly == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y - 1, chunk_pos.0.z));
+        } else if ly == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y + 1, chunk_pos.0.z));
+        }
+        if lz == 0 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z - 1));
+        } else if lz == 15 {
+            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
+        }
+
+        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            let above = world.get_block(pos + IVec3::Y);
+            if (current != BlockId::GRASS && current != BlockId::DIRT) || !above.is_air() {
+                return false;
+            }
+
+            world.set_block(pos, BlockId::FARMLAND);
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            let mesher = ChunkMesher::new(&self.registry);
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
+                self.gpu_chunks.insert(cpos, gpu_mesh);
+            } else {
+                self.gpu_chunks.remove(&cpos);
+            }
+        }
+
+        true
+    }
+
+    /// Registers a planted crop for growth updates.
+    pub fn plant_crop(&mut self, pos: IVec3) {
+        self.planted_crops.push((pos, 0.0));
+    }
+
+    /// Periodically grows planted crops to their next stage.
+    pub fn update_crops(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut changed_chunks = HashSet::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            for (pos, timer) in self.planted_crops.iter_mut() {
+                *timer += dt;
+                // Grow to next stage every 8 seconds
+                if *timer >= 8.0 {
+                    *timer = 0.0;
+                    let current = world.get_block(*pos);
+                    let next = match current {
+                        BlockId::WHEAT_0 => Some(BlockId::WHEAT_1),
+                        BlockId::WHEAT_1 => Some(BlockId::WHEAT_2),
+                        BlockId::WHEAT_2 => Some(BlockId::WHEAT_3),
+                        _ => None,
+                    };
+                    if let Some(next_block) = next {
+                        world.set_block(*pos, next_block);
+                        let (cp, _, _, _) = world_to_chunk_coords(*pos);
+                        changed_chunks.insert(cp);
+                    }
+                }
+            }
+        }
+
+        // Retain only growing crops
+        {
+            let world = self.world.lock().unwrap();
+            self.planted_crops.retain(|(pos, _)| {
+                let b = world.get_block(*pos);
+                b == BlockId::WHEAT_0 || b == BlockId::WHEAT_1 || b == BlockId::WHEAT_2
+            });
+        }
+
+        if !changed_chunks.is_empty() {
+            let world = self.world.lock().unwrap();
+            let mesher = ChunkMesher::new(&self.registry);
+            for cpos in changed_chunks {
+                if let Some(chunk) = world.get_chunk(cpos) {
+                    let origin = cpos.to_world_origin();
+                    let sources = world.get_light_sources_near(origin, 15);
+                    let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                        world.get_block(origin + IVec3::new(x, y, z))
+                    });
+                    if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
+                        self.gpu_chunks.insert(cpos, gpu_mesh);
+                    }
+                }
+            }
+        }
     }
 
     #[allow(dead_code)]

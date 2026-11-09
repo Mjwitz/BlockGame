@@ -406,6 +406,67 @@ impl CraftingManager {
             inputs: vec![ItemId::RAW_GOLD],
             output: ItemSlot::new(ItemId::GOLD_INGOT, 1),
         });
+
+        // Hoes (2x3 trimmed pattern, both left and right orientations)
+        let register_hoe = |cm: &mut CraftingManager, name_left: &'static str, name_right: &'static str, mat: ItemId, out: ItemId| {
+            // Left orientation
+            cm.register(Recipe::Shaped {
+                name: name_left,
+                width: 2,
+                height: 3,
+                pattern: vec![
+                    Some(mat),  Some(mat),
+                    None,       Some(ItemId::STICK),
+                    None,       Some(ItemId::STICK),
+                ],
+                output: ItemSlot::new(out, 1),
+            });
+            // Right orientation
+            cm.register(Recipe::Shaped {
+                name: name_right,
+                width: 2,
+                height: 3,
+                pattern: vec![
+                    Some(mat),           Some(mat),
+                    Some(ItemId::STICK), None,
+                    Some(ItemId::STICK), None,
+                ],
+                output: ItemSlot::new(out, 1),
+            });
+        };
+
+        register_hoe(self, "Wooden Hoe (Left)", "Wooden Hoe (Right)", ItemId::PLANKS, ItemId::WOODEN_HOE);
+        register_hoe(self, "Stone Hoe (Left)", "Stone Hoe (Right)", ItemId::COBBLESTONE, ItemId::STONE_HOE);
+        register_hoe(self, "Iron Hoe (Left)", "Iron Hoe (Right)", ItemId::IRON_INGOT, ItemId::IRON_HOE);
+        register_hoe(self, "Diamond Hoe (Left)", "Diamond Hoe (Right)", ItemId::DIAMOND, ItemId::DIAMOND_HOE);
+
+        // Bread: 3 Wheat in a horizontal row (3x1)
+        self.register(Recipe::Shaped {
+            name: "Bread",
+            width: 3,
+            height: 1,
+            pattern: vec![Some(ItemId::WHEAT), Some(ItemId::WHEAT), Some(ItemId::WHEAT)],
+            output: ItemSlot::new(ItemId::BREAD, 1),
+        });
+
+        // Cooking Meats (1 Raw Meat -> 1 Cooked Meat)
+        self.register(Recipe::Shapeless {
+            name: "Cooked Steak from Raw Beef",
+            inputs: vec![ItemId::RAW_BEEF],
+            output: ItemSlot::new(ItemId::COOKED_STEAK, 1),
+        });
+
+        self.register(Recipe::Shapeless {
+            name: "Cooked Porkchop from Raw Porkchop",
+            inputs: vec![ItemId::RAW_PORKCHOP],
+            output: ItemSlot::new(ItemId::COOKED_PORKCHOP, 1),
+        });
+
+        self.register(Recipe::Shapeless {
+            name: "Cooked Chicken from Raw Chicken",
+            inputs: vec![ItemId::RAW_CHICKEN],
+            output: ItemSlot::new(ItemId::COOKED_CHICKEN, 1),
+        });
     }
 }
 
@@ -510,6 +571,44 @@ mod tests {
         let crafted = cm.craft(&mut grid).unwrap();
         assert_eq!(crafted.item_id, ItemId::IRON_INGOT);
         assert_eq!(grid.get(1, 1).count, 2);
+    }
+
+    #[test]
+    fn test_bread_crafting() {
+        let cm = CraftingManager::new();
+        let mut grid = CraftingGrid::new_3x3();
+
+        // 3 Wheat horizontally
+        grid.set(0, 1, ItemSlot::new(ItemId::WHEAT, 2));
+        grid.set(1, 1, ItemSlot::new(ItemId::WHEAT, 2));
+        grid.set(2, 1, ItemSlot::new(ItemId::WHEAT, 2));
+
+        let res = cm.find_match(&grid);
+        assert!(res.is_some());
+        let (_, out) = res.unwrap();
+        assert_eq!(out.item_id, ItemId::BREAD);
+        assert_eq!(out.count, 1);
+    }
+
+    #[test]
+    fn test_diamond_hoe_crafting() {
+        let cm = CraftingManager::new();
+        let mut grid = CraftingGrid::new_3x3();
+
+        // Left diamond hoe:
+        // [Diamond, Diamond]
+        // [None, Stick]
+        // [None, Stick]
+        grid.set(0, 0, ItemSlot::new(ItemId::DIAMOND, 1));
+        grid.set(1, 0, ItemSlot::new(ItemId::DIAMOND, 1));
+        grid.set(1, 1, ItemSlot::new(ItemId::STICK, 1));
+        grid.set(1, 2, ItemSlot::new(ItemId::STICK, 1));
+
+        let res = cm.find_match(&grid);
+        assert!(res.is_some());
+        let (_, out) = res.unwrap();
+        assert_eq!(out.item_id, ItemId::DIAMOND_HOE);
+        assert_eq!(out.count, 1);
     }
 }
 

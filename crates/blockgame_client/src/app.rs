@@ -63,6 +63,7 @@ pub struct AppState {
     pub ui_index_buffer: Option<wgpu::Buffer>,
     pub ui_index_count: u32,
     pub item_drop_gpu_mesh: Option<blockgame_render::GpuMeshBuffers>,
+    pub animal_gpu_mesh: Option<blockgame_render::GpuMeshBuffers>,
     pub total_time: f32,
     pub walk_distance: f32,
     pub punch_timer: f32,
@@ -265,6 +266,7 @@ impl ApplicationHandler for BlockGameApp {
             ui_index_buffer: None,
             ui_index_count: 0,
             item_drop_gpu_mesh: None,
+            animal_gpu_mesh: None,
             total_time: 0.0,
             walk_distance: 0.0,
             punch_timer: 0.0,
@@ -372,6 +374,31 @@ impl ApplicationHandler for BlockGameApp {
                     MouseButton::Left => {
                         if pressed {
                             state.punch_timer = 0.25; // Trigger punch animation
+                            let held_slot = state.inventory.get(state.active_hotbar_slot);
+                            let attack_damage = if let Some(def) = state.item_registry.get(held_slot.item_id) {
+                                match def.tool_tier {
+                                    Some(ToolTier::Wood) => 4.0,
+                                    Some(ToolTier::Stone) => 5.0,
+                                    Some(ToolTier::Iron) => 6.0,
+                                    Some(ToolTier::Diamond) => 7.0,
+                                    _ => 1.0,
+                                }
+                            } else {
+                                1.0
+                            };
+
+                            let hit_animal = state.world_manager.attack_animal(
+                                state.camera.position,
+                                state.camera.forward(),
+                                3.5,
+                                attack_damage,
+                            );
+                            if hit_animal {
+                                state.mouse_left_down = false;
+                                state.breaking_voxel = None;
+                                state.break_progress = 0.0;
+                                state.cracking_buffer = None;
+                            }
                         }
                     }
                     MouseButton::Right if pressed => {
@@ -405,8 +432,51 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
-                        // 2. Check if holding food and hungry or hurt (eat food!)
                         let held_slot = state.inventory.get(state.active_hotbar_slot);
+
+                        // 2. Hoe Tilling (Grass or Dirt with Hoe -> Farmland)
+                        if !held_slot.is_empty() {
+                            if let Some(def) = state.item_registry.get(held_slot.item_id) {
+                                if def.tool_type == Some(blockgame_core::tool::ToolType::Hoe) {
+                                    if let Some(hit) = state.targeted_block {
+                                        if hit.hit_face == blockgame_core::direction::Direction::PosY {
+                                            let tilled = state.world_manager.till_block(hit.hit_voxel, &state.device, &state.pipeline);
+                                            if tilled {
+                                                state.punch_timer = 0.2;
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Wheat Seed Planting (Seeds on Farmland -> Wheat Crop)
+                        if held_slot.item_id == ItemId::WHEAT_SEEDS {
+                            if let Some(hit) = state.targeted_block {
+                                let block_beneath = {
+                                    let world_guard = state.world_manager.world().lock().unwrap();
+                                    world_guard.get_block(hit.hit_voxel)
+                                };
+                                if block_beneath == BlockId::FARMLAND && hit.hit_face == blockgame_core::direction::Direction::PosY {
+                                    let planted = state.world_manager.place_block(
+                                        hit.place_voxel,
+                                        BlockId::WHEAT_0,
+                                        &state.player.aabb(),
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                    if planted {
+                                        state.world_manager.plant_crop(hit.place_voxel);
+                                        state.inventory.slots[state.active_hotbar_slot].take(1);
+                                        state.punch_timer = 0.2;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. Check if holding food and hungry or hurt (eat food!)
                         if !held_slot.is_empty() {
                             if let Some(food) = state.item_registry.get_food(held_slot.item_id) {
                                 if state.player_stats.eat(food.food_points, food.saturation) {
@@ -417,7 +487,7 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
-                        // 3. Otherwise place active block from hotbar slot
+                        // 5. Otherwise place active block from hotbar slot
                         let slot = state.inventory.get(state.active_hotbar_slot);
                         if !slot.is_empty() {
                             if let Some(def) = state.item_registry.get(slot.item_id) {
@@ -672,6 +742,15 @@ impl ApplicationHandler for BlockGameApp {
                     let _ = state.world_manager.update_item_drops(dt, state.player.position);
                 }
 
+                // 3b. Update Animals & Planted Crops
+                let animal_drops = state.world_manager.update_animals(dt);
+                for (pos, drops) in animal_drops {
+                    for drop_slot in drops {
+                        state.world_manager.spawn_item_drop(pos, drop_slot);
+                    }
+                }
+                state.world_manager.update_crops(dt, &state.device, &state.pipeline);
+
                 // 4. Update Camera position and atmosphere uniform
                 state.camera.position = state.player.eye_position();
                 let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
@@ -773,6 +852,25 @@ impl ApplicationHandler for BlockGameApp {
                                                 );
                                             }
                                         }
+                                        // 12% chance to drop Wheat Seeds from Grass
+                                        if broken == BlockId::GRASS {
+                                            let hash = (target_voxel.x.wrapping_mul(87654321) ^ target_voxel.y.wrapping_mul(23456789) ^ target_voxel.z.wrapping_mul(98765432)) % 100;
+                                            if hash.abs() < 12 {
+                                                state.world_manager.spawn_item_drop(
+                                                    target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                                    ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
+                                                );
+                                            }
+                                        }
+                                        // Ripe Wheat Crop drops additional 1..2 seeds
+                                        if broken == BlockId::WHEAT_3 {
+                                            let hash = (target_voxel.x.wrapping_mul(1234567) ^ target_voxel.z.wrapping_mul(7654321)) % 2;
+                                            let seed_count = (hash.abs() + 1) as u16;
+                                            state.world_manager.spawn_item_drop(
+                                                target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                                ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
+                                            );
+                                        }
                                     }
                                     state.breaking_voxel = None;
                                     state.break_progress = 0.0;
@@ -871,6 +969,14 @@ impl ApplicationHandler for BlockGameApp {
                     state.item_drop_gpu_mesh = None;
                 }
 
+                // Upload dynamic 3D Animals mesh
+                if !state.world_manager.animals.is_empty() {
+                    let animals_mesh = blockgame_render::build_animals_mesh(&state.world_manager.animals);
+                    state.animal_gpu_mesh = state.pipeline.upload_mesh(&state.device, &animals_mesh);
+                } else {
+                    state.animal_gpu_mesh = None;
+                }
+
                 // 8. Render frame
                 let output = match state.surface.get_current_texture() {
                     Ok(frame) => frame,
@@ -939,6 +1045,11 @@ impl ApplicationHandler for BlockGameApp {
                     // Render floating 3D item drops
                     if let Some(drop_mesh) = &state.item_drop_gpu_mesh {
                         drop_mesh.draw(&mut render_pass);
+                    }
+
+                    // Render active 3D animals
+                    if let Some(animal_mesh) = &state.animal_gpu_mesh {
+                        animal_mesh.draw(&mut render_pass);
                     }
 
                     // Render targeted block selection wireframe or progressive cracking overlay

@@ -194,6 +194,9 @@ pub async fn render_world_to_image(
     );
     let item_drop_gpu_mesh = pipeline.upload_mesh(&device, &drops_mesh);
 
+    let animals_mesh = blockgame_render::build_animals_mesh(&world_manager.animals);
+    let animal_gpu_mesh = pipeline.upload_mesh(&device, &animals_mesh);
+
     // 3. Perform DDA raycast from crosshair
     let hit = {
         let world_guard = world_manager.world().lock().unwrap();
@@ -255,6 +258,10 @@ pub async fn render_world_to_image(
 
         if let Some(drop_mesh) = &item_drop_gpu_mesh {
             drop_mesh.draw(&mut render_pass);
+        }
+
+        if let Some(anim_mesh) = &animal_gpu_mesh {
+            anim_mesh.draw(&mut render_pass);
         }
 
         if let Some(buf) = &wireframe_buffer {
@@ -875,6 +882,208 @@ pub async fn render_world_to_image(
             image::ExtendedColorType::Rgba8,
         )?;
         log::info!("Successfully saved inventory interaction image to inventory_render.png");
+    }
+
+    // Render Phase 3 Farming and Animals showcase scene
+    {
+        // 1. Plant a patch of wheat crops in various stages (0..3) on farmland
+        let dummy_player_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+        let farm_x = 0;
+        let farm_z = 5;
+        let farm_y = base_y;
+
+        world_manager.place_block(IVec3::new(farm_x, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(farm_x, farm_y + 1, farm_z), BlockId::WHEAT_0, &dummy_player_box, &device, &pipeline);
+
+        world_manager.place_block(IVec3::new(farm_x + 1, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(farm_x + 1, farm_y + 1, farm_z), BlockId::WHEAT_1, &dummy_player_box, &device, &pipeline);
+
+        world_manager.place_block(IVec3::new(farm_x + 2, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(farm_x + 2, farm_y + 1, farm_z), BlockId::WHEAT_2, &dummy_player_box, &device, &pipeline);
+
+        world_manager.place_block(IVec3::new(farm_x + 3, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(farm_x + 3, farm_y + 1, farm_z), BlockId::WHEAT_3, &dummy_player_box, &device, &pipeline);
+
+        // Position 3 animals near the farm
+        world_manager.animals.clear();
+        let mut cow = blockgame_core::animal::AnimalEntity::new(
+            1,
+            blockgame_core::animal::AnimalKind::Cow,
+            Vec3::new(-1.8, (farm_y + 1) as f32, 5.0),
+        );
+        cow.yaw = (40.0_f32).to_radians();
+        world_manager.animals.push(cow);
+
+        let mut pig = blockgame_core::animal::AnimalEntity::new(
+            2,
+            blockgame_core::animal::AnimalKind::Pig,
+            Vec3::new(-0.4, (farm_y + 1) as f32, 5.2),
+        );
+        pig.yaw = (15.0_f32).to_radians();
+        world_manager.animals.push(pig);
+
+        let mut chicken = blockgame_core::animal::AnimalEntity::new(
+            3,
+            blockgame_core::animal::AnimalKind::Chicken,
+            Vec3::new(1.2, (farm_y + 1) as f32, 6.2),
+        );
+        chicken.yaw = (-30.0_f32).to_radians();
+        world_manager.animals.push(chicken);
+
+        let animals_mesh = blockgame_render::build_animals_mesh(&world_manager.animals);
+        let animal_gpu_mesh = pipeline.upload_mesh(&device, &animals_mesh);
+
+        // Position camera with open 3/4 perspective showing animals, wheat crops, and cabin
+        let farm_cam_pos = Vec3::new(-3.0, (farm_y + 2) as f32 + 0.3, 8.8);
+        let farm_cam = Camera::new(
+            farm_cam_pos,
+            (-50.0_f32).to_radians(),
+            (-12.0_f32).to_radians(),
+        );
+        let mut farm_uniform = CameraUniform::default();
+        farm_cam.update_uniform_with_atmosphere(&mut farm_uniform, width as f32 / height as f32, &day_night);
+        pipeline.update_camera(&queue, &farm_uniform);
+
+        let mut farm_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Farming & Animals Encoder"),
+        });
+
+        {
+            let mut render_pass = farm_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Farming & Animals Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: sky[0] as f64,
+                            g: sky[1] as f64,
+                            b: sky[2] as f64,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            if let Some(drop_mesh) = &item_drop_gpu_mesh {
+                drop_mesh.draw(&mut render_pass);
+            }
+
+            if let Some(anim_mesh) = &animal_gpu_mesh {
+                anim_mesh.draw(&mut render_pass);
+            }
+        }
+
+        let mut farm_ui_mesh = UiMesh::new();
+        let screen_w = width as f32;
+        let screen_h = height as f32;
+        // Hotbar slot 0 = Iron Hoe
+        let mut farm_inventory = inventory.clone();
+        farm_inventory.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_HOE, 1);
+        farm_inventory.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WHEAT_SEEDS, 32);
+        farm_inventory.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 5);
+        farm_inventory.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COOKED_STEAK, 8);
+
+        UiBuilder::build_hud(&mut farm_ui_mesh, screen_w, screen_h, &farm_inventory, 0, &item_registry, 0.0, 0.0, &stats);
+
+        if !farm_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Farm UI VB"),
+                contents: bytemuck::cast_slice(&farm_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Farm UI IB"),
+                contents: bytemuck::cast_slice(&farm_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = farm_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Farm UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..farm_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        farm_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(farm_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut farm_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            farm_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "farming_and_animals_render.png",
+            &farm_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved farming & animals showcase image to farming_and_animals_render.png");
     }
 
     Ok(())

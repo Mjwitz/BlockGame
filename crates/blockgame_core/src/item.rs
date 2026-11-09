@@ -46,6 +46,21 @@ impl ItemId {
     pub const IRON_SHOVEL: Self = Self(36);
     pub const DIAMOND_SHOVEL: Self = Self(37);
     pub const APPLE: Self = Self(38);
+    pub const WOODEN_HOE: Self = Self(39);
+    pub const STONE_HOE: Self = Self(40);
+    pub const IRON_HOE: Self = Self(41);
+    pub const DIAMOND_HOE: Self = Self(42);
+    pub const WHEAT_SEEDS: Self = Self(43);
+    pub const WHEAT: Self = Self(44);
+    pub const BREAD: Self = Self(45);
+    pub const RAW_BEEF: Self = Self(46);
+    pub const COOKED_STEAK: Self = Self(47);
+    pub const RAW_PORKCHOP: Self = Self(48);
+    pub const COOKED_PORKCHOP: Self = Self(49);
+    pub const RAW_CHICKEN: Self = Self(50);
+    pub const COOKED_CHICKEN: Self = Self(51);
+    pub const LEATHER: Self = Self(52);
+    pub const FEATHER: Self = Self(53);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -687,6 +702,196 @@ impl ItemRegistry {
             icon_tile: 31,
         });
         self.register_food(ItemId::APPLE, FoodDef::new(4, 2.4));
+
+        // Hoes
+        self.register(ItemDef {
+            id: ItemId::WOODEN_HOE,
+            name: "blockgame:wooden_hoe",
+            display_name: "Wooden Hoe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(59),
+            tool_type: Some(ToolType::Hoe),
+            tool_tier: Some(ToolTier::Wood),
+            icon_tile: 155,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::STONE_HOE,
+            name: "blockgame:stone_hoe",
+            display_name: "Stone Hoe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(131),
+            tool_type: Some(ToolType::Hoe),
+            tool_tier: Some(ToolTier::Stone),
+            icon_tile: 156,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::IRON_HOE,
+            name: "blockgame:iron_hoe",
+            display_name: "Iron Hoe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(250),
+            tool_type: Some(ToolType::Hoe),
+            tool_tier: Some(ToolTier::Iron),
+            icon_tile: 157,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DIAMOND_HOE,
+            name: "blockgame:diamond_hoe",
+            display_name: "Diamond Hoe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(1561),
+            tool_type: Some(ToolType::Hoe),
+            tool_tier: Some(ToolTier::Diamond),
+            icon_tile: 158,
+        });
+
+        // Farming and Food
+        self.register(ItemDef {
+            id: ItemId::WHEAT_SEEDS,
+            name: "blockgame:wheat_seeds",
+            display_name: "Wheat Seeds",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 159,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::WHEAT,
+            name: "blockgame:wheat",
+            display_name: "Wheat",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 160,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BREAD,
+            name: "blockgame:bread",
+            display_name: "Bread",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 161,
+        });
+        self.register_food(ItemId::BREAD, FoodDef::new(5, 6.0));
+
+        // Animal Meats and Drops
+        self.register(ItemDef {
+            id: ItemId::RAW_BEEF,
+            name: "blockgame:raw_beef",
+            display_name: "Raw Beef",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 162,
+        });
+        self.register_food(ItemId::RAW_BEEF, FoodDef::new(3, 1.8));
+
+        self.register(ItemDef {
+            id: ItemId::COOKED_STEAK,
+            name: "blockgame:cooked_steak",
+            display_name: "Steak",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 163,
+        });
+        self.register_food(ItemId::COOKED_STEAK, FoodDef::new(8, 12.8));
+
+        self.register(ItemDef {
+            id: ItemId::RAW_PORKCHOP,
+            name: "blockgame:raw_porkchop",
+            display_name: "Raw Porkchop",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 164,
+        });
+        self.register_food(ItemId::RAW_PORKCHOP, FoodDef::new(3, 1.8));
+
+        self.register(ItemDef {
+            id: ItemId::COOKED_PORKCHOP,
+            name: "blockgame:cooked_porkchop",
+            display_name: "Cooked Porkchop",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 165,
+        });
+        self.register_food(ItemId::COOKED_PORKCHOP, FoodDef::new(8, 12.8));
+
+        self.register(ItemDef {
+            id: ItemId::RAW_CHICKEN,
+            name: "blockgame:raw_chicken",
+            display_name: "Raw Chicken",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 166,
+        });
+        self.register_food(ItemId::RAW_CHICKEN, FoodDef::new(2, 1.2));
+
+        self.register(ItemDef {
+            id: ItemId::COOKED_CHICKEN,
+            name: "blockgame:cooked_chicken",
+            display_name: "Cooked Chicken",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 167,
+        });
+        self.register_food(ItemId::COOKED_CHICKEN, FoodDef::new(6, 7.2));
+
+        self.register(ItemDef {
+            id: ItemId::LEATHER,
+            name: "blockgame:leather",
+            display_name: "Leather",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 168,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::FEATHER,
+            name: "blockgame:feather",
+            display_name: "Feather",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 169,
+        });
     }
 }
 
@@ -724,6 +929,9 @@ impl Inventory {
         inv.slots[6] = ItemSlot::new(ItemId::STICK, 8);
         inv.slots[7] = ItemSlot::new(ItemId::GLASS, 16);
         inv.slots[8] = ItemSlot::new(ItemId::CRAFTING_TABLE, 1);
+        inv.slots[9] = ItemSlot::new(ItemId::IRON_HOE, 1);
+        inv.slots[10] = ItemSlot::new(ItemId::WHEAT_SEEDS, 16);
+        inv.slots[11] = ItemSlot::new(ItemId::BREAD, 4);
         inv
     }
 
