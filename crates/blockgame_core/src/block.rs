@@ -75,6 +75,11 @@ impl BlockId {
     pub const fn is_air(&self) -> bool {
         self.0 == 0
     }
+
+    #[inline]
+    pub const fn is_water(&self) -> bool {
+        self.0 == Self::WATER.0 || self.0 == Self::SEAGRASS.0
+    }
 }
 
 impl From<u8> for BlockId {

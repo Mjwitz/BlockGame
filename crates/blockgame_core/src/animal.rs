@@ -204,10 +204,10 @@ impl AnimalEntity {
         let head_y = (self.position.y + height * 0.85).floor() as i32;
         let head_x = self.position.x.floor() as i32;
         let head_z = self.position.z.floor() as i32;
-        let is_head_submerged = world.get_block(IVec3::new(head_x, head_y, head_z)) == BlockId::WATER;
+        let is_head_submerged = world.get_block(IVec3::new(head_x, head_y, head_z)).is_water();
 
         let feet_y = self.position.y.floor() as i32;
-        let is_in_water = is_head_submerged || world.get_block(IVec3::new(head_x, feet_y, head_z)) == BlockId::WATER;
+        let is_in_water = is_head_submerged || world.get_block(IVec3::new(head_x, feet_y, head_z)).is_water();
 
         if is_head_submerged {
             if self.breath > 0.0 {

@@ -580,7 +580,12 @@ impl WorldManager {
             } else {
                 Vec::new()
             };
-            world.set_block(pos, BlockId::AIR);
+            let replacement = if current == BlockId::SEAGRASS {
+                BlockId::WATER
+            } else {
+                BlockId::AIR
+            };
+            world.set_block(pos, replacement);
 
             if is_torch {
                 for dx in -1..=1 {
@@ -715,7 +720,8 @@ impl WorldManager {
         let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            if !current.is_air() {
+            let can_place = current.is_air() || (current == BlockId::WATER && block_id == BlockId::SEAGRASS);
+            if !can_place {
                 return false;
             }
             let is_torch = block_id == BlockId::TORCH || block_id == BlockId::FURNACE_LIT;

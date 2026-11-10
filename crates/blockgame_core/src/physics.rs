@@ -152,7 +152,7 @@ impl PlayerPhysics {
         for y in min_y..=max_y {
             for z in min_z..=max_z {
                 for x in min_x..=max_x {
-                    if world.get_block(IVec3::new(x, y, z)) == BlockId::WATER {
+                    if world.get_block(IVec3::new(x, y, z)).is_water() {
                         return true;
                     }
                 }

@@ -124,6 +124,57 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    if block_id == BlockId::SEAGRASS {
+                        // 1. Build crossed diagonal plant quads for seagrass
+                        self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
+
+                        // 2. Seagrass is waterlogged! Generate water boundary faces for any direction
+                        // not adjacent to water or another waterlogged block.
+                        for dir in Direction::ALL {
+                            let normal = dir.normal_ivec();
+                            let nx = ix + normal.x;
+                            let ny = iy + normal.y;
+                            let nz = iz + normal.z;
+
+                            let neighbor_id = query_block(nx, ny, nz);
+
+                            if neighbor_id.is_water() {
+                                continue;
+                            }
+
+                            if self.registry.is_transparent(neighbor_id) {
+                                let tile_id = self.registry.get_texture(BlockId::WATER, dir);
+                                let uv = TextureAtlas::get_uv_bounds(tile_id);
+
+                                let light = if nx >= 0
+                                    && nx < CHUNK_SIZE_X as i32
+                                    && ny >= 0
+                                    && ny < CHUNK_SIZE_Y as i32
+                                    && nz >= 0
+                                    && nz < CHUNK_SIZE_Z as i32
+                                {
+                                    let lv = light_map.get(nx as usize, ny as usize, nz as usize);
+                                    [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
+                                } else {
+                                    let blk = light_map.get_block_rel(nx, ny, nz);
+                                    [1.0, blk as f32 / 15.0]
+                                };
+
+                                self.build_water_face(
+                                    &mut mesh,
+                                    chunk.pos,
+                                    ix,
+                                    iy,
+                                    iz,
+                                    dir,
+                                    uv,
+                                    light,
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
                     if block_id == BlockId::WATER {
                         for dir in Direction::ALL {
                             let normal = dir.normal_ivec();
@@ -133,8 +184,8 @@ impl<'a> ChunkMesher<'a> {
 
                             let neighbor_id = query_block(nx, ny, nz);
 
-                            // Adjacent water blocks should not render internal faces
-                            if neighbor_id == BlockId::WATER {
+                            // Adjacent water blocks (and waterlogged seagrass) should not render internal faces
+                            if neighbor_id.is_water() {
                                 continue;
                             }
 
@@ -1914,5 +1965,41 @@ mod tests {
         assert_eq!(mesh.water_vertices.len(), 24);
         assert_eq!(mesh.water_indices.len(), 36);
         assert_eq!(mesh.face_count(), 12);
+    }
+
+    #[test]
+    fn test_seagrass_waterlogged_and_crossed_quads() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        // Isolated seagrass in air: crossed quads (16 vertices, 24 indices)
+        // and waterlogged water faces (24 vertices, 36 indices)
+        chunk.set(4, 4, 4, BlockId::SEAGRASS);
+        let mesh = mesher.mesh_chunk(&chunk);
+
+        assert_eq!(mesh.vertices.len(), 16);
+        assert_eq!(mesh.indices.len(), 24);
+        assert_eq!(mesh.water_vertices.len(), 24);
+        assert_eq!(mesh.water_indices.len(), 36);
+
+        // When surrounded by water, seagrass should render its crossed quads
+        // and NO internal water faces between water and seagrass
+        let mut water_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        water_chunk.set(4, 4, 4, BlockId::SEAGRASS);
+        water_chunk.set(4, 5, 4, BlockId::WATER); // Above
+        water_chunk.set(4, 3, 4, BlockId::WATER); // Below
+        water_chunk.set(5, 4, 4, BlockId::WATER); // East
+        water_chunk.set(3, 4, 4, BlockId::WATER); // West
+        water_chunk.set(4, 4, 5, BlockId::WATER); // South
+        water_chunk.set(4, 4, 3, BlockId::WATER); // North
+
+        let submerged_mesh = mesher.mesh_chunk(&water_chunk);
+
+        // Seagrass plant crop vertices: exactly 16
+        assert_eq!(submerged_mesh.vertices.len(), 16);
+        // The 6 outer water blocks face air outward, but have zero internal faces facing seagrass
+        // Each of the 6 surrounding water blocks has 5 faces exposed to air = 30 faces * 4 = 120 vertices
+        assert_eq!(submerged_mesh.water_vertices.len(), 120);
     }
 }

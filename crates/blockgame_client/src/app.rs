@@ -959,7 +959,7 @@ impl ApplicationHandler for BlockGameApp {
                 );
                 let (is_head_submerged, is_touching_cactus) = {
                     let world = state.world_manager.world().lock().unwrap();
-                    let submerged = world.get_block(head_block_pos) == BlockId::WATER;
+                    let submerged = world.get_block(head_block_pos).is_water();
                     let touching_cactus = state.player.is_touching_cactus(&world);
                     (submerged, touching_cactus)
                 };
@@ -1070,7 +1070,7 @@ impl ApplicationHandler for BlockGameApp {
                 );
                 let is_camera_underwater = {
                     let world = state.world_manager.world().lock().unwrap();
-                    world.get_block(camera_block_pos) == BlockId::WATER
+                    world.get_block(camera_block_pos).is_water()
                 };
                 let player_pos = state.player.position;
                 let current_biome = state.world_manager.generator.get_biome(
@@ -1519,7 +1519,7 @@ impl ApplicationHandler for BlockGameApp {
                 );
                 let is_camera_underwater = {
                     let world = state.world_manager.world().lock().unwrap();
-                    world.get_block(camera_block_pos) == BlockId::WATER
+                    world.get_block(camera_block_pos).is_water()
                 };
                 let clear_color = if is_camera_underwater {
                     wgpu::Color {

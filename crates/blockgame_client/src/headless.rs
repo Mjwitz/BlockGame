@@ -3189,6 +3189,18 @@ pub async fn render_world_to_image(
 
         let dummy_box = AABB::new(Vec3::new(999.0, 999.0, 999.0), Vec3::new(0.6, 1.8, 0.6));
 
+        // Clear showcase area of any random natural terrain obstructions
+        {
+            let mut world = world_manager.world().lock().unwrap();
+            for dx in -5..=6 {
+                for dz in -5..=5 {
+                    for dy in 0..=6 {
+                        world.set_block(IVec3::new(p5_x + dx, p5_y + dy, p5_z + dz), BlockId::AIR);
+                    }
+                }
+            }
+        }
+
         // 1. Dark Forest Environment (left side): Grass, Dark Oak 2x2 Tree, Dark Oak Planks
         for dx in -4..=0 {
             for dz in -4..=1 {
@@ -3236,7 +3248,7 @@ pub async fn render_world_to_image(
 
         // Water basin in the lagoon
         for dx in 1..=4 {
-            for dz in -3..=0 {
+            for dz in -3..=1 {
                 let p = IVec3::new(p5_x + dx, p5_y, p5_z + dz);
                 let b = {
                     let world = world_manager.world().lock().unwrap();
@@ -3250,8 +3262,8 @@ pub async fn render_world_to_image(
 
         // 3. Camera positioned in front of the scene
         let p5_day_night = DayNightCycle::new();
-        let p5_cam_pos = Vec3::new((p5_x as f32) + 0.5, (p5_y as f32) + 2.0, (p5_z as f32) + 3.6);
-        let p5_cam = Camera::new(p5_cam_pos, (-90.0_f32).to_radians(), (-15.0_f32).to_radians());
+        let p5_cam_pos = Vec3::new((p5_x as f32) + 0.6, (p5_y as f32) + 2.3, (p5_z as f32) + 3.2);
+        let p5_cam = Camera::new(p5_cam_pos, (-90.0_f32).to_radians(), (-20.0_f32).to_radians());
         let mut p5_uniform = CameraUniform::default();
         let reef_fog = [0.26, 0.58, 0.68];
         let reef_tint = [0.94, 1.04, 1.08];
