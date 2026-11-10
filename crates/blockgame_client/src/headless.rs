@@ -2940,5 +2940,235 @@ pub async fn render_world_to_image(
         log::info!("Successfully saved Phase 3 Biome Atmosphere showcase image to phase_3_biome_atmosphere_render.png");
     }
 
+    // 15. Phase 4 Showcase Render (Rivers, Taiga, Mushroom Fields & Fungal Strata)
+    {
+        let p4_x = -6;
+        let p4_z = 4;
+        let dummy_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+        let p4_y = {
+            let world_guard = world_manager.world().lock().unwrap();
+            let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+            while y > 1 {
+                let block = world_guard.get_block(IVec3::new(p4_x, y, p4_z));
+                if !block.is_air() {
+                    break;
+                }
+                y -= 1;
+            }
+            y
+        };
+
+        // 1. Mushroom Fields Terrain (Mycelium ground + Giant Red & Brown Mushrooms)
+        for dx in -4..=0 {
+            for dz in -3..=5 {
+                world_manager.place_block(IVec3::new(p4_x + dx, p4_y, p4_z + dz), BlockId::MYCELIUM, &dummy_box, &device, &pipeline);
+            }
+        }
+        // Giant Red Mushroom
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 1, p4_z - 1), BlockId::MUSHROOM_STEM, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 2, p4_z - 1), BlockId::MUSHROOM_STEM, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 3, p4_z - 1), BlockId::MUSHROOM_STEM, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 4, p4_z - 1), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 3, p4_y + 4, p4_z - 1), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 4, p4_z - 1), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 4, p4_z - 2), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 4, p4_z), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 3, p4_y + 3, p4_z - 1), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 3, p4_z - 1), BlockId::RED_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+
+        // Giant Brown Mushroom
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 1, p4_z + 1), BlockId::MUSHROOM_STEM, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 2, p4_z + 1), BlockId::MUSHROOM_STEM, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 3, p4_z + 1), BlockId::BROWN_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 2, p4_y + 3, p4_z + 1), BlockId::BROWN_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x, p4_y + 3, p4_z + 1), BlockId::BROWN_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 3, p4_z), BlockId::BROWN_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x - 1, p4_y + 3, p4_z + 2), BlockId::BROWN_MUSHROOM_BLOCK, &dummy_box, &device, &pipeline);
+
+        // 2. Taiga Terrain (Podzol floor + Mossy Cobblestone boulders + Spruce Tree)
+        for dx in 1..=5 {
+            for dz in -3..=5 {
+                world_manager.place_block(IVec3::new(p4_x + dx, p4_y, p4_z + dz), BlockId::PODZOL, &dummy_box, &device, &pipeline);
+            }
+        }
+        // Mossy Cobblestone boulder on Podzol
+        world_manager.place_block(IVec3::new(p4_x + 1, p4_y + 1, p4_z + 1), BlockId::MOSSY_COBBLESTONE, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 2, p4_y + 1, p4_z + 1), BlockId::MOSSY_COBBLESTONE, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 1, p4_y + 1, p4_z), BlockId::MOSSY_COBBLESTONE, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 1, p4_y + 2, p4_z + 1), BlockId::MOSSY_COBBLESTONE, &dummy_box, &device, &pipeline);
+
+        // Spruce tree on Podzol
+        world_manager.place_block(IVec3::new(p4_x + 3, p4_y + 1, p4_z - 1), BlockId::SPRUCE_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 3, p4_y + 2, p4_z - 1), BlockId::SPRUCE_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 3, p4_y + 3, p4_z - 1), BlockId::SPRUCE_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 3, p4_y + 4, p4_z - 1), BlockId::SPRUCE_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 2, p4_y + 3, p4_z - 1), BlockId::SPRUCE_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 4, p4_y + 3, p4_z - 1), BlockId::SPRUCE_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 3, p4_y + 3, p4_z - 2), BlockId::SPRUCE_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p4_x + 3, p4_y + 3, p4_z), BlockId::SPRUCE_LEAVES, &dummy_box, &device, &pipeline);
+
+        // 3. Camera positioned right in front of the scene at eye level
+        let p4_day_night = DayNightCycle::new();
+        let p4_cam_pos = Vec3::new((p4_x as f32) + 0.5, (p4_y as f32) + 2.0, (p4_z as f32) + 3.6);
+        let p4_cam = Camera::new(p4_cam_pos, (-90.0_f32).to_radians(), (-16.0_f32).to_radians());
+        let mut p4_uniform = CameraUniform::default();
+        let mushroom_fog = [0.72, 0.60, 0.78];
+        let mushroom_tint = [1.04, 0.92, 1.06];
+        p4_cam.update_uniform_with_atmosphere_water_tint(
+            &mut p4_uniform,
+            width as f32 / height as f32,
+            &p4_day_night,
+            false,
+            mushroom_fog,
+            mushroom_tint,
+        );
+        pipeline.update_camera(&queue, &p4_uniform);
+
+        let mut p4_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Phase 4 River Mushrooms Encoder"),
+        });
+
+        {
+            let mut render_pass = p4_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Phase 4 3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.70,
+                            g: 0.60,
+                            b: 0.76,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            render_pass.set_pipeline(&pipeline.water_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render_water(&mut render_pass);
+        }
+
+        // Draw HUD overlay with Phase 4 items in hotbar
+        let mut p4_ui_mesh = UiMesh::new();
+        let stats = blockgame_core::PlayerStats::new();
+        let mut p4_inv = inventory.clone();
+        p4_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::PODZOL, 64);
+        p4_inv.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::MOSSY_COBBLESTONE, 32);
+        p4_inv.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::MYCELIUM, 64);
+        p4_inv.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RED_MUSHROOM_BLOCK, 48);
+        p4_inv.slots[4] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BROWN_MUSHROOM_BLOCK, 48);
+        p4_inv.slots[5] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::MUSHROOM_STEM, 32);
+        p4_inv.slots[6] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SPRUCE_LOG, 16);
+        p4_inv.slots[7] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SPRUCE_LEAVES, 16);
+        p4_inv.slots[8] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COBBLESTONE, 64);
+        UiBuilder::build_hud(&mut p4_ui_mesh, screen_w, screen_h, &p4_inv, 0, &item_registry, 0.0, 0.0, &stats);
+
+        if !p4_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Phase 4 UI VB"),
+                contents: bytemuck::cast_slice(&p4_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Phase 4 UI IB"),
+                contents: bytemuck::cast_slice(&p4_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = p4_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Phase 4 UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..p4_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        p4_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(p4_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut p4_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            p4_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "phase_4_biome_river_mushrooms_render.png",
+            &p4_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Phase 4 Biome River & Mushrooms showcase image to phase_4_biome_river_mushrooms_render.png");
+    }
+
     Ok(())
 }

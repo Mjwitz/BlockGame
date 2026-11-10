@@ -1124,6 +1124,28 @@ impl CraftingManager {
             input: ItemId::CLAY,
             output: ItemSlot::new(ItemId::TERRACOTTA, 1),
         });
+
+        // Mossy Cobblestone: Cobblestone + Leaves (Shapeless)
+        self.register(Recipe::Shapeless {
+            name: "Mossy Cobblestone from Leaves",
+            inputs: vec![ItemId::COBBLESTONE, ItemId::LEAVES],
+            output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Mossy Cobblestone from Spruce Leaves",
+            inputs: vec![ItemId::COBBLESTONE, ItemId::SPRUCE_LEAVES],
+            output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Mossy Cobblestone from Birch Leaves",
+            inputs: vec![ItemId::COBBLESTONE, ItemId::BIRCH_LEAVES],
+            output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Mossy Cobblestone from Jungle Leaves",
+            inputs: vec![ItemId::COBBLESTONE, ItemId::JUNGLE_LEAVES],
+            output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
+        });
     }
 }
 
@@ -1161,7 +1183,10 @@ pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
         | ItemId::CRAFTING_TABLE
         | ItemId::CHEST
         | ItemId::FURNACE => 15.0,
-        ItemId::STICK => 5.0,
+        ItemId::STICK
+        | ItemId::MUSHROOM_STEM
+        | ItemId::RED_MUSHROOM_BLOCK
+        | ItemId::BROWN_MUSHROOM_BLOCK => 5.0,
         ItemId::WOODEN_PICKAXE
         | ItemId::WOODEN_AXE
         | ItemId::WOODEN_SHOVEL
@@ -1420,7 +1445,7 @@ mod tests {
 
     #[test]
     fn test_phase_3_jungle_and_badlands_recipes() {
-        let mut cm = CraftingManager::new();
+        let cm = CraftingManager::new();
 
         // 1. Jungle Log -> 4 Jungle Planks (Shapeless)
         let mut grid_shapeless = CraftingGrid::new_2x2();
@@ -1443,5 +1468,29 @@ mod tests {
         // 4. Furnace fuel: Jungle Log and Jungle Planks burn for 15.0s
         assert_eq!(get_fuel_burn_time(ItemId::JUNGLE_LOG), 15.0);
         assert_eq!(get_fuel_burn_time(ItemId::JUNGLE_PLANKS), 15.0);
+    }
+
+    #[test]
+    fn test_phase_4_mossy_cobble_and_mushroom_recipes() {
+        let cm = CraftingManager::new();
+
+        // 1. Cobblestone + Leaves -> Mossy Cobblestone (Shapeless)
+        let mut grid = CraftingGrid::new_2x2();
+        grid.set(0, 0, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid.set(1, 0, ItemSlot::new(ItemId::LEAVES, 1));
+        let out = cm.craft(&mut grid);
+        assert_eq!(out, Some(ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1)));
+
+        // 2. Cobblestone + Spruce Leaves -> Mossy Cobblestone (Shapeless)
+        let mut grid_spruce = CraftingGrid::new_2x2();
+        grid_spruce.set(0, 0, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid_spruce.set(0, 1, ItemSlot::new(ItemId::SPRUCE_LEAVES, 1));
+        let out_spruce = cm.craft(&mut grid_spruce);
+        assert_eq!(out_spruce, Some(ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1)));
+
+        // 3. Furnace fuel: Giant mushroom blocks & stems burn for 5.0s
+        assert_eq!(get_fuel_burn_time(ItemId::MUSHROOM_STEM), 5.0);
+        assert_eq!(get_fuel_burn_time(ItemId::RED_MUSHROOM_BLOCK), 5.0);
+        assert_eq!(get_fuel_burn_time(ItemId::BROWN_MUSHROOM_BLOCK), 5.0);
     }
 }

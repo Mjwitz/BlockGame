@@ -191,6 +191,9 @@ impl WorldManager {
         // - Savanna: 60% spawn chance (grazing cows and pigs)
         // - Swamp: 55% spawn chance (mud wallowing pigs and chickens)
         // - SnowyTundra: 25% spawn chance (cold adapted chickens, cows, pigs)
+        // - Taiga: 55% spawn chance (coniferous foraging: cows, pigs, chickens)
+        // - MushroomFields: 70% spawn chance (peaceful fungal sanctuary: cows)
+        // - River: 20% spawn chance (riverbank chickens/pigs)
         let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
             Biome::Desert | Biome::Ocean | Biome::Badlands => return,
             Biome::Plains => (0.65, [(AnimalKind::Cow, 0.40), (AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25)], 2, 4),
@@ -201,6 +204,9 @@ impl WorldManager {
             Biome::SnowyTundra => (0.25, [(AnimalKind::Chicken, 0.45), (AnimalKind::Cow, 0.35), (AnimalKind::Pig, 0.20)], 1, 3),
             Biome::Jungle => (0.65, [(AnimalKind::Chicken, 0.50), (AnimalKind::Pig, 0.35), (AnimalKind::Cow, 0.15)], 2, 5),
             Biome::Beach => (0.30, [(AnimalKind::Chicken, 0.70), (AnimalKind::Pig, 0.20), (AnimalKind::Cow, 0.10)], 1, 3),
+            Biome::Taiga => (0.55, [(AnimalKind::Cow, 0.40), (AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25)], 2, 4),
+            Biome::MushroomFields => (0.70, [(AnimalKind::Cow, 1.00), (AnimalKind::Pig, 0.0), (AnimalKind::Chicken, 0.0)], 2, 4),
+            Biome::River => (0.20, [(AnimalKind::Chicken, 0.60), (AnimalKind::Pig, 0.30), (AnimalKind::Cow, 0.10)], 1, 2),
         };
 
         // Deterministic pseudo-random seed per chunk column
@@ -246,7 +252,7 @@ impl WorldManager {
             let mut ay = (VERTICAL_CHUNKS * 16) - 2;
             while ay > 1 {
                 let b = world.get_block(IVec3::new(ax, ay, az));
-                if b == BlockId::GRASS || b == BlockId::DIRT || b == BlockId::SNOW_BLOCK || b == BlockId::CLAY || b == BlockId::SAND {
+                if b == BlockId::GRASS || b == BlockId::DIRT || b == BlockId::SNOW_BLOCK || b == BlockId::CLAY || b == BlockId::SAND || b == BlockId::PODZOL || b == BlockId::MYCELIUM {
                     break;
                 }
                 ay -= 1;

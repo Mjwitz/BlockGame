@@ -56,6 +56,12 @@ impl BlockId {
     pub const JUNGLE_LEAVES: Self = Self(47);
     pub const TERRACOTTA: Self = Self(48);
     pub const RED_SAND: Self = Self(49);
+    pub const PODZOL: Self = Self(50);
+    pub const MOSSY_COBBLESTONE: Self = Self(51);
+    pub const MYCELIUM: Self = Self(52);
+    pub const RED_MUSHROOM_BLOCK: Self = Self(53);
+    pub const BROWN_MUSHROOM_BLOCK: Self = Self(54);
+    pub const MUSHROOM_STEM: Self = Self(55);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -802,6 +808,94 @@ impl BlockRegistry {
             required_tool: Some(ToolType::Shovel),
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::RED_SAND),
+            drop_count: (1, 1),
+        });
+
+        // Taiga & Forest Blocks
+        registry.register(BlockDefinition {
+            id: BlockId::PODZOL,
+            name: "Podzol",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 224, NegY: 2 (Dirt), Sides: 223
+            textures: [224, 2, 223, 223, 223, 223],
+            hardness: 0.5,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::PODZOL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::MOSSY_COBBLESTONE,
+            name: "Mossy Cobblestone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [225; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::MOSSY_COBBLESTONE),
+            drop_count: (1, 1),
+        });
+
+        // Mushroom Fields (Island) Blocks
+        registry.register(BlockDefinition {
+            id: BlockId::MYCELIUM,
+            name: "Mycelium",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 227, NegY: 2 (Dirt), Sides: 226
+            textures: [227, 2, 226, 226, 226, 226],
+            hardness: 0.6,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::MYCELIUM),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::RED_MUSHROOM_BLOCK,
+            name: "Red Mushroom Block",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [228; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::RED_MUSHROOM_BLOCK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BROWN_MUSHROOM_BLOCK,
+            name: "Brown Mushroom Block",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [229; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::BROWN_MUSHROOM_BLOCK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::MUSHROOM_STEM,
+            name: "Mushroom Stem",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [230; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::MUSHROOM_STEM),
             drop_count: (1, 1),
         });
 

@@ -85,6 +85,12 @@ impl ItemId {
     pub const JUNGLE_LEAVES: Self = Self(75);
     pub const TERRACOTTA: Self = Self(76);
     pub const RED_SAND: Self = Self(77);
+    pub const PODZOL: Self = Self(78);
+    pub const MOSSY_COBBLESTONE: Self = Self(79);
+    pub const MYCELIUM: Self = Self(80);
+    pub const RED_MUSHROOM_BLOCK: Self = Self(81);
+    pub const BROWN_MUSHROOM_BLOCK: Self = Self(82);
+    pub const MUSHROOM_STEM: Self = Self(83);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1210,6 +1216,79 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 222,
+        });
+
+        // Phase 4 Items: Taiga & Mushroom Fields
+        self.register(ItemDef {
+            id: ItemId::PODZOL,
+            name: "blockgame:podzol",
+            display_name: "Podzol",
+            max_stack: 64,
+            placeable_block: Some(BlockId::PODZOL),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 224,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::MOSSY_COBBLESTONE,
+            name: "blockgame:mossy_cobblestone",
+            display_name: "Mossy Cobblestone",
+            max_stack: 64,
+            placeable_block: Some(BlockId::MOSSY_COBBLESTONE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 225,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::MYCELIUM,
+            name: "blockgame:mycelium",
+            display_name: "Mycelium",
+            max_stack: 64,
+            placeable_block: Some(BlockId::MYCELIUM),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 227,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::RED_MUSHROOM_BLOCK,
+            name: "blockgame:red_mushroom_block",
+            display_name: "Red Mushroom Block",
+            max_stack: 64,
+            placeable_block: Some(BlockId::RED_MUSHROOM_BLOCK),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 228,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BROWN_MUSHROOM_BLOCK,
+            name: "blockgame:brown_mushroom_block",
+            display_name: "Brown Mushroom Block",
+            max_stack: 64,
+            placeable_block: Some(BlockId::BROWN_MUSHROOM_BLOCK),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 229,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::MUSHROOM_STEM,
+            name: "blockgame:mushroom_stem",
+            display_name: "Mushroom Stem",
+            max_stack: 64,
+            placeable_block: Some(BlockId::MUSHROOM_STEM),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 230,
         });
     }
 }
