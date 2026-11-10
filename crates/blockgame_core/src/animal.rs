@@ -75,28 +75,51 @@ pub struct AnimalEntity {
     pub walk_anim_timer: f32,
     pub on_ground: bool,
     pub dead: bool,
+    pub rng_state: u64,
+    pub stuck_timer: f32,
 }
 
 impl AnimalEntity {
     pub fn new(id: u32, kind: AnimalKind, position: Vec3) -> Self {
         let max_hp = kind.max_health();
+        let mut seed = ((id as u64) + 1).wrapping_mul(0x517cc1b727220a95);
+        seed ^= (position.x.to_bits() as u64).wrapping_mul(0x6c62272e07bb0142);
+        seed ^= (position.z.to_bits() as u64).wrapping_mul(0x62b821756295c58d);
+        if seed == 0 {
+            seed = 0x853c49e6748fea9b;
+        }
+        let wander_init = 1.0 + (id % 3) as f32 * 0.8;
         Self {
             id,
             kind,
             position,
             velocity: Vec3::ZERO,
-            yaw: 0.0,
+            yaw: ((id * 37) % 360) as f32 * (PI / 180.0),
             health: max_hp,
             max_health: max_hp,
             hurt_timer: 0.0,
             flee_timer: 0.0,
             flee_dir: Vec3::ZERO,
-            wander_timer: 2.0,
-            is_moving: false,
+            wander_timer: wander_init,
+            is_moving: true,
             walk_anim_timer: 0.0,
             on_ground: false,
             dead: false,
+            rng_state: seed,
+            stuck_timer: 0.0,
         }
+    }
+
+    /// Advances the animal's internal PRNG state and returns a uniform pseudo-random f32 in 0.0..1.0.
+    #[inline]
+    pub fn next_f32(&mut self) -> f32 {
+        self.rng_state ^= self.rng_state << 13;
+        self.rng_state ^= self.rng_state >> 7;
+        self.rng_state ^= self.rng_state << 17;
+        if self.rng_state == 0 {
+            self.rng_state = 0x853c49e6748fea9b;
+        }
+        ((self.rng_state >> 32) as u32 as f32) / (u32::MAX as f32)
     }
 
     pub fn aabb(&self) -> AABB {
@@ -161,6 +184,11 @@ impl AnimalEntity {
             return;
         }
 
+        if self.position.y < -40.0 {
+            self.dead = true;
+            return;
+        }
+
         if self.hurt_timer > 0.0 {
             self.hurt_timer = (self.hurt_timer - dt).max(0.0);
         }
@@ -175,21 +203,22 @@ impl AnimalEntity {
         } else {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
-                // Change state: moving or standing still
-                let pseudo_rand = ((self.position.x * 12.9898 + self.position.z * 78.233)
-                    .sin()
-                    .fract()
-                    + 1.0)
-                    * 0.5;
-                if pseudo_rand > 0.45 {
+                let r = self.next_f32();
+                if r < 0.60 {
+                    // Start moving
                     self.is_moving = true;
-                    // Pick a random direction
-                    let angle = pseudo_rand * 2.0 * PI;
-                    self.yaw = angle;
-                    self.wander_timer = 2.0 + pseudo_rand * 3.0;
+                    let change = (self.next_f32() - 0.5) * 1.8;
+                    let new_angle = if self.next_f32() < 0.35 {
+                        self.next_f32() * 2.0 * PI
+                    } else {
+                        self.yaw + change
+                    };
+                    self.yaw = new_angle;
+                    self.wander_timer = 2.0 + self.next_f32() * 4.0;
                 } else {
+                    // Idle in place
                     self.is_moving = false;
-                    self.wander_timer = 1.5 + pseudo_rand * 2.0;
+                    self.wander_timer = 1.5 + self.next_f32() * 2.5;
                 }
             }
 
@@ -199,8 +228,15 @@ impl AnimalEntity {
         }
 
         // 2. Physics & Movement
-        let gravity = -28.0;
+        let gravity = if self.kind == AnimalKind::Chicken {
+            -12.0 // Chickens fall much slower (wing flapping flutter)
+        } else {
+            -28.0
+        };
         self.velocity.y += gravity * dt;
+        if self.kind == AnimalKind::Chicken && self.velocity.y < -2.2 {
+            self.velocity.y = -2.2; // Chicken flutter terminal velocity
+        }
 
         let target_speed = if self.flee_timer > 0.0 {
             self.kind.flee_speed()
@@ -224,9 +260,9 @@ impl AnimalEntity {
             }
         }
 
-        // 3. Block Step/Jump Check
-        if self.on_ground && horiz_speed > 0.2 {
-            let front_check = self.position + wish_dir * 0.6;
+        // 3. Block Step/Jump Check & Stuck Resolution
+        if self.on_ground && (self.is_moving || self.flee_timer > 0.0) {
+            let front_check = self.position + wish_dir * 0.55;
             let check_x = front_check.x.floor() as i32;
             let check_y = self.position.y.floor() as i32;
             let check_z = front_check.z.floor() as i32;
@@ -238,7 +274,26 @@ impl AnimalEntity {
             if registry.is_solid(block_in_front) && !registry.is_solid(block_above_front) {
                 self.velocity.y = 7.0;
                 self.on_ground = false;
+                self.stuck_timer = 0.0;
+            } else if registry.is_solid(block_in_front) && registry.is_solid(block_above_front) {
+                // High obstacle (wall/tree): turn away smoothly
+                if self.flee_timer <= 0.0 {
+                    self.yaw += PI * 0.5 + self.next_f32() * PI;
+                    self.wander_timer = 1.5 + self.next_f32() * 2.5;
+                }
             }
+        }
+
+        // Stuck detection: if trying to walk but moving very slowly, pick a new direction
+        if self.is_moving && self.on_ground && horiz_speed < 0.12 {
+            self.stuck_timer += dt;
+            if self.stuck_timer > 0.75 {
+                self.yaw += PI * 0.5 + self.next_f32() * PI;
+                self.wander_timer = 2.0 + self.next_f32() * 3.0;
+                self.stuck_timer = 0.0;
+            }
+        } else {
+            self.stuck_timer = (self.stuck_timer - dt * 2.0).max(0.0);
         }
 
         // 4. Swept Axis-Separated Collision Resolution
@@ -334,6 +389,10 @@ impl AnimalEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        block::BlockId,
+        chunk::{Chunk, ChunkPos},
+    };
 
     #[test]
     fn test_animal_initialization_and_damage() {
@@ -369,5 +428,35 @@ mod tests {
         chicken.take_damage(100.0, Vec3::Z);
         let chicken_drops = chicken.generate_drops();
         assert_eq!(chicken_drops[0].item_id, ItemId::RAW_CHICKEN);
+    }
+
+    #[test]
+    fn test_animal_ai_wander_and_no_permanent_freeze() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let chunk_pos = ChunkPos::new(0, 3, 0);
+        let mut chunk = Chunk::new(chunk_pos);
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 15, z, BlockId::GRASS);
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let mut cow = AnimalEntity::new(4, AnimalKind::Cow, Vec3::new(8.0, 64.0, 8.0));
+
+        // Track state transitions over 200 ticks on solid ground
+        let start_pos = cow.position;
+        let mut moved = false;
+
+        for _ in 0..200 {
+            cow.update(0.05, &world, &registry);
+            if cow.position.x != start_pos.x || cow.position.z != start_pos.z {
+                moved = true;
+            }
+        }
+
+        assert!(!cow.dead, "Animal on solid ground should remain alive");
+        assert!(moved, "Animal should wander and change horizontal position over 10 seconds");
     }
 }

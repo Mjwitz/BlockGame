@@ -923,6 +923,7 @@ fn add_animal_box(
     min: [f32; 3],
     max: [f32; 3],
     uvs: &[[f32; 2]; 4],
+    uvs_front: Option<&[[f32; 2]; 4]>,
     ao: f32,
     light: [f32; 2],
     pos: glam::Vec3,
@@ -954,7 +955,7 @@ fn add_animal_box(
             to_world(x0, y1, z1),
         ],
         to_world_normal(0.0, 0.0, 1.0),
-        uvs,
+        uvs_front.unwrap_or(uvs),
         ao,
         light,
     );
@@ -1157,6 +1158,17 @@ fn add_animal_leg_box(
     );
 }
 
+#[inline]
+fn get_animal_uvs(tile_id: u16) -> [[f32; 2]; 4] {
+    let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+    [
+        [u_min, v_max],
+        [u_max, v_max],
+        [u_max, v_min],
+        [u_min, v_min],
+    ]
+}
+
 /// Builds 3D composite blocky models for active animals with walking leg animations.
 pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
     let mut mesh = ChunkMesh::new();
@@ -1165,20 +1177,6 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
         if animal.dead {
             continue;
         }
-
-        let tile_id = match animal.kind {
-            AnimalKind::Cow => 170,
-            AnimalKind::Pig => 171,
-            AnimalKind::Chicken => 172,
-        };
-
-        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
-        let uvs = [
-            [u_min, v_max],
-            [u_max, v_max],
-            [u_max, v_min],
-            [u_min, v_min],
-        ];
 
         // Red/white damage flash when hurt
         let (light, ao) = if animal.hurt_timer > 0.0 {
@@ -1194,24 +1192,30 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
 
         match animal.kind {
             AnimalKind::Cow => {
+                let uvs_body = get_animal_uvs(170);
+                let uvs_head = get_animal_uvs(185);
+                let uvs_legs = get_animal_uvs(186);
+
                 // Body
                 add_animal_box(
                     &mut mesh,
                     [-0.35, 0.45, -0.55],
                     [0.35, 1.1, 0.55],
-                    &uvs,
+                    &uvs_body,
+                    None,
                     ao,
                     light,
                     pos,
                     cos_y,
                     sin_y,
                 );
-                // Head
+                // Head (with front-facing eyes and markings)
                 add_animal_box(
                     &mut mesh,
                     [-0.22, 0.85, 0.55],
                     [0.22, 1.3, 1.0],
-                    &uvs,
+                    &uvs_body,
+                    Some(&uvs_head),
                     ao,
                     light,
                     pos,
@@ -1223,7 +1227,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.15, 0.85, 1.0],
                     [0.15, 1.08, 1.16],
-                    &uvs,
+                    &uvs_legs,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1235,7 +1240,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.25, 1.3, 0.7],
                     [-0.18, 1.45, 0.76],
-                    &uvs,
+                    &uvs_legs,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1246,7 +1252,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [0.18, 1.3, 0.7],
                     [0.25, 1.45, 0.76],
-                    &uvs,
+                    &uvs_legs,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1261,7 +1268,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.45,
                     0.39,
                     leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1275,7 +1282,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.45,
                     0.39,
                     -leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1289,7 +1296,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.45,
                     -0.39,
                     -leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1303,7 +1310,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.45,
                     -0.39,
                     leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1312,24 +1319,30 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                 );
             }
             AnimalKind::Pig => {
+                let uvs_body = get_animal_uvs(171);
+                let uvs_head = get_animal_uvs(187);
+                let uvs_legs = get_animal_uvs(188);
+
                 // Body
                 add_animal_box(
                     &mut mesh,
                     [-0.3, 0.32, -0.45],
                     [0.3, 0.82, 0.45],
-                    &uvs,
+                    &uvs_body,
+                    None,
                     ao,
                     light,
                     pos,
                     cos_y,
                     sin_y,
                 );
-                // Head
+                // Head (with front-facing pig face)
                 add_animal_box(
                     &mut mesh,
                     [-0.2, 0.5, 0.45],
                     [0.2, 0.9, 0.85],
-                    &uvs,
+                    &uvs_body,
+                    Some(&uvs_head),
                     ao,
                     light,
                     pos,
@@ -1341,7 +1354,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.12, 0.52, 0.85],
                     [0.12, 0.72, 0.98],
-                    &uvs,
+                    &uvs_legs,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1356,7 +1370,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.32,
                     0.3,
                     leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1370,7 +1384,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.32,
                     0.3,
                     -leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1384,7 +1398,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.32,
                     -0.3,
                     -leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1398,7 +1412,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.32,
                     -0.3,
                     leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1407,24 +1421,30 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                 );
             }
             AnimalKind::Chicken => {
+                let uvs_body = get_animal_uvs(172);
+                let uvs_head = get_animal_uvs(189);
+                let uvs_legs = get_animal_uvs(190);
+
                 // Body
                 add_animal_box(
                     &mut mesh,
                     [-0.18, 0.25, -0.22],
                     [0.18, 0.55, 0.22],
-                    &uvs,
+                    &uvs_body,
+                    None,
                     ao,
                     light,
                     pos,
                     cos_y,
                     sin_y,
                 );
-                // Head
+                // Head (with front-facing eyes and comb)
                 add_animal_box(
                     &mut mesh,
                     [-0.1, 0.45, 0.15],
                     [0.1, 0.75, 0.35],
-                    &uvs,
+                    &uvs_body,
+                    Some(&uvs_head),
                     ao,
                     light,
                     pos,
@@ -1436,7 +1456,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.06, 0.52, 0.35],
                     [0.06, 0.62, 0.48],
-                    &uvs,
+                    &uvs_legs,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1448,7 +1469,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.03, 0.44, 0.26],
                     [0.03, 0.52, 0.34],
-                    &uvs,
+                    &uvs_head,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1460,7 +1482,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.22, 0.3, -0.18],
                     [-0.18, 0.52, 0.18],
-                    &uvs,
+                    &uvs_body,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1471,7 +1494,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [0.18, 0.3, -0.18],
                     [0.22, 0.52, 0.18],
-                    &uvs,
+                    &uvs_body,
+                    None,
                     ao,
                     light,
                     pos,
@@ -1486,7 +1510,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.25,
                     0.0,
                     leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,
@@ -1500,7 +1524,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     0.25,
                     0.0,
                     -leg_swing,
-                    &uvs,
+                    &uvs_legs,
                     ao,
                     light,
                     pos,

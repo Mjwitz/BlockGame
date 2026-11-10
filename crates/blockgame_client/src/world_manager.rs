@@ -13,9 +13,9 @@ use blockgame_core::{
     physics::AABB,
     world::{world_to_chunk_coords, World},
 };
-use blockgame_gen::TerrainGenerator;
+use blockgame_gen::{Biome, TerrainGenerator};
 use blockgame_render::{ChunkMesh, ChunkMesher, GpuMeshBuffers, VoxelPipeline};
-use glam::{IVec3, Vec3};
+use glam::{IVec2, IVec3, Vec3};
 use rayon::prelude::*;
 
 pub struct WorldManager {
@@ -34,6 +34,7 @@ pub struct WorldManager {
     pub animals: Vec<AnimalEntity>,
     pub next_animal_id: u32,
     pub planted_crops: Vec<(IVec3, f32)>,
+    pub animal_spawned_columns: HashSet<IVec2>,
 }
 
 impl WorldManager {
@@ -56,6 +57,7 @@ impl WorldManager {
             animals: Vec::new(),
             next_animal_id: 1,
             planted_crops: Vec::new(),
+            animal_spawned_columns: HashSet::new(),
         }
     }
 
@@ -133,46 +135,133 @@ impl WorldManager {
             face_count
         );
 
-        // Spawn initial passive animals on the surface near spawn
+        // Biome-aware initial animal herd spawning across spawn chunks
         {
-            let world_guard = self.world.lock().unwrap();
-            let mut spawn_animal_at = |kind: AnimalKind, x: i32, z: i32| {
-                let mut y = 50;
-                while y > 1 {
-                    let b = world_guard.get_block(IVec3::new(x, y, z));
-                    if b == BlockId::GRASS || b == BlockId::DIRT {
-                        break;
-                    }
-                    y -= 1;
+            let world_arc = self.world.clone();
+            let world_guard = world_arc.lock().unwrap();
+            for cz in -r..=r {
+                for cx in -r..=r {
+                    self.try_spawn_animals_in_column(cx, cz, &world_guard);
                 }
-                if y > 1 {
-                    self.animals.push(AnimalEntity::new(
+            }
+        }
+    }
+
+    /// Evaluates biome-aware animal spawning in a 16x16 chunk column (cx, cz).
+    pub fn try_spawn_animals_in_column(&mut self, cx: i32, cz: i32, world: &World) {
+        // Prevent re-spawning in the same column
+        if !self.animal_spawned_columns.insert(IVec2::new(cx, cz)) {
+            return;
+        }
+
+        // Global animal cap to protect performance and maintain balanced density
+        if self.animals.len() >= 35 {
+            return;
+        }
+
+        let center_x = cx * 16 + 8;
+        let center_z = cz * 16 + 8;
+        let surface_y = self.generator.surface_height(center_x, center_z);
+        let biome = self.generator.get_biome(center_x, center_z, surface_y);
+
+        // Biome spawn probabilities & herd compositions:
+        // - Desert: 0% spawn chance
+        // - Plains: 65% spawn chance (pasture grazing: cows, pigs, chickens)
+        // - Forest: 50% spawn chance (woodland foraging: pigs, chickens, occasional cows)
+        // - Mountains: 20% spawn chance (high-altitude chickens, occasional cows/pigs)
+        let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
+            Biome::Desert => return,
+            Biome::Plains => (0.65, [(AnimalKind::Cow, 0.40), (AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25)], 2, 4),
+            Biome::Forest => (0.50, [(AnimalKind::Pig, 0.45), (AnimalKind::Chicken, 0.35), (AnimalKind::Cow, 0.20)], 2, 3),
+            Biome::Mountains => (0.20, [(AnimalKind::Chicken, 0.50), (AnimalKind::Cow, 0.30), (AnimalKind::Pig, 0.20)], 1, 2),
+        };
+
+        // Deterministic pseudo-random seed per chunk column
+        let mut rng = ((cx as u64).wrapping_mul(73856093)
+            ^ (cz as u64).wrapping_mul(19349663)
+            ^ (self.generator.seed as u64))
+            ^ 0x9e3779b97f4a7c15;
+
+        #[inline]
+        fn next_f32(rng: &mut u64) -> f32 {
+            *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((*rng >> 32) as u32 as f32) / (u32::MAX as f32)
+        }
+
+        if next_f32(&mut rng) > spawn_chance {
+            return;
+        }
+
+        // Select animal kind for this herd
+        let roll = next_f32(&mut rng);
+        let mut accum = 0.0;
+        let mut selected_kind = kind_weights[0].0;
+        for (kind, weight) in kind_weights {
+            accum += weight;
+            if roll <= accum {
+                selected_kind = kind;
+                break;
+            }
+        }
+
+        let herd_size = min_herd + ((next_f32(&mut rng) * (max_herd - min_herd + 1) as f32).floor() as usize).min(max_herd - min_herd);
+
+        for _ in 0..herd_size {
+            if self.animals.len() >= 35 {
+                break;
+            }
+            let dx = ((next_f32(&mut rng) * 8.0) - 4.0).round() as i32;
+            let dz = ((next_f32(&mut rng) * 8.0) - 4.0).round() as i32;
+            let ax = center_x + dx;
+            let az = center_z + dz;
+
+            // Find top solid ground block
+            let mut ay = 48;
+            while ay > 1 {
+                let b = world.get_block(IVec3::new(ax, ay, az));
+                if b == BlockId::GRASS || b == BlockId::DIRT {
+                    break;
+                }
+                ay -= 1;
+            }
+
+            if ay > 1 {
+                let above = world.get_block(IVec3::new(ax, ay + 1, az));
+                if above.is_air() {
+                    let mut entity = AnimalEntity::new(
                         self.next_animal_id,
-                        kind,
-                        Vec3::new(x as f32 + 0.5, (y + 1) as f32, z as f32 + 0.5),
-                    ));
+                        selected_kind,
+                        Vec3::new(ax as f32 + 0.5, (ay + 1) as f32, az as f32 + 0.5),
+                    );
+                    entity.rng_state = rng;
+                    self.animals.push(entity);
                     self.next_animal_id += 1;
                 }
-            };
-
-            spawn_animal_at(AnimalKind::Cow, 6, 6);
-            spawn_animal_at(AnimalKind::Cow, 8, 4);
-            spawn_animal_at(AnimalKind::Pig, -6, 5);
-            spawn_animal_at(AnimalKind::Pig, -8, 7);
-            spawn_animal_at(AnimalKind::Chicken, 4, -6);
-            spawn_animal_at(AnimalKind::Chicken, 6, -8);
+            }
         }
     }
 
     /// Periodic update called every frame: streams chunks and uploads completed background meshes.
     pub fn update(&mut self, player_pos: Vec3, device: &wgpu::Device, pipeline: &VoxelPipeline) {
         // 1. Ingest background mesh results (all completed meshes uploaded)
+        let mut completed_surface_chunks = Vec::new();
         while let Ok((pos, mesh)) = self.mesh_rx.try_recv() {
             self.queued_meshing.remove(&pos);
             self.queued_generation.remove(&pos);
             self.loaded_chunks_set.insert(pos);
+            if pos.0.y == 0 {
+                completed_surface_chunks.push((pos.0.x, pos.0.z));
+            }
             if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
                 self.gpu_chunks.insert(pos, gpu_mesh);
+            }
+        }
+
+        if !completed_surface_chunks.is_empty() {
+            let world_arc = self.world.clone();
+            let world_guard = world_arc.lock().unwrap();
+            for (cx, cz) in completed_surface_chunks {
+                self.try_spawn_animals_in_column(cx, cz, &world_guard);
             }
         }
 
