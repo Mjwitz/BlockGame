@@ -621,8 +621,17 @@ impl ApplicationHandler for BlockGameApp {
                             if let Some(def) = state.item_registry.get(slot.item_id) {
                                 if let Some(block_id) = def.placeable_block {
                                     if let Some(hit) = state.targeted_block {
+                                        let target_is_water = {
+                                            let world_guard = state.world_manager.world().lock().unwrap();
+                                            world_guard.get_block(hit.hit_voxel).is_water()
+                                        };
+                                        let target_pos = if target_is_water && block_id != BlockId::LILY_PAD {
+                                            hit.hit_voxel
+                                        } else {
+                                            hit.place_voxel
+                                        };
                                         let placed = state.world_manager.place_block(
-                                            hit.place_voxel,
+                                            target_pos,
                                             block_id,
                                             &state.player.aabb(),
                                             &state.device,
@@ -1103,15 +1112,29 @@ impl ApplicationHandler for BlockGameApp {
                 {
                     let world_guard = state.world_manager.world().lock().unwrap();
                     let held_item = state.inventory.get(state.active_hotbar_slot).item_id;
-                    let target_water = held_item == ItemId::LILY_PAD;
-                    let hit = raycast_voxel_with_water(
+                    let is_placeable = state
+                        .item_registry
+                        .get(held_item)
+                        .and_then(|d| d.placeable_block)
+                        .is_some();
+                    let mut hit = raycast_voxel_with_water(
                         state.camera.position,
                         state.camera.forward(),
                         5.0, // 5 blocks reach
                         &world_guard,
                         &self.registry,
-                        target_water,
+                        held_item == ItemId::LILY_PAD,
                     );
+                    if hit.is_none() && is_placeable {
+                        hit = raycast_voxel_with_water(
+                            state.camera.position,
+                            state.camera.forward(),
+                            5.0,
+                            &world_guard,
+                            &self.registry,
+                            true,
+                        );
+                    }
 
                     if let Some(h) = hit {
                         // Recreate wireframe buffer if target voxel changed

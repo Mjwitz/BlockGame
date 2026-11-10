@@ -139,10 +139,30 @@ impl ItemDrop {
             self.pickup_delay -= dt;
         }
 
-        // 1. Gravity and Ground Collision
-        self.velocity.y -= 18.0 * dt;
-        self.velocity.x *= 0.92;
-        self.velocity.z *= 0.92;
+        // 1. Gravity, Buoyancy and Ground Collision
+        let current_voxel = IVec3::new(
+            self.position.x.floor() as i32,
+            self.position.y.floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let (cp, lx, ly, lz) = world_to_chunk_coords(current_voxel);
+        let current_block = if let Some(chunk) = world.get_chunk(cp) {
+            chunk.get(lx, ly, lz).unwrap_or(BlockId::AIR)
+        } else {
+            BlockId::AIR
+        };
+
+        if current_block == BlockId::WATER || current_block == BlockId::SEAGRASS {
+            // Water buoyancy: upward buoyant force + water drag
+            self.velocity.y += 12.0 * dt;
+            self.velocity.y = self.velocity.y.min(2.5); // Max upward float velocity
+            self.velocity.x *= 0.85;
+            self.velocity.z *= 0.85;
+        } else {
+            self.velocity.y -= 18.0 * dt;
+            self.velocity.x *= 0.92;
+            self.velocity.z *= 0.92;
+        }
 
         let next_pos = self.position + self.velocity * dt;
 
@@ -151,11 +171,11 @@ impl ItemDrop {
         let check_x = next_pos.x.floor() as i32;
         let check_z = next_pos.z.floor() as i32;
 
-        let (cp, lx, ly, lz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
-        let is_solid = if let Some(chunk) = world.get_chunk(cp) {
+        let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
+        let is_solid = if let Some(chunk) = world.get_chunk(cp_next) {
             chunk
-                .get(lx, ly, lz)
-                .map_or(false, |b| !registry.is_transparent(b))
+                .get(nlx, nly, nlz)
+                .map_or(false, |b| registry.is_solid(b))
         } else {
             false
         };
@@ -304,5 +324,29 @@ mod tests {
         let mut void_sand = FallingBlock::with_velocity(BlockId::SAND, Vec3::new(0.0, -60.0, 0.0), -20.0);
         let status = void_sand.update(0.5, &world, &registry);
         assert_eq!(status, FallingBlockStatus::Despawned);
+    }
+
+    #[test]
+    fn test_item_drop_buoyancy_in_water() {
+        let mut world = World::new();
+        let registry = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Water at y=10 and y=11, air at y=12
+        world.set_block(IVec3::new(5, 10, 5), BlockId::WATER);
+        world.set_block(IVec3::new(5, 11, 5), BlockId::WATER);
+        world.set_block(IVec3::new(5, 12, 5), BlockId::AIR);
+
+        let mut drop = ItemDrop::new(
+            Vec3::new(5.0, 10.2, 5.0),
+            ItemSlot::new(crate::item::ItemId::COAL, 1),
+        );
+        drop.velocity = Vec3::ZERO;
+
+        // In water, buoyancy pulls upward
+        let status = drop.update(0.1, &world, &registry, Vec3::new(100.0, 100.0, 100.0));
+        assert_eq!(status, ItemDropStatus::Alive);
+        assert!(drop.velocity.y > 0.0, "Item in water must accelerate upward from buoyancy");
+        assert!(drop.position.y > 10.2, "Item position must rise toward surface");
     }
 }

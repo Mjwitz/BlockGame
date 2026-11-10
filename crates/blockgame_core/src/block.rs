@@ -5,6 +5,7 @@ use glam::IVec3;
 use crate::direction::Direction;
 use crate::item::{ItemId, ItemSlot};
 use crate::tool::{ToolTier, ToolType};
+use crate::world::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -1415,6 +1416,75 @@ pub fn break_unsupported_attached(
     (extra_drops, modified_positions, falling_blocks)
 }
 
+/// Checks if `pos` (which is AIR or fragile) is adjacent to WATER, and if so,
+/// fills `pos` with WATER and cascades downward into open air or fragile blocks.
+pub fn apply_water_fill(
+    pos: IVec3,
+    world: &mut World,
+    _registry: &BlockRegistry,
+) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
+    let current = world.get_block(pos);
+    if !current.is_air() && !current.is_fragile() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // Check if above is water, or any horizontal neighbor is water
+    let above = pos + IVec3::Y;
+    let horizontal = [
+        pos + IVec3::X,
+        pos - IVec3::X,
+        pos + IVec3::Z,
+        pos - IVec3::Z,
+    ];
+
+    let has_water_neighbor = world.get_block(above).is_water()
+        || horizontal.iter().any(|&p| world.get_block(p).is_water());
+
+    if !has_water_neighbor {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut modified_positions = Vec::new();
+    let mut extra_drops = Vec::new();
+
+    // Fill pos with water
+    world.set_block(pos, BlockId::WATER);
+    modified_positions.push(pos);
+
+    // Cascade downward into open air or wash away fragile blocks
+    let mut check_pos = pos - IVec3::Y;
+    while check_pos.y >= 0 {
+        let b = world.get_block(check_pos);
+        if b.is_air() {
+            world.set_block(check_pos, BlockId::WATER);
+            modified_positions.push(check_pos);
+            check_pos -= IVec3::Y;
+        } else if b.is_fragile() {
+            let drop_item = match b {
+                BlockId::TORCH => ItemSlot::new(crate::item::ItemId::TORCH, 1),
+                BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 => {
+                    ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1)
+                }
+                BlockId::WHEAT_3 => ItemSlot::new(crate::item::ItemId::WHEAT, 1),
+                BlockId::TALL_GRASS => ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1),
+                BlockId::LILY_PAD => ItemSlot::new(crate::item::ItemId::LILY_PAD, 1),
+                _ => ItemSlot::EMPTY,
+            };
+            if !drop_item.is_empty() {
+                extra_drops.push((check_pos, drop_item));
+            }
+            world.set_block(check_pos, BlockId::WATER);
+            modified_positions.push(check_pos);
+            check_pos -= IVec3::Y;
+        } else {
+            // Hit solid block below
+            break;
+        }
+    }
+
+    (modified_positions, extra_drops)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1650,4 +1720,76 @@ mod tests {
         assert!(modified_sand.contains(&IVec3::new(2, 2, 2)));
         assert!(modified_sand.contains(&IVec3::new(2, 3, 2)));
     }
+
+    #[test]
+    fn test_water_fill_into_exposed_space() {
+        let mut world = World::new();
+        let reg = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // 1. Water at (6, 5, 5), wall at (5, 5, 5), floor at (5, 4, 5)
+        world.set_block(IVec3::new(6, 5, 5), BlockId::WATER);
+        world.set_block(IVec3::new(5, 5, 5), BlockId::STONE);
+        world.set_block(IVec3::new(5, 4, 5), BlockId::STONE);
+
+        // Break wall -> becomes AIR
+        world.set_block(IVec3::new(5, 5, 5), BlockId::AIR);
+        let (modified, drops) = apply_water_fill(IVec3::new(5, 5, 5), &mut world, &reg);
+
+        assert!(drops.is_empty());
+        assert_eq!(world.get_block(IVec3::new(5, 5, 5)), BlockId::WATER);
+        assert_eq!(modified, vec![IVec3::new(5, 5, 5)]);
+    }
+
+    #[test]
+    fn test_water_fill_cascades_downward_and_washes_fragile_blocks() {
+        let mut world = World::new();
+        let reg = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Water at (4, 10, 4)
+        world.set_block(IVec3::new(4, 10, 4), BlockId::WATER);
+        // Wall at (3, 10, 4)
+        world.set_block(IVec3::new(3, 10, 4), BlockId::STONE);
+        // Air at (3, 9, 4)
+        world.set_block(IVec3::new(3, 9, 4), BlockId::AIR);
+        // Torch at (3, 8, 4)
+        world.set_block(IVec3::new(3, 8, 4), BlockId::TORCH);
+        // Solid ground at (3, 7, 4)
+        world.set_block(IVec3::new(3, 7, 4), BlockId::STONE);
+
+        // Break wall at (3, 10, 4)
+        world.set_block(IVec3::new(3, 10, 4), BlockId::AIR);
+        let (modified, drops) = apply_water_fill(IVec3::new(3, 10, 4), &mut world, &reg);
+
+        // Water fills (3, 10, 4), cascades down to (3, 9, 4), and washes away torch at (3, 8, 4)
+        assert_eq!(world.get_block(IVec3::new(3, 10, 4)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(3, 9, 4)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(3, 8, 4)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(3, 7, 4)), BlockId::STONE);
+
+        assert_eq!(modified.len(), 3);
+        assert_eq!(drops.len(), 1);
+        assert_eq!(drops[0].0, IVec3::new(3, 8, 4));
+        assert_eq!(drops[0].1.item_id, ItemId::TORCH);
+    }
+
+    #[test]
+    fn test_block_placement_in_water_displaces_water() {
+        let mut world = World::new();
+        let reg = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Seabed at (5, 1, 5), water at (5, 2, 5)
+        world.set_block(IVec3::new(5, 1, 5), BlockId::STONE);
+        world.set_block(IVec3::new(5, 2, 5), BlockId::WATER);
+
+        assert_eq!(world.get_block(IVec3::new(5, 2, 5)), BlockId::WATER);
+
+        // Place cobblestone at (5, 2, 5), displacing water
+        world.set_block(IVec3::new(5, 2, 5), BlockId::COBBLESTONE);
+        assert_eq!(world.get_block(IVec3::new(5, 2, 5)), BlockId::COBBLESTONE);
+        assert!(reg.is_solid(world.get_block(IVec3::new(5, 2, 5))));
+    }
 }
+

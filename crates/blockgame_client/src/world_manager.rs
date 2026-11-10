@@ -6,7 +6,9 @@ use std::sync::{
 
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
-    block::{break_unsupported_attached, can_block_survive, BlockId, BlockRegistry},
+    block::{
+        apply_water_fill, break_unsupported_attached, can_block_survive, BlockId, BlockRegistry,
+    },
     chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
     entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus},
     item::ItemSlot,
@@ -611,6 +613,15 @@ impl WorldManager {
             for (mpos, drop) in unsupported_drops {
                 let drop_pos = mpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
                 extra_drops.push((drop_pos, drop));
+            }
+
+            // If broken block was air and has adjacent water, water flows to fill exposed space
+            let (water_filled, water_drops) = apply_water_fill(pos, &mut world, &self.registry);
+            for wpos in water_filled {
+                Self::add_chunk_and_neighbors(wpos, &mut chunks_to_rebuild);
+            }
+            for (wpos, drop) in water_drops {
+                extra_drops.push((wpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
             }
 
             if is_light_source {
