@@ -159,9 +159,9 @@ impl TerrainGenerator {
         let fx = x as f64;
         let fz = z as f64;
 
-        // Mushroom Fields: rare fungal biome with distinct mycelium turf
+        // Mushroom Fields: very rare fungal biome with distinct mycelium turf
         let m_val = self.mushroom_noise.get([fx * 0.003, fz * 0.003]);
-        if m_val > 0.32 {
+        if m_val > 0.60 {
             if height <= self.water_level {
                 return Biome::Ocean;
             }

@@ -80,6 +80,21 @@ impl BlockId {
     pub const fn is_water(&self) -> bool {
         self.0 == Self::WATER.0 || self.0 == Self::SEAGRASS.0
     }
+
+    #[inline]
+    pub const fn luminance(&self) -> u8 {
+        match self.0 {
+            13 => 14, // TORCH
+            27 => 13, // FURNACE_LIT
+            62 => 15, // SEA_LANTERN
+            _ => 0,
+        }
+    }
+
+    #[inline]
+    pub const fn is_emissive(&self) -> bool {
+        self.luminance() > 0
+    }
 }
 
 impl From<u8> for BlockId {
@@ -849,7 +864,7 @@ impl BlockRegistry {
             textures: [225; 6],
             hardness: 2.0,
             required_tool: Some(ToolType::Pickaxe),
-            min_tier: ToolTier::None,
+            min_tier: ToolTier::Wood,
             drop_item: Some(ItemId::MOSSY_COBBLESTONE),
             drop_count: (1, 1),
         });
@@ -1162,13 +1177,20 @@ mod tests {
             Some((ItemId::DIRT, 1))
         );
 
-        // 3. Stone requires Wood Pickaxe or better
+        // 3. Stone & Mossy Cobblestone require Wood Pickaxe or better
         assert!(!reg.can_harvest(BlockId::STONE, None, ToolTier::None));
         assert_eq!(reg.get_drop(BlockId::STONE, None, ToolTier::None), None);
         assert!(reg.can_harvest(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood));
         assert_eq!(
             reg.get_drop(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood),
             Some((ItemId::COBBLESTONE, 1))
+        );
+        assert!(!reg.can_harvest(BlockId::MOSSY_COBBLESTONE, None, ToolTier::None));
+        assert_eq!(reg.get_drop(BlockId::MOSSY_COBBLESTONE, None, ToolTier::None), None);
+        assert!(reg.can_harvest(BlockId::MOSSY_COBBLESTONE, Some(ToolType::Pickaxe), ToolTier::Wood));
+        assert_eq!(
+            reg.get_drop(BlockId::MOSSY_COBBLESTONE, Some(ToolType::Pickaxe), ToolTier::Wood),
+            Some((ItemId::MOSSY_COBBLESTONE, 1))
         );
 
         // 4. Diamond Ore requires Iron Pickaxe or better

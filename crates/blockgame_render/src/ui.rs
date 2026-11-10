@@ -564,7 +564,20 @@ impl UiBuilder {
         let def = def_opt.unwrap();
         let block_registry = blockgame_core::block::BlockRegistry::new();
 
-        if let Some(block_id) = def.placeable_block {
+        let is_flat_plant_or_crop = match def.placeable_block {
+            Some(b) => {
+                b == blockgame_core::block::BlockId::SEAGRASS
+                    || b == blockgame_core::block::BlockId::TALL_GRASS
+                    || b == blockgame_core::block::BlockId::LILY_PAD
+                    || b == blockgame_core::block::BlockId::WHEAT_0
+                    || b == blockgame_core::block::BlockId::WHEAT_1
+                    || b == blockgame_core::block::BlockId::WHEAT_2
+                    || b == blockgame_core::block::BlockId::WHEAT_3
+            }
+            None => false,
+        };
+
+        if let Some(block_id) = def.placeable_block.filter(|_| !is_flat_plant_or_crop) {
             if block_id == blockgame_core::block::BlockId::TORCH {
                 // -----------------------------------------------------------------
                 // 3D HELD TORCH: 3D volumetric wooden shaft and 3D glowing flame head
@@ -3066,6 +3079,12 @@ impl UiBuilder {
             blockgame_core::crafting::RecipeCategory::Crafting3x3 => "[ 3x3 Crafting Table ]",
             blockgame_core::crafting::RecipeCategory::Crafting2x2 => "[ 2x2 Crafting Grid ]",
             blockgame_core::crafting::RecipeCategory::Smelting => "[ Smelting / Cooking ]",
+            blockgame_core::crafting::RecipeCategory::WorldGen => "[ World Generation / Natural Source ]",
+        };
+        let cat_col = if params.recipe.category == blockgame_core::crafting::RecipeCategory::WorldGen {
+            [0.35, 0.95, 0.65, 1.0]
+        } else {
+            [0.35, 0.85, 0.95, 1.0]
         };
         let cat_x = mx + modal_w - (cat_str.len() as f32 * 9.0) - 20.0;
         Self::draw_string(
@@ -3076,7 +3095,7 @@ impl UiBuilder {
             8.0,
             12.0,
             1.0,
-            [0.35, 0.85, 0.95, 1.0],
+            cat_col,
         );
 
         // 3. Recipe Content Box
@@ -3093,124 +3112,289 @@ impl UiBuilder {
             [0.12, 0.12, 0.14, 0.95],
         );
 
-        let slot_size = Self::SLOT_SIZE;
-        let slot_gap = Self::SLOT_GAP;
-        let grid_start_x = box_x + 28.0;
-        let grid_start_y = box_y + 24.0;
+        if params.recipe.category == blockgame_core::crafting::RecipeCategory::WorldGen {
+            let info = blockgame_core::crafting::get_item_source_info(params.target_item);
 
-        // 3x3 Input Grid
-        for gy in 0..3 {
-            for gx in 0..3 {
-                let idx = gy * 3 + gx;
-                let sx = grid_start_x + (gx as f32) * (slot_size + slot_gap);
-                let sy = grid_start_y + (gy as f32) * (slot_size + slot_gap);
+            // Left: Display Pedestal & Slot
+            let ped_x = box_x + 36.0;
+            let ped_y = box_y + 36.0;
+            let ped_size = 72.0;
 
-                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+            mesh.add_quad(ped_x, ped_y, ped_size, ped_size, slot_uv, [1.0, 1.0, 1.0, 1.0]);
+            mesh.add_quad(ped_x - 8.0, ped_y + ped_size + 4.0, ped_size + 16.0, 6.0, white_uv, [0.3, 0.3, 0.35, 1.0]);
+            mesh.add_quad(ped_x - 14.0, ped_y + ped_size + 10.0, ped_size + 28.0, 6.0, white_uv, [0.2, 0.2, 0.25, 1.0]);
 
-                if let Some(ing_id) = params.recipe.inputs[idx] {
-                    if let Some(def) = registry.get(ing_id) {
-                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-                        let pad = 6.0;
-                        mesh.add_quad(
-                            sx + pad,
-                            sy + pad,
-                            slot_size - pad * 2.0,
-                            slot_size - pad * 2.0,
-                            icon_uv,
-                            [1.0, 1.0, 1.0, 1.0],
-                        );
-
-                        if cursor_pos[0] >= sx
-                            && cursor_pos[0] <= sx + slot_size
-                            && cursor_pos[1] >= sy
-                            && cursor_pos[1] <= sy + slot_size
-                        {
-                            mesh.add_quad(
-                                sx - 2.0,
-                                sy - 2.0,
-                                slot_size + 4.0,
-                                slot_size + 4.0,
-                                highlight_uv,
-                                [1.0, 1.0, 1.0, 1.0],
-                            );
-                            *hovered_item_name = Some(def.display_name);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Arrow ===>
-        let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 24.0;
-        let arrow_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 6.0;
-        Self::draw_string(
-            mesh,
-            arrow_x,
-            arrow_y,
-            "===>",
-            10.0,
-            14.0,
-            1.0,
-            [0.85, 0.85, 0.90, 1.0],
-        );
-
-        // Output Slot
-        let out_x = arrow_x + 64.0;
-        let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 28.0;
-        let out_size = 56.0;
-        mesh.add_quad(
-            out_x,
-            out_y,
-            out_size,
-            out_size,
-            slot_uv,
-            [1.0, 1.0, 1.0, 1.0],
-        );
-
-        let out_slot = params.recipe.output;
-        if !out_slot.is_empty() {
-            if let Some(def) = registry.get(out_slot.item_id) {
+            if let Some(def) = registry.get(params.target_item) {
                 let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-                let pad = 6.0;
+                let pad = 8.0;
                 mesh.add_quad(
-                    out_x + pad,
-                    out_y + pad,
-                    out_size - pad * 2.0,
-                    out_size - pad * 2.0,
+                    ped_x + pad,
+                    ped_y + pad,
+                    ped_size - pad * 2.0,
+                    ped_size - pad * 2.0,
                     icon_uv,
                     [1.0, 1.0, 1.0, 1.0],
                 );
-                Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
 
-                if cursor_pos[0] >= out_x
-                    && cursor_pos[0] <= out_x + out_size
-                    && cursor_pos[1] >= out_y
-                    && cursor_pos[1] <= out_y + out_size
+                if cursor_pos[0] >= ped_x
+                    && cursor_pos[0] <= ped_x + ped_size
+                    && cursor_pos[1] >= ped_y
+                    && cursor_pos[1] <= ped_y + ped_size
                 {
                     mesh.add_quad(
-                        out_x - 2.0,
-                        out_y - 2.0,
-                        out_size + 4.0,
-                        out_size + 4.0,
+                        ped_x - 2.0,
+                        ped_y - 2.0,
+                        ped_size + 4.0,
+                        ped_size + 4.0,
                         highlight_uv,
                         [1.0, 1.0, 1.0, 1.0],
                     );
                     *hovered_item_name = Some(def.display_name);
                 }
             }
-        }
 
-        // Recipe Name at bottom of box
-        Self::draw_string(
-            mesh,
-            box_x + 20.0,
-            box_y + box_h - 22.0,
-            params.recipe.name,
-            8.0,
-            12.0,
-            0.5,
-            [0.70, 0.70, 0.75, 1.0],
-        );
+            // Right: Information Text
+            let text_x = ped_x + ped_size + 32.0;
+            let mut line_y = box_y + 24.0;
+
+            Self::draw_string(
+                mesh,
+                text_x,
+                line_y,
+                "Natural Occurrence",
+                9.0,
+                14.0,
+                1.0,
+                [1.0, 0.85, 0.30, 1.0],
+            );
+            line_y += 20.0;
+
+            Self::draw_string(
+                mesh,
+                text_x,
+                line_y,
+                "No crafting recipe required.",
+                8.0,
+                12.0,
+                1.0,
+                [0.70, 0.70, 0.75, 1.0],
+            );
+            line_y += 18.0;
+
+            mesh.add_quad(text_x, line_y, 220.0, 1.5, white_uv, [0.3, 0.3, 0.35, 1.0]);
+            line_y += 10.0;
+
+            if let Some(src) = info {
+                Self::draw_string(
+                    mesh,
+                    text_x,
+                    line_y,
+                    "Found In:",
+                    8.0,
+                    12.0,
+                    1.0,
+                    [0.95, 0.95, 0.95, 1.0],
+                );
+                line_y += 14.0;
+                Self::draw_string(
+                    mesh,
+                    text_x + 8.0,
+                    line_y,
+                    src.location,
+                    8.0,
+                    12.0,
+                    0.5,
+                    [0.45, 0.95, 0.55, 1.0],
+                );
+                line_y += 20.0;
+
+                Self::draw_string(
+                    mesh,
+                    text_x,
+                    line_y,
+                    "Harvest Tool:",
+                    8.0,
+                    12.0,
+                    1.0,
+                    [0.95, 0.95, 0.95, 1.0],
+                );
+                line_y += 14.0;
+                Self::draw_string(
+                    mesh,
+                    text_x + 8.0,
+                    line_y,
+                    src.tool_required,
+                    8.0,
+                    12.0,
+                    0.5,
+                    [0.45, 0.80, 1.0, 1.0],
+                );
+                line_y += 20.0;
+
+                Self::draw_string(
+                    mesh,
+                    text_x,
+                    line_y,
+                    "Notes:",
+                    8.0,
+                    12.0,
+                    1.0,
+                    [0.95, 0.95, 0.95, 1.0],
+                );
+                line_y += 14.0;
+                Self::draw_string(
+                    mesh,
+                    text_x + 8.0,
+                    line_y,
+                    src.notes,
+                    8.0,
+                    12.0,
+                    0.5,
+                    [0.80, 0.80, 0.85, 1.0],
+                );
+            } else {
+                Self::draw_string(
+                    mesh,
+                    text_x,
+                    line_y,
+                    "Obtained via exploration in world biomes.",
+                    8.0,
+                    12.0,
+                    0.5,
+                    [0.45, 0.95, 0.55, 1.0],
+                );
+            }
+
+            Self::draw_string(
+                mesh,
+                box_x + 20.0,
+                box_y + box_h - 20.0,
+                "Press U on this item to view crafting recipes using it",
+                8.0,
+                12.0,
+                0.5,
+                [0.55, 0.70, 0.85, 1.0],
+            );
+        } else {
+            let slot_size = Self::SLOT_SIZE;
+            let slot_gap = Self::SLOT_GAP;
+            let grid_start_x = box_x + 28.0;
+            let grid_start_y = box_y + 24.0;
+
+            // 3x3 Input Grid
+            for gy in 0..3 {
+                for gx in 0..3 {
+                    let idx = gy * 3 + gx;
+                    let sx = grid_start_x + (gx as f32) * (slot_size + slot_gap);
+                    let sy = grid_start_y + (gy as f32) * (slot_size + slot_gap);
+
+                    mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+
+                    if let Some(ing_id) = params.recipe.inputs[idx] {
+                        if let Some(def) = registry.get(ing_id) {
+                            let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                            let pad = 6.0;
+                            mesh.add_quad(
+                                sx + pad,
+                                sy + pad,
+                                slot_size - pad * 2.0,
+                                slot_size - pad * 2.0,
+                                icon_uv,
+                                [1.0, 1.0, 1.0, 1.0],
+                            );
+
+                            if cursor_pos[0] >= sx
+                                && cursor_pos[0] <= sx + slot_size
+                                && cursor_pos[1] >= sy
+                                && cursor_pos[1] <= sy + slot_size
+                            {
+                                mesh.add_quad(
+                                    sx - 2.0,
+                                    sy - 2.0,
+                                    slot_size + 4.0,
+                                    slot_size + 4.0,
+                                    highlight_uv,
+                                    [1.0, 1.0, 1.0, 1.0],
+                                );
+                                *hovered_item_name = Some(def.display_name);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Arrow ===>
+            let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 24.0;
+            let arrow_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 6.0;
+            Self::draw_string(
+                mesh,
+                arrow_x,
+                arrow_y,
+                "===>",
+                10.0,
+                14.0,
+                1.0,
+                [0.85, 0.85, 0.90, 1.0],
+            );
+
+            // Output Slot
+            let out_x = arrow_x + 64.0;
+            let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 28.0;
+            let out_size = 56.0;
+            mesh.add_quad(
+                out_x,
+                out_y,
+                out_size,
+                out_size,
+                slot_uv,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+
+            let out_slot = params.recipe.output;
+            if !out_slot.is_empty() {
+                if let Some(def) = registry.get(out_slot.item_id) {
+                    let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                    let pad = 6.0;
+                    mesh.add_quad(
+                        out_x + pad,
+                        out_y + pad,
+                        out_size - pad * 2.0,
+                        out_size - pad * 2.0,
+                        icon_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
+
+                    if cursor_pos[0] >= out_x
+                        && cursor_pos[0] <= out_x + out_size
+                        && cursor_pos[1] >= out_y
+                        && cursor_pos[1] <= out_y + out_size
+                    {
+                        mesh.add_quad(
+                            out_x - 2.0,
+                            out_y - 2.0,
+                            out_size + 4.0,
+                            out_size + 4.0,
+                            highlight_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+                        *hovered_item_name = Some(def.display_name);
+                    }
+                }
+            }
+
+            // Recipe Name at bottom of box
+            Self::draw_string(
+                mesh,
+                box_x + 20.0,
+                box_y + box_h - 22.0,
+                params.recipe.name,
+                8.0,
+                12.0,
+                0.5,
+                [0.70, 0.70, 0.75, 1.0],
+            );
+        }
     }
 }
 
@@ -3464,6 +3648,37 @@ mod tests {
     }
 
     #[test]
+    fn test_draw_recipe_modal_world_gen() {
+        let mut mesh = UiMesh::new();
+        let registry = ItemRegistry::new();
+        let display_recipe = blockgame_core::crafting::DisplayRecipe {
+            name: "Dirt",
+            category: blockgame_core::crafting::RecipeCategory::WorldGen,
+            inputs: [None; 9],
+            output: ItemSlot::new(ItemId::DIRT, 1),
+        };
+        let params = RecipeModalParams {
+            target_item: ItemId::DIRT,
+            recipe: &display_recipe,
+            recipe_index: 0,
+            total_recipes: 1,
+            is_usage_mode: false,
+        };
+        let mut hovered = None;
+        UiBuilder::draw_recipe_modal(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &params,
+            [640.0, 360.0],
+            &registry,
+            &mut hovered,
+        );
+        assert!(mesh.indices.len() > 0);
+        assert!(mesh.vertices.len() > 0);
+    }
+
+    #[test]
     fn test_build_furnace_screen() {
         let mut mesh = UiMesh::new();
         let inv = Inventory::new(36);
@@ -3513,5 +3728,22 @@ mod tests {
         let submerged_quads = mesh.indices.len() / 6;
 
         assert!(submerged_quads > normal_quads, "Submerged HUD must generate extra quads for underwater tint and bubbles");
+    }
+
+    #[test]
+    fn test_build_hud_held_seagrass_flat_item() {
+        let registry = ItemRegistry::new();
+
+        // 3D Block (Dirt) generates 3 isometric faces (18 indices)
+        let mut mesh_block = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_block, 1280.0, 720.0, ItemSlot::new(ItemId::DIRT, 1), &registry, 0.0, 0.0);
+        let block_quads = mesh_block.indices.len() / 6;
+        assert_eq!(block_quads, 3, "Solid blocks should generate 3 isometric cube faces");
+
+        // Plant item (Seagrass) generates 1 flat 2D sprite face (6 indices)
+        let mut mesh_seagrass = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_seagrass, 1280.0, 720.0, ItemSlot::new(ItemId::SEAGRASS, 1), &registry, 0.0, 0.0);
+        let seagrass_quads = mesh_seagrass.indices.len() / 6;
+        assert_eq!(seagrass_quads, 1, "Seagrass in hand should generate 1 flat 2D item sprite quad instead of a 3D cube");
     }
 }

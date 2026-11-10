@@ -1450,6 +1450,8 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                 let uvs_body = get_animal_uvs(170);
                 let uvs_head = get_animal_uvs(185);
                 let uvs_legs = get_animal_uvs(186);
+                let uvs_snout = get_animal_uvs(240);
+                let uvs_horns = get_animal_uvs(241);
 
                 // Body
                 add_animal_box(
@@ -1482,7 +1484,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.15, 0.85, 1.0],
                     [0.15, 1.08, 1.16],
-                    &uvs_legs,
+                    &uvs_snout,
                     None,
                     ao,
                     light,
@@ -1495,7 +1497,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [-0.25, 1.3, 0.7],
                     [-0.18, 1.45, 0.76],
-                    &uvs_legs,
+                    &uvs_horns,
                     None,
                     ao,
                     light,
@@ -1507,7 +1509,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     &mut mesh,
                     [0.18, 1.3, 0.7],
                     [0.25, 1.45, 0.76],
-                    &uvs_legs,
+                    &uvs_horns,
                     None,
                     ao,
                     light,
@@ -2001,5 +2003,17 @@ mod tests {
         // The 6 outer water blocks face air outward, but have zero internal faces facing seagrass
         // Each of the 6 surrounding water blocks has 5 faces exposed to air = 30 faces * 4 = 120 vertices
         assert_eq!(submerged_mesh.water_vertices.len(), 120);
+    }
+
+    #[test]
+    fn test_cow_mesh_generation() {
+        let cow = AnimalEntity::new(
+            1,
+            AnimalKind::Cow,
+            glam::Vec3::new(10.0, 64.0, 10.0),
+        );
+        let mesh = build_animals_mesh(&[cow]);
+        assert!(!mesh.vertices.is_empty(), "Cow mesh vertices must not be empty");
+        assert!(!mesh.indices.is_empty(), "Cow mesh indices must not be empty");
     }
 }

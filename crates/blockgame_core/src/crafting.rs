@@ -88,6 +88,280 @@ pub enum RecipeCategory {
     Crafting3x3,
     Crafting2x2,
     Smelting,
+    WorldGen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemSourceInfo {
+    pub location: &'static str,
+    pub tool_required: &'static str,
+    pub notes: &'static str,
+}
+
+pub fn get_item_source_info(item_id: ItemId) -> Option<ItemSourceInfo> {
+    match item_id {
+        ItemId::DIRT => Some(ItemSourceInfo {
+            location: "Plains, Forests, and Riverbanks",
+            tool_required: "Shovel (or by hand)",
+            notes: "Abundant surface soil block.",
+        }),
+        ItemId::GRASS => Some(ItemSourceInfo {
+            location: "Surface of temperate and lush biomes",
+            tool_required: "Shovel with Silk Touch",
+            notes: "Spreads green grass to adjacent dirt.",
+        }),
+        ItemId::STONE => Some(ItemSourceInfo {
+            location: "Underground, cliffs, and mountain peaks",
+            tool_required: "Pickaxe (Silk Touch drops Stone)",
+            notes: "Abundant everywhere beneath the soil.",
+        }),
+        ItemId::COBBLESTONE => Some(ItemSourceInfo {
+            location: "Mined from Stone underground",
+            tool_required: "Pickaxe (Wooden or better)",
+            notes: "Drops when mining stone without Silk Touch.",
+        }),
+        ItemId::SAND => Some(ItemSourceInfo {
+            location: "Deserts, Beaches, and Ocean floor",
+            tool_required: "Shovel (or by hand)",
+            notes: "Abundant along water bodies and desert dunes.",
+        }),
+        ItemId::GRAVEL => Some(ItemSourceInfo {
+            location: "Beaches, riverbeds, and underground",
+            tool_required: "Shovel",
+            notes: "Gravity-affected block; may yield Flint.",
+        }),
+        ItemId::SANDSTONE => Some(ItemSourceInfo {
+            location: "Beneath desert sand dunes",
+            tool_required: "Pickaxe (Wooden or better)",
+            notes: "Natural compacted desert sedimentary rock.",
+        }),
+        ItemId::RED_SAND => Some(ItemSourceInfo {
+            location: "Badlands valleys and red dunes",
+            tool_required: "Shovel (or by hand)",
+            notes: "Warm crimson sand unique to badlands.",
+        }),
+        ItemId::TERRACOTTA => Some(ItemSourceInfo {
+            location: "Badlands canyon mesas and cliffs",
+            tool_required: "Pickaxe (Wooden or better)",
+            notes: "Forms colorful stratified mesa cliffs.",
+        }),
+        ItemId::PODZOL => Some(ItemSourceInfo {
+            location: "Floor of Taiga evergreen forests",
+            tool_required: "Shovel with Silk Touch",
+            notes: "Rich needle-litter soil in taiga biomes.",
+        }),
+        ItemId::MYCELIUM => Some(ItemSourceInfo {
+            location: "Rare Mushroom Fields island biomes",
+            tool_required: "Shovel with Silk Touch",
+            notes: "Very rare spongy turf; breeds giant mushrooms.",
+        }),
+        ItemId::SNOW_BLOCK => Some(ItemSourceInfo {
+            location: "Snowy Slopes and Frozen Peaks",
+            tool_required: "Shovel",
+            notes: "Covers high cold mountain summits.",
+        }),
+        ItemId::ICE => Some(ItemSourceInfo {
+            location: "Frozen oceans and high mountain lakes",
+            tool_required: "Pickaxe with Silk Touch",
+            notes: "Forms over cold surface water.",
+        }),
+        ItemId::CLAY => Some(ItemSourceInfo {
+            location: "Riverbeds, lakes, and shallow coasts",
+            tool_required: "Shovel",
+            notes: "Found under water; smelt into bricks.",
+        }),
+        ItemId::LILY_PAD => Some(ItemSourceInfo {
+            location: "Surface of swamps and calm rivers",
+            tool_required: "Hand (instant harvest)",
+            notes: "Floats atop calm river and lake water.",
+        }),
+        ItemId::CACTUS => Some(ItemSourceInfo {
+            location: "Deserts and arid badlands",
+            tool_required: "Hand or Weapon (caution: spikes!)",
+            notes: "Grows on desert sand; deals contact damage.",
+        }),
+        ItemId::WOOD_LOG => Some(ItemSourceInfo {
+            location: "Oak trees in Plains and Forests",
+            tool_required: "Axe (or by hand)",
+            notes: "Fell oak tree trunks to harvest.",
+        }),
+        ItemId::BIRCH_LOG => Some(ItemSourceInfo {
+            location: "Birch trees in Birch Forest biomes",
+            tool_required: "Axe (or by hand)",
+            notes: "Distinctive white-bark forest trees.",
+        }),
+        ItemId::SPRUCE_LOG => Some(ItemSourceInfo {
+            location: "Conifer trees in Taiga biomes",
+            tool_required: "Axe (or by hand)",
+            notes: "Evergreen conifer trees in cold regions.",
+        }),
+        ItemId::ACACIA_LOG => Some(ItemSourceInfo {
+            location: "Acacia trees in Savanna biomes",
+            tool_required: "Axe (or by hand)",
+            notes: "Grows in warm arid savanna plains.",
+        }),
+        ItemId::JUNGLE_LOG => Some(ItemSourceInfo {
+            location: "Jungle rainforest canopy trees",
+            tool_required: "Axe (or by hand)",
+            notes: "Tall towering trees in tropical rainforests.",
+        }),
+        ItemId::DARK_OAK_LOG => Some(ItemSourceInfo {
+            location: "Dark Forest biomes",
+            tool_required: "Axe (or by hand)",
+            notes: "Thick canopy trees with dense dark wood.",
+        }),
+        ItemId::LEAVES => Some(ItemSourceInfo {
+            location: "Oak tree canopies in Forests",
+            tool_required: "Shears (or naturally decays)",
+            notes: "Drops Apples and Saplings when cleared.",
+        }),
+        ItemId::BIRCH_LEAVES => Some(ItemSourceInfo {
+            location: "Birch tree canopies",
+            tool_required: "Shears (or naturally decays)",
+            notes: "Foliage of birch trees.",
+        }),
+        ItemId::SPRUCE_LEAVES => Some(ItemSourceInfo {
+            location: "Evergreen pine needles in Taiga",
+            tool_required: "Shears (or naturally decays)",
+            notes: "Dense needle foliage of taiga conifers.",
+        }),
+        ItemId::ACACIA_LEAVES => Some(ItemSourceInfo {
+            location: "Flat canopies in Savanna biomes",
+            tool_required: "Shears (or naturally decays)",
+            notes: "Savanna flat-top canopy leaves.",
+        }),
+        ItemId::JUNGLE_LEAVES => Some(ItemSourceInfo {
+            location: "Jungle rainforest canopies",
+            tool_required: "Shears (or naturally decays)",
+            notes: "Lush tropical rainforest tree foliage.",
+        }),
+        ItemId::DARK_OAK_LEAVES => Some(ItemSourceInfo {
+            location: "Dark Forest dense roof",
+            tool_required: "Shears (or naturally decays)",
+            notes: "Dense canopy foliage blocking out the sky.",
+        }),
+        ItemId::RED_MUSHROOM_BLOCK => Some(ItemSourceInfo {
+            location: "Giant red mushrooms in Mushroom Fields",
+            tool_required: "Axe (or by hand)",
+            notes: "Found on rare mushroom field islands.",
+        }),
+        ItemId::BROWN_MUSHROOM_BLOCK => Some(ItemSourceInfo {
+            location: "Giant brown mushrooms in Mushroom Fields",
+            tool_required: "Axe (or by hand)",
+            notes: "Found on rare mushroom field islands.",
+        }),
+        ItemId::MUSHROOM_STEM => Some(ItemSourceInfo {
+            location: "Stems of giant mushrooms",
+            tool_required: "Axe (or by hand)",
+            notes: "Thick fungal stalks in Mushroom Fields.",
+        }),
+        ItemId::COAL_ORE => Some(ItemSourceInfo {
+            location: "Underground rock strata and cliff veins",
+            tool_required: "Pickaxe (Wooden or better)",
+            notes: "Mined for Coal fuel and torches.",
+        }),
+        ItemId::COPPER_ORE => Some(ItemSourceInfo {
+            location: "Underground mineral deposits (Y: 10-60)",
+            tool_required: "Pickaxe (Stone or better)",
+            notes: "Drops Raw Copper; smelt into Copper Ingots.",
+        }),
+        ItemId::IRON_ORE => Some(ItemSourceInfo {
+            location: "Underground rock strata (Y: 5-55)",
+            tool_required: "Pickaxe (Stone or better)",
+            notes: "Drops Raw Iron; smelt into Iron Ingots.",
+        }),
+        ItemId::GOLD_ORE => Some(ItemSourceInfo {
+            location: "Deep underground caves (Y <= 30)",
+            tool_required: "Pickaxe (Iron or better)",
+            notes: "Drops Raw Gold; smelt into Gold Ingots.",
+        }),
+        ItemId::DIAMOND_ORE => Some(ItemSourceInfo {
+            location: "Deep underground near bedrock (Y <= 16)",
+            tool_required: "Pickaxe (Iron or better)",
+            notes: "Rare precious mineral, drops Diamonds.",
+        }),
+        ItemId::RAW_COPPER => Some(ItemSourceInfo {
+            location: "Mined from Copper Ore veins",
+            tool_required: "Pickaxe (Stone or better)",
+            notes: "Smelt in a furnace into Copper Ingots.",
+        }),
+        ItemId::RAW_IRON => Some(ItemSourceInfo {
+            location: "Mined from Iron Ore veins",
+            tool_required: "Pickaxe (Stone or better)",
+            notes: "Smelt in a furnace into Iron Ingots.",
+        }),
+        ItemId::RAW_GOLD => Some(ItemSourceInfo {
+            location: "Mined from Gold Ore veins",
+            tool_required: "Pickaxe (Iron or better)",
+            notes: "Smelt in a furnace into Gold Ingots.",
+        }),
+        ItemId::COAL => Some(ItemSourceInfo {
+            location: "Mined from Coal Ore veins",
+            tool_required: "Pickaxe (Wooden or better)",
+            notes: "Primary furnace fuel and torch ingredient.",
+        }),
+        ItemId::DIAMOND => Some(ItemSourceInfo {
+            location: "Mined from Diamond Ore deep underground",
+            tool_required: "Pickaxe (Iron or better)",
+            notes: "Top-tier gemstone for armor and tools.",
+        }),
+        ItemId::TALL_GRASS => Some(ItemSourceInfo {
+            location: "Plains and Forest surface floor",
+            tool_required: "Shears (drops grass) or Hand",
+            notes: "Breaks into Wheat Seeds when harvested.",
+        }),
+        ItemId::SEAGRASS => Some(ItemSourceInfo {
+            location: "Ocean floors and river bottoms",
+            tool_required: "Shears (drops seagrass) or Hand",
+            notes: "Underwater marine vegetation.",
+        }),
+        ItemId::CORAL_BLOCK => Some(ItemSourceInfo {
+            location: "Warm coral reef ocean shallows",
+            tool_required: "Pickaxe with Silk Touch",
+            notes: "Vibrant living underwater coral structures.",
+        }),
+        ItemId::TUBE_CORAL_BLOCK => Some(ItemSourceInfo {
+            location: "Warm coral reef ocean shallows",
+            tool_required: "Pickaxe with Silk Touch",
+            notes: "Bright blue tube corals in warm shallows.",
+        }),
+        ItemId::APPLE => Some(ItemSourceInfo {
+            location: "Decaying Oak leaves in Forests",
+            tool_required: "Hand / Leaf decay",
+            notes: "Nutritious fruit dropped when clearing oak trees.",
+        }),
+        ItemId::WHEAT_SEEDS => Some(ItemSourceInfo {
+            location: "Harvesting Tall Grass in plains",
+            tool_required: "Hand (break tall grass)",
+            notes: "Plant on Farmland near water to grow Wheat.",
+        }),
+        ItemId::RAW_BEEF => Some(ItemSourceInfo {
+            location: "Defeating Cows in Plains & Forests",
+            tool_required: "Weapon / Hand",
+            notes: "Cook in a furnace into Steak.",
+        }),
+        ItemId::RAW_PORKCHOP => Some(ItemSourceInfo {
+            location: "Defeating Pigs in Plains & Forests",
+            tool_required: "Weapon / Hand",
+            notes: "Cook in a furnace into Cooked Porkchop.",
+        }),
+        ItemId::RAW_CHICKEN => Some(ItemSourceInfo {
+            location: "Defeating Chickens in Plains",
+            tool_required: "Weapon / Hand",
+            notes: "Cook in a furnace into Cooked Chicken.",
+        }),
+        ItemId::LEATHER => Some(ItemSourceInfo {
+            location: "Defeating Cows in Plains & Forests",
+            tool_required: "Weapon / Hand",
+            notes: "Used for crafting books, armor, and gear.",
+        }),
+        ItemId::FEATHER => Some(ItemSourceInfo {
+            location: "Defeating Chickens in Plains",
+            tool_required: "Weapon / Hand",
+            notes: "Dropped by chickens; used to craft arrows.",
+        }),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

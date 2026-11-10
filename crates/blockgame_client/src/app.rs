@@ -1353,7 +1353,7 @@ impl ApplicationHandler for BlockGameApp {
                             display_recipe_storage =
                                 Some(blockgame_core::crafting::DisplayRecipe {
                                     name: item_name,
-                                    category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
+                                    category: blockgame_core::crafting::RecipeCategory::WorldGen,
                                     inputs: [None; 9],
                                     output: ItemSlot::new(m.target_item, 1),
                                 });

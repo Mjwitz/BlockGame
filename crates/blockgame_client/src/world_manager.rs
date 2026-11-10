@@ -558,7 +558,7 @@ impl WorldManager {
             if current.is_air() {
                 return None;
             }
-            let is_torch = current == BlockId::TORCH || current == BlockId::FURNACE_LIT;
+            let is_light_source = current.is_emissive();
             let dropped_chest_items = if current == BlockId::CHEST {
                 world.remove_chest(pos).unwrap_or_default()
             } else if current == BlockId::FURNACE || current == BlockId::FURNACE_LIT {
@@ -587,7 +587,7 @@ impl WorldManager {
             };
             world.set_block(pos, replacement);
 
-            if is_torch {
+            if is_light_source {
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {
@@ -724,13 +724,13 @@ impl WorldManager {
             if !can_place {
                 return false;
             }
-            let is_torch = block_id == BlockId::TORCH || block_id == BlockId::FURNACE_LIT;
+            let is_light_source = block_id.is_emissive();
             world.set_block(pos, block_id);
             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
                 world.get_or_create_furnace(pos);
             }
 
-            if is_torch {
+            if is_light_source {
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {

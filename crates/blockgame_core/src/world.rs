@@ -200,7 +200,7 @@ impl World {
         if let Some(chunk) = self.chunks.get_mut(&cpos) {
             let ok = chunk.set(lx, ly, lz, block_id);
             if ok {
-                if block_id == BlockId::TORCH {
+                if block_id.is_emissive() {
                     self.light_sources.insert(world_pos);
                 } else {
                     self.light_sources.remove(&world_pos);
@@ -229,7 +229,8 @@ impl World {
         for y in 0..CHUNK_SIZE_Y {
             for z in 0..CHUNK_SIZE_Z {
                 for x in 0..CHUNK_SIZE_X {
-                    if chunk.get_unchecked(x, y, z) == BlockId::TORCH {
+                    let block = chunk.get_unchecked(x, y, z);
+                    if block.is_emissive() {
                         self.light_sources
                             .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
                     }
@@ -267,7 +268,10 @@ impl World {
                 && pos.z <= max_z
             {
                 let rel = pos - origin;
-                sources.push((rel, 14));
+                let lum = self.get_block(pos).luminance();
+                if lum > 0 {
+                    sources.push((rel, lum));
+                }
             }
         }
         sources
@@ -377,5 +381,25 @@ mod tests {
         assert_eq!(furnace.output.item_id, crate::item::ItemId::IRON_INGOT);
         assert_eq!(furnace.output.count, 1);
         assert!(furnace.is_burning()); // Coal still has ~71s of burn time left
+    }
+
+    #[test]
+    fn test_sea_lantern_light_sources_cross_chunk() {
+        let mut world = World::new();
+        // Insert chunk at (0, 0, 0)
+        let chunk0 = Chunk::new(ChunkPos::new(0, 0, 0));
+        world.insert_chunk(chunk0);
+
+        // Place a sea lantern at chunk border (15, 10, 15)
+        let sea_lantern_pos = IVec3::new(15, 10, 15);
+        world.set_block(sea_lantern_pos, BlockId::SEA_LANTERN);
+
+        // Check light sources near chunk (1, 0, 0) whose origin is (16, 0, 0)
+        let chunk1_origin = IVec3::new(16, 0, 0);
+        let sources = world.get_light_sources_near(chunk1_origin, 15);
+        assert!(!sources.is_empty(), "Sea lantern should be visible from neighbor chunk");
+        let (rel_pos, lum) = sources[0];
+        assert_eq!(rel_pos, sea_lantern_pos - chunk1_origin);
+        assert_eq!(lum, 15, "Sea lantern luminance must be 15");
     }
 }
