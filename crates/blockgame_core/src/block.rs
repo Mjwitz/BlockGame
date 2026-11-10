@@ -62,6 +62,14 @@ impl BlockId {
     pub const RED_MUSHROOM_BLOCK: Self = Self(53);
     pub const BROWN_MUSHROOM_BLOCK: Self = Self(54);
     pub const MUSHROOM_STEM: Self = Self(55);
+    pub const DARK_OAK_LOG: Self = Self(56);
+    pub const DARK_OAK_PLANKS: Self = Self(57);
+    pub const DARK_OAK_LEAVES: Self = Self(58);
+    pub const CORAL_BLOCK: Self = Self(59);
+    pub const TUBE_CORAL_BLOCK: Self = Self(60);
+    pub const PRISMARINE: Self = Self(61);
+    pub const SEA_LANTERN: Self = Self(62);
+    pub const SEAGRASS: Self = Self(63);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -896,6 +904,118 @@ impl BlockRegistry {
             required_tool: None,
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::MUSHROOM_STEM),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DARK_OAK_LOG,
+            name: "Dark Oak Log",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [232, 232, 231, 231, 231, 231],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DARK_OAK_LOG),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DARK_OAK_PLANKS,
+            name: "Dark Oak Planks",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [233; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DARK_OAK_PLANKS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DARK_OAK_LEAVES,
+            name: "Dark Oak Leaves",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [234; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::APPLE),
+            drop_count: (0, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::CORAL_BLOCK,
+            name: "Brain Coral Block",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [235; 6],
+            hardness: 1.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::CORAL_BLOCK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TUBE_CORAL_BLOCK,
+            name: "Tube Coral Block",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [236; 6],
+            hardness: 1.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::TUBE_CORAL_BLOCK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::PRISMARINE,
+            name: "Prismarine",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [237; 6],
+            hardness: 1.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::PRISMARINE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::SEA_LANTERN,
+            name: "Sea Lantern",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 15,
+            textures: [238; 6],
+            hardness: 0.3,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SEA_LANTERN),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::SEAGRASS,
+            name: "Seagrass",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [239; 6],
+            hardness: 0.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SEAGRASS),
             drop_count: (1, 1),
         });
 

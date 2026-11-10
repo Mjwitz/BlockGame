@@ -392,6 +392,11 @@ impl CraftingManager {
             inputs: vec![ItemId::JUNGLE_LOG],
             output: ItemSlot::new(ItemId::JUNGLE_PLANKS, 4),
         });
+        self.register(Recipe::Shapeless {
+            name: "Dark Oak Planks from Dark Oak Log",
+            inputs: vec![ItemId::DARK_OAK_LOG],
+            output: ItemSlot::new(ItemId::DARK_OAK_PLANKS, 4),
+        });
 
         // 2. 2 Planks vertically -> 4 Sticks (Shaped 1x2)
         self.register(Recipe::Shaped {
@@ -427,6 +432,13 @@ impl CraftingManager {
             width: 1,
             height: 2,
             pattern: vec![Some(ItemId::JUNGLE_PLANKS), Some(ItemId::JUNGLE_PLANKS)],
+            output: ItemSlot::new(ItemId::STICK, 4),
+        });
+        self.register(Recipe::Shaped {
+            name: "Sticks from Dark Oak Planks",
+            width: 1,
+            height: 2,
+            pattern: vec![Some(ItemId::DARK_OAK_PLANKS), Some(ItemId::DARK_OAK_PLANKS)],
             output: ItemSlot::new(ItemId::STICK, 4),
         });
 
@@ -491,6 +503,18 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::CRAFTING_TABLE, 1),
         });
+        self.register(Recipe::Shaped {
+            name: "Crafting Table (Dark Oak)",
+            width: 2,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::CRAFTING_TABLE, 1),
+        });
 
         // 4. 1 Coal over 1 Stick -> 4 Torches (Shaped 1x2)
         self.register(Recipe::Shaped {
@@ -535,6 +559,13 @@ impl CraftingManager {
             width: 1,
             height: 2,
             pattern: vec![Some(ItemId::JUNGLE_PLANKS), Some(ItemId::STICK)],
+            output: ItemSlot::new(ItemId::TORCH, 4),
+        });
+        self.register(Recipe::Shaped {
+            name: "Torches from Dark Oak Planks",
+            width: 1,
+            height: 2,
+            pattern: vec![Some(ItemId::DARK_OAK_PLANKS), Some(ItemId::STICK)],
             output: ItemSlot::new(ItemId::TORCH, 4),
         });
 
@@ -615,6 +646,23 @@ impl CraftingManager {
                 Some(ItemId::JUNGLE_PLANKS),
                 Some(ItemId::JUNGLE_PLANKS),
                 Some(ItemId::JUNGLE_PLANKS),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
+            ],
+            output: ItemSlot::new(ItemId::WOODEN_PICKAXE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Wooden Pickaxe (Dark Oak)",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
                 None,
                 Some(ItemId::STICK),
                 None,
@@ -757,6 +805,13 @@ impl CraftingManager {
         );
         register_axe(
             self,
+            "Wooden Axe (Dark Oak Left)",
+            "Wooden Axe (Dark Oak Right)",
+            ItemId::DARK_OAK_PLANKS,
+            ItemId::WOODEN_AXE,
+        );
+        register_axe(
+            self,
             "Stone Axe (Left)",
             "Stone Axe (Right)",
             ItemId::COBBLESTONE,
@@ -794,6 +849,7 @@ impl CraftingManager {
         register_shovel(self, "Wooden Shovel (Spruce)", ItemId::SPRUCE_PLANKS, ItemId::WOODEN_SHOVEL);
         register_shovel(self, "Wooden Shovel (Acacia)", ItemId::ACACIA_PLANKS, ItemId::WOODEN_SHOVEL);
         register_shovel(self, "Wooden Shovel (Jungle)", ItemId::JUNGLE_PLANKS, ItemId::WOODEN_SHOVEL);
+        register_shovel(self, "Wooden Shovel (Dark Oak)", ItemId::DARK_OAK_PLANKS, ItemId::WOODEN_SHOVEL);
         register_shovel(
             self,
             "Stone Shovel",
@@ -916,6 +972,13 @@ impl CraftingManager {
             "Wooden Hoe (Jungle Left)",
             "Wooden Hoe (Jungle Right)",
             ItemId::JUNGLE_PLANKS,
+            ItemId::WOODEN_HOE,
+        );
+        register_hoe(
+            self,
+            "Wooden Hoe (Dark Oak Left)",
+            "Wooden Hoe (Dark Oak Right)",
+            ItemId::DARK_OAK_PLANKS,
             ItemId::WOODEN_HOE,
         );
         register_hoe(
@@ -1058,6 +1121,23 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::CHEST, 1),
         });
+        self.register(Recipe::Shaped {
+            name: "Chest (Dark Oak)",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                None,
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+                Some(ItemId::DARK_OAK_PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::CHEST, 1),
+        });
 
         // Sandstone: 4 Sand in a 2x2 square
         self.register(Recipe::Shaped {
@@ -1146,6 +1226,37 @@ impl CraftingManager {
             inputs: vec![ItemId::COBBLESTONE, ItemId::JUNGLE_LEAVES],
             output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
         });
+        self.register(Recipe::Shapeless {
+            name: "Mossy Cobblestone from Dark Oak Leaves",
+            inputs: vec![ItemId::COBBLESTONE, ItemId::DARK_OAK_LEAVES],
+            output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
+        });
+
+        // Prismarine: 4 Cobblestone + 1 Clay (Shapeless)
+        self.register(Recipe::Shapeless {
+            name: "Prismarine",
+            inputs: vec![
+                ItemId::COBBLESTONE,
+                ItemId::COBBLESTONE,
+                ItemId::COBBLESTONE,
+                ItemId::COBBLESTONE,
+                ItemId::CLAY,
+            ],
+            output: ItemSlot::new(ItemId::PRISMARINE, 4),
+        });
+
+        // Sea Lantern: 4 Prismarine + 1 Torch (Shapeless)
+        self.register(Recipe::Shapeless {
+            name: "Sea Lantern",
+            inputs: vec![
+                ItemId::PRISMARINE,
+                ItemId::PRISMARINE,
+                ItemId::PRISMARINE,
+                ItemId::PRISMARINE,
+                ItemId::TORCH,
+            ],
+            output: ItemSlot::new(ItemId::SEA_LANTERN, 1),
+        });
     }
 }
 
@@ -1175,11 +1286,13 @@ pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
         | ItemId::SPRUCE_LOG
         | ItemId::ACACIA_LOG
         | ItemId::JUNGLE_LOG
+        | ItemId::DARK_OAK_LOG
         | ItemId::PLANKS
         | ItemId::BIRCH_PLANKS
         | ItemId::SPRUCE_PLANKS
         | ItemId::ACACIA_PLANKS
         | ItemId::JUNGLE_PLANKS
+        | ItemId::DARK_OAK_PLANKS
         | ItemId::CRAFTING_TABLE
         | ItemId::CHEST
         | ItemId::FURNACE => 15.0,
@@ -1417,9 +1530,9 @@ mod tests {
         assert_eq!(dia_pick_recipes[0].inputs[4], Some(ItemId::STICK));
         assert_eq!(dia_pick_recipes[0].inputs[7], Some(ItemId::STICK));
 
-        // 2. Recipes producing Chest (Oak, Birch, Spruce, Acacia, Jungle variants)
+        // 2. Recipes producing Chest (Oak, Birch, Spruce, Acacia, Jungle, Dark Oak variants)
         let chest_recipes = cm.get_recipes_for_output(ItemId::CHEST);
-        assert_eq!(chest_recipes.len(), 5);
+        assert_eq!(chest_recipes.len(), 6);
         assert_eq!(chest_recipes[0].category, RecipeCategory::Crafting3x3);
 
         // 3. Recipes producing Planks (from Wood Log)
@@ -1492,5 +1605,56 @@ mod tests {
         assert_eq!(get_fuel_burn_time(ItemId::MUSHROOM_STEM), 5.0);
         assert_eq!(get_fuel_burn_time(ItemId::RED_MUSHROOM_BLOCK), 5.0);
         assert_eq!(get_fuel_burn_time(ItemId::BROWN_MUSHROOM_BLOCK), 5.0);
+    }
+
+    #[test]
+    fn test_phase_5_dark_oak_and_coral_recipes() {
+        let cm = CraftingManager::new();
+
+        // 1. Dark Oak Log -> 4 Dark Oak Planks (Shapeless)
+        let mut grid_log = CraftingGrid::new_2x2();
+        grid_log.set(0, 0, ItemSlot::new(ItemId::DARK_OAK_LOG, 1));
+        let out_planks = cm.craft(&mut grid_log);
+        assert_eq!(out_planks, Some(ItemSlot::new(ItemId::DARK_OAK_PLANKS, 4)));
+
+        // 2. 4 Dark Oak Planks -> Crafting Table (Shaped 2x2)
+        let mut grid_table = CraftingGrid::new_2x2();
+        grid_table.set(0, 0, ItemSlot::new(ItemId::DARK_OAK_PLANKS, 1));
+        grid_table.set(1, 0, ItemSlot::new(ItemId::DARK_OAK_PLANKS, 1));
+        grid_table.set(0, 1, ItemSlot::new(ItemId::DARK_OAK_PLANKS, 1));
+        grid_table.set(1, 1, ItemSlot::new(ItemId::DARK_OAK_PLANKS, 1));
+        let out_table = cm.craft(&mut grid_table);
+        assert_eq!(out_table, Some(ItemSlot::new(ItemId::CRAFTING_TABLE, 1)));
+
+        // 3. 4 Cobblestone + 1 Clay -> 4 Prismarine (Shapeless)
+        let mut grid_prismarine = CraftingGrid::new_3x3();
+        grid_prismarine.set(0, 0, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid_prismarine.set(1, 0, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid_prismarine.set(2, 0, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid_prismarine.set(0, 1, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid_prismarine.set(1, 1, ItemSlot::new(ItemId::CLAY, 1));
+        let out_prismarine = cm.craft(&mut grid_prismarine);
+        assert_eq!(out_prismarine, Some(ItemSlot::new(ItemId::PRISMARINE, 4)));
+
+        // 4. 4 Prismarine + 1 Torch -> 1 Sea Lantern (Shapeless)
+        let mut grid_sea_lantern = CraftingGrid::new_3x3();
+        grid_sea_lantern.set(0, 0, ItemSlot::new(ItemId::PRISMARINE, 1));
+        grid_sea_lantern.set(1, 0, ItemSlot::new(ItemId::PRISMARINE, 1));
+        grid_sea_lantern.set(0, 1, ItemSlot::new(ItemId::PRISMARINE, 1));
+        grid_sea_lantern.set(1, 1, ItemSlot::new(ItemId::PRISMARINE, 1));
+        grid_sea_lantern.set(2, 1, ItemSlot::new(ItemId::TORCH, 1));
+        let out_sea_lantern = cm.craft(&mut grid_sea_lantern);
+        assert_eq!(out_sea_lantern, Some(ItemSlot::new(ItemId::SEA_LANTERN, 1)));
+
+        // 5. Cobblestone + Dark Oak Leaves -> Mossy Cobblestone
+        let mut grid_mossy = CraftingGrid::new_2x2();
+        grid_mossy.set(0, 0, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        grid_mossy.set(1, 0, ItemSlot::new(ItemId::DARK_OAK_LEAVES, 1));
+        let out_mossy = cm.craft(&mut grid_mossy);
+        assert_eq!(out_mossy, Some(ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1)));
+
+        // 6. Fuel burn time: Dark Oak logs & planks burn for 15.0s
+        assert_eq!(get_fuel_burn_time(ItemId::DARK_OAK_LOG), 15.0);
+        assert_eq!(get_fuel_burn_time(ItemId::DARK_OAK_PLANKS), 15.0);
     }
 }

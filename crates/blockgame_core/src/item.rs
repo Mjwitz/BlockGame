@@ -91,6 +91,14 @@ impl ItemId {
     pub const RED_MUSHROOM_BLOCK: Self = Self(81);
     pub const BROWN_MUSHROOM_BLOCK: Self = Self(82);
     pub const MUSHROOM_STEM: Self = Self(83);
+    pub const DARK_OAK_LOG: Self = Self(84);
+    pub const DARK_OAK_PLANKS: Self = Self(85);
+    pub const DARK_OAK_LEAVES: Self = Self(86);
+    pub const CORAL_BLOCK: Self = Self(87);
+    pub const TUBE_CORAL_BLOCK: Self = Self(88);
+    pub const PRISMARINE: Self = Self(89);
+    pub const SEA_LANTERN: Self = Self(90);
+    pub const SEAGRASS: Self = Self(91);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1289,6 +1297,103 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 230,
+        });
+
+        // Phase 5 Items: Dark Forest & Coral Reefs
+        self.register(ItemDef {
+            id: ItemId::DARK_OAK_LOG,
+            name: "blockgame:dark_oak_log",
+            display_name: "Dark Oak Log",
+            max_stack: 64,
+            placeable_block: Some(BlockId::DARK_OAK_LOG),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 231,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DARK_OAK_PLANKS,
+            name: "blockgame:dark_oak_planks",
+            display_name: "Dark Oak Planks",
+            max_stack: 64,
+            placeable_block: Some(BlockId::DARK_OAK_PLANKS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 233,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DARK_OAK_LEAVES,
+            name: "blockgame:dark_oak_leaves",
+            display_name: "Dark Oak Leaves",
+            max_stack: 64,
+            placeable_block: Some(BlockId::DARK_OAK_LEAVES),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 234,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::CORAL_BLOCK,
+            name: "blockgame:coral_block",
+            display_name: "Brain Coral Block",
+            max_stack: 64,
+            placeable_block: Some(BlockId::CORAL_BLOCK),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 235,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::TUBE_CORAL_BLOCK,
+            name: "blockgame:tube_coral_block",
+            display_name: "Tube Coral Block",
+            max_stack: 64,
+            placeable_block: Some(BlockId::TUBE_CORAL_BLOCK),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 236,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::PRISMARINE,
+            name: "blockgame:prismarine",
+            display_name: "Prismarine",
+            max_stack: 64,
+            placeable_block: Some(BlockId::PRISMARINE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 237,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SEA_LANTERN,
+            name: "blockgame:sea_lantern",
+            display_name: "Sea Lantern",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SEA_LANTERN),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 238,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SEAGRASS,
+            name: "blockgame:seagrass",
+            display_name: "Seagrass",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SEAGRASS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 239,
         });
     }
 }

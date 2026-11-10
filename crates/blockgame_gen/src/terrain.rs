@@ -20,6 +20,8 @@ pub enum Biome {
     River,
     Taiga,
     MushroomFields,
+    DarkForest,
+    CoralReef,
 }
 
 impl Biome {
@@ -35,10 +37,12 @@ impl Biome {
             Biome::Savanna => [0.86, 0.80, 0.60],     // Sun-drenched golden afternoon
             Biome::Mountains => [0.65, 0.75, 0.90],   // Crisp alpine thin mist
             Biome::Ocean => [0.38, 0.58, 0.86],       // Deep marine azure
+            Biome::CoralReef => [0.22, 0.65, 0.78],   // Vibrant turquoise/aquamarine lagoon
             Biome::Beach => [0.75, 0.82, 0.92],       // Sunny coastal breeze
             Biome::River => [0.55, 0.75, 0.95],       // Clear flowing stream atmosphere
             Biome::Taiga => [0.62, 0.74, 0.72],       // Cool evergreen pine mist
             Biome::MushroomFields => [0.72, 0.60, 0.78], // Mystical spore-filled violet haze
+            Biome::DarkForest => [0.32, 0.42, 0.35],  // Dense canopy shadowy gloom
             Biome::Forest | Biome::Plains => [0.60, 0.78, 0.98], // Clear temperate sky
         }
     }
@@ -55,10 +59,12 @@ impl Biome {
             Biome::Savanna => [1.04, 0.98, 0.85],
             Biome::Mountains => [0.95, 0.98, 1.05],
             Biome::Ocean => [0.88, 0.95, 1.08],
+            Biome::CoralReef => [0.90, 1.08, 1.12],
             Biome::Beach => [1.00, 1.00, 1.02],
             Biome::River => [0.98, 1.02, 1.05],
             Biome::Taiga => [0.94, 0.98, 1.02],
             Biome::MushroomFields => [1.04, 0.92, 1.06],
+            Biome::DarkForest => [0.88, 0.94, 0.86],
             Biome::Forest | Biome::Plains => [1.00, 1.00, 1.00],
         }
     }
@@ -169,6 +175,11 @@ impl TerrainGenerator {
         }
 
         if height <= self.water_level {
+            let temp = self.temp_noise.get([fx * 0.003, fz * 0.003]);
+            let moisture = self.moisture_noise.get([fx * 0.003, fz * 0.003]);
+            if temp > 0.18 && moisture > -0.10 {
+                return Biome::CoralReef;
+            }
             return Biome::Ocean;
         }
 
@@ -205,6 +216,9 @@ impl TerrainGenerator {
         } else if height <= self.water_level + 4 && moisture > 0.18 {
             // Lowlands near water level with high humidity: Swamp
             Biome::Swamp
+        } else if temp >= 0.0 && temp <= 0.22 && moisture > 0.22 {
+            // High humidity temperate canopy: Dark Forest (dense 2x2 dark oak trees)
+            Biome::DarkForest
         } else if moisture > 0.10 {
             // High humidity temperate: Forest
             Biome::Forest
@@ -256,7 +270,7 @@ impl TerrainGenerator {
                             BlockId::AIR
                         } else if wy == surface_y - 1 {
                             if is_underwater || surface_y <= self.water_level + 1 {
-                                if biome == Biome::Ocean {
+                                if biome == Biome::Ocean || biome == Biome::CoralReef {
                                     // Alternating sand and gravel ocean bed
                                     let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31)).unsigned_abs() % 3;
                                     if gh == 0 {
@@ -314,7 +328,7 @@ impl TerrainGenerator {
                             }
                         } else if wy >= surface_y - 4 {
                             if is_underwater || surface_y <= self.water_level + 1 {
-                                if biome == Biome::Ocean {
+                                if biome == Biome::Ocean || biome == Biome::CoralReef {
                                     let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31)).unsigned_abs() % 3;
                                     if gh == 0 {
                                         BlockId::GRAVEL
@@ -490,6 +504,45 @@ impl TerrainGenerator {
                             }
                         }
                     }
+
+                    // Underwater features: Coral reefs, Sea Lanterns, and Seagrass
+                    let local_surface_y = surface_y - origin.y;
+                    if local_surface_y >= 1 && local_surface_y < (CHUNK_SIZE_Y as i32 - 1) {
+                        let ly = local_surface_y as usize;
+                        let seabed = chunk.get(lx, ly - 1, lz);
+                        if (seabed == Some(BlockId::SAND) || seabed == Some(BlockId::GRAVEL))
+                            && chunk.get(lx, ly, lz) == Some(BlockId::WATER)
+                        {
+                            let water_depth = self.water_level - surface_y;
+                            let ch = tree_hash(wx, wz, self.seed.wrapping_add(1234));
+                            if biome == Biome::CoralReef && water_depth >= 2 {
+                                if ch % 11 == 0 {
+                                    // Coral column (2-4 blocks tall, within water depth)
+                                    let col_height = (2 + ((ch >> 4) % 3) as usize).min(water_depth.saturating_sub(1) as usize);
+                                    let coral_type = if (ch >> 8) % 2 == 0 {
+                                        BlockId::CORAL_BLOCK
+                                    } else {
+                                        BlockId::TUBE_CORAL_BLOCK
+                                    };
+                                    for cy in ly..(ly + col_height).min(CHUNK_SIZE_Y) {
+                                        chunk.set(lx, cy, lz, coral_type);
+                                    }
+                                    if (ch >> 12) % 3 == 0 && col_height >= 2 {
+                                        let lantern_y = (ly + col_height - 1).min(CHUNK_SIZE_Y - 1);
+                                        chunk.set(lx, lantern_y, lz, BlockId::SEA_LANTERN);
+                                    }
+                                } else if ch % 23 == 0 {
+                                    // Glowing Sea Lantern resting on the reef floor
+                                    chunk.set(lx, ly, lz, BlockId::SEA_LANTERN);
+                                } else if ch % 3 == 0 {
+                                    // Lush seagrass
+                                    chunk.set(lx, ly, lz, BlockId::SEAGRASS);
+                                }
+                            } else if (biome == Biome::Ocean || biome == Biome::River) && ch % 7 == 0 {
+                                chunk.set(lx, ly, lz, BlockId::SEAGRASS);
+                            }
+                        }
+                    }
                     continue; // No trees or tall grass underwater
                 }
 
@@ -509,6 +562,7 @@ impl TerrainGenerator {
                             Biome::Swamp => 15,
                             Biome::Jungle => 35,
                             Biome::Taiga => 18,
+                            Biome::DarkForest => 15,
                             _ => 0,
                         };
                         if grass_chance > 0
@@ -551,6 +605,7 @@ impl TerrainGenerator {
                     Biome::Swamp => ground == Some(BlockId::GRASS) || ground == Some(BlockId::CLAY),
                     Biome::Taiga => ground == Some(BlockId::PODZOL) || ground == Some(BlockId::GRASS),
                     Biome::MushroomFields => ground == Some(BlockId::MYCELIUM),
+                    Biome::DarkForest => ground == Some(BlockId::GRASS) || ground == Some(BlockId::DIRT) || ground == Some(BlockId::PODZOL),
                     _ => ground == Some(BlockId::GRASS),
                 };
                 if !valid_ground {
@@ -916,6 +971,70 @@ impl TerrainGenerator {
                             }
                         }
                     }
+                    Biome::DarkForest => {
+                        if th % 13 == 0 && lx >= 2 && lx < (CHUNK_SIZE_X - 4) && lz >= 2 && lz < (CHUNK_SIZE_Z - 4) {
+                            let is_shroom = (th >> 9) % 7 == 0;
+                            if is_shroom {
+                                // Giant mushroom growing beneath or between dark oak canopy
+                                let is_red = (th >> 5) % 2 == 0;
+                                let stalk_height = 4 + ((th >> 3) % 2) as usize;
+                                for ty in ly..(ly + stalk_height).min(CHUNK_SIZE_Y) {
+                                    chunk.set(lx, ty, lz, BlockId::MUSHROOM_STEM);
+                                }
+                                let top_y = ly + stalk_height;
+                                let cap_block = if is_red {
+                                    BlockId::RED_MUSHROOM_BLOCK
+                                } else {
+                                    BlockId::BROWN_MUSHROOM_BLOCK
+                                };
+                                if top_y < CHUNK_SIZE_Y {
+                                    for dz in -1_i32..=1 {
+                                        for dx in -1_i32..=1 {
+                                            let cx = lx as i32 + dx;
+                                            let cz = lz as i32 + dz;
+                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                                chunk.set(cx as usize, top_y, cz as usize, cap_block);
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Massive 2x2 Dark Oak Tree
+                                let trunk_height = 6 + ((th >> 3) % 3) as usize; // 6 to 8 blocks
+                                for ty in ly..(ly + trunk_height).min(CHUNK_SIZE_Y) {
+                                    for ox in 0..2 {
+                                        for oz in 0..2 {
+                                            chunk.set(lx + ox, ty, lz + oz, BlockId::DARK_OAK_LOG);
+                                        }
+                                    }
+                                }
+                                let top_y = ly + trunk_height;
+                                // Dense intersecting roof canopy (leaves)
+                                for dy in 0..=3 {
+                                    if dy > top_y { break; }
+                                    let cy = top_y + 1 - dy;
+                                    if cy >= CHUNK_SIZE_Y {
+                                        continue;
+                                    }
+                                    let radius: i32 = if dy == 0 { 2 } else { 3 };
+                                    for dz in -radius..=(radius + 1) {
+                                        for dx in -radius..=(radius + 1) {
+                                            if (dx == -radius || dx == radius + 1) && (dz == -radius || dz == radius + 1) {
+                                                continue; // Round corners
+                                            }
+                                            let cx = lx as i32 + dx;
+                                            let cz = lz as i32 + dz;
+                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                                if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
+                                                    chunk.set(cx as usize, cy, cz as usize, BlockId::DARK_OAK_LEAVES);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1030,7 +1149,7 @@ mod tests {
             }
         }
 
-        // Verify that all 14 varied climate biomes are generated
+        // Verify that all 16 varied climate biomes are generated
         assert!(biomes_found.contains(&Biome::Plains), "Expected Plains biome");
         assert!(biomes_found.contains(&Biome::Forest), "Expected Forest biome");
         assert!(biomes_found.contains(&Biome::Mountains), "Expected Mountains biome");
@@ -1045,5 +1164,7 @@ mod tests {
         assert!(biomes_found.contains(&Biome::River), "Expected River biome");
         assert!(biomes_found.contains(&Biome::Taiga), "Expected Taiga biome");
         assert!(biomes_found.contains(&Biome::MushroomFields), "Expected MushroomFields biome");
+        assert!(biomes_found.contains(&Biome::DarkForest), "Expected DarkForest biome");
+        assert!(biomes_found.contains(&Biome::CoralReef), "Expected CoralReef biome");
     }
 }

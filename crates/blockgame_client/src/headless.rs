@@ -3170,5 +3170,246 @@ pub async fn render_world_to_image(
         log::info!("Successfully saved Phase 4 Biome River & Mushrooms showcase image to phase_4_biome_river_mushrooms_render.png");
     }
 
+    // Pass 16: Phase 5 - Dark Forest (Roofed Forest) & Coral Reefs Showcase
+    {
+        let p5_x = -6_i32;
+        let p5_z = 4_i32;
+        let p5_y = {
+            let world_guard = world_manager.world().lock().unwrap();
+            let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+            while y > 1 {
+                let block = world_guard.get_block(IVec3::new(p5_x, y, p5_z));
+                if !block.is_air() {
+                    break;
+                }
+                y -= 1;
+            }
+            y
+        };
+
+        let dummy_box = AABB::new(Vec3::new(999.0, 999.0, 999.0), Vec3::new(0.6, 1.8, 0.6));
+
+        // 1. Dark Forest Environment (left side): Grass, Dark Oak 2x2 Tree, Dark Oak Planks
+        for dx in -4..=0 {
+            for dz in -4..=1 {
+                world_manager.place_block(IVec3::new(p5_x + dx, p5_y, p5_z + dz), BlockId::GRASS, &dummy_box, &device, &pipeline);
+            }
+        }
+        // Dark Oak 2x2 Trunk
+        for ty in 1..=4 {
+            world_manager.place_block(IVec3::new(p5_x - 2, p5_y + ty, p5_z - 2), BlockId::DARK_OAK_LOG, &dummy_box, &device, &pipeline);
+            world_manager.place_block(IVec3::new(p5_x - 1, p5_y + ty, p5_z - 2), BlockId::DARK_OAK_LOG, &dummy_box, &device, &pipeline);
+            world_manager.place_block(IVec3::new(p5_x - 2, p5_y + ty, p5_z - 1), BlockId::DARK_OAK_LOG, &dummy_box, &device, &pipeline);
+            world_manager.place_block(IVec3::new(p5_x - 1, p5_y + ty, p5_z - 1), BlockId::DARK_OAK_LOG, &dummy_box, &device, &pipeline);
+        }
+        // Dark Oak Leaves Roof Canopy
+        for dy in 3..=5 {
+            let rad: i32 = if dy == 5 { 1 } else { 2 };
+            for dz in -rad..=rad {
+                for dx in -rad..=rad {
+                    world_manager.place_block(IVec3::new(p5_x - 1 + dx, p5_y + dy, p5_z - 1 + dz), BlockId::DARK_OAK_LEAVES, &dummy_box, &device, &pipeline);
+                }
+            }
+        }
+        // Dark Oak Planks placed on ground
+        world_manager.place_block(IVec3::new(p5_x - 3, p5_y + 1, p5_z), BlockId::DARK_OAK_PLANKS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x - 2, p5_y + 1, p5_z), BlockId::DARK_OAK_PLANKS, &dummy_box, &device, &pipeline);
+
+        // 2. Coral Reef Lagoon (right side): Sand seabed, Coral pillars, Sea Lantern, Prismarine, Seagrass, and Water
+        for dx in 1..=5 {
+            for dz in -4..=1 {
+                world_manager.place_block(IVec3::new(p5_x + dx, p5_y - 1, p5_z + dz), BlockId::SAND, &dummy_box, &device, &pipeline);
+            }
+        }
+        // Coral Formations & Prismarine & Sea Lantern
+        world_manager.place_block(IVec3::new(p5_x + 1, p5_y, p5_z), BlockId::PRISMARINE, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x + 2, p5_y, p5_z - 1), BlockId::CORAL_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x + 2, p5_y + 1, p5_z - 1), BlockId::CORAL_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x + 2, p5_y + 2, p5_z - 1), BlockId::SEA_LANTERN, &dummy_box, &device, &pipeline);
+
+        world_manager.place_block(IVec3::new(p5_x + 3, p5_y, p5_z - 2), BlockId::TUBE_CORAL_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x + 3, p5_y + 1, p5_z - 2), BlockId::TUBE_CORAL_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x + 4, p5_y, p5_z - 2), BlockId::TUBE_CORAL_BLOCK, &dummy_box, &device, &pipeline);
+
+        world_manager.place_block(IVec3::new(p5_x + 3, p5_y, p5_z), BlockId::SEAGRASS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p5_x + 4, p5_y, p5_z - 1), BlockId::SEAGRASS, &dummy_box, &device, &pipeline);
+
+        // Water basin in the lagoon
+        for dx in 1..=4 {
+            for dz in -3..=0 {
+                let p = IVec3::new(p5_x + dx, p5_y, p5_z + dz);
+                let b = {
+                    let world = world_manager.world().lock().unwrap();
+                    world.get_block(p)
+                };
+                if b.is_air() {
+                    world_manager.place_block(p, BlockId::WATER, &dummy_box, &device, &pipeline);
+                }
+            }
+        }
+
+        // 3. Camera positioned in front of the scene
+        let p5_day_night = DayNightCycle::new();
+        let p5_cam_pos = Vec3::new((p5_x as f32) + 0.5, (p5_y as f32) + 2.0, (p5_z as f32) + 3.6);
+        let p5_cam = Camera::new(p5_cam_pos, (-90.0_f32).to_radians(), (-15.0_f32).to_radians());
+        let mut p5_uniform = CameraUniform::default();
+        let reef_fog = [0.26, 0.58, 0.68];
+        let reef_tint = [0.94, 1.04, 1.08];
+        p5_cam.update_uniform_with_atmosphere_water_tint(
+            &mut p5_uniform,
+            width as f32 / height as f32,
+            &p5_day_night,
+            false,
+            reef_fog,
+            reef_tint,
+        );
+        pipeline.update_camera(&queue, &p5_uniform);
+
+        let mut p5_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Phase 5 Dark Forest Reef Encoder"),
+        });
+
+        {
+            let mut render_pass = p5_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Phase 5 3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.28,
+                            g: 0.55,
+                            b: 0.65,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            render_pass.set_pipeline(&pipeline.water_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render_water(&mut render_pass);
+        }
+
+        // Draw HUD overlay with Phase 5 items in hotbar
+        let mut p5_ui_mesh = UiMesh::new();
+        let stats = blockgame_core::PlayerStats::new();
+        let mut p5_inv = inventory.clone();
+        p5_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DARK_OAK_LOG, 64);
+        p5_inv.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DARK_OAK_PLANKS, 64);
+        p5_inv.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DARK_OAK_LEAVES, 64);
+        p5_inv.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CORAL_BLOCK, 64);
+        p5_inv.slots[4] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TUBE_CORAL_BLOCK, 64);
+        p5_inv.slots[5] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::PRISMARINE, 64);
+        p5_inv.slots[6] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SEA_LANTERN, 64);
+        p5_inv.slots[7] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SEAGRASS, 64);
+        p5_inv.slots[8] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::MOSSY_COBBLESTONE, 64);
+        UiBuilder::build_hud(&mut p5_ui_mesh, screen_w, screen_h, &p5_inv, 6, &item_registry, 0.0, 0.0, &stats);
+
+        if !p5_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Phase 5 UI VB"),
+                contents: bytemuck::cast_slice(&p5_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Phase 5 UI IB"),
+                contents: bytemuck::cast_slice(&p5_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = p5_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Phase 5 UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..p5_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        p5_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(p5_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut p5_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            p5_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "phase_5_dark_forest_coral_reefs_render.png",
+            &p5_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Phase 5 Dark Forest & Coral Reefs showcase image to phase_5_dark_forest_coral_reefs_render.png");
+    }
+
     Ok(())
 }

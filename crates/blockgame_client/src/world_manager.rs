@@ -195,9 +195,10 @@ impl WorldManager {
         // - MushroomFields: 70% spawn chance (peaceful fungal sanctuary: cows)
         // - River: 20% spawn chance (riverbank chickens/pigs)
         let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
-            Biome::Desert | Biome::Ocean | Biome::Badlands => return,
+            Biome::Desert | Biome::Ocean | Biome::Badlands | Biome::CoralReef => return,
             Biome::Plains => (0.65, [(AnimalKind::Cow, 0.40), (AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25)], 2, 4),
             Biome::Forest => (0.50, [(AnimalKind::Pig, 0.45), (AnimalKind::Chicken, 0.35), (AnimalKind::Cow, 0.20)], 2, 3),
+            Biome::DarkForest => (0.50, [(AnimalKind::Pig, 0.45), (AnimalKind::Chicken, 0.35), (AnimalKind::Cow, 0.20)], 2, 4),
             Biome::Mountains => (0.20, [(AnimalKind::Chicken, 0.50), (AnimalKind::Cow, 0.30), (AnimalKind::Pig, 0.20)], 1, 2),
             Biome::Savanna => (0.60, [(AnimalKind::Cow, 0.55), (AnimalKind::Pig, 0.25), (AnimalKind::Chicken, 0.20)], 2, 4),
             Biome::Swamp => (0.55, [(AnimalKind::Pig, 0.60), (AnimalKind::Chicken, 0.30), (AnimalKind::Cow, 0.10)], 2, 4),
