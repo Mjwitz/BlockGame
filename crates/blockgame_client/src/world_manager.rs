@@ -27,6 +27,7 @@ pub struct WorldManager {
     queued_generation: HashSet<ChunkPos>,
     queued_meshing: HashSet<ChunkPos>,
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
+    pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     mesh_rx: Receiver<(ChunkPos, ChunkMesh)>,
     mesh_tx: Sender<(ChunkPos, ChunkMesh)>,
     last_player_chunk: ChunkPos,
@@ -50,6 +51,7 @@ impl WorldManager {
             queued_generation: HashSet::new(),
             queued_meshing: HashSet::new(),
             gpu_chunks: HashMap::new(),
+            gpu_water_chunks: HashMap::new(),
             mesh_rx,
             mesh_tx,
             last_player_chunk: ChunkPos::new(i32::MAX, i32::MAX, i32::MAX),
@@ -58,6 +60,25 @@ impl WorldManager {
             next_animal_id: 1,
             planted_crops: Vec::new(),
             animal_spawned_columns: HashSet::new(),
+        }
+    }
+
+    pub fn store_mesh(
+        &mut self,
+        pos: ChunkPos,
+        mesh: &ChunkMesh,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        if let Some(gpu_mesh) = pipeline.upload_mesh(device, mesh) {
+            self.gpu_chunks.insert(pos, gpu_mesh);
+        } else {
+            self.gpu_chunks.remove(&pos);
+        }
+        if let Some(gpu_water) = pipeline.upload_water_mesh(device, mesh) {
+            self.gpu_water_chunks.insert(pos, gpu_water);
+        } else {
+            self.gpu_water_chunks.remove(&pos);
         }
     }
 
@@ -124,9 +145,7 @@ impl WorldManager {
         let mut face_count = 0;
         for (pos, mesh) in meshes {
             face_count += mesh.face_count();
-            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                self.gpu_chunks.insert(pos, gpu_mesh);
-            }
+            self.store_mesh(pos, &mesh, device, pipeline);
         }
 
         log::info!(
@@ -252,9 +271,7 @@ impl WorldManager {
             if pos.0.y == 0 {
                 completed_surface_chunks.push((pos.0.x, pos.0.z));
             }
-            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                self.gpu_chunks.insert(pos, gpu_mesh);
-            }
+            self.store_mesh(pos, &mesh, device, pipeline);
         }
 
         if !completed_surface_chunks.is_empty() {
@@ -385,6 +402,7 @@ impl WorldManager {
 
             for pos in to_remove {
                 self.gpu_chunks.remove(&pos);
+                self.gpu_water_chunks.remove(&pos);
                 self.loaded_chunks_set.remove(&pos);
                 self.queued_meshing.remove(&pos);
                 self.queued_generation.remove(&pos);
@@ -425,6 +443,41 @@ impl WorldManager {
     /// Renders all currently loaded GPU chunk meshes without frustum culling.
     pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
         self.render_with_frustum(render_pass, None);
+    }
+
+    /// Renders loaded GPU water chunk meshes with optional camera view frustum culling.
+    pub fn render_water_with_frustum<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+    ) {
+        for (&pos, gpu_mesh) in &self.gpu_water_chunks {
+            if gpu_mesh.index_count == 0 {
+                continue;
+            }
+
+            if let Some(f) = frustum {
+                let min = Vec3::new(
+                    pos.0.x as f32 * 16.0,
+                    pos.0.y as f32 * 16.0,
+                    pos.0.z as f32 * 16.0,
+                );
+                let max = min + Vec3::splat(16.0);
+                if !f.is_box_visible(min, max) {
+                    continue;
+                }
+            }
+
+            render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+            render_pass
+                .set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+        }
+    }
+
+    /// Renders all currently loaded GPU water chunk meshes without frustum culling.
+    pub fn render_water<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+        self.render_water_with_frustum(render_pass, None);
     }
 
     pub fn world(&self) -> &Arc<Mutex<World>> {
@@ -548,11 +601,7 @@ impl WorldManager {
         };
 
         for (cpos, mesh) in new_meshes {
-            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                self.gpu_chunks.insert(cpos, gpu_mesh);
-            } else {
-                self.gpu_chunks.remove(&cpos);
-            }
+            self.store_mesh(cpos, &mesh, device, pipeline);
         }
 
         let drop_pos = pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
@@ -693,11 +742,7 @@ impl WorldManager {
         };
 
         for (cpos, mesh) in new_meshes {
-            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                self.gpu_chunks.insert(cpos, gpu_mesh);
-            } else {
-                self.gpu_chunks.remove(&cpos);
-            }
+            self.store_mesh(cpos, &mesh, device, pipeline);
         }
 
         true
@@ -838,11 +883,7 @@ impl WorldManager {
         };
 
         for (cpos, mesh) in new_meshes {
-            if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                self.gpu_chunks.insert(cpos, gpu_mesh);
-            } else {
-                self.gpu_chunks.remove(&cpos);
-            }
+            self.store_mesh(cpos, &mesh, device, pipeline);
         }
 
         true
@@ -889,19 +930,24 @@ impl WorldManager {
         }
 
         if !changed_chunks.is_empty() {
-            let world = self.world.lock().unwrap();
-            let mesher = ChunkMesher::new(&self.registry);
-            for cpos in changed_chunks {
-                if let Some(chunk) = world.get_chunk(cpos) {
-                    let origin = cpos.to_world_origin();
-                    let sources = world.get_light_sources_near(origin, 15);
-                    let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                        world.get_block(origin + IVec3::new(x, y, z))
-                    });
-                    if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                        self.gpu_chunks.insert(cpos, gpu_mesh);
+            let registry = Arc::clone(&self.registry);
+            let mesher = ChunkMesher::new(&registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        meshes.push((cpos, mesh));
                     }
                 }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
             }
         }
     }
@@ -937,19 +983,24 @@ impl WorldManager {
         }
 
         if !changed_chunks.is_empty() {
-            let world = self.world.lock().unwrap();
-            let mesher = ChunkMesher::new(&self.registry);
-            for cpos in changed_chunks {
-                if let Some(chunk) = world.get_chunk(cpos) {
-                    let origin = cpos.to_world_origin();
-                    let sources = world.get_light_sources_near(origin, 15);
-                    let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                        world.get_block(origin + IVec3::new(x, y, z))
-                    });
-                    if let Some(gpu_mesh) = pipeline.upload_mesh(device, &mesh) {
-                        self.gpu_chunks.insert(cpos, gpu_mesh);
+            let registry = Arc::clone(&self.registry);
+            let mesher = ChunkMesher::new(&registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        meshes.push((cpos, mesh));
                     }
                 }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
             }
         }
     }

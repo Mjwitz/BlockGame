@@ -74,10 +74,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Multiply by vertex ambient occlusion factor
     let final_light = combined_light * in.ao;
 
-    // 5. Distance atmospheric fog matching dynamic sky color
+    // 5. Distance atmospheric fog matching dynamic sky/underwater color
     let dist = length(camera.camera_pos.xyz - in.world_pos);
-    let fog_start = 80.0;
-    let fog_end = 175.0;
+    var fog_start = 80.0;
+    var fog_end = 175.0;
+    if (camera.sky_color.a > 1.5) {
+        // Submerged underwater fog: tight visibility with deep ocean scatter
+        fog_start = 1.0;
+        fog_end = 22.0;
+    }
     let fog_factor = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
     let sky_fog_color = camera.sky_color.rgb;
 

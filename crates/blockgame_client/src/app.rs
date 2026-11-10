@@ -951,8 +951,19 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
 
-                // Update player stats (regeneration, starvation, void damage at y < -25.0)
-                state.player_stats.update(dt, state.player.position.y);
+                // Check if player's head is submerged in water for breath and drowning
+                let head_block_pos = IVec3::new(
+                    state.player.position.x.floor() as i32,
+                    (state.player.position.y + 1.62).floor() as i32,
+                    state.player.position.z.floor() as i32,
+                );
+                let is_head_submerged = {
+                    let world = state.world_manager.world().lock().unwrap();
+                    world.get_block(head_block_pos) == BlockId::WATER
+                };
+
+                // Update player stats (regeneration, starvation, void damage, breath/drowning)
+                state.player_stats.update(dt, state.player.position.y, is_head_submerged);
 
                 // Handle death transition and item scattering
                 if state.player_stats.is_dead {
@@ -1046,10 +1057,20 @@ impl ApplicationHandler for BlockGameApp {
                 // 4. Update Camera position and atmosphere uniform
                 state.camera.position = state.player.eye_position();
                 let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
-                state.camera.update_uniform_with_atmosphere(
+                let camera_block_pos = IVec3::new(
+                    state.camera.position.x.floor() as i32,
+                    state.camera.position.y.floor() as i32,
+                    state.camera.position.z.floor() as i32,
+                );
+                let is_camera_underwater = {
+                    let world = state.world_manager.world().lock().unwrap();
+                    world.get_block(camera_block_pos) == BlockId::WATER
+                };
+                state.camera.update_uniform_with_atmosphere_water(
                     &mut state.camera_uniform,
                     aspect,
                     &state.day_night,
+                    is_camera_underwater,
                 );
                 state
                     .pipeline
@@ -1475,7 +1496,31 @@ impl ApplicationHandler for BlockGameApp {
                             label: Some("Frame Command Encoder"),
                         });
 
-                let sky = state.day_night.sky_color();
+                let camera_block_pos = IVec3::new(
+                    state.camera.position.x.floor() as i32,
+                    state.camera.position.y.floor() as i32,
+                    state.camera.position.z.floor() as i32,
+                );
+                let is_camera_underwater = {
+                    let world = state.world_manager.world().lock().unwrap();
+                    world.get_block(camera_block_pos) == BlockId::WATER
+                };
+                let clear_color = if is_camera_underwater {
+                    wgpu::Color {
+                        r: 0.05,
+                        g: 0.22,
+                        b: 0.45,
+                        a: 1.0,
+                    }
+                } else {
+                    let sky = state.day_night.sky_color();
+                    wgpu::Color {
+                        r: sky[0] as f64,
+                        g: sky[1] as f64,
+                        b: sky[2] as f64,
+                        a: 1.0,
+                    }
+                };
 
                 // 3D Voxel Terrain Pass
                 {
@@ -1485,12 +1530,7 @@ impl ApplicationHandler for BlockGameApp {
                             view: &view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: sky[0] as f64,
-                                    g: sky[1] as f64,
-                                    b: sky[2] as f64,
-                                    a: 1.0,
-                                }),
+                                load: wgpu::LoadOp::Clear(clear_color),
                                 store: wgpu::StoreOp::Store,
                             },
                         })],
@@ -1535,6 +1575,14 @@ impl ApplicationHandler for BlockGameApp {
                         render_pass.set_vertex_buffer(0, wireframe_buf.slice(..));
                         render_pass.draw(0..24, 0..1);
                     }
+
+                    // Render translucent water meshes after all opaque geometry
+                    render_pass.set_pipeline(&state.pipeline.water_pipeline);
+                    render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                    render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
+                    state
+                        .world_manager
+                        .render_water_with_frustum(&mut render_pass, Some(&frustum));
                 }
 
                 // 2D UI Overlay Pass (Draws HUD or Inventory over 3D world)

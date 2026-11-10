@@ -82,14 +82,29 @@ impl Camera {
         aspect: f32,
         cycle: &DayNightCycle,
     ) {
+        self.update_uniform_with_atmosphere_water(uniform, aspect, cycle, false);
+    }
+
+    pub fn update_uniform_with_atmosphere_water(
+        &self,
+        uniform: &mut CameraUniform,
+        aspect: f32,
+        cycle: &DayNightCycle,
+        is_underwater: bool,
+    ) {
         let view_proj = self.build_view_projection_matrix(aspect);
         uniform.view_proj = view_proj.to_cols_array_2d();
         uniform.camera_pos = [self.position.x, self.position.y, self.position.z, 1.0];
 
         let sun = cycle.sun_direction();
         uniform.sun_dir = [sun.x, sun.y, sun.z, 0.0];
-        uniform.sun_color = cycle.light_color_and_intensity();
-        uniform.sky_color = cycle.sky_color();
+        if is_underwater {
+            uniform.sun_color = [0.2, 0.55, 0.85, 0.6];
+            uniform.sky_color = [0.05, 0.22, 0.45, 2.0]; // Alpha = 2.0 signals underwater fog
+        } else {
+            uniform.sun_color = cycle.light_color_and_intensity();
+            uniform.sky_color = cycle.sky_color();
+        }
     }
 }
 

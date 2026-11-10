@@ -121,6 +121,7 @@ impl DynamicMeshBuffers {
 
 pub struct VoxelPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
+    pub water_pipeline: wgpu::RenderPipeline,
     pub camera_buffer: wgpu::Buffer,
     pub camera_bind_group: wgpu::BindGroup,
     pub camera_bind_group_layout: wgpu::BindGroupLayout,
@@ -310,8 +311,53 @@ impl VoxelPipeline {
             cache: None,
         });
 
+        let water_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Water Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[VoxelVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None, // Two-sided water faces (visible from above & below)
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false, // Critical: Translucent water does not overwrite depth buffer!
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             render_pipeline,
+            water_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout,
@@ -325,7 +371,7 @@ impl VoxelPipeline {
     }
 
     pub fn upload_mesh(&self, device: &wgpu::Device, mesh: &ChunkMesh) -> Option<GpuMeshBuffers> {
-        if mesh.is_empty() {
+        if mesh.indices.is_empty() {
             return None;
         }
 
@@ -345,6 +391,34 @@ impl VoxelPipeline {
             vertex_buffer,
             index_buffer,
             index_count: mesh.indices.len() as u32,
+        })
+    }
+
+    pub fn upload_water_mesh(
+        &self,
+        device: &wgpu::Device,
+        mesh: &ChunkMesh,
+    ) -> Option<GpuMeshBuffers> {
+        if mesh.water_indices.is_empty() {
+            return None;
+        }
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Chunk Water Vertex Buffer"),
+            contents: bytemuck::cast_slice(&mesh.water_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Chunk Water Index Buffer"),
+            contents: bytemuck::cast_slice(&mesh.water_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Some(GpuMeshBuffers {
+            vertex_buffer,
+            index_buffer,
+            index_count: mesh.water_indices.len() as u32,
         })
     }
 }

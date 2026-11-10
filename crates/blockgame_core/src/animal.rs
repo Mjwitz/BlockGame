@@ -2,7 +2,7 @@ use glam::{IVec3, Vec3};
 use std::f32::consts::PI;
 
 use crate::{
-    block::BlockRegistry,
+    block::{BlockId, BlockRegistry},
     item::{ItemId, ItemSlot},
     physics::AABB,
     world::World,
@@ -77,6 +77,9 @@ pub struct AnimalEntity {
     pub dead: bool,
     pub rng_state: u64,
     pub stuck_timer: f32,
+    pub breath: f32,
+    pub max_breath: f32,
+    pub drown_timer: f32,
 }
 
 impl AnimalEntity {
@@ -107,6 +110,9 @@ impl AnimalEntity {
             dead: false,
             rng_state: seed,
             stuck_timer: 0.0,
+            breath: 15.0,
+            max_breath: 15.0,
+            drown_timer: 0.0,
         }
     }
 
@@ -193,6 +199,41 @@ impl AnimalEntity {
             self.hurt_timer = (self.hurt_timer - dt).max(0.0);
         }
 
+        // 0. Water & Drowning Check
+        let (_half_width, height) = self.kind.dimensions();
+        let head_y = (self.position.y + height * 0.85).floor() as i32;
+        let head_x = self.position.x.floor() as i32;
+        let head_z = self.position.z.floor() as i32;
+        let is_head_submerged = world.get_block(IVec3::new(head_x, head_y, head_z)) == BlockId::WATER;
+
+        let feet_y = self.position.y.floor() as i32;
+        let is_in_water = is_head_submerged || world.get_block(IVec3::new(head_x, feet_y, head_z)) == BlockId::WATER;
+
+        if is_head_submerged {
+            if self.breath > 0.0 {
+                if self.breath >= dt {
+                    self.breath -= dt;
+                } else {
+                    let excess = dt - self.breath;
+                    self.breath = 0.0;
+                    self.drown_timer += excess;
+                    while self.drown_timer >= 1.0 {
+                        self.drown_timer -= 1.0;
+                        self.take_damage(2.0, Vec3::ZERO);
+                    }
+                }
+            } else {
+                self.drown_timer += dt;
+                while self.drown_timer >= 1.0 {
+                    self.drown_timer -= 1.0;
+                    self.take_damage(2.0, Vec3::ZERO);
+                }
+            }
+        } else {
+            self.drown_timer = 0.0;
+            self.breath = (self.breath + dt * 5.0).min(self.max_breath);
+        }
+
         // 1. AI Decision Making
         let mut wish_dir = Vec3::ZERO;
 
@@ -228,7 +269,9 @@ impl AnimalEntity {
         }
 
         // 2. Physics & Movement
-        let gravity = if self.kind == AnimalKind::Chicken {
+        let gravity = if is_in_water {
+            -6.0 // Substantially reduced gravity in water
+        } else if self.kind == AnimalKind::Chicken {
             -12.0 // Chickens fall much slower (wing flapping flutter)
         } else {
             -28.0
@@ -236,6 +279,15 @@ impl AnimalEntity {
         self.velocity.y += gravity * dt;
         if self.kind == AnimalKind::Chicken && self.velocity.y < -2.2 {
             self.velocity.y = -2.2; // Chicken flutter terminal velocity
+        }
+
+        // Water drag & swimming buoyancy
+        if is_in_water {
+            self.velocity.y *= 0.85;
+            self.velocity.y += 10.0 * dt; // Instinctively paddle upward
+            if self.velocity.y > 2.5 {
+                self.velocity.y = 2.5;
+            }
         }
 
         let target_speed = if self.flee_timer > 0.0 {
@@ -458,5 +510,46 @@ mod tests {
 
         assert!(!cow.dead, "Animal on solid ground should remain alive");
         assert!(moved, "Animal should wander and change horizontal position over 10 seconds");
+    }
+
+    #[test]
+    fn test_animal_drowning_when_submerged() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let chunk_pos = ChunkPos::new(0, 0, 0);
+        let mut chunk = Chunk::new(chunk_pos);
+        // Fill chunk with water so animal is completely submerged
+        chunk.fill(BlockId::WATER);
+        // Floor at y=0..2 and ceiling at y=8..16 so animal stays completely submerged
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 0..2 {
+                    chunk.set(x, y, z, BlockId::STONE);
+                }
+                for y in 8..16 {
+                    chunk.set(x, y, z, BlockId::STONE);
+                }
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let mut cow = AnimalEntity::new(5, AnimalKind::Cow, Vec3::new(8.0, 3.0, 8.0));
+        cow.is_moving = false;
+        cow.wander_timer = 9999.0;
+        assert_eq!(cow.breath, 15.0);
+        assert_eq!(cow.health, 10.0);
+
+        // Submerge for 15 seconds: breath goes to 0
+        for _ in 0..150 {
+            cow.update(0.1, &world, &registry);
+        }
+        assert_eq!(cow.breath, 0.0);
+        assert_eq!(cow.health, 10.0); // Not damaged yet until timer ticks
+
+        // 1 more second submerged: drown damage triggers
+        for _ in 0..10 {
+            cow.update(0.1, &world, &registry);
+        }
+        assert!(cow.health < 10.0, "Submerged animal should take drowning damage");
     }
 }

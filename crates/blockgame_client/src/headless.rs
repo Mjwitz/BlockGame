@@ -2302,6 +2302,12 @@ pub async fn render_world_to_image(
             render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
             world_manager.render(&mut render_pass);
+
+            // Water pass
+            render_pass.set_pipeline(&pipeline.water_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render_water(&mut render_pass);
         }
 
         // Draw HUD overlay with Birch Log in hotbar
@@ -2399,6 +2405,167 @@ pub async fn render_world_to_image(
             image::ExtendedColorType::Rgba8,
         )?;
         log::info!("Successfully saved Terrain and Water showcase image to terrain_and_water_render.png");
+
+        // 12. Underwater Submersion & Oxygen Bubbles Showcase Render
+        let underwater_cam_pos = Vec3::new(pond_x as f32, (pond_y as f32) + 0.35, pond_z as f32);
+        let underwater_cam = Camera::new(underwater_cam_pos, (-15.0_f32).to_radians(), (10.0_f32).to_radians());
+        let mut underwater_uniform = CameraUniform::default();
+        underwater_cam.update_uniform_with_atmosphere_water(
+            &mut underwater_uniform,
+            width as f32 / height as f32,
+            &pond_day_night,
+            true, // is_underwater = true triggers underwater fog & filtered sunlight
+        );
+        pipeline.update_camera(&queue, &underwater_uniform);
+
+        let mut underwater_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Underwater Encoder"),
+        });
+
+        {
+            let mut render_pass = underwater_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Underwater 3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.05,
+                            g: 0.22,
+                            b: 0.45,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            // 1. Opaque geometry pass (lakebed sand, stone, shoreline, trees)
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            // 2. Translucent water geometry pass (water surface visible from underneath)
+            render_pass.set_pipeline(&pipeline.water_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render_water(&mut render_pass);
+        }
+
+        // Draw HUD overlay with Underwater Screen Overlay and Oxygen Bubbles
+        let mut underwater_ui_mesh = UiMesh::new();
+        let mut underwater_stats = blockgame_core::PlayerStats::new();
+        underwater_stats.is_submerged = true;
+        underwater_stats.breath = 10.5; // 7 full bubbles remaining
+        UiBuilder::build_hud(
+            &mut underwater_ui_mesh,
+            screen_w,
+            screen_h,
+            &water_inv,
+            0,
+            &item_registry,
+            0.0,
+            0.0,
+            &underwater_stats,
+        );
+
+        if !underwater_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Underwater UI VB"),
+                contents: bytemuck::cast_slice(&underwater_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Underwater UI IB"),
+                contents: bytemuck::cast_slice(&underwater_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = underwater_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Underwater UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..underwater_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        underwater_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(underwater_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut underwater_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            underwater_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "underwater_render.png",
+            &underwater_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Underwater showcase image to underwater_render.png");
     }
 
     Ok(())

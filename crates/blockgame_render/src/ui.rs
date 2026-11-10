@@ -279,6 +279,8 @@ impl UiBuilder {
     pub const HUNGER_HALF_TILE: u16 = 30;
     pub const FLAME_CONTAINER_TILE: u16 = 183;
     pub const FLAME_FULL_TILE: u16 = 184;
+    pub const BUBBLE_FULL_TILE: u16 = 201;
+    pub const BUBBLE_POP_TILE: u16 = 202;
 
     pub const SLOT_SIZE: f32 = 48.0;
     pub const SLOT_GAP: f32 = 5.0;
@@ -1572,6 +1574,19 @@ impl UiBuilder {
     ) {
         mesh.clear();
 
+        // 0. Full-screen Underwater Screen Overlay (When Player is Submerged)
+        if stats.is_submerged && !stats.is_dead {
+            let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+            mesh.add_quad(
+                0.0,
+                0.0,
+                screen_w,
+                screen_h,
+                white_uv,
+                [0.03, 0.22, 0.48, 0.28],
+            );
+        }
+
         // 1. Center Crosshair (24x24 px) - only when alive
         if !stats.is_dead {
             let ch_size = 24.0;
@@ -1728,7 +1743,38 @@ impl UiBuilder {
             }
         }
 
-        // 6. Full-screen Red Damage Flash
+        // 6. Oxygen / Breath Bubbles (10 bubbles directly above hunger bar when submerged or recovering breath)
+        if (stats.is_submerged || stats.breath < stats.max_breath) && !stats.is_dead {
+            let bubble_full_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_FULL_TILE);
+            let bubble_pop_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_POP_TILE);
+            let bubbles_y = bars_y - 20.0;
+
+            let bubbles_remaining = ((stats.breath / stats.max_breath) * 10.0).ceil() as i32;
+            for i in 0..10 {
+                let bx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
+                if i < bubbles_remaining {
+                    mesh.add_quad(
+                        bx,
+                        bubbles_y,
+                        icon_size,
+                        icon_size,
+                        bubble_full_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                } else if i == bubbles_remaining && stats.drown_timer > 0.0 {
+                    mesh.add_quad(
+                        bx,
+                        bubbles_y,
+                        icon_size,
+                        icon_size,
+                        bubble_pop_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                }
+            }
+        }
+
+        // 7. Full-screen Red Damage Flash
         if stats.damage_flash > 0.0 {
             let flash_alpha = ((stats.damage_flash / 0.5) * 0.40).clamp(0.0, 0.40);
             let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
@@ -3447,5 +3493,25 @@ mod tests {
 
         assert!(mesh.indices.len() > 0);
         assert!(mesh.vertices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_hud_underwater_and_bubbles() {
+        let mut mesh = UiMesh::new();
+        let inv = Inventory::new(36);
+        let registry = ItemRegistry::new();
+        let mut stats = blockgame_core::player::PlayerStats::new();
+
+        // Normal HUD
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        let normal_quads = mesh.indices.len() / 6;
+
+        // Submerged HUD (adds underwater overlay + 10 bubble quads)
+        stats.is_submerged = true;
+        stats.breath = 12.0;
+        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        let submerged_quads = mesh.indices.len() / 6;
+
+        assert!(submerged_quads > normal_quads, "Submerged HUD must generate extra quads for underwater tint and bubbles");
     }
 }

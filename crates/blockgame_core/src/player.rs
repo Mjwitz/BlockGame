@@ -12,6 +12,10 @@ pub struct PlayerStats {
     pub starvation_timer: f32,
     pub void_timer: f32,
     pub is_dead: bool,
+    pub breath: f32,
+    pub max_breath: f32,
+    pub drown_timer: f32,
+    pub is_submerged: bool,
 }
 
 impl Default for PlayerStats {
@@ -23,6 +27,7 @@ impl Default for PlayerStats {
 impl PlayerStats {
     pub const MAX_HEALTH: f32 = 20.0;
     pub const MAX_HUNGER: f32 = 20.0;
+    pub const MAX_BREATH: f32 = 15.0; // 15 seconds of oxygen (10 bubbles)
 
     pub fn new() -> Self {
         Self {
@@ -38,6 +43,10 @@ impl PlayerStats {
             starvation_timer: 0.0,
             void_timer: 0.0,
             is_dead: false,
+            breath: Self::MAX_BREATH,
+            max_breath: Self::MAX_BREATH,
+            drown_timer: 0.0,
+            is_submerged: false,
         }
     }
 
@@ -103,8 +112,8 @@ impl PlayerStats {
         }
     }
 
-    /// Ticks player regeneration, starvation, damage cooldowns, and void damage.
-    pub fn update(&mut self, dt: f32, player_y: f32) {
+    /// Ticks player regeneration, starvation, damage cooldowns, void damage, and breath/drowning.
+    pub fn update(&mut self, dt: f32, player_y: f32, is_submerged: bool) {
         if self.is_dead {
             return;
         }
@@ -154,6 +163,34 @@ impl PlayerStats {
         } else {
             self.starvation_timer = 0.0;
         }
+
+        // 4. Breath & Drowning Mechanics
+        self.is_submerged = is_submerged;
+        if is_submerged {
+            if self.breath > 0.0 {
+                if self.breath >= dt {
+                    self.breath -= dt;
+                } else {
+                    let excess = dt - self.breath;
+                    self.breath = 0.0;
+                    self.drown_timer += excess;
+                    while self.drown_timer >= 1.0 {
+                        self.drown_timer -= 1.0;
+                        self.take_damage_force(2.0); // 1 full heart (2 HP) drowning damage
+                    }
+                }
+            } else {
+                self.drown_timer += dt;
+                while self.drown_timer >= 1.0 {
+                    self.drown_timer -= 1.0;
+                    self.take_damage_force(2.0);
+                }
+            }
+        } else {
+            self.drown_timer = 0.0;
+            // Rapid breath regeneration when surfacing (recovers full in 3 seconds)
+            self.breath = (self.breath + dt * (self.max_breath / 3.0)).min(self.max_breath);
+        }
     }
 }
 
@@ -167,6 +204,7 @@ mod tests {
         assert_eq!(stats.health, 20.0);
         assert_eq!(stats.hunger, 20.0);
         assert_eq!(stats.saturation, 5.0);
+        assert_eq!(stats.breath, 15.0);
         assert!(!stats.is_dead);
     }
 
@@ -196,7 +234,7 @@ mod tests {
         let mut stats = PlayerStats::new();
         // Fall into void below y = -25.0
         for _ in 0..5 {
-            stats.update(0.5, -30.0);
+            stats.update(0.5, -30.0, false);
         }
         // 5 ticks of 4.0 damage = 20.0 damage = death
         assert_eq!(stats.health, 0.0);
@@ -210,12 +248,12 @@ mod tests {
         stats.hunger = 20.0;
 
         // Advance 3 seconds of regen
-        stats.update(3.0, 10.0);
+        stats.update(3.0, 10.0, false);
         assert_eq!(stats.health, 11.0);
 
         // Starvation test
         stats.hunger = 0.0;
-        stats.update(4.0, 10.0);
+        stats.update(4.0, 10.0, false);
         assert_eq!(stats.health, 10.0);
     }
 
@@ -232,5 +270,32 @@ mod tests {
         // Eating when full fails
         stats.hunger = 20.0;
         assert!(!stats.eat(4, 2.4));
+    }
+
+    #[test]
+    fn test_breath_depletion_and_drowning() {
+        let mut stats = PlayerStats::new();
+        assert_eq!(stats.breath, 15.0);
+
+        // Submerged for 10 seconds
+        stats.update(10.0, 10.0, true);
+        assert_eq!(stats.breath, 5.0);
+        assert_eq!(stats.health, 20.0); // Not drowning yet
+
+        // Submerged for another 5 seconds -> breath reaches 0
+        stats.update(5.0, 10.0, true);
+        assert_eq!(stats.breath, 0.0);
+        assert_eq!(stats.health, 20.0);
+
+        // Submerged for 1 more second -> takes drowning damage (2 HP)
+        stats.update(1.0, 10.0, true);
+        assert_eq!(stats.health, 18.0);
+
+        // Surface: rapid recovery
+        stats.update(1.5, 10.0, false);
+        assert!(stats.breath > 7.0);
+
+        stats.update(2.0, 10.0, false);
+        assert_eq!(stats.breath, 15.0);
     }
 }

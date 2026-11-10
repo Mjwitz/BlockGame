@@ -13,6 +13,8 @@ use crate::atlas::TextureAtlas;
 pub struct ChunkMesh {
     pub vertices: Vec<VoxelVertex>,
     pub indices: Vec<u32>,
+    pub water_vertices: Vec<VoxelVertex>,
+    pub water_indices: Vec<u32>,
 }
 
 impl ChunkMesh {
@@ -20,15 +22,17 @@ impl ChunkMesh {
         Self {
             vertices: Vec::new(),
             indices: Vec::new(),
+            water_vertices: Vec::new(),
+            water_indices: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.indices.is_empty()
+        self.indices.is_empty() && self.water_indices.is_empty()
     }
 
     pub fn face_count(&self) -> usize {
-        self.indices.len() / 6
+        (self.indices.len() + self.water_indices.len()) / 6
     }
 }
 
@@ -115,6 +119,54 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    if block_id == BlockId::WATER {
+                        for dir in Direction::ALL {
+                            let normal = dir.normal_ivec();
+                            let nx = ix + normal.x;
+                            let ny = iy + normal.y;
+                            let nz = iz + normal.z;
+
+                            let neighbor_id = query_block(nx, ny, nz);
+
+                            // Adjacent water blocks should not render internal faces
+                            if neighbor_id == BlockId::WATER {
+                                continue;
+                            }
+
+                            // Only generate water face if adjacent block is transparent (air, tall grass, glass, etc.)
+                            if self.registry.is_transparent(neighbor_id) {
+                                let tile_id = self.registry.get_texture(block_id, dir);
+                                let uv = TextureAtlas::get_uv_bounds(tile_id);
+
+                                let light = if nx >= 0
+                                    && nx < CHUNK_SIZE_X as i32
+                                    && ny >= 0
+                                    && ny < CHUNK_SIZE_Y as i32
+                                    && nz >= 0
+                                    && nz < CHUNK_SIZE_Z as i32
+                                {
+                                    let lv = light_map.get(nx as usize, ny as usize, nz as usize);
+                                    [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
+                                } else {
+                                    let blk = light_map.get_block_rel(nx, ny, nz);
+                                    [1.0, blk as f32 / 15.0]
+                                };
+
+                                self.build_water_face(
+                                    &mut mesh,
+                                    chunk.pos,
+                                    ix,
+                                    iy,
+                                    iz,
+                                    dir,
+                                    uv,
+                                    light,
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
                     for dir in Direction::ALL {
                         let normal = dir.normal_ivec();
                         let nx = ix + normal.x;
@@ -123,10 +175,8 @@ impl<'a> ChunkMesher<'a> {
 
                         let neighbor_id = query_block(nx, ny, nz);
 
-                        // Adjacent glass or water blocks should not render the internal face between them
-                        if (block_id == BlockId::GLASS && neighbor_id == BlockId::GLASS)
-                            || (block_id == BlockId::WATER && neighbor_id == BlockId::WATER)
-                        {
+                        // Adjacent glass blocks should not render the internal face between them
+                        if block_id == BlockId::GLASS && neighbor_id == BlockId::GLASS {
                             continue;
                         }
 
@@ -273,6 +323,92 @@ impl<'a> ChunkMesher<'a> {
                 start_idx + 0,
             ]);
         }
+    }
+
+    fn build_water_face(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        dir: Direction,
+        uv_bounds: [f32; 4],
+        light: [f32; 2],
+    ) {
+        let [u_min, v_min, u_max, v_max] = uv_bounds;
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+        let normal = dir.normal_f32();
+
+        let positions = match dir {
+            Direction::PosY => [
+                [fx, fy + 1.0, fz + 1.0],
+                [fx + 1.0, fy + 1.0, fz + 1.0],
+                [fx + 1.0, fy + 1.0, fz],
+                [fx, fy + 1.0, fz],
+            ],
+            Direction::NegY => [
+                [fx, fy, fz],
+                [fx + 1.0, fy, fz],
+                [fx + 1.0, fy, fz + 1.0],
+                [fx, fy, fz + 1.0],
+            ],
+            Direction::PosZ => [
+                [fx, fy, fz + 1.0],
+                [fx + 1.0, fy, fz + 1.0],
+                [fx + 1.0, fy + 1.0, fz + 1.0],
+                [fx, fy + 1.0, fz + 1.0],
+            ],
+            Direction::NegZ => [
+                [fx + 1.0, fy, fz],
+                [fx, fy, fz],
+                [fx, fy + 1.0, fz],
+                [fx + 1.0, fy + 1.0, fz],
+            ],
+            Direction::PosX => [
+                [fx + 1.0, fy, fz + 1.0],
+                [fx + 1.0, fy, fz],
+                [fx + 1.0, fy + 1.0, fz],
+                [fx + 1.0, fy + 1.0, fz + 1.0],
+            ],
+            Direction::NegX => [
+                [fx, fy, fz],
+                [fx, fy, fz + 1.0],
+                [fx, fy + 1.0, fz + 1.0],
+                [fx, fy + 1.0, fz],
+            ],
+        };
+
+        let uvs = [
+            [u_min, v_max],
+            [u_max, v_max],
+            [u_max, v_min],
+            [u_min, v_min],
+        ];
+
+        let start_idx = mesh.water_vertices.len() as u32;
+
+        for i in 0..4 {
+            mesh.water_vertices.push(VoxelVertex {
+                position: positions[i],
+                uv: uvs[i],
+                normal,
+                ao: 1.0,
+                light,
+            });
+        }
+
+        mesh.water_indices.extend_from_slice(&[
+            start_idx + 0,
+            start_idx + 1,
+            start_idx + 2,
+            start_idx + 2,
+            start_idx + 3,
+            start_idx + 0,
+        ]);
     }
 
     /// Generates slender 3D post mesh for torches centered in the block.
@@ -1693,5 +1829,25 @@ mod tests {
         assert!(!mesh.is_empty());
         assert!(mesh.vertices.len() > 100);
         assert!(mesh.indices.len() > 100);
+    }
+
+    #[test]
+    fn test_water_mesh_separation() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        chunk.set(2, 2, 2, BlockId::STONE);
+        chunk.set(8, 8, 8, BlockId::WATER);
+        let mesh = mesher.mesh_chunk(&chunk);
+
+        // Stone block generates 6 opaque faces (24 vertices, 36 indices)
+        assert_eq!(mesh.vertices.len(), 24);
+        assert_eq!(mesh.indices.len(), 36);
+
+        // Water block generates 6 translucent faces (24 vertices, 36 indices) in water buffers
+        assert_eq!(mesh.water_vertices.len(), 24);
+        assert_eq!(mesh.water_indices.len(), 36);
+        assert_eq!(mesh.face_count(), 12);
     }
 }
