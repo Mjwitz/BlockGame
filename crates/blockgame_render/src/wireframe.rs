@@ -106,20 +106,80 @@ impl WireframePipeline {
 
         let vertices: [LineVertex; 24] = [
             // Bottom 4 edges
-            LineVertex { position: [x0, y0, z0] }, LineVertex { position: [x1, y0, z0] },
-            LineVertex { position: [x1, y0, z0] }, LineVertex { position: [x1, y0, z1] },
-            LineVertex { position: [x1, y0, z1] }, LineVertex { position: [x0, y0, z1] },
-            LineVertex { position: [x0, y0, z1] }, LineVertex { position: [x0, y0, z0] },
+            LineVertex {
+                position: [x0, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z1],
+            },
+            LineVertex {
+                position: [x1, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z0],
+            },
             // Top 4 edges
-            LineVertex { position: [x0, y1, z0] }, LineVertex { position: [x1, y1, z0] },
-            LineVertex { position: [x1, y1, z0] }, LineVertex { position: [x1, y1, z1] },
-            LineVertex { position: [x1, y1, z1] }, LineVertex { position: [x0, y1, z1] },
-            LineVertex { position: [x0, y1, z1] }, LineVertex { position: [x0, y1, z0] },
+            LineVertex {
+                position: [x0, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z1],
+            },
+            LineVertex {
+                position: [x1, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z0],
+            },
             // 4 Vertical corner pillars
-            LineVertex { position: [x0, y0, z0] }, LineVertex { position: [x0, y1, z0] },
-            LineVertex { position: [x1, y0, z0] }, LineVertex { position: [x1, y1, z0] },
-            LineVertex { position: [x1, y0, z1] }, LineVertex { position: [x1, y1, z1] },
-            LineVertex { position: [x0, y0, z1] }, LineVertex { position: [x0, y1, z1] },
+            LineVertex {
+                position: [x0, y0, z0],
+            },
+            LineVertex {
+                position: [x0, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z1],
+            },
+            LineVertex {
+                position: [x1, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z1],
+            },
         ];
 
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -213,18 +273,78 @@ impl WireframePipeline {
         let z1 = voxel.z as f32 + 1.002;
 
         let box_edges: [LineVertex; 24] = [
-            LineVertex { position: [x0, y0, z0] }, LineVertex { position: [x1, y0, z0] },
-            LineVertex { position: [x1, y0, z0] }, LineVertex { position: [x1, y0, z1] },
-            LineVertex { position: [x1, y0, z1] }, LineVertex { position: [x0, y0, z1] },
-            LineVertex { position: [x0, y0, z1] }, LineVertex { position: [x0, y0, z0] },
-            LineVertex { position: [x0, y1, z0] }, LineVertex { position: [x1, y1, z0] },
-            LineVertex { position: [x1, y1, z0] }, LineVertex { position: [x1, y1, z1] },
-            LineVertex { position: [x1, y1, z1] }, LineVertex { position: [x0, y1, z1] },
-            LineVertex { position: [x0, y1, z1] }, LineVertex { position: [x0, y1, z0] },
-            LineVertex { position: [x0, y0, z0] }, LineVertex { position: [x0, y1, z0] },
-            LineVertex { position: [x1, y0, z0] }, LineVertex { position: [x1, y1, z0] },
-            LineVertex { position: [x1, y0, z1] }, LineVertex { position: [x1, y1, z1] },
-            LineVertex { position: [x0, y0, z1] }, LineVertex { position: [x0, y1, z1] },
+            LineVertex {
+                position: [x0, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z1],
+            },
+            LineVertex {
+                position: [x1, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z0],
+            },
+            LineVertex {
+                position: [x0, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z1],
+            },
+            LineVertex {
+                position: [x1, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z0],
+            },
+            LineVertex {
+                position: [x0, y0, z0],
+            },
+            LineVertex {
+                position: [x0, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z0],
+            },
+            LineVertex {
+                position: [x1, y1, z0],
+            },
+            LineVertex {
+                position: [x1, y0, z1],
+            },
+            LineVertex {
+                position: [x1, y1, z1],
+            },
+            LineVertex {
+                position: [x0, y0, z1],
+            },
+            LineVertex {
+                position: [x0, y1, z1],
+            },
         ];
         vertices.extend_from_slice(&box_edges);
 
@@ -239,28 +359,52 @@ impl WireframePipeline {
 
         for &([u0, v0], [u1, v1]) in &CRACK_SEGMENTS[..num_segments] {
             // PosY (top face)
-            vertices.push(LineVertex { position: [bx0 + u0, by1 + eps, bz0 + v0] });
-            vertices.push(LineVertex { position: [bx0 + u1, by1 + eps, bz0 + v1] });
+            vertices.push(LineVertex {
+                position: [bx0 + u0, by1 + eps, bz0 + v0],
+            });
+            vertices.push(LineVertex {
+                position: [bx0 + u1, by1 + eps, bz0 + v1],
+            });
 
             // NegY (bottom face)
-            vertices.push(LineVertex { position: [bx0 + u0, by0 - eps, bz0 + v0] });
-            vertices.push(LineVertex { position: [bx0 + u1, by0 - eps, bz0 + v1] });
+            vertices.push(LineVertex {
+                position: [bx0 + u0, by0 - eps, bz0 + v0],
+            });
+            vertices.push(LineVertex {
+                position: [bx0 + u1, by0 - eps, bz0 + v1],
+            });
 
             // PosZ (front face)
-            vertices.push(LineVertex { position: [bx0 + u0, by0 + v0, bz1 + eps] });
-            vertices.push(LineVertex { position: [bx0 + u1, by0 + v1, bz1 + eps] });
+            vertices.push(LineVertex {
+                position: [bx0 + u0, by0 + v0, bz1 + eps],
+            });
+            vertices.push(LineVertex {
+                position: [bx0 + u1, by0 + v1, bz1 + eps],
+            });
 
             // NegZ (back face)
-            vertices.push(LineVertex { position: [bx0 + u0, by0 + v0, bz0 - eps] });
-            vertices.push(LineVertex { position: [bx0 + u1, by0 + v1, bz0 - eps] });
+            vertices.push(LineVertex {
+                position: [bx0 + u0, by0 + v0, bz0 - eps],
+            });
+            vertices.push(LineVertex {
+                position: [bx0 + u1, by0 + v1, bz0 - eps],
+            });
 
             // PosX (right face)
-            vertices.push(LineVertex { position: [bx1 + eps, by0 + v0, bz0 + u0] });
-            vertices.push(LineVertex { position: [bx1 + eps, by0 + v1, bz0 + u1] });
+            vertices.push(LineVertex {
+                position: [bx1 + eps, by0 + v0, bz0 + u0],
+            });
+            vertices.push(LineVertex {
+                position: [bx1 + eps, by0 + v1, bz0 + u1],
+            });
 
             // NegX (left face)
-            vertices.push(LineVertex { position: [bx0 - eps, by0 + v0, bz0 + u0] });
-            vertices.push(LineVertex { position: [bx0 - eps, by0 + v1, bz0 + u1] });
+            vertices.push(LineVertex {
+                position: [bx0 - eps, by0 + v0, bz0 + u0],
+            });
+            vertices.push(LineVertex {
+                position: [bx0 - eps, by0 + v1, bz0 + u1],
+            });
         }
 
         let vertex_count = vertices.len() as u32;

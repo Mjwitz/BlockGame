@@ -131,7 +131,11 @@ impl Recipe {
 
     pub fn to_display_recipe(&self) -> DisplayRecipe {
         match self {
-            Recipe::Shapeless { name, inputs, output } => {
+            Recipe::Shapeless {
+                name,
+                inputs,
+                output,
+            } => {
                 let mut grid = [None; 9];
                 for (i, &inp) in inputs.iter().take(9).enumerate() {
                     grid[i] = Some(inp);
@@ -325,7 +329,12 @@ impl CraftingManager {
                     }
                 }
             }
-            Recipe::Shaped { width, height, pattern, .. } => {
+            Recipe::Shaped {
+                width,
+                height,
+                pattern,
+                ..
+            } => {
                 let (min_x, min_y, _, _) = grid.bounding_box()?;
                 for dy in 0..*height {
                     for dx in 0..*width {
@@ -364,8 +373,10 @@ impl CraftingManager {
             width: 2,
             height: 2,
             pattern: vec![
-                Some(ItemId::PLANKS), Some(ItemId::PLANKS),
-                Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
             ],
             output: ItemSlot::new(ItemId::CRAFTING_TABLE, 1),
         });
@@ -394,9 +405,15 @@ impl CraftingManager {
             width: 3,
             height: 3,
             pattern: vec![
-                Some(ItemId::PLANKS), Some(ItemId::PLANKS), Some(ItemId::PLANKS),
-                None,                 Some(ItemId::STICK),  None,
-                None,                 Some(ItemId::STICK),  None,
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
             ],
             output: ItemSlot::new(ItemId::WOODEN_PICKAXE, 1),
         });
@@ -407,9 +424,15 @@ impl CraftingManager {
             width: 3,
             height: 3,
             pattern: vec![
-                Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE),
-                None,                     Some(ItemId::STICK),       None,
-                None,                     Some(ItemId::STICK),       None,
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
             ],
             output: ItemSlot::new(ItemId::STONE_PICKAXE, 1),
         });
@@ -420,9 +443,15 @@ impl CraftingManager {
             width: 3,
             height: 3,
             pattern: vec![
-                Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),
-                None,                    Some(ItemId::STICK),      None,
-                None,                    Some(ItemId::STICK),      None,
+                Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
             ],
             output: ItemSlot::new(ItemId::IRON_PICKAXE, 1),
         });
@@ -433,24 +462,37 @@ impl CraftingManager {
             width: 3,
             height: 3,
             pattern: vec![
-                Some(ItemId::DIAMOND), Some(ItemId::DIAMOND), Some(ItemId::DIAMOND),
-                None,                  Some(ItemId::STICK),   None,
-                None,                  Some(ItemId::STICK),   None,
+                Some(ItemId::DIAMOND),
+                Some(ItemId::DIAMOND),
+                Some(ItemId::DIAMOND),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
             ],
             output: ItemSlot::new(ItemId::DIAMOND_PICKAXE, 1),
         });
 
         // Axes (2x3 trimmed pattern, both left and right orientations)
-        let register_axe = |cm: &mut CraftingManager, name_left: &'static str, name_right: &'static str, mat: ItemId, out: ItemId| {
+        let register_axe = |cm: &mut CraftingManager,
+                            name_left: &'static str,
+                            name_right: &'static str,
+                            mat: ItemId,
+                            out: ItemId| {
             // Left orientation
             cm.register(Recipe::Shaped {
                 name: name_left,
                 width: 2,
                 height: 3,
                 pattern: vec![
-                    Some(mat),  Some(mat),
-                    Some(mat),  Some(ItemId::STICK),
-                    None,       Some(ItemId::STICK),
+                    Some(mat),
+                    Some(mat),
+                    Some(mat),
+                    Some(ItemId::STICK),
+                    None,
+                    Some(ItemId::STICK),
                 ],
                 output: ItemSlot::new(out, 1),
             });
@@ -460,38 +502,72 @@ impl CraftingManager {
                 width: 2,
                 height: 3,
                 pattern: vec![
-                    Some(mat),           Some(mat),
-                    Some(ItemId::STICK), Some(mat),
-                    Some(ItemId::STICK), None,
-                ],
-                output: ItemSlot::new(out, 1),
-            });
-        };
-
-        register_axe(self, "Wooden Axe (Left)", "Wooden Axe (Right)", ItemId::PLANKS, ItemId::WOODEN_AXE);
-        register_axe(self, "Stone Axe (Left)", "Stone Axe (Right)", ItemId::COBBLESTONE, ItemId::STONE_AXE);
-        register_axe(self, "Iron Axe (Left)", "Iron Axe (Right)", ItemId::IRON_INGOT, ItemId::IRON_AXE);
-        register_axe(self, "Diamond Axe (Left)", "Diamond Axe (Right)", ItemId::DIAMOND, ItemId::DIAMOND_AXE);
-
-        // Shovels (1x3 trimmed pattern)
-        let register_shovel = |cm: &mut CraftingManager, name: &'static str, mat: ItemId, out: ItemId| {
-            cm.register(Recipe::Shaped {
-                name,
-                width: 1,
-                height: 3,
-                pattern: vec![
+                    Some(mat),
                     Some(mat),
                     Some(ItemId::STICK),
+                    Some(mat),
                     Some(ItemId::STICK),
+                    None,
                 ],
                 output: ItemSlot::new(out, 1),
             });
         };
 
+        register_axe(
+            self,
+            "Wooden Axe (Left)",
+            "Wooden Axe (Right)",
+            ItemId::PLANKS,
+            ItemId::WOODEN_AXE,
+        );
+        register_axe(
+            self,
+            "Stone Axe (Left)",
+            "Stone Axe (Right)",
+            ItemId::COBBLESTONE,
+            ItemId::STONE_AXE,
+        );
+        register_axe(
+            self,
+            "Iron Axe (Left)",
+            "Iron Axe (Right)",
+            ItemId::IRON_INGOT,
+            ItemId::IRON_AXE,
+        );
+        register_axe(
+            self,
+            "Diamond Axe (Left)",
+            "Diamond Axe (Right)",
+            ItemId::DIAMOND,
+            ItemId::DIAMOND_AXE,
+        );
+
+        // Shovels (1x3 trimmed pattern)
+        let register_shovel =
+            |cm: &mut CraftingManager, name: &'static str, mat: ItemId, out: ItemId| {
+                cm.register(Recipe::Shaped {
+                    name,
+                    width: 1,
+                    height: 3,
+                    pattern: vec![Some(mat), Some(ItemId::STICK), Some(ItemId::STICK)],
+                    output: ItemSlot::new(out, 1),
+                });
+            };
+
         register_shovel(self, "Wooden Shovel", ItemId::PLANKS, ItemId::WOODEN_SHOVEL);
-        register_shovel(self, "Stone Shovel", ItemId::COBBLESTONE, ItemId::STONE_SHOVEL);
+        register_shovel(
+            self,
+            "Stone Shovel",
+            ItemId::COBBLESTONE,
+            ItemId::STONE_SHOVEL,
+        );
         register_shovel(self, "Iron Shovel", ItemId::IRON_INGOT, ItemId::IRON_SHOVEL);
-        register_shovel(self, "Diamond Shovel", ItemId::DIAMOND, ItemId::DIAMOND_SHOVEL);
+        register_shovel(
+            self,
+            "Diamond Shovel",
+            ItemId::DIAMOND,
+            ItemId::DIAMOND_SHOVEL,
+        );
 
         // Smelting Substitute Recipes (1 Raw Ore -> 1 Ingot)
         self.register(Recipe::Shapeless {
@@ -513,16 +589,23 @@ impl CraftingManager {
         });
 
         // Hoes (2x3 trimmed pattern, both left and right orientations)
-        let register_hoe = |cm: &mut CraftingManager, name_left: &'static str, name_right: &'static str, mat: ItemId, out: ItemId| {
+        let register_hoe = |cm: &mut CraftingManager,
+                            name_left: &'static str,
+                            name_right: &'static str,
+                            mat: ItemId,
+                            out: ItemId| {
             // Left orientation
             cm.register(Recipe::Shaped {
                 name: name_left,
                 width: 2,
                 height: 3,
                 pattern: vec![
-                    Some(mat),  Some(mat),
-                    None,       Some(ItemId::STICK),
-                    None,       Some(ItemId::STICK),
+                    Some(mat),
+                    Some(mat),
+                    None,
+                    Some(ItemId::STICK),
+                    None,
+                    Some(ItemId::STICK),
                 ],
                 output: ItemSlot::new(out, 1),
             });
@@ -532,25 +615,56 @@ impl CraftingManager {
                 width: 2,
                 height: 3,
                 pattern: vec![
-                    Some(mat),           Some(mat),
-                    Some(ItemId::STICK), None,
-                    Some(ItemId::STICK), None,
+                    Some(mat),
+                    Some(mat),
+                    Some(ItemId::STICK),
+                    None,
+                    Some(ItemId::STICK),
+                    None,
                 ],
                 output: ItemSlot::new(out, 1),
             });
         };
 
-        register_hoe(self, "Wooden Hoe (Left)", "Wooden Hoe (Right)", ItemId::PLANKS, ItemId::WOODEN_HOE);
-        register_hoe(self, "Stone Hoe (Left)", "Stone Hoe (Right)", ItemId::COBBLESTONE, ItemId::STONE_HOE);
-        register_hoe(self, "Iron Hoe (Left)", "Iron Hoe (Right)", ItemId::IRON_INGOT, ItemId::IRON_HOE);
-        register_hoe(self, "Diamond Hoe (Left)", "Diamond Hoe (Right)", ItemId::DIAMOND, ItemId::DIAMOND_HOE);
+        register_hoe(
+            self,
+            "Wooden Hoe (Left)",
+            "Wooden Hoe (Right)",
+            ItemId::PLANKS,
+            ItemId::WOODEN_HOE,
+        );
+        register_hoe(
+            self,
+            "Stone Hoe (Left)",
+            "Stone Hoe (Right)",
+            ItemId::COBBLESTONE,
+            ItemId::STONE_HOE,
+        );
+        register_hoe(
+            self,
+            "Iron Hoe (Left)",
+            "Iron Hoe (Right)",
+            ItemId::IRON_INGOT,
+            ItemId::IRON_HOE,
+        );
+        register_hoe(
+            self,
+            "Diamond Hoe (Left)",
+            "Diamond Hoe (Right)",
+            ItemId::DIAMOND,
+            ItemId::DIAMOND_HOE,
+        );
 
         // Bread: 3 Wheat in a horizontal row (3x1)
         self.register(Recipe::Shaped {
             name: "Bread",
             width: 3,
             height: 1,
-            pattern: vec![Some(ItemId::WHEAT), Some(ItemId::WHEAT), Some(ItemId::WHEAT)],
+            pattern: vec![
+                Some(ItemId::WHEAT),
+                Some(ItemId::WHEAT),
+                Some(ItemId::WHEAT),
+            ],
             output: ItemSlot::new(ItemId::BREAD, 1),
         });
 
@@ -579,9 +693,15 @@ impl CraftingManager {
             width: 3,
             height: 3,
             pattern: vec![
-                Some(ItemId::PLANKS), Some(ItemId::PLANKS), Some(ItemId::PLANKS),
-                Some(ItemId::PLANKS), None,                 Some(ItemId::PLANKS),
-                Some(ItemId::PLANKS), Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                None,
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS),
             ],
             output: ItemSlot::new(ItemId::CHEST, 1),
         });
@@ -592,9 +712,15 @@ impl CraftingManager {
             width: 3,
             height: 3,
             pattern: vec![
-                Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE),
-                Some(ItemId::COBBLESTONE), None,                     Some(ItemId::COBBLESTONE),
-                Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE), Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                None,
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::COBBLESTONE),
             ],
             output: ItemSlot::new(ItemId::FURNACE, 1),
         });
@@ -635,9 +761,16 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
 pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
     match fuel {
         ItemId::COAL => 80.0,
-        ItemId::WOOD_LOG | ItemId::PLANKS | ItemId::CRAFTING_TABLE | ItemId::CHEST | ItemId::FURNACE => 15.0,
+        ItemId::WOOD_LOG
+        | ItemId::PLANKS
+        | ItemId::CRAFTING_TABLE
+        | ItemId::CHEST
+        | ItemId::FURNACE => 15.0,
         ItemId::STICK => 5.0,
-        ItemId::WOODEN_PICKAXE | ItemId::WOODEN_AXE | ItemId::WOODEN_SHOVEL | ItemId::WOODEN_HOE => 10.0,
+        ItemId::WOODEN_PICKAXE
+        | ItemId::WOODEN_AXE
+        | ItemId::WOODEN_SHOVEL
+        | ItemId::WOODEN_HOE => 10.0,
         _ => 0.0,
     }
 }
@@ -694,7 +827,10 @@ mod tests {
         grid.set(2, 2, ItemSlot::new(ItemId::PLANKS, 5));
 
         let res = cm.find_match(&grid);
-        assert!(res.is_some(), "Shaped recipe should match regardless of corner placement!");
+        assert!(
+            res.is_some(),
+            "Shaped recipe should match regardless of corner placement!"
+        );
         let (_, out) = res.unwrap();
         assert_eq!(out.item_id, ItemId::STICK);
         assert_eq!(out.count, 4);
@@ -831,7 +967,8 @@ mod tests {
 
         // 5. Smelting category recognition
         let iron_ingot_recipes = cm.get_recipes_for_output(ItemId::IRON_INGOT);
-        assert!(iron_ingot_recipes.iter().any(|r| r.category == RecipeCategory::Smelting));
+        assert!(iron_ingot_recipes
+            .iter()
+            .any(|r| r.category == RecipeCategory::Smelting));
     }
 }
-

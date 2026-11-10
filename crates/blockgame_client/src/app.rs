@@ -17,7 +17,6 @@ use blockgame_render::{
     WireframePipeline,
 };
 use glam::{IVec3, Vec3};
-use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -73,11 +72,9 @@ pub struct AppState {
     pub cursor_pos: [f32; 2],
     pub ui_pipeline: UiPipeline,
     pub ui_mesh: UiMesh,
-    pub ui_vertex_buffer: Option<wgpu::Buffer>,
-    pub ui_index_buffer: Option<wgpu::Buffer>,
-    pub ui_index_count: u32,
-    pub item_drop_gpu_mesh: Option<blockgame_render::GpuMeshBuffers>,
-    pub animal_gpu_mesh: Option<blockgame_render::GpuMeshBuffers>,
+    pub ui_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub item_drop_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub total_time: f32,
     pub walk_distance: f32,
     pub punch_timer: f32,
@@ -125,7 +122,9 @@ impl AppState {
         self.camera.position = self.player.eye_position();
         self.camera.pitch = 0.0;
         self.mouse_captured = true;
-        let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+        let _ = self
+            .window
+            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
         self.window.set_cursor_visible(false);
     }
 }
@@ -197,12 +196,26 @@ impl ApplicationHandler for BlockGameApp {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::AutoNoVsync)
+        {
+            wgpu::PresentMode::AutoNoVsync
+        } else {
+            wgpu::PresentMode::AutoVsync
+        };
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width,
             height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -213,16 +226,10 @@ impl ApplicationHandler for BlockGameApp {
 
         let atlas = TextureAtlas::generate_default();
         let pipeline = VoxelPipeline::new(&device, &queue, surface_format, &atlas);
-        let wireframe_pipeline = WireframePipeline::new(
-            &device,
-            surface_format,
-            &pipeline.camera_bind_group_layout,
-        );
-        let ui_pipeline = UiPipeline::new(
-            &device,
-            surface_format,
-            &pipeline.texture_bind_group_layout,
-        );
+        let wireframe_pipeline =
+            WireframePipeline::new(&device, surface_format, &pipeline.camera_bind_group_layout);
+        let ui_pipeline =
+            UiPipeline::new(&device, surface_format, &pipeline.texture_bind_group_layout);
 
         let mut world_manager =
             WorldManager::new(self.seed, self.render_distance, self.registry.clone());
@@ -239,7 +246,11 @@ impl ApplicationHandler for BlockGameApp {
 
         let day_night = DayNightCycle::new();
         let mut camera_uniform = CameraUniform::default();
-        camera.update_uniform_with_atmosphere(&mut camera_uniform, width as f32 / height as f32, &day_night);
+        camera.update_uniform_with_atmosphere(
+            &mut camera_uniform,
+            width as f32 / height as f32,
+            &day_night,
+        );
         pipeline.update_camera(&queue, &camera_uniform);
 
         let item_registry = Arc::new(ItemRegistry::new());
@@ -283,11 +294,11 @@ impl ApplicationHandler for BlockGameApp {
             cursor_pos: [width as f32 * 0.5, height as f32 * 0.5],
             ui_pipeline,
             ui_mesh: UiMesh::new(),
-            ui_vertex_buffer: None,
-            ui_index_buffer: None,
-            ui_index_count: 0,
-            item_drop_gpu_mesh: None,
-            animal_gpu_mesh: None,
+            ui_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic UI Mesh"),
+            item_drop_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Item Drop Mesh",
+            ),
+            animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Animal Mesh"),
             total_time: 0.0,
             walk_distance: 0.0,
             punch_timer: 0.0,
@@ -320,7 +331,9 @@ impl ApplicationHandler for BlockGameApp {
                 if new_size.width > 0 && new_size.height > 0 {
                     state.surface_config.width = new_size.width;
                     state.surface_config.height = new_size.height;
-                    state.surface.configure(&state.device, &state.surface_config);
+                    state
+                        .surface
+                        .configure(&state.device, &state.surface_config);
                     let (_depth_tex, depth_view) =
                         create_depth_texture(&state.device, new_size.width, new_size.height);
                     state.depth_view = depth_view;
@@ -356,8 +369,10 @@ impl ApplicationHandler for BlockGameApp {
                         let btn_h = 44.0;
                         let btn_x = (screen_w - btn_w) * 0.5;
                         let btn_y = screen_h * 0.50;
-                        if state.cursor_pos[0] >= btn_x && state.cursor_pos[0] <= btn_x + btn_w
-                            && state.cursor_pos[1] >= btn_y && state.cursor_pos[1] <= btn_y + btn_h
+                        if state.cursor_pos[0] >= btn_x
+                            && state.cursor_pos[0] <= btn_x + btn_w
+                            && state.cursor_pos[1] >= btn_y
+                            && state.cursor_pos[1] <= btn_y + btn_h
                         {
                             state.respawn_player();
                         }
@@ -398,7 +413,9 @@ impl ApplicationHandler for BlockGameApp {
                 if !state.mouse_captured {
                     if pressed {
                         state.mouse_captured = true;
-                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                         state.window.set_cursor_visible(false);
                     }
                     return;
@@ -409,17 +426,18 @@ impl ApplicationHandler for BlockGameApp {
                         if pressed {
                             state.punch_timer = 0.25; // Trigger punch animation
                             let held_slot = state.inventory.get(state.active_hotbar_slot);
-                            let attack_damage = if let Some(def) = state.item_registry.get(held_slot.item_id) {
-                                match def.tool_tier {
-                                    Some(ToolTier::Wood) => 4.0,
-                                    Some(ToolTier::Stone) => 5.0,
-                                    Some(ToolTier::Iron) => 6.0,
-                                    Some(ToolTier::Diamond) => 7.0,
-                                    _ => 1.0,
-                                }
-                            } else {
-                                1.0
-                            };
+                            let attack_damage =
+                                if let Some(def) = state.item_registry.get(held_slot.item_id) {
+                                    match def.tool_tier {
+                                        Some(ToolTier::Wood) => 4.0,
+                                        Some(ToolTier::Stone) => 5.0,
+                                        Some(ToolTier::Iron) => 6.0,
+                                        Some(ToolTier::Diamond) => 7.0,
+                                        _ => 1.0,
+                                    }
+                                } else {
+                                    1.0
+                                };
 
                             let hit_animal = state.world_manager.attack_animal(
                                 state.camera.position,
@@ -449,7 +467,8 @@ impl ApplicationHandler for BlockGameApp {
                                 state.cracking_buffer = None;
 
                                 {
-                                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                                    let mut world_guard =
+                                        state.world_manager.world().lock().unwrap();
                                     world_guard.get_or_create_furnace(hit.hit_voxel);
                                 }
 
@@ -457,7 +476,9 @@ impl ApplicationHandler for BlockGameApp {
                                 state.active_furnace_pos = Some(hit.hit_voxel);
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
-                                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
                                 state.window.set_cursor_visible(true);
                                 return;
                             }
@@ -468,7 +489,8 @@ impl ApplicationHandler for BlockGameApp {
                                 state.cracking_buffer = None;
 
                                 {
-                                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                                    let mut world_guard =
+                                        state.world_manager.world().lock().unwrap();
                                     world_guard.get_or_create_chest(hit.hit_voxel);
                                 }
 
@@ -476,7 +498,9 @@ impl ApplicationHandler for BlockGameApp {
                                 state.active_chest_pos = Some(hit.hit_voxel);
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
-                                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
                                 state.window.set_cursor_visible(true);
                                 return;
                             }
@@ -489,8 +513,12 @@ impl ApplicationHandler for BlockGameApp {
                                 // Return any items left in current grid
                                 for slot in state.crafting_grid.slots.drain(..) {
                                     if !slot.is_empty() {
-                                        if let Some(rem) = state.inventory.add_item(slot, &state.item_registry) {
-                                            state.world_manager.spawn_item_drop(state.player.position, rem);
+                                        if let Some(rem) =
+                                            state.inventory.add_item(slot, &state.item_registry)
+                                        {
+                                            state
+                                                .world_manager
+                                                .spawn_item_drop(state.player.position, rem);
                                         }
                                     }
                                 }
@@ -500,7 +528,9 @@ impl ApplicationHandler for BlockGameApp {
                                 state.crafting_grid = CraftingGrid::new_3x3();
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
-                                let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
                                 state.window.set_cursor_visible(true);
                                 return;
                             }
@@ -513,8 +543,14 @@ impl ApplicationHandler for BlockGameApp {
                             if let Some(def) = state.item_registry.get(held_slot.item_id) {
                                 if def.tool_type == Some(blockgame_core::tool::ToolType::Hoe) {
                                     if let Some(hit) = state.targeted_block {
-                                        if hit.hit_face == blockgame_core::direction::Direction::PosY {
-                                            let tilled = state.world_manager.till_block(hit.hit_voxel, &state.device, &state.pipeline);
+                                        if hit.hit_face
+                                            == blockgame_core::direction::Direction::PosY
+                                        {
+                                            let tilled = state.world_manager.till_block(
+                                                hit.hit_voxel,
+                                                &state.device,
+                                                &state.pipeline,
+                                            );
                                             if tilled {
                                                 state.punch_timer = 0.2;
                                                 return;
@@ -532,7 +568,9 @@ impl ApplicationHandler for BlockGameApp {
                                     let world_guard = state.world_manager.world().lock().unwrap();
                                     world_guard.get_block(hit.hit_voxel)
                                 };
-                                if block_beneath == BlockId::FARMLAND && hit.hit_face == blockgame_core::direction::Direction::PosY {
+                                if block_beneath == BlockId::FARMLAND
+                                    && hit.hit_face == blockgame_core::direction::Direction::PosY
+                                {
                                     let planted = state.world_manager.place_block(
                                         hit.place_voxel,
                                         BlockId::WHEAT_0,
@@ -635,9 +673,15 @@ impl ApplicationHandler for BlockGameApp {
                         if key == KeyCode::ArrowLeft {
                             if let Some(m) = &mut state.jei_recipe_modal {
                                 let total = if m.is_usage_mode {
-                                    state.crafting_manager.get_recipes_using_input(m.target_item).len()
+                                    state
+                                        .crafting_manager
+                                        .get_recipes_using_input(m.target_item)
+                                        .len()
                                 } else {
-                                    state.crafting_manager.get_recipes_for_output(m.target_item).len()
+                                    state
+                                        .crafting_manager
+                                        .get_recipes_for_output(m.target_item)
+                                        .len()
                                 };
                                 if total > 1 {
                                     m.recipe_index = (m.recipe_index + total - 1) % total;
@@ -648,9 +692,15 @@ impl ApplicationHandler for BlockGameApp {
                         if key == KeyCode::ArrowRight {
                             if let Some(m) = &mut state.jei_recipe_modal {
                                 let total = if m.is_usage_mode {
-                                    state.crafting_manager.get_recipes_using_input(m.target_item).len()
+                                    state
+                                        .crafting_manager
+                                        .get_recipes_using_input(m.target_item)
+                                        .len()
                                 } else {
-                                    state.crafting_manager.get_recipes_for_output(m.target_item).len()
+                                    state
+                                        .crafting_manager
+                                        .get_recipes_for_output(m.target_item)
+                                        .len()
                                 };
                                 if total > 1 {
                                     m.recipe_index = (m.recipe_index + 1) % total;
@@ -663,7 +713,9 @@ impl ApplicationHandler for BlockGameApp {
 
                 match key {
                     KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
-                    KeyCode::KeyR if pressed && state.inventory_open && !state.jei_search_focused => {
+                    KeyCode::KeyR
+                        if pressed && state.inventory_open && !state.jei_search_focused =>
+                    {
                         if let Some(id) = find_hovered_item(state) {
                             state.jei_recipe_modal = Some(JeiRecipeModalState {
                                 target_item: id,
@@ -673,7 +725,9 @@ impl ApplicationHandler for BlockGameApp {
                             return;
                         }
                     }
-                    KeyCode::KeyU if pressed && state.inventory_open && !state.jei_search_focused => {
+                    KeyCode::KeyU
+                        if pressed && state.inventory_open && !state.jei_search_focused =>
+                    {
                         if let Some(id) = find_hovered_item(state) {
                             state.jei_recipe_modal = Some(JeiRecipeModalState {
                                 target_item: id,
@@ -706,27 +760,40 @@ impl ApplicationHandler for BlockGameApp {
                             // Safely return crafting grid items and cursor held item to inventory
                             for slot in state.crafting_grid.slots.drain(..) {
                                 if !slot.is_empty() {
-                                    if let Some(rem) = state.inventory.add_item(slot, &state.item_registry) {
-                                        state.world_manager.spawn_item_drop(state.player.position, rem);
+                                    if let Some(rem) =
+                                        state.inventory.add_item(slot, &state.item_registry)
+                                    {
+                                        state
+                                            .world_manager
+                                            .spawn_item_drop(state.player.position, rem);
                                     }
                                 }
                             }
                             if !state.cursor_held.is_empty() {
-                                let held = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
-                                if let Some(rem) = state.inventory.add_item(held, &state.item_registry) {
-                                    state.world_manager.spawn_item_drop(state.player.position, rem);
+                                let held =
+                                    std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                                if let Some(rem) =
+                                    state.inventory.add_item(held, &state.item_registry)
+                                {
+                                    state
+                                        .world_manager
+                                        .spawn_item_drop(state.player.position, rem);
                                 }
                             }
                             state.inventory_open = false;
                             state.mouse_captured = true;
-                            let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                             state.window.set_cursor_visible(false);
                         } else {
                             // Open 2x2 backpack inventory
                             state.crafting_grid = CraftingGrid::new_2x2();
                             state.inventory_open = true;
                             state.mouse_captured = false;
-                            let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None);
                             state.window.set_cursor_visible(true);
                         }
                     }
@@ -740,24 +807,37 @@ impl ApplicationHandler for BlockGameApp {
                         if state.inventory_open {
                             for slot in state.crafting_grid.slots.drain(..) {
                                 if !slot.is_empty() {
-                                    if let Some(rem) = state.inventory.add_item(slot, &state.item_registry) {
-                                        state.world_manager.spawn_item_drop(state.player.position, rem);
+                                    if let Some(rem) =
+                                        state.inventory.add_item(slot, &state.item_registry)
+                                    {
+                                        state
+                                            .world_manager
+                                            .spawn_item_drop(state.player.position, rem);
                                     }
                                 }
                             }
                             if !state.cursor_held.is_empty() {
-                                let held = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
-                                if let Some(rem) = state.inventory.add_item(held, &state.item_registry) {
-                                    state.world_manager.spawn_item_drop(state.player.position, rem);
+                                let held =
+                                    std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                                if let Some(rem) =
+                                    state.inventory.add_item(held, &state.item_registry)
+                                {
+                                    state
+                                        .world_manager
+                                        .spawn_item_drop(state.player.position, rem);
                                 }
                             }
                             state.inventory_open = false;
                             state.mouse_captured = true;
-                            let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                             state.window.set_cursor_visible(false);
                         } else {
                             state.mouse_captured = false;
-                            let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None);
                             state.window.set_cursor_visible(true);
                         }
                     }
@@ -781,7 +861,10 @@ impl ApplicationHandler for BlockGameApp {
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
-                let dt = now.duration_since(state.last_frame_time).as_secs_f32().min(0.1);
+                let dt = now
+                    .duration_since(state.last_frame_time)
+                    .as_secs_f32()
+                    .min(0.1);
                 state.last_frame_time = now;
 
                 // Update dynamic Day/Night celestial cycle
@@ -789,22 +872,34 @@ impl ApplicationHandler for BlockGameApp {
                 state.total_time += dt;
 
                 // 1. Calculate player wish direction relative to camera yaw
-                let forward = Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
-                let right = Vec3::new(-state.camera.yaw.sin(), 0.0, state.camera.yaw.cos()).normalize();
+                let forward =
+                    Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
+                let right =
+                    Vec3::new(-state.camera.yaw.sin(), 0.0, state.camera.yaw.cos()).normalize();
 
                 let mut wish_dir = Vec3::ZERO;
                 if !state.player_stats.is_dead {
-                    if state.moving_forward { wish_dir += forward; }
-                    if state.moving_backward { wish_dir -= forward; }
-                    if state.moving_right { wish_dir += right; }
-                    if state.moving_left { wish_dir -= right; }
+                    if state.moving_forward {
+                        wish_dir += forward;
+                    }
+                    if state.moving_backward {
+                        wish_dir -= forward;
+                    }
+                    if state.moving_right {
+                        wish_dir += right;
+                    }
+                    if state.moving_left {
+                        wish_dir -= right;
+                    }
                     if wish_dir.length_squared() > 0.0 {
                         wish_dir = wish_dir.normalize();
                     }
 
                     // If flying, vertical movement with Space / Shift
                     if state.player.flying {
-                        if state.jumping { wish_dir.y += 1.0; }
+                        if state.jumping {
+                            wish_dir.y += 1.0;
+                        }
                     }
                 }
 
@@ -827,13 +922,20 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 // Update walking distance & movement exhaustion (advances ONLY when moving)
-                let is_moving = (state.moving_forward || state.moving_backward || state.moving_left || state.moving_right)
+                let is_moving = (state.moving_forward
+                    || state.moving_backward
+                    || state.moving_left
+                    || state.moving_right)
                     && (state.player.on_ground || state.player.flying);
-                let horiz_speed = (state.player.velocity.x * state.player.velocity.x + state.player.velocity.z * state.player.velocity.z).sqrt();
+                let horiz_speed = (state.player.velocity.x * state.player.velocity.x
+                    + state.player.velocity.z * state.player.velocity.z)
+                    .sqrt();
                 if is_moving && horiz_speed > 0.1 && !state.player_stats.is_dead {
                     state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
                     if state.player.on_ground {
-                        state.player_stats.add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
+                        state
+                            .player_stats
+                            .add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
                     }
                 }
 
@@ -854,24 +956,33 @@ impl ApplicationHandler for BlockGameApp {
                         for slot in state.inventory.slots.iter_mut() {
                             if !slot.is_empty() {
                                 let drop_slot = std::mem::replace(slot, ItemSlot::EMPTY);
-                                state.world_manager.spawn_item_drop(state.player.position, drop_slot);
+                                state
+                                    .world_manager
+                                    .spawn_item_drop(state.player.position, drop_slot);
                             }
                         }
                         // Scatter crafting grid items
                         for slot in state.crafting_grid.slots.drain(..) {
                             if !slot.is_empty() {
-                                state.world_manager.spawn_item_drop(state.player.position, slot);
+                                state
+                                    .world_manager
+                                    .spawn_item_drop(state.player.position, slot);
                             }
                         }
                         // Scatter cursor held item
                         if !state.cursor_held.is_empty() {
-                            let drop_slot = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
-                            state.world_manager.spawn_item_drop(state.player.position, drop_slot);
+                            let drop_slot =
+                                std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                            state
+                                .world_manager
+                                .spawn_item_drop(state.player.position, drop_slot);
                         }
 
                         // Unlock mouse so user can click the Respawn button
                         state.mouse_captured = false;
-                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
                         state.window.set_cursor_visible(true);
                     }
                     // Cinematic death camera tilt
@@ -889,15 +1000,21 @@ impl ApplicationHandler for BlockGameApp {
 
                 // 3. Update Item Drops & Magnetism Pickup (only when alive)
                 if !state.player_stats.is_dead {
-                    let collected = state.world_manager.update_item_drops(dt, state.player.position);
+                    let collected = state
+                        .world_manager
+                        .update_item_drops(dt, state.player.position);
                     for item in collected {
                         let overflow = state.inventory.add_item(item, &state.item_registry);
                         if let Some(remaining) = overflow {
-                            state.world_manager.spawn_item_drop(state.player.position, remaining);
+                            state
+                                .world_manager
+                                .spawn_item_drop(state.player.position, remaining);
                         }
                     }
                 } else {
-                    let _ = state.world_manager.update_item_drops(dt, state.player.position);
+                    let _ = state
+                        .world_manager
+                        .update_item_drops(dt, state.player.position);
                 }
 
                 // 3b. Update Animals & Planted Crops
@@ -907,14 +1024,24 @@ impl ApplicationHandler for BlockGameApp {
                         state.world_manager.spawn_item_drop(pos, drop_slot);
                     }
                 }
-                state.world_manager.update_crops(dt, &state.device, &state.pipeline);
-                state.world_manager.update_furnaces(dt, &state.device, &state.pipeline);
+                state
+                    .world_manager
+                    .update_crops(dt, &state.device, &state.pipeline);
+                state
+                    .world_manager
+                    .update_furnaces(dt, &state.device, &state.pipeline);
 
                 // 4. Update Camera position and atmosphere uniform
                 state.camera.position = state.player.eye_position();
                 let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
-                state.camera.update_uniform_with_atmosphere(&mut state.camera_uniform, aspect, &state.day_night);
-                state.pipeline.update_camera(&state.queue, &state.camera_uniform);
+                state.camera.update_uniform_with_atmosphere(
+                    &mut state.camera_uniform,
+                    aspect,
+                    &state.day_night,
+                );
+                state
+                    .pipeline
+                    .update_camera(&state.queue, &state.camera_uniform);
 
                 // 5. Perform Fast Voxel Traversal (DDA) raycast from crosshair
                 {
@@ -951,7 +1078,11 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 // 5b. Process hold-to-break mining mechanics
-                if state.mouse_left_down && state.mouse_captured && !state.inventory_open && !state.player_stats.is_dead {
+                if state.mouse_left_down
+                    && state.mouse_captured
+                    && !state.inventory_open
+                    && !state.player_stats.is_dead
+                {
                     if state.punch_timer <= 0.05 {
                         state.punch_timer = 0.25; // Continuous swing loop while holding down break
                     }
@@ -975,13 +1106,18 @@ impl ApplicationHandler for BlockGameApp {
                             state.cracking_buffer = None;
                         } else {
                             let held_slot = state.inventory.get(state.active_hotbar_slot);
-                            let (held_tool_type, held_tool_tier) = if let Some(def) = state.item_registry.get(held_slot.item_id) {
-                                (def.tool_type, def.tool_tier.unwrap_or(ToolTier::None))
-                            } else {
-                                (None, ToolTier::None)
-                            };
+                            let (held_tool_type, held_tool_tier) =
+                                if let Some(def) = state.item_registry.get(held_slot.item_id) {
+                                    (def.tool_type, def.tool_tier.unwrap_or(ToolTier::None))
+                                } else {
+                                    (None, ToolTier::None)
+                                };
 
-                            let break_time = self.registry.get_break_time(block_at_voxel, held_tool_type, held_tool_tier);
+                            let break_time = self.registry.get_break_time(
+                                block_at_voxel,
+                                held_tool_type,
+                                held_tool_tier,
+                            );
                             if break_time.is_infinite() {
                                 state.break_progress = 0.0;
                                 state.cracking_buffer = None;
@@ -995,7 +1131,10 @@ impl ApplicationHandler for BlockGameApp {
                                         &state.pipeline,
                                     ) {
                                         state.player_stats.add_exhaustion(0.025);
-                                        if let Some((drop_item, drop_count)) = self.registry.get_drop(broken, held_tool_type, held_tool_tier) {
+                                        if let Some((drop_item, drop_count)) = self
+                                            .registry
+                                            .get_drop(broken, held_tool_type, held_tool_tier)
+                                        {
                                             state.world_manager.spawn_item_drop(
                                                 target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
                                                 ItemSlot::new(drop_item, drop_count),
@@ -1003,27 +1142,37 @@ impl ApplicationHandler for BlockGameApp {
                                         }
                                         // 15% chance to drop Apple from Leaves
                                         if broken == BlockId::LEAVES {
-                                            let hash = (target_voxel.x.wrapping_mul(73856093) ^ target_voxel.y.wrapping_mul(19349663) ^ target_voxel.z.wrapping_mul(83492791)) % 100;
+                                            let hash = (target_voxel.x.wrapping_mul(73856093)
+                                                ^ target_voxel.y.wrapping_mul(19349663)
+                                                ^ target_voxel.z.wrapping_mul(83492791))
+                                                % 100;
                                             if hash.abs() < 15 {
                                                 state.world_manager.spawn_item_drop(
-                                                    target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                                    target_voxel.as_vec3()
+                                                        + Vec3::new(0.5, 0.5, 0.5),
                                                     ItemSlot::new(ItemId::APPLE, 1),
                                                 );
                                             }
                                         }
                                         // 12% chance to drop Wheat Seeds from Grass
                                         if broken == BlockId::GRASS {
-                                            let hash = (target_voxel.x.wrapping_mul(87654321) ^ target_voxel.y.wrapping_mul(23456789) ^ target_voxel.z.wrapping_mul(98765432)) % 100;
+                                            let hash = (target_voxel.x.wrapping_mul(87654321)
+                                                ^ target_voxel.y.wrapping_mul(23456789)
+                                                ^ target_voxel.z.wrapping_mul(98765432))
+                                                % 100;
                                             if hash.abs() < 12 {
                                                 state.world_manager.spawn_item_drop(
-                                                    target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                                    target_voxel.as_vec3()
+                                                        + Vec3::new(0.5, 0.5, 0.5),
                                                     ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
                                                 );
                                             }
                                         }
                                         // Ripe Wheat Crop drops additional 1..2 seeds
                                         if broken == BlockId::WHEAT_3 {
-                                            let hash = (target_voxel.x.wrapping_mul(1234567) ^ target_voxel.z.wrapping_mul(7654321)) % 2;
+                                            let hash = (target_voxel.x.wrapping_mul(1234567)
+                                                ^ target_voxel.z.wrapping_mul(7654321))
+                                                % 2;
                                             let seed_count = (hash.abs() + 1) as u16;
                                             state.world_manager.spawn_item_drop(
                                                 target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
@@ -1035,12 +1184,14 @@ impl ApplicationHandler for BlockGameApp {
                                     state.break_progress = 0.0;
                                     state.cracking_buffer = None;
                                 } else {
-                                    let stage = ((state.break_progress * 10.0).floor() as usize).min(9);
-                                    let (crack_buf, count) = WireframePipeline::create_cracking_box_buffer(
-                                        &state.device,
-                                        target_voxel,
-                                        stage,
-                                    );
+                                    let stage =
+                                        ((state.break_progress * 10.0).floor() as usize).min(9);
+                                    let (crack_buf, count) =
+                                        WireframePipeline::create_cracking_box_buffer(
+                                            &state.device,
+                                            target_voxel,
+                                            stage,
+                                        );
                                     state.cracking_buffer = Some((crack_buf, count));
                                 }
                             }
@@ -1057,30 +1208,36 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 // 6. Update chunk streaming around player
-                state.world_manager.update(
-                    state.player.position,
-                    &state.device,
-                    &state.pipeline,
-                );
+                state
+                    .world_manager
+                    .update(state.player.position, &state.device, &state.pipeline);
 
                 if let Some(furnace_pos) = state.active_furnace_pos {
-                    let dist_sq = (state.player.position - (furnace_pos.as_vec3() + Vec3::splat(0.5))).length_squared();
+                    let dist_sq = (state.player.position
+                        - (furnace_pos.as_vec3() + Vec3::splat(0.5)))
+                    .length_squared();
                     if dist_sq > 36.0 {
                         state.active_furnace_pos = None;
                         state.inventory_open = false;
                         state.mouse_captured = true;
-                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                         state.window.set_cursor_visible(false);
                     }
                 }
 
                 if let Some(chest_pos) = state.active_chest_pos {
-                    let dist_sq = (state.player.position - (chest_pos.as_vec3() + Vec3::splat(0.5))).length_squared();
+                    let dist_sq = (state.player.position
+                        - (chest_pos.as_vec3() + Vec3::splat(0.5)))
+                    .length_squared();
                     if dist_sq > 36.0 {
                         state.active_chest_pos = None;
                         state.inventory_open = false;
                         state.mouse_captured = true;
-                        let _ = state.window.set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                         state.window.set_cursor_visible(false);
                     }
                 }
@@ -1088,7 +1245,9 @@ impl ApplicationHandler for BlockGameApp {
                 // 7. Build 2D UI Overlay (HUD or Inventory/Crafting Screen)
                 let screen_w = state.surface_config.width as f32;
                 let screen_h = state.surface_config.height as f32;
-                state.ui_pipeline.update_screen_size(&state.queue, screen_w, screen_h);
+                state
+                    .ui_pipeline
+                    .update_screen_size(&state.queue, screen_w, screen_h);
 
                 if state.inventory_open {
                     // 1. Prepare JEI Item Index Catalog & Filter
@@ -1107,7 +1266,8 @@ impl ApplicationHandler for BlockGameApp {
                         .map(|def| def.id)
                         .collect();
                     let items_per_page = 6 * 8;
-                    let total_pages = ((catalog.len() + items_per_page - 1) / items_per_page).max(1);
+                    let total_pages =
+                        ((catalog.len() + items_per_page - 1) / items_per_page).max(1);
                     if state.jei_page >= total_pages {
                         state.jei_page = total_pages.saturating_sub(1);
                     }
@@ -1125,7 +1285,9 @@ impl ApplicationHandler for BlockGameApp {
                     let mut modal_params: Option<blockgame_render::ui::RecipeModalParams> = None;
                     if let Some(m) = &state.jei_recipe_modal {
                         let recipes = if m.is_usage_mode {
-                            state.crafting_manager.get_recipes_using_input(m.target_item)
+                            state
+                                .crafting_manager
+                                .get_recipes_using_input(m.target_item)
                         } else {
                             state.crafting_manager.get_recipes_for_output(m.target_item)
                         };
@@ -1139,12 +1301,13 @@ impl ApplicationHandler for BlockGameApp {
                                 .get(m.target_item)
                                 .map(|d| d.display_name)
                                 .unwrap_or("Item");
-                            display_recipe_storage = Some(blockgame_core::crafting::DisplayRecipe {
-                                name: item_name,
-                                category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
-                                inputs: [None; 9],
-                                output: ItemSlot::new(m.target_item, 1),
-                            });
+                            display_recipe_storage =
+                                Some(blockgame_core::crafting::DisplayRecipe {
+                                    name: item_name,
+                                    category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
+                                    inputs: [None; 9],
+                                    output: ItemSlot::new(m.target_item, 1),
+                                });
                         }
                         if let Some(ref disp) = display_recipe_storage {
                             modal_params = Some(blockgame_render::ui::RecipeModalParams {
@@ -1160,7 +1323,10 @@ impl ApplicationHandler for BlockGameApp {
                     if let Some(furnace_pos) = state.active_furnace_pos {
                         let furnace = {
                             let world_guard = state.world_manager.world().lock().unwrap();
-                            world_guard.get_furnace(furnace_pos).cloned().unwrap_or_default()
+                            world_guard
+                                .get_furnace(furnace_pos)
+                                .cloned()
+                                .unwrap_or_default()
                         };
                         UiBuilder::build_furnace_screen(
                             &mut state.ui_mesh,
@@ -1178,7 +1344,10 @@ impl ApplicationHandler for BlockGameApp {
                     } else if let Some(chest_pos) = state.active_chest_pos {
                         let chest_slots = {
                             let world_guard = state.world_manager.world().lock().unwrap();
-                            world_guard.get_chest(chest_pos).cloned().unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
+                            world_guard
+                                .get_chest(chest_pos)
+                                .cloned()
+                                .unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
                         };
                         UiBuilder::build_chest_screen(
                             &mut state.ui_mesh,
@@ -1227,23 +1396,12 @@ impl ApplicationHandler for BlockGameApp {
                     );
                 }
 
-                if !state.ui_mesh.indices.is_empty() {
-                    let vertex_buf = state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("UI Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&state.ui_mesh.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    let index_buf = state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("UI Index Buffer"),
-                        contents: bytemuck::cast_slice(&state.ui_mesh.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    });
-                    state.ui_vertex_buffer = Some(vertex_buf);
-                    state.ui_index_buffer = Some(index_buf);
-                    state.ui_index_count = state.ui_mesh.indices.len() as u32;
-                } else {
-                    state.ui_index_count = 0;
-                }
+                state.ui_dynamic_mesh.update(
+                    &state.device,
+                    &state.queue,
+                    &state.ui_mesh.vertices,
+                    &state.ui_mesh.indices,
+                );
 
                 // Upload dynamic 3D Item Drops mesh
                 if !state.world_manager.item_drops.is_empty() {
@@ -1251,24 +1409,37 @@ impl ApplicationHandler for BlockGameApp {
                         &state.world_manager.item_drops,
                         &state.item_registry,
                     );
-                    state.item_drop_gpu_mesh = state.pipeline.upload_mesh(&state.device, &drops_mesh);
+                    state.item_drop_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &drops_mesh.vertices,
+                        &drops_mesh.indices,
+                    );
                 } else {
-                    state.item_drop_gpu_mesh = None;
+                    state.item_drop_dynamic_mesh.clear();
                 }
 
                 // Upload dynamic 3D Animals mesh
                 if !state.world_manager.animals.is_empty() {
-                    let animals_mesh = blockgame_render::build_animals_mesh(&state.world_manager.animals);
-                    state.animal_gpu_mesh = state.pipeline.upload_mesh(&state.device, &animals_mesh);
+                    let animals_mesh =
+                        blockgame_render::build_animals_mesh(&state.world_manager.animals);
+                    state.animal_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &animals_mesh.vertices,
+                        &animals_mesh.indices,
+                    );
                 } else {
-                    state.animal_gpu_mesh = None;
+                    state.animal_dynamic_mesh.clear();
                 }
 
                 // 8. Render frame
                 let output = match state.surface.get_current_texture() {
                     Ok(frame) => frame,
                     Err(wgpu::SurfaceError::Lost) => {
-                        state.surface.configure(&state.device, &state.surface_config);
+                        state
+                            .surface
+                            .configure(&state.device, &state.surface_config);
                         return;
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => {
@@ -1286,9 +1457,11 @@ impl ApplicationHandler for BlockGameApp {
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
                 let mut encoder =
-                    state.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Frame Command Encoder"),
-                    });
+                    state
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Frame Command Encoder"),
+                        });
 
                 let sky = state.day_night.sky_color();
 
@@ -1309,35 +1482,34 @@ impl ApplicationHandler for BlockGameApp {
                                 store: wgpu::StoreOp::Store,
                             },
                         })],
-                        depth_stencil_attachment: Some(
-                            wgpu::RenderPassDepthStencilAttachment {
-                                view: &state.depth_view,
-                                depth_ops: Some(wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(1.0),
-                                    store: wgpu::StoreOp::Store,
-                                }),
-                                stencil_ops: None,
-                            },
-                        ),
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &state.depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
 
-                    // Render voxel terrain meshes
+                    // Render voxel terrain meshes with frustum culling
                     render_pass.set_pipeline(&state.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
                     render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
-                    state.world_manager.render(&mut render_pass);
+                    let aspect =
+                        state.surface_config.width as f32 / state.surface_config.height as f32;
+                    let frustum = state.camera.build_frustum(aspect);
+                    state
+                        .world_manager
+                        .render_with_frustum(&mut render_pass, Some(&frustum));
 
                     // Render floating 3D item drops
-                    if let Some(drop_mesh) = &state.item_drop_gpu_mesh {
-                        drop_mesh.draw(&mut render_pass);
-                    }
+                    state.item_drop_dynamic_mesh.draw(&mut render_pass);
 
                     // Render active 3D animals
-                    if let Some(animal_mesh) = &state.animal_gpu_mesh {
-                        animal_mesh.draw(&mut render_pass);
-                    }
+                    state.animal_dynamic_mesh.draw(&mut render_pass);
 
                     // Render targeted block selection wireframe or progressive cracking overlay
                     if let Some((crack_buf, vertex_count)) = &state.cracking_buffer {
@@ -1370,15 +1542,11 @@ impl ApplicationHandler for BlockGameApp {
                         occlusion_query_set: None,
                     });
 
-                    if state.ui_index_count > 0 {
-                        if let (Some(vb), Some(ib)) = (&state.ui_vertex_buffer, &state.ui_index_buffer) {
-                            ui_pass.set_pipeline(&state.ui_pipeline.render_pipeline);
-                            ui_pass.set_bind_group(0, &state.ui_pipeline.screen_bind_group, &[]);
-                            ui_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
-                            ui_pass.set_vertex_buffer(0, vb.slice(..));
-                            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                            ui_pass.draw_indexed(0..state.ui_index_count, 0, 0..1);
-                        }
+                    if state.ui_dynamic_mesh.index_count > 0 {
+                        ui_pass.set_pipeline(&state.ui_pipeline.render_pipeline);
+                        ui_pass.set_bind_group(0, &state.ui_pipeline.screen_bind_group, &[]);
+                        ui_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
+                        state.ui_dynamic_mesh.draw(&mut ui_pass);
                     }
                 }
 
@@ -1439,7 +1607,12 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
             let sy = craft_y + (gy as f32) * (slot_size + slot_gap);
             if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
                 let mut slot = state.crafting_grid.get(gx, gy);
-                click_slot_raw(&mut slot, &mut state.cursor_held, is_right_click, &state.item_registry);
+                click_slot_raw(
+                    &mut slot,
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
                 state.crafting_grid.set(gx, gy, slot);
                 return;
             }
@@ -1451,15 +1624,25 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     let result_y = craft_y + ((grid_h as f32 - 1.0) * (slot_size + slot_gap) * 0.5);
     let result_size = slot_size + 8.0;
 
-    if cx >= result_x && cx < result_x + result_size && cy >= result_y && cy < result_y + result_size {
+    if cx >= result_x
+        && cx < result_x + result_size
+        && cy >= result_y
+        && cy < result_y + result_size
+    {
         if state.crafting_result.is_some() {
             if state.shift_down {
                 while let Some(crafted) = state.crafting_manager.craft(&mut state.crafting_grid) {
                     if let Some(rem) = state.inventory.add_item(crafted, &state.item_registry) {
-                        state.world_manager.spawn_item_drop(state.player.position, rem);
+                        state
+                            .world_manager
+                            .spawn_item_drop(state.player.position, rem);
                         break;
                     }
-                    if state.crafting_manager.find_match(&state.crafting_grid).is_none() {
+                    if state
+                        .crafting_manager
+                        .find_match(&state.crafting_grid)
+                        .is_none()
+                    {
                         break;
                     }
                 }
@@ -1498,7 +1681,12 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
                         }
                     }
                 } else {
-                    state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                    state.inventory.click_slot(
+                        slot_idx,
+                        &mut state.cursor_held,
+                        is_right_click,
+                        &state.item_registry,
+                    );
                 }
                 return;
             }
@@ -1524,7 +1712,12 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
                     }
                 }
             } else {
-                state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+                state.inventory.click_slot(
+                    i,
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
             }
             return;
         }
@@ -1532,7 +1725,9 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
 }
 
 fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
-    let Some(chest_pos) = state.active_chest_pos else { return };
+    let Some(chest_pos) = state.active_chest_pos else {
+        return;
+    };
     let screen_w = state.surface_config.width as f32;
     let screen_h = state.surface_config.height as f32;
     let cx = state.cursor_pos[0];
@@ -1558,14 +1753,20 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
                     if state.shift_down {
                         let item = chest_slots[slot_idx];
                         if !item.is_empty() {
-                            if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                            if let Some(rem) = state.inventory.add_item(item, &state.item_registry)
+                            {
                                 chest_slots[slot_idx] = rem;
                             } else {
                                 chest_slots[slot_idx] = ItemSlot::EMPTY;
                             }
                         }
                     } else {
-                        click_slot_raw(&mut chest_slots[slot_idx], &mut state.cursor_held, is_right_click, &state.item_registry);
+                        click_slot_raw(
+                            &mut chest_slots[slot_idx],
+                            &mut state.cursor_held,
+                            is_right_click,
+                            &state.item_registry,
+                        );
                     }
                 }
                 return;
@@ -1591,7 +1792,12 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
                         state.inventory.slots[slot_idx] = rem.unwrap_or(ItemSlot::EMPTY);
                     }
                 } else {
-                    state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                    state.inventory.click_slot(
+                        slot_idx,
+                        &mut state.cursor_held,
+                        is_right_click,
+                        &state.item_registry,
+                    );
                 }
                 return;
             }
@@ -1614,7 +1820,12 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
                     state.inventory.slots[i] = rem.unwrap_or(ItemSlot::EMPTY);
                 }
             } else {
-                state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+                state.inventory.click_slot(
+                    i,
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
             }
             return;
         }
@@ -1622,7 +1833,9 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
 }
 
 fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
-    let Some(furnace_pos) = state.active_furnace_pos else { return };
+    let Some(furnace_pos) = state.active_furnace_pos else {
+        return;
+    };
     let screen_w = state.surface_config.width as f32;
     let screen_h = state.surface_config.height as f32;
     let cx = state.cursor_pos[0];
@@ -1660,7 +1873,12 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
                 }
             }
         } else {
-            click_slot_raw(&mut furnace.input, &mut state.cursor_held, is_right_click, &state.item_registry);
+            click_slot_raw(
+                &mut furnace.input,
+                &mut state.cursor_held,
+                is_right_click,
+                &state.item_registry,
+            );
         }
         return;
     }
@@ -1679,7 +1897,12 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
                 }
             }
         } else {
-            click_slot_raw(&mut furnace.fuel, &mut state.cursor_held, is_right_click, &state.item_registry);
+            click_slot_raw(
+                &mut furnace.fuel,
+                &mut state.cursor_held,
+                is_right_click,
+                &state.item_registry,
+            );
         }
         return;
     }
@@ -1742,7 +1965,14 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
                                 let transfer = space.min(item.count);
                                 furnace.fuel.count += transfer;
                                 let remaining = item.count - transfer;
-                                state.inventory.set(slot_idx, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                                state.inventory.set(
+                                    slot_idx,
+                                    if remaining > 0 {
+                                        ItemSlot::new(item.item_id, remaining)
+                                    } else {
+                                        ItemSlot::EMPTY
+                                    },
+                                );
                                 return;
                             }
                         }
@@ -1758,13 +1988,25 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
                                 let transfer = space.min(item.count);
                                 furnace.input.count += transfer;
                                 let remaining = item.count - transfer;
-                                state.inventory.set(slot_idx, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                                state.inventory.set(
+                                    slot_idx,
+                                    if remaining > 0 {
+                                        ItemSlot::new(item.item_id, remaining)
+                                    } else {
+                                        ItemSlot::EMPTY
+                                    },
+                                );
                                 return;
                             }
                         }
                     }
                 } else {
-                    state.inventory.click_slot(slot_idx, &mut state.cursor_held, is_right_click, &state.item_registry);
+                    state.inventory.click_slot(
+                        slot_idx,
+                        &mut state.cursor_held,
+                        is_right_click,
+                        &state.item_registry,
+                    );
                 }
                 return;
             }
@@ -1794,7 +2036,14 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
                             let transfer = space.min(item.count);
                             furnace.fuel.count += transfer;
                             let remaining = item.count - transfer;
-                            state.inventory.set(i, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                            state.inventory.set(
+                                i,
+                                if remaining > 0 {
+                                    ItemSlot::new(item.item_id, remaining)
+                                } else {
+                                    ItemSlot::EMPTY
+                                },
+                            );
                             return;
                         }
                     }
@@ -1809,20 +2058,36 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
                             let transfer = space.min(item.count);
                             furnace.input.count += transfer;
                             let remaining = item.count - transfer;
-                            state.inventory.set(i, if remaining > 0 { ItemSlot::new(item.item_id, remaining) } else { ItemSlot::EMPTY });
+                            state.inventory.set(
+                                i,
+                                if remaining > 0 {
+                                    ItemSlot::new(item.item_id, remaining)
+                                } else {
+                                    ItemSlot::EMPTY
+                                },
+                            );
                             return;
                         }
                     }
                 }
             } else {
-                state.inventory.click_slot(i, &mut state.cursor_held, is_right_click, &state.item_registry);
+                state.inventory.click_slot(
+                    i,
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
             }
             return;
         }
     }
 }
 
-fn add_to_chest_slots(chest_slots: &mut [ItemSlot], mut item: ItemSlot, registry: &ItemRegistry) -> Option<ItemSlot> {
+fn add_to_chest_slots(
+    chest_slots: &mut [ItemSlot],
+    mut item: ItemSlot,
+    registry: &ItemRegistry,
+) -> Option<ItemSlot> {
     if item.is_empty() {
         return None;
     }
@@ -1934,9 +2199,13 @@ fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool
 
     // Recipe cycle controls (< and >)
     let recipes = if modal.is_usage_mode {
-        state.crafting_manager.get_recipes_using_input(modal.target_item)
+        state
+            .crafting_manager
+            .get_recipes_using_input(modal.target_item)
     } else {
-        state.crafting_manager.get_recipes_for_output(modal.target_item)
+        state
+            .crafting_manager
+            .get_recipes_for_output(modal.target_item)
     };
     let total_recipes = recipes.len();
 
@@ -2101,7 +2370,11 @@ fn handle_jei_panel_click(state: &mut AppState, is_right_click: bool) -> bool {
     }
 
     // Check if clicked anywhere inside JEI panel bounding box
-    if cx >= start_x - 6.0 && cx <= start_x + panel_w + 6.0 && cy >= page_y - 6.0 && cy <= search_y + search_h + 6.0 {
+    if cx >= start_x - 6.0
+        && cx <= start_x + panel_w + 6.0
+        && cy >= page_y - 6.0
+        && cy <= search_y + search_h + 6.0
+    {
         state.jei_search_focused = false;
         return true;
     }
@@ -2179,16 +2452,30 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
         let world_guard = state.world_manager.world().lock().unwrap();
         if let Some(furnace) = world_guard.get_furnace(furnace_pos) {
             // Input
-            if cx >= center_x && cx <= center_x + slot_size && cy >= input_y && cy <= input_y + slot_size {
-                if !furnace.input.is_empty() { return Some(furnace.input.item_id); }
+            if cx >= center_x
+                && cx <= center_x + slot_size
+                && cy >= input_y
+                && cy <= input_y + slot_size
+            {
+                if !furnace.input.is_empty() {
+                    return Some(furnace.input.item_id);
+                }
             }
             // Fuel
-            if cx >= center_x && cx <= center_x + slot_size && cy >= fuel_y && cy <= fuel_y + slot_size {
-                if !furnace.fuel.is_empty() { return Some(furnace.fuel.item_id); }
+            if cx >= center_x
+                && cx <= center_x + slot_size
+                && cy >= fuel_y
+                && cy <= fuel_y + slot_size
+            {
+                if !furnace.fuel.is_empty() {
+                    return Some(furnace.fuel.item_id);
+                }
             }
             // Output
             if cx >= out_x && cx <= out_x + out_size && cy >= out_y && cy <= out_y + out_size {
-                if !furnace.output.is_empty() { return Some(furnace.output.item_id); }
+                if !furnace.output.is_empty() {
+                    return Some(furnace.output.item_id);
+                }
             }
         }
     } else if let Some(chest_pos) = state.active_chest_pos {
@@ -2294,4 +2581,3 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
 
     None
 }
-

@@ -2,9 +2,9 @@ mod app;
 mod headless;
 mod world_manager;
 
-use std::sync::Arc;
 use app::BlockGameApp;
 use blockgame_core::block::BlockRegistry;
+use std::sync::Arc;
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,8 +18,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if offscreen render mode is requested
     if let Some(idx) = args.iter().position(|a| a == "--render-to-image") {
-        let output_path = args.get(idx + 1).map(|s| s.as_str()).unwrap_or("landscape_render.png");
-        log::info!("Starting headless world landscape render to {}", output_path);
+        let output_path = args
+            .get(idx + 1)
+            .map(|s| s.as_str())
+            .unwrap_or("landscape_render.png");
+        log::info!(
+            "Starting headless world landscape render to {}",
+            output_path
+        );
         pollster::block_on(headless::render_world_to_image(
             seed,
             render_distance,
@@ -32,7 +38,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.iter().any(|a| a == "--headless") {
         let output_path = "landscape_render.png";
-        log::info!("Starting headless world landscape render to {}", output_path);
+        log::info!(
+            "Starting headless world landscape render to {}",
+            output_path
+        );
         pollster::block_on(headless::render_world_to_image(
             seed,
             render_distance,

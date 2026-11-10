@@ -57,7 +57,11 @@ pub async fn render_world_to_image(
 
     let render_texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Landscape Render Target"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -82,16 +86,9 @@ pub async fn render_world_to_image(
 
     let atlas = TextureAtlas::generate_default();
     let pipeline = VoxelPipeline::new(&device, &queue, target_format, &atlas);
-    let wireframe_pipeline = WireframePipeline::new(
-        &device,
-        target_format,
-        &pipeline.camera_bind_group_layout,
-    );
-    let ui_pipeline = UiPipeline::new(
-        &device,
-        target_format,
-        &pipeline.texture_bind_group_layout,
-    );
+    let wireframe_pipeline =
+        WireframePipeline::new(&device, target_format, &pipeline.camera_bind_group_layout);
+    let ui_pipeline = UiPipeline::new(&device, target_format, &pipeline.texture_bind_group_layout);
 
     let registry = Arc::new(BlockRegistry::new());
     let item_registry = Arc::new(ItemRegistry::new());
@@ -100,7 +97,10 @@ pub async fn render_world_to_image(
     world_manager.init_spawn_area(&device, &pipeline);
 
     // 1. Build a player outpost structure with torches demonstrating dual-channel lighting!
-    let dummy_player_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+    let dummy_player_box = AABB::new(
+        Vec3::new(100.0, 100.0, 100.0),
+        Vec3::new(101.0, 101.0, 101.0),
+    );
     let base_x = 0;
     let base_z = 0;
     let base_y = 24;
@@ -113,21 +113,46 @@ pub async fn render_world_to_image(
                 let is_wall = dx == -3 || dx == 3 || dz == -3 || dz == 3;
                 let is_corner = (dx.abs() == 3) && (dz.abs() == 3);
                 let is_door = (dx == 0 && dz == 3) && (dy == 0 || dy == 1);
-                let is_window = (dx.abs() == 3 || dz == -3) && (dy == 1 || dy == 2) && (dx % 2 == 0);
+                let is_window =
+                    (dx.abs() == 3 || dz == -3) && (dy == 1 || dy == 2) && (dx % 2 == 0);
 
                 let pos = IVec3::new(base_x + dx, y, base_z + dz);
 
                 if is_door {
                     world_manager.break_block(pos, &device, &pipeline);
                 } else if is_corner {
-                    world_manager.place_block(pos, BlockId::WOOD_LOG, &dummy_player_box, &device, &pipeline);
+                    world_manager.place_block(
+                        pos,
+                        BlockId::WOOD_LOG,
+                        &dummy_player_box,
+                        &device,
+                        &pipeline,
+                    );
                 } else if is_window {
-                    world_manager.place_block(pos, BlockId::GLASS, &dummy_player_box, &device, &pipeline);
+                    world_manager.place_block(
+                        pos,
+                        BlockId::GLASS,
+                        &dummy_player_box,
+                        &device,
+                        &pipeline,
+                    );
                 } else if is_wall {
                     if dy == 0 {
-                        world_manager.place_block(pos, BlockId::COBBLESTONE, &dummy_player_box, &device, &pipeline);
+                        world_manager.place_block(
+                            pos,
+                            BlockId::COBBLESTONE,
+                            &dummy_player_box,
+                            &device,
+                            &pipeline,
+                        );
                     } else {
-                        world_manager.place_block(pos, BlockId::PLANKS, &dummy_player_box, &device, &pipeline);
+                        world_manager.place_block(
+                            pos,
+                            BlockId::PLANKS,
+                            &dummy_player_box,
+                            &device,
+                            &pipeline,
+                        );
                     }
                 }
             }
@@ -177,8 +202,10 @@ pub async fn render_world_to_image(
         let mut world_guard = world_manager.world().lock().unwrap();
         let chest = world_guard.get_or_create_chest(IVec3::new(base_x + 2, base_y + 1, base_z + 4));
         chest[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND, 12);
-        chest[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::GOLD_INGOT, 24);
-        chest[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_INGOT, 32);
+        chest[1] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::GOLD_INGOT, 24);
+        chest[2] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_INGOT, 32);
         chest[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 48);
         chest[4] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 16);
     }
@@ -190,13 +217,13 @@ pub async fn render_world_to_image(
 
     // Position camera with a 3/4 perspective showing cabin, glowing torches, and sunset landscape
     let eye = Vec3::new(-3.5, (base_y + 2) as f32 + 0.8, 9.0);
-    let camera = Camera::new(
-        eye,
-        (-72.0_f32).to_radians(),
-        (-10.0_f32).to_radians(),
-    );
+    let camera = Camera::new(eye, (-72.0_f32).to_radians(), (-10.0_f32).to_radians());
     let mut camera_uniform = CameraUniform::default();
-    camera.update_uniform_with_atmosphere(&mut camera_uniform, width as f32 / height as f32, &day_night);
+    camera.update_uniform_with_atmosphere(
+        &mut camera_uniform,
+        width as f32 / height as f32,
+        &day_night,
+    );
     pipeline.update_camera(&queue, &camera_uniform);
 
     // Spawn item drops on the grass in clear view of the camera: wood log and slender glowing torch
@@ -214,10 +241,8 @@ pub async fn render_world_to_image(
     torch_drop.age = 0.8;
     world_manager.item_drops.push(torch_drop);
 
-    let drops_mesh = blockgame_render::build_item_drops_mesh(
-        &world_manager.item_drops,
-        &item_registry,
-    );
+    let drops_mesh =
+        blockgame_render::build_item_drops_mesh(&world_manager.item_drops, &item_registry);
     let item_drop_gpu_mesh = pipeline.upload_mesh(&device, &drops_mesh);
 
     let animals_mesh = blockgame_render::build_animals_mesh(&world_manager.animals);
@@ -226,7 +251,13 @@ pub async fn render_world_to_image(
     // 3. Perform DDA raycast from crosshair
     let hit = {
         let world_guard = world_manager.world().lock().unwrap();
-        raycast_voxel(camera.position, camera.forward(), 6.0, &world_guard, &registry)
+        raycast_voxel(
+            camera.position,
+            camera.forward(),
+            6.0,
+            &world_guard,
+            &registry,
+        )
     };
 
     let wireframe_buffer = hit.map(|h| {
@@ -304,7 +335,17 @@ pub async fn render_world_to_image(
     let screen_h = height as f32;
     ui_pipeline.update_screen_size(&queue, screen_w, screen_h);
     let stats = blockgame_core::PlayerStats::new();
-    UiBuilder::build_hud(&mut ui_mesh, screen_w, screen_h, &inventory, 3, &item_registry, 0.0, 0.0, &stats);
+    UiBuilder::build_hud(
+        &mut ui_mesh,
+        screen_w,
+        screen_h,
+        &inventory,
+        3,
+        &item_registry,
+        0.0,
+        0.0,
+        &stats,
+    );
 
     if !ui_mesh.indices.is_empty() {
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -356,7 +397,11 @@ pub async fn render_world_to_image(
                 rows_per_image: Some(height),
             },
         },
-        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
     );
 
     queue.submit(Some(encoder.finish()));
@@ -388,7 +433,10 @@ pub async fn render_world_to_image(
         image::ExtendedColorType::Rgba8,
     )?;
 
-    log::info!("Successfully saved rendered interaction image to {}", output_path);
+    log::info!(
+        "Successfully saved rendered interaction image to {}",
+        output_path
+    );
 
     // Also render first-person view with a held 3D block (Wood Log)
     {
@@ -436,7 +484,17 @@ pub async fn render_world_to_image(
 
         let mut block_ui_mesh = UiMesh::new();
         // Slot 1 is Wood Log!
-        UiBuilder::build_hud(&mut block_ui_mesh, screen_w, screen_h, &inventory, 1, &item_registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut block_ui_mesh,
+            screen_w,
+            screen_h,
+            &inventory,
+            1,
+            &item_registry,
+            0.0,
+            0.0,
+            &stats,
+        );
 
         if !block_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -488,7 +546,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(block_encoder.finish()));
@@ -568,7 +630,17 @@ pub async fn render_world_to_image(
 
         let mut pick_ui_mesh = UiMesh::new();
         // Slot 0 is Stone Pickaxe!
-        UiBuilder::build_hud(&mut pick_ui_mesh, screen_w, screen_h, &inventory, 0, &item_registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut pick_ui_mesh,
+            screen_w,
+            screen_h,
+            &inventory,
+            0,
+            &item_registry,
+            0.0,
+            0.0,
+            &stats,
+        );
 
         if !pick_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -620,7 +692,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(pick_encoder.finish()));
@@ -702,7 +778,17 @@ pub async fn render_world_to_image(
         empty_inventory.slots[8] = blockgame_core::item::ItemSlot::EMPTY;
         let mut hand_ui_mesh = UiMesh::new();
         // Slot 8 is empty! punch_time = 0.5 (peak punch swing)
-        UiBuilder::build_hud(&mut hand_ui_mesh, screen_w, screen_h, &empty_inventory, 8, &item_registry, 0.0, 0.5, &stats);
+        UiBuilder::build_hud(
+            &mut hand_ui_mesh,
+            screen_w,
+            screen_h,
+            &empty_inventory,
+            8,
+            &item_registry,
+            0.0,
+            0.5,
+            &stats,
+        );
 
         if !hand_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -754,7 +840,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(hand_encoder.finish()));
@@ -809,8 +899,15 @@ pub async fn render_world_to_image(
     ];
 
     let mut crafting_grid = blockgame_core::crafting::CraftingGrid::new_2x2();
-    crafting_grid.set(0, 0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1));
-    let crafting_result = Some(blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::PLANKS, 4));
+    crafting_grid.set(
+        0,
+        0,
+        blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1),
+    );
+    let crafting_result = Some(blockgame_core::item::ItemSlot::new(
+        blockgame_core::item::ItemId::PLANKS,
+        4,
+    ));
 
     UiBuilder::build_inventory_screen(
         &mut inv_ui_mesh,
@@ -878,7 +975,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(inv_encoder.finish()));
@@ -915,22 +1016,73 @@ pub async fn render_world_to_image(
     // Render Phase 3 Farming and Animals showcase scene
     {
         // 1. Plant a patch of wheat crops in various stages (0..3) on farmland
-        let dummy_player_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+        let dummy_player_box = AABB::new(
+            Vec3::new(100.0, 100.0, 100.0),
+            Vec3::new(101.0, 101.0, 101.0),
+        );
         let farm_x = 0;
         let farm_z = 5;
         let farm_y = base_y;
 
-        world_manager.place_block(IVec3::new(farm_x, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
-        world_manager.place_block(IVec3::new(farm_x, farm_y + 1, farm_z), BlockId::WHEAT_0, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(
+            IVec3::new(farm_x, farm_y, farm_z),
+            BlockId::FARMLAND,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
+        world_manager.place_block(
+            IVec3::new(farm_x, farm_y + 1, farm_z),
+            BlockId::WHEAT_0,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
 
-        world_manager.place_block(IVec3::new(farm_x + 1, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
-        world_manager.place_block(IVec3::new(farm_x + 1, farm_y + 1, farm_z), BlockId::WHEAT_1, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(
+            IVec3::new(farm_x + 1, farm_y, farm_z),
+            BlockId::FARMLAND,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
+        world_manager.place_block(
+            IVec3::new(farm_x + 1, farm_y + 1, farm_z),
+            BlockId::WHEAT_1,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
 
-        world_manager.place_block(IVec3::new(farm_x + 2, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
-        world_manager.place_block(IVec3::new(farm_x + 2, farm_y + 1, farm_z), BlockId::WHEAT_2, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(
+            IVec3::new(farm_x + 2, farm_y, farm_z),
+            BlockId::FARMLAND,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
+        world_manager.place_block(
+            IVec3::new(farm_x + 2, farm_y + 1, farm_z),
+            BlockId::WHEAT_2,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
 
-        world_manager.place_block(IVec3::new(farm_x + 3, farm_y, farm_z), BlockId::FARMLAND, &dummy_player_box, &device, &pipeline);
-        world_manager.place_block(IVec3::new(farm_x + 3, farm_y + 1, farm_z), BlockId::WHEAT_3, &dummy_player_box, &device, &pipeline);
+        world_manager.place_block(
+            IVec3::new(farm_x + 3, farm_y, farm_z),
+            BlockId::FARMLAND,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
+        world_manager.place_block(
+            IVec3::new(farm_x + 3, farm_y + 1, farm_z),
+            BlockId::WHEAT_3,
+            &dummy_player_box,
+            &device,
+            &pipeline,
+        );
 
         // Position 3 animals near the farm
         world_manager.animals.clear();
@@ -969,7 +1121,11 @@ pub async fn render_world_to_image(
             (-12.0_f32).to_radians(),
         );
         let mut farm_uniform = CameraUniform::default();
-        farm_cam.update_uniform_with_atmosphere(&mut farm_uniform, width as f32 / height as f32, &day_night);
+        farm_cam.update_uniform_with_atmosphere(
+            &mut farm_uniform,
+            width as f32 / height as f32,
+            &day_night,
+        );
         pipeline.update_camera(&queue, &farm_uniform);
 
         let mut farm_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1023,12 +1179,26 @@ pub async fn render_world_to_image(
         let screen_h = height as f32;
         // Hotbar slot 0 = Iron Hoe
         let mut farm_inventory = inventory.clone();
-        farm_inventory.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_HOE, 1);
-        farm_inventory.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WHEAT_SEEDS, 32);
-        farm_inventory.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 5);
-        farm_inventory.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COOKED_STEAK, 8);
+        farm_inventory.slots[0] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_HOE, 1);
+        farm_inventory.slots[1] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WHEAT_SEEDS, 32);
+        farm_inventory.slots[2] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 5);
+        farm_inventory.slots[3] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COOKED_STEAK, 8);
 
-        UiBuilder::build_hud(&mut farm_ui_mesh, screen_w, screen_h, &farm_inventory, 0, &item_registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut farm_ui_mesh,
+            screen_w,
+            screen_h,
+            &farm_inventory,
+            0,
+            &item_registry,
+            0.0,
+            0.0,
+            &stats,
+        );
 
         if !farm_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1080,7 +1250,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(farm_encoder.finish()));
@@ -1111,7 +1285,9 @@ pub async fn render_world_to_image(
             height,
             image::ExtendedColorType::Rgba8,
         )?;
-        log::info!("Successfully saved farming & animals showcase image to farming_and_animals_render.png");
+        log::info!(
+            "Successfully saved farming & animals showcase image to farming_and_animals_render.png"
+        );
     }
 
     // Render verification of held 2D item (Bread) with no outlines
@@ -1162,8 +1338,19 @@ pub async fn render_world_to_image(
         let screen_w = width as f32;
         let screen_h = height as f32;
         let mut bread_inv = inventory.clone();
-        bread_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 8);
-        UiBuilder::build_hud(&mut bread_ui_mesh, screen_w, screen_h, &bread_inv, 0, &item_registry, 0.0, 0.0, &stats);
+        bread_inv.slots[0] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 8);
+        UiBuilder::build_hud(
+            &mut bread_ui_mesh,
+            screen_w,
+            screen_h,
+            &bread_inv,
+            0,
+            &item_registry,
+            0.0,
+            0.0,
+            &stats,
+        );
 
         if !bread_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1215,7 +1402,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(bread_encoder.finish()));
@@ -1258,7 +1449,11 @@ pub async fn render_world_to_image(
             (-12.0_f32).to_radians(),
         );
         let mut chest_uniform = CameraUniform::default();
-        chest_cam.update_uniform_with_atmosphere(&mut chest_uniform, width as f32 / height as f32, &day_night);
+        chest_cam.update_uniform_with_atmosphere(
+            &mut chest_uniform,
+            width as f32 / height as f32,
+            &day_night,
+        );
         pipeline.update_camera(&queue, &chest_uniform);
 
         let mut chest_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1303,8 +1498,19 @@ pub async fn render_world_to_image(
         let screen_w = width as f32;
         let screen_h = height as f32;
         let mut chest_inv = inventory.clone();
-        chest_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CHEST, 4);
-        UiBuilder::build_hud(&mut chest_ui_mesh, screen_w, screen_h, &chest_inv, 0, &item_registry, 0.0, 0.0, &stats);
+        chest_inv.slots[0] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CHEST, 4);
+        UiBuilder::build_hud(
+            &mut chest_ui_mesh,
+            screen_w,
+            screen_h,
+            &chest_inv,
+            0,
+            &item_registry,
+            0.0,
+            0.0,
+            &stats,
+        );
 
         if !chest_ui_mesh.indices.is_empty() {
             let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1356,7 +1562,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(chest_encoder.finish()));
@@ -1402,14 +1612,21 @@ pub async fn render_world_to_image(
 
         let chest_slots = {
             let world_guard = world_manager.world().lock().unwrap();
-            world_guard.get_chest(IVec3::new(base_x + 2, base_y + 1, base_z + 4)).cloned().unwrap()
+            world_guard
+                .get_chest(IVec3::new(base_x + 2, base_y + 1, base_z + 4))
+                .cloned()
+                .unwrap()
         };
 
         let mut inv_with_items = inventory.clone();
-        inv_with_items.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND_PICKAXE, 1);
-        inv_with_items.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_AXE, 1);
-        inv_with_items.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CHEST, 8);
-        inv_with_items.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 12);
+        inv_with_items.slots[0] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND_PICKAXE, 1);
+        inv_with_items.slots[1] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_AXE, 1);
+        inv_with_items.slots[2] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CHEST, 8);
+        inv_with_items.slots[3] =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BREAD, 12);
 
         UiBuilder::build_chest_screen(
             &mut chest_screen_mesh,
@@ -1475,7 +1692,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(chest_ui_encoder.finish()));
@@ -1578,7 +1799,10 @@ pub async fn render_world_to_image(
                 Some(blockgame_core::item::ItemId::STICK),
                 None,
             ],
-            output: blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::DIAMOND_PICKAXE, 1),
+            output: blockgame_core::item::ItemSlot::new(
+                blockgame_core::item::ItemId::DIAMOND_PICKAXE,
+                1,
+            ),
         };
 
         let modal_params = blockgame_render::ui::RecipeModalParams {
@@ -1606,8 +1830,15 @@ pub async fn render_world_to_image(
         let cursor_pos = [out_x + 28.0, out_y + 28.0];
 
         let mut crafting_grid = blockgame_core::crafting::CraftingGrid::new_3x3();
-        crafting_grid.set(0, 0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1));
-        let crafting_result = Some(blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::PLANKS, 4));
+        crafting_grid.set(
+            0,
+            0,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 1),
+        );
+        let crafting_result = Some(blockgame_core::item::ItemSlot::new(
+            blockgame_core::item::ItemId::PLANKS,
+            4,
+        ));
 
         UiBuilder::build_inventory_screen(
             &mut jei_ui_mesh,
@@ -1674,7 +1905,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(jei_encoder.finish()));
@@ -1705,7 +1940,9 @@ pub async fn render_world_to_image(
             height,
             image::ExtendedColorType::Rgba8,
         )?;
-        log::info!("Successfully saved JEI recipe browser showcase image to jei_recipe_browser_render.png");
+        log::info!(
+            "Successfully saved JEI recipe browser showcase image to jei_recipe_browser_render.png"
+        );
     }
 
     // =========================================================================
@@ -1763,20 +2000,50 @@ pub async fn render_world_to_image(
         ui_pipeline.update_screen_size(&queue, screen_w, screen_h);
 
         let mut furnace_inv = Inventory::new(36);
-        furnace_inv.set(0, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COBBLESTONE, 64));
-        furnace_inv.set(1, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 32));
-        furnace_inv.set(2, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_COPPER, 18));
-        furnace_inv.set(3, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_GOLD, 8));
-        furnace_inv.set(4, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_BEEF, 10));
-        furnace_inv.set(5, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_PICKAXE, 1));
-        furnace_inv.set(6, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::FURNACE, 2));
-        furnace_inv.set(9, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 48));
-        furnace_inv.set(10, blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SAND, 32));
+        furnace_inv.set(
+            0,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COBBLESTONE, 64),
+        );
+        furnace_inv.set(
+            1,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 32),
+        );
+        furnace_inv.set(
+            2,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_COPPER, 18),
+        );
+        furnace_inv.set(
+            3,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_GOLD, 8),
+        );
+        furnace_inv.set(
+            4,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_BEEF, 10),
+        );
+        furnace_inv.set(
+            5,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_PICKAXE, 1),
+        );
+        furnace_inv.set(
+            6,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::FURNACE, 2),
+        );
+        furnace_inv.set(
+            9,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 48),
+        );
+        furnace_inv.set(
+            10,
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SAND, 32),
+        );
 
         let mut furnace_state = blockgame_core::world::FurnaceState::new();
-        furnace_state.input = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_IRON, 16);
-        furnace_state.fuel = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 5);
-        furnace_state.output = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_INGOT, 4);
+        furnace_state.input =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RAW_IRON, 16);
+        furnace_state.fuel =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 5);
+        furnace_state.output =
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::IRON_INGOT, 4);
         furnace_state.burn_time_remaining = 52.0;
         furnace_state.max_burn_time = 80.0;
         furnace_state.cook_progress = 5.2;
@@ -1866,7 +2133,11 @@ pub async fn render_world_to_image(
                     rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         queue.submit(Some(furnace_encoder.finish()));

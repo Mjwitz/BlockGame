@@ -103,8 +103,12 @@ impl UiMesh {
         });
 
         self.indices.extend_from_slice(&[
-            base_idx, base_idx + 1, base_idx + 2,
-            base_idx, base_idx + 2, base_idx + 3,
+            base_idx,
+            base_idx + 1,
+            base_idx + 2,
+            base_idx,
+            base_idx + 2,
+            base_idx + 3,
         ]);
     }
 
@@ -298,7 +302,7 @@ impl UiBuilder {
             12, 10, 10, 10, 10, 10, 10, 10, 10, 6, 10, 10, 10, 10, 10, 10, // 64..79
             10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 6, 10, 6, 10, 10, // 80..95
             4, 10, 10, 10, 10, 10, 8, 10, 10, 2, 10, 8, 4, 10, 10, 10, // 96..111
-            10, 10, 10, 10, 6, 10, 10, 10, 10, 10, 10, 6, 2, 6, 12 // 112..126
+            10, 10, 10, 10, 6, 10, 10, 10, 10, 10, 10, 6, 2, 6, 12, // 112..126
         ];
         let raw_w = WIDTHS[(c - 33) as usize];
         (raw_w + 2) as f32 / 12.0
@@ -362,7 +366,16 @@ impl UiBuilder {
         let total_w = Self::string_width(&text, char_w, spacing);
         let x = slot_x + slot_size - total_w - 4.0;
         let y = slot_y + slot_size - char_h - 3.0;
-        Self::draw_string(mesh, x, y, &text, char_w, char_h, spacing, [1.0, 1.0, 1.0, 1.0]);
+        Self::draw_string(
+            mesh,
+            x,
+            y,
+            &text,
+            char_w,
+            char_h,
+            spacing,
+            [1.0, 1.0, 1.0, 1.0],
+        );
     }
 
     /// Draws a hover tooltip displaying an item's display name.
@@ -398,14 +411,7 @@ impl UiBuilder {
         );
 
         // Tooltip Background (deep dark violet)
-        mesh.add_quad(
-            tx,
-            ty,
-            box_w,
-            box_h,
-            white_uv,
-            [0.08, 0.04, 0.16, 0.94],
-        );
+        mesh.add_quad(tx, ty, box_w, box_h, white_uv, [0.08, 0.04, 0.16, 0.94]);
 
         // Tooltip Text
         Self::draw_string(
@@ -456,19 +462,49 @@ impl UiBuilder {
             let punch_x = -45.0 * scale * punch_swing;
             let punch_y = -35.0 * scale * punch_swing;
 
-            let p_arm_bot_r = [screen_w + 40.0 * scale + bob_x + punch_x * 0.3, screen_h + 30.0 * scale];
-            let p_arm_bot_l = [screen_w - 95.0 * scale + bob_x + punch_x * 0.3, screen_h + 30.0 * scale];
-            let p_arm_bot_m = [(p_arm_bot_l[0] + p_arm_bot_r[0]) * 0.5, (p_arm_bot_l[1] + p_arm_bot_r[1]) * 0.5];
+            let p_arm_bot_r = [
+                screen_w + 40.0 * scale + bob_x + punch_x * 0.3,
+                screen_h + 30.0 * scale,
+            ];
+            let p_arm_bot_l = [
+                screen_w - 95.0 * scale + bob_x + punch_x * 0.3,
+                screen_h + 30.0 * scale,
+            ];
+            let p_arm_bot_m = [
+                (p_arm_bot_l[0] + p_arm_bot_r[0]) * 0.5,
+                (p_arm_bot_l[1] + p_arm_bot_r[1]) * 0.5,
+            ];
 
-            let p_sleeve_r = [screen_w - 20.0 * scale + bob_x + punch_x * 0.6, screen_h - 130.0 * scale + bob_y + punch_y * 0.6];
-            let p_sleeve_l = [screen_w - 145.0 * scale + bob_x + punch_x * 0.6, screen_h - 85.0 * scale + bob_y + punch_y * 0.6];
-            let p_sleeve_m = [(p_sleeve_l[0] + p_sleeve_r[0]) * 0.5, (p_sleeve_l[1] + p_sleeve_r[1]) * 0.5];
+            let p_sleeve_r = [
+                screen_w - 20.0 * scale + bob_x + punch_x * 0.6,
+                screen_h - 130.0 * scale + bob_y + punch_y * 0.6,
+            ];
+            let p_sleeve_l = [
+                screen_w - 145.0 * scale + bob_x + punch_x * 0.6,
+                screen_h - 85.0 * scale + bob_y + punch_y * 0.6,
+            ];
+            let p_sleeve_m = [
+                (p_sleeve_l[0] + p_sleeve_r[0]) * 0.5,
+                (p_sleeve_l[1] + p_sleeve_r[1]) * 0.5,
+            ];
 
-            let p_wrist_r = [screen_w - 75.0 * scale + bob_x + punch_x, screen_h - 195.0 * scale + bob_y + punch_y];
-            let p_wrist_l = [screen_w - 180.0 * scale + bob_x + punch_x, screen_h - 150.0 * scale + bob_y + punch_y];
-            let p_wrist_m = [(p_wrist_l[0] + p_wrist_r[0]) * 0.5, (p_wrist_l[1] + p_wrist_r[1]) * 0.5];
+            let p_wrist_r = [
+                screen_w - 75.0 * scale + bob_x + punch_x,
+                screen_h - 195.0 * scale + bob_y + punch_y,
+            ];
+            let p_wrist_l = [
+                screen_w - 180.0 * scale + bob_x + punch_x,
+                screen_h - 150.0 * scale + bob_y + punch_y,
+            ];
+            let p_wrist_m = [
+                (p_wrist_l[0] + p_wrist_r[0]) * 0.5,
+                (p_wrist_l[1] + p_wrist_r[1]) * 0.5,
+            ];
 
-            let p_hand = [screen_w - 155.0 * scale + bob_x + punch_x * 1.1, screen_h - 200.0 * scale + bob_y + punch_y * 1.1];
+            let p_hand = [
+                screen_w - 155.0 * scale + bob_x + punch_x * 1.1,
+                screen_h - 200.0 * scale + bob_y + punch_y * 1.1,
+            ];
 
             let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
             let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
@@ -501,8 +537,14 @@ impl UiBuilder {
             );
 
             // 3. Clenched fist punching forward
-            let p_fist_tip_l = [p_hand[0] - 25.0 * scale + punch_x * 0.2, p_hand[1] - 25.0 * scale + punch_y * 0.2];
-            let p_fist_tip_r = [p_hand[0] + 40.0 * scale + punch_x * 0.2, p_hand[1] - 45.0 * scale + punch_y * 0.2];
+            let p_fist_tip_l = [
+                p_hand[0] - 25.0 * scale + punch_x * 0.2,
+                p_hand[1] - 25.0 * scale + punch_y * 0.2,
+            ];
+            let p_fist_tip_r = [
+                p_hand[0] + 40.0 * scale + punch_x * 0.2,
+                p_hand[1] - 45.0 * scale + punch_y * 0.2,
+            ];
             mesh.add_quad_vertices(
                 [p_wrist_l, p_wrist_r, p_fist_tip_r, p_fist_tip_l],
                 white_uv,
@@ -567,11 +609,7 @@ impl UiBuilder {
                 ];
 
                 // 1. Shaft Front Face
-                mesh.add_quad_vertices(
-                    [p0, p1, p2, p3],
-                    torch_uvs,
-                    [[1.0, 1.0, 1.0, 1.0]; 4],
-                );
+                mesh.add_quad_vertices([p0, p1, p2, p3], torch_uvs, [[1.0, 1.0, 1.0, 1.0]; 4]);
 
                 // 2. Shaft Side 3D Thickness Face (extruded back-left)
                 let p3_b = [p3[0] + thick[0], p3[1] + thick[1]];
@@ -665,9 +703,12 @@ impl UiBuilder {
                 ];
                 let bs = 90.0 * scale;
 
-                let top_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
-                let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
-                let right_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosX);
+                let top_tile = block_registry
+                    .get_texture(block_id, blockgame_core::direction::Direction::PosY);
+                let side_tile = block_registry
+                    .get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+                let right_tile = block_registry
+                    .get_texture(block_id, blockgame_core::direction::Direction::PosX);
 
                 let [u0_t, v0_t, u1_t, v1_t] = TextureAtlas::get_uv_bounds(top_tile);
                 let [u0_s, v0_s, u1_s, v1_s] = TextureAtlas::get_uv_bounds(side_tile);
@@ -679,12 +720,7 @@ impl UiBuilder {
                 let p_top_s = [bc[0], bc[1] + bs * 0.35];
                 let p_top_w = [bc[0] - bs * 1.05, bc[1] - bs * 0.16];
 
-                let uvs_top = [
-                    [u0_t, v0_t],
-                    [u1_t, v0_t],
-                    [u1_t, v1_t],
-                    [u0_t, v1_t],
-                ];
+                let uvs_top = [[u0_t, v0_t], [u1_t, v0_t], [u1_t, v1_t], [u0_t, v1_t]];
                 mesh.add_quad_vertices(
                     [p_top_w, p_top_n, p_top_e, p_top_s],
                     uvs_top,
@@ -695,12 +731,7 @@ impl UiBuilder {
                 let h_face = bs * 1.10;
                 let p_left_bot_w = [p_top_w[0], p_top_w[1] + h_face];
                 let p_left_bot_e = [p_top_s[0], p_top_s[1] + h_face];
-                let uvs_left = [
-                    [u0_s, v0_s],
-                    [u1_s, v0_s],
-                    [u1_s, v1_s],
-                    [u0_s, v1_s],
-                ];
+                let uvs_left = [[u0_s, v0_s], [u1_s, v0_s], [u1_s, v1_s], [u0_s, v1_s]];
                 mesh.add_quad_vertices(
                     [p_top_w, p_top_s, p_left_bot_e, p_left_bot_w],
                     uvs_left,
@@ -710,12 +741,7 @@ impl UiBuilder {
                 // Right Face (parallelogram facing front-right)
                 let p_right_bot_w = p_left_bot_e;
                 let p_right_bot_e = [p_top_e[0], p_top_e[1] + h_face];
-                let uvs_right = [
-                    [u0_r, v0_r],
-                    [u1_r, v0_r],
-                    [u1_r, v1_r],
-                    [u0_r, v1_r],
-                ];
+                let uvs_right = [[u0_r, v0_r], [u1_r, v0_r], [u1_r, v1_r], [u0_r, v1_r]];
                 mesh.add_quad_vertices(
                     [p_top_s, p_top_e, p_right_bot_e, p_right_bot_w],
                     uvs_right,
@@ -782,15 +808,23 @@ impl UiBuilder {
                 let thick = [-9.0 * scale, -7.0 * scale];
 
                 // 1. 3D Handle Front Face
-                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
-                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
-                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
-                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
-                mesh.add_quad_vertices(
-                    [h0, h1, h2, h3],
-                    white_uv,
-                    [[0.60, 0.42, 0.24, 1.0]; 4],
-                );
+                let h0 = [
+                    handle_base[0] - norm[0] * half_w,
+                    handle_base[1] - norm[1] * half_w,
+                ];
+                let h1 = [
+                    handle_base[0] + norm[0] * half_w,
+                    handle_base[1] + norm[1] * half_w,
+                ];
+                let h2 = [
+                    handle_tip[0] + norm[0] * half_w,
+                    handle_tip[1] + norm[1] * half_w,
+                ];
+                let h3 = [
+                    handle_tip[0] - norm[0] * half_w,
+                    handle_tip[1] - norm[1] * half_w,
+                ];
+                mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.60, 0.42, 0.24, 1.0]; 4]);
 
                 // 2. 3D Handle Side Thickness Face
                 let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
@@ -818,7 +852,8 @@ impl UiBuilder {
                         [0.55, 1.00, 1.00, 1.0],
                         [0.15, 0.60, 0.65, 1.0],
                     ),
-                    _ => ( // Iron Pickaxe
+                    _ => (
+                        // Iron Pickaxe
                         [0.82, 0.85, 0.90, 1.0],
                         [0.96, 0.98, 1.00, 1.0],
                         [0.55, 0.58, 0.65, 1.0],
@@ -847,7 +882,10 @@ impl UiBuilder {
                 ];
 
                 // Left Blade Quad
-                let tip_l_in = [tip_l[0] - dir[0] * 8.0 * scale, tip_l[1] - dir[1] * 8.0 * scale];
+                let tip_l_in = [
+                    tip_l[0] - dir[0] * 8.0 * scale,
+                    tip_l[1] - dir[1] * 8.0 * scale,
+                ];
                 mesh.add_quad_vertices(
                     [head_bot, tip_l_in, tip_l, head_top],
                     white_uv,
@@ -855,7 +893,10 @@ impl UiBuilder {
                 );
 
                 // Right Blade Quad
-                let tip_r_in = [tip_r[0] - dir[0] * 8.0 * scale, tip_r[1] - dir[1] * 8.0 * scale];
+                let tip_r_in = [
+                    tip_r[0] - dir[0] * 8.0 * scale,
+                    tip_r[1] - dir[1] * 8.0 * scale,
+                ];
                 mesh.add_quad_vertices(
                     [head_bot, head_top, tip_r, tip_r_in],
                     white_uv,
@@ -887,15 +928,23 @@ impl UiBuilder {
                 );
 
                 // Center Socket Collar (Dark steel/band)
-                let c0 = [head_center[0] - norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] - norm[1] * 14.0 * scale - dir[1] * 12.0 * scale];
-                let c1 = [head_center[0] + norm[0] * 14.0 * scale - dir[0] * 12.0 * scale, head_center[1] + norm[0] * 14.0 * scale - dir[1] * 12.0 * scale];
-                let c2 = [head_center[0] + norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] + norm[0] * 14.0 * scale + dir[1] * 12.0 * scale];
-                let c3 = [head_center[0] - norm[0] * 14.0 * scale + dir[0] * 12.0 * scale, head_center[1] - norm[0] * 14.0 * scale + dir[1] * 12.0 * scale];
-                mesh.add_quad_vertices(
-                    [c0, c1, c2, c3],
-                    white_uv,
-                    [[0.30, 0.30, 0.34, 1.0]; 4],
-                );
+                let c0 = [
+                    head_center[0] - norm[0] * 14.0 * scale - dir[0] * 12.0 * scale,
+                    head_center[1] - norm[1] * 14.0 * scale - dir[1] * 12.0 * scale,
+                ];
+                let c1 = [
+                    head_center[0] + norm[0] * 14.0 * scale - dir[0] * 12.0 * scale,
+                    head_center[1] + norm[0] * 14.0 * scale - dir[1] * 12.0 * scale,
+                ];
+                let c2 = [
+                    head_center[0] + norm[0] * 14.0 * scale + dir[0] * 12.0 * scale,
+                    head_center[1] + norm[0] * 14.0 * scale + dir[1] * 12.0 * scale,
+                ];
+                let c3 = [
+                    head_center[0] - norm[0] * 14.0 * scale + dir[0] * 12.0 * scale,
+                    head_center[1] - norm[0] * 14.0 * scale + dir[1] * 12.0 * scale,
+                ];
+                mesh.add_quad_vertices([c0, c1, c2, c3], white_uv, [[0.30, 0.30, 0.34, 1.0]; 4]);
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
@@ -932,15 +981,23 @@ impl UiBuilder {
                 let thick = [-9.0 * scale, -7.0 * scale];
 
                 // 1. 3D Handle Front Face
-                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
-                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
-                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
-                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
-                mesh.add_quad_vertices(
-                    [h0, h1, h2, h3],
-                    white_uv,
-                    [[0.60, 0.42, 0.24, 1.0]; 4],
-                );
+                let h0 = [
+                    handle_base[0] - norm[0] * half_w,
+                    handle_base[1] - norm[1] * half_w,
+                ];
+                let h1 = [
+                    handle_base[0] + norm[0] * half_w,
+                    handle_base[1] + norm[1] * half_w,
+                ];
+                let h2 = [
+                    handle_tip[0] + norm[0] * half_w,
+                    handle_tip[1] + norm[1] * half_w,
+                ];
+                let h3 = [
+                    handle_tip[0] - norm[0] * half_w,
+                    handle_tip[1] - norm[1] * half_w,
+                ];
+                mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.60, 0.42, 0.24, 1.0]; 4]);
 
                 // 2. 3D Handle Side Thickness Face
                 let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
@@ -968,7 +1025,8 @@ impl UiBuilder {
                         [0.55, 1.00, 1.00, 1.0],
                         [0.15, 0.60, 0.65, 1.0],
                     ),
-                    _ => ( // Iron Hoe
+                    _ => (
+                        // Iron Hoe
                         [0.82, 0.85, 0.90, 1.0],
                         [0.96, 0.98, 1.00, 1.0],
                         [0.55, 0.58, 0.65, 1.0],
@@ -991,7 +1049,10 @@ impl UiBuilder {
                     head_center[0] - dir[0] * blade_w,
                     head_center[1] - dir[1] * blade_w,
                 ];
-                let tip_l_in = [tip_l[0] - dir[0] * 8.0 * scale, tip_l[1] - dir[1] * 8.0 * scale];
+                let tip_l_in = [
+                    tip_l[0] - dir[0] * 8.0 * scale,
+                    tip_l[1] - dir[1] * 8.0 * scale,
+                ];
 
                 mesh.add_quad_vertices(
                     [head_bot, tip_l_in, tip_l, head_top],
@@ -1049,36 +1110,94 @@ impl UiBuilder {
                 let half_w = 9.0 * scale;
                 let thick = [-9.0 * scale, -7.0 * scale];
 
-                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
-                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
-                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
-                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                let h0 = [
+                    handle_base[0] - norm[0] * half_w,
+                    handle_base[1] - norm[1] * half_w,
+                ];
+                let h1 = [
+                    handle_base[0] + norm[0] * half_w,
+                    handle_base[1] + norm[1] * half_w,
+                ];
+                let h2 = [
+                    handle_tip[0] + norm[0] * half_w,
+                    handle_tip[1] + norm[1] * half_w,
+                ];
+                let h3 = [
+                    handle_tip[0] - norm[0] * half_w,
+                    handle_tip[1] - norm[1] * half_w,
+                ];
                 mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.60, 0.42, 0.24, 1.0]; 4]);
                 let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
                 let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
-                mesh.add_quad_vertices([h0_b, h0, h3, h3_b], white_uv, [[0.38, 0.25, 0.13, 1.0]; 4]);
+                mesh.add_quad_vertices(
+                    [h0_b, h0, h3, h3_b],
+                    white_uv,
+                    [[0.38, 0.25, 0.13, 1.0]; 4],
+                );
 
                 let (col_head_main, col_head_top, _col_head_side) = match active_slot.item_id {
-                    ItemId::WOODEN_AXE => ([0.68, 0.48, 0.28, 1.0], [0.85, 0.65, 0.42, 1.0], [0.45, 0.30, 0.16, 1.0]),
-                    ItemId::STONE_AXE => ([0.55, 0.55, 0.58, 1.0], [0.75, 0.75, 0.78, 1.0], [0.35, 0.35, 0.38, 1.0]),
-                    ItemId::DIAMOND_AXE => ([0.25, 0.88, 0.92, 1.0], [0.55, 1.00, 1.00, 1.0], [0.15, 0.60, 0.65, 1.0]),
-                    _ => ([0.82, 0.85, 0.90, 1.0], [0.96, 0.98, 1.00, 1.0], [0.55, 0.58, 0.65, 1.0]),
+                    ItemId::WOODEN_AXE => (
+                        [0.68, 0.48, 0.28, 1.0],
+                        [0.85, 0.65, 0.42, 1.0],
+                        [0.45, 0.30, 0.16, 1.0],
+                    ),
+                    ItemId::STONE_AXE => (
+                        [0.55, 0.55, 0.58, 1.0],
+                        [0.75, 0.75, 0.78, 1.0],
+                        [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    ItemId::DIAMOND_AXE => (
+                        [0.25, 0.88, 0.92, 1.0],
+                        [0.55, 1.00, 1.00, 1.0],
+                        [0.15, 0.60, 0.65, 1.0],
+                    ),
+                    _ => (
+                        [0.82, 0.85, 0.90, 1.0],
+                        [0.96, 0.98, 1.00, 1.0],
+                        [0.55, 0.58, 0.65, 1.0],
+                    ),
                 };
 
                 let head_center = handle_tip;
                 let blade_len = 50.0 * scale;
-                let p_top_tip = [head_center[0] - norm[0] * blade_len + dir[0] * 20.0 * scale, head_center[1] - norm[1] * blade_len + dir[1] * 20.0 * scale];
-                let p_bot_tip = [head_center[0] - norm[0] * (blade_len - 10.0 * scale) - dir[0] * 35.0 * scale, head_center[1] - norm[1] * (blade_len - 10.0 * scale) - dir[1] * 35.0 * scale];
-                let p_top_back = [head_center[0] + norm[0] * 15.0 * scale + dir[0] * 12.0 * scale, head_center[1] + norm[0] * 15.0 * scale + dir[1] * 12.0 * scale];
-                let p_bot_back = [head_center[0] + norm[0] * 15.0 * scale - dir[0] * 20.0 * scale, head_center[1] + norm[0] * 15.0 * scale - dir[1] * 20.0 * scale];
+                let p_top_tip = [
+                    head_center[0] - norm[0] * blade_len + dir[0] * 20.0 * scale,
+                    head_center[1] - norm[1] * blade_len + dir[1] * 20.0 * scale,
+                ];
+                let p_bot_tip = [
+                    head_center[0] - norm[0] * (blade_len - 10.0 * scale) - dir[0] * 35.0 * scale,
+                    head_center[1] - norm[1] * (blade_len - 10.0 * scale) - dir[1] * 35.0 * scale,
+                ];
+                let p_top_back = [
+                    head_center[0] + norm[0] * 15.0 * scale + dir[0] * 12.0 * scale,
+                    head_center[1] + norm[0] * 15.0 * scale + dir[1] * 12.0 * scale,
+                ];
+                let p_bot_back = [
+                    head_center[0] + norm[0] * 15.0 * scale - dir[0] * 20.0 * scale,
+                    head_center[1] + norm[0] * 15.0 * scale - dir[1] * 20.0 * scale,
+                ];
 
-                mesh.add_quad_vertices([p_bot_tip, p_bot_back, p_top_back, p_top_tip], white_uv, [col_head_main; 4]);
+                mesh.add_quad_vertices(
+                    [p_bot_tip, p_bot_back, p_top_back, p_top_tip],
+                    white_uv,
+                    [col_head_main; 4],
+                );
                 let p_top_tip_b = [p_top_tip[0] + thick[0], p_top_tip[1] + thick[1]];
                 let p_top_back_b = [p_top_back[0] + thick[0], p_top_back[1] + thick[1]];
-                mesh.add_quad_vertices([p_top_tip, p_top_back, p_top_back_b, p_top_tip_b], white_uv, [col_head_top; 4]);
+                mesh.add_quad_vertices(
+                    [p_top_tip, p_top_back, p_top_back_b, p_top_tip_b],
+                    white_uv,
+                    [col_head_top; 4],
+                );
 
                 if active_slot.count > 1 {
-                    Self::draw_stack_number(mesh, screen_w - 75.0 * scale, screen_h - 45.0 * scale, 30.0 * scale, active_slot.count);
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
                 }
             } else if is_shovel {
                 // -----------------------------------------------------------------
@@ -1105,36 +1224,94 @@ impl UiBuilder {
                 let half_w = 9.0 * scale;
                 let thick = [-9.0 * scale, -7.0 * scale];
 
-                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
-                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
-                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
-                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                let h0 = [
+                    handle_base[0] - norm[0] * half_w,
+                    handle_base[1] - norm[1] * half_w,
+                ];
+                let h1 = [
+                    handle_base[0] + norm[0] * half_w,
+                    handle_base[1] + norm[1] * half_w,
+                ];
+                let h2 = [
+                    handle_tip[0] + norm[0] * half_w,
+                    handle_tip[1] + norm[1] * half_w,
+                ];
+                let h3 = [
+                    handle_tip[0] - norm[0] * half_w,
+                    handle_tip[1] - norm[1] * half_w,
+                ];
                 mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.60, 0.42, 0.24, 1.0]; 4]);
                 let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
                 let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
-                mesh.add_quad_vertices([h0_b, h0, h3, h3_b], white_uv, [[0.38, 0.25, 0.13, 1.0]; 4]);
+                mesh.add_quad_vertices(
+                    [h0_b, h0, h3, h3_b],
+                    white_uv,
+                    [[0.38, 0.25, 0.13, 1.0]; 4],
+                );
 
                 let (col_head_main, col_head_top, _col_head_side) = match active_slot.item_id {
-                    ItemId::WOODEN_SHOVEL => ([0.68, 0.48, 0.28, 1.0], [0.85, 0.65, 0.42, 1.0], [0.45, 0.30, 0.16, 1.0]),
-                    ItemId::STONE_SHOVEL => ([0.55, 0.55, 0.58, 1.0], [0.75, 0.75, 0.78, 1.0], [0.35, 0.35, 0.38, 1.0]),
-                    ItemId::DIAMOND_SHOVEL => ([0.25, 0.88, 0.92, 1.0], [0.55, 1.00, 1.00, 1.0], [0.15, 0.60, 0.65, 1.0]),
-                    _ => ([0.82, 0.85, 0.90, 1.0], [0.96, 0.98, 1.00, 1.0], [0.55, 0.58, 0.65, 1.0]),
+                    ItemId::WOODEN_SHOVEL => (
+                        [0.68, 0.48, 0.28, 1.0],
+                        [0.85, 0.65, 0.42, 1.0],
+                        [0.45, 0.30, 0.16, 1.0],
+                    ),
+                    ItemId::STONE_SHOVEL => (
+                        [0.55, 0.55, 0.58, 1.0],
+                        [0.75, 0.75, 0.78, 1.0],
+                        [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    ItemId::DIAMOND_SHOVEL => (
+                        [0.25, 0.88, 0.92, 1.0],
+                        [0.55, 1.00, 1.00, 1.0],
+                        [0.15, 0.60, 0.65, 1.0],
+                    ),
+                    _ => (
+                        [0.82, 0.85, 0.90, 1.0],
+                        [0.96, 0.98, 1.00, 1.0],
+                        [0.55, 0.58, 0.65, 1.0],
+                    ),
                 };
 
                 let blade_w = 20.0 * scale;
                 let blade_len = 50.0 * scale;
-                let b_base_l = [handle_tip[0] - norm[0] * blade_w, handle_tip[1] - norm[1] * blade_w];
-                let b_base_r = [handle_tip[0] + norm[0] * blade_w, handle_tip[1] + norm[1] * blade_w];
-                let b_tip_l = [b_base_l[0] + dir[0] * blade_len, b_base_l[1] + dir[1] * blade_len];
-                let b_tip_r = [b_base_r[0] + dir[0] * blade_len, b_base_r[1] + dir[1] * blade_len];
+                let b_base_l = [
+                    handle_tip[0] - norm[0] * blade_w,
+                    handle_tip[1] - norm[1] * blade_w,
+                ];
+                let b_base_r = [
+                    handle_tip[0] + norm[0] * blade_w,
+                    handle_tip[1] + norm[1] * blade_w,
+                ];
+                let b_tip_l = [
+                    b_base_l[0] + dir[0] * blade_len,
+                    b_base_l[1] + dir[1] * blade_len,
+                ];
+                let b_tip_r = [
+                    b_base_r[0] + dir[0] * blade_len,
+                    b_base_r[1] + dir[1] * blade_len,
+                ];
 
-                mesh.add_quad_vertices([b_base_l, b_base_r, b_tip_r, b_tip_l], white_uv, [col_head_main; 4]);
+                mesh.add_quad_vertices(
+                    [b_base_l, b_base_r, b_tip_r, b_tip_l],
+                    white_uv,
+                    [col_head_main; 4],
+                );
                 let b_tip_l_b = [b_tip_l[0] + thick[0], b_tip_l[1] + thick[1]];
                 let b_tip_r_b = [b_tip_r[0] + thick[0], b_tip_r[1] + thick[1]];
-                mesh.add_quad_vertices([b_tip_l, b_tip_r, b_tip_r_b, b_tip_l_b], white_uv, [col_head_top; 4]);
+                mesh.add_quad_vertices(
+                    [b_tip_l, b_tip_r, b_tip_r_b, b_tip_l_b],
+                    white_uv,
+                    [col_head_top; 4],
+                );
 
                 if active_slot.count > 1 {
-                    Self::draw_stack_number(mesh, screen_w - 75.0 * scale, screen_h - 45.0 * scale, 30.0 * scale, active_slot.count);
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
                 }
             } else if active_slot.item_id == ItemId::STICK {
                 // -----------------------------------------------------------------
@@ -1167,11 +1344,7 @@ impl UiBuilder {
                 let s3 = [tip[0] - norm[0] * half_w, tip[1] - norm[1] * half_w];
 
                 // 1. Stick Front Face
-                mesh.add_quad_vertices(
-                    [s0, s1, s2, s3],
-                    white_uv,
-                    [[0.62, 0.44, 0.25, 1.0]; 4],
-                );
+                mesh.add_quad_vertices([s0, s1, s2, s3], white_uv, [[0.62, 0.44, 0.25, 1.0]; 4]);
 
                 // 2. Stick Side 3D Thickness Face
                 let s0_b = [s0[0] + thick[0], s0[1] + thick[1]];
@@ -1244,7 +1417,8 @@ impl UiBuilder {
                         [0.95, 0.80, 0.20, 1.0],
                         [0.72, 0.58, 0.12, 1.0],
                     ),
-                    _ => ( // Iron Ingot
+                    _ => (
+                        // Iron Ingot
                         [0.94, 0.96, 1.00, 1.0],
                         [0.78, 0.81, 0.88, 1.0],
                         [0.60, 0.62, 0.70, 1.0],
@@ -1256,28 +1430,16 @@ impl UiBuilder {
                 let t_ne = [ic[0] + iw * 0.70, ic[1] - id * 0.60];
                 let t_se = [ic[0] + iw, ic[1] + id * 0.20];
                 let t_sw = [ic[0] - iw, ic[1] + id * 0.20];
-                mesh.add_quad_vertices(
-                    [t_sw, t_nw, t_ne, t_se],
-                    white_uv,
-                    [col_top; 4],
-                );
+                mesh.add_quad_vertices([t_sw, t_nw, t_ne, t_se], white_uv, [col_top; 4]);
 
                 // Front Face
                 let f_bl = [t_sw[0], t_sw[1] + ih];
                 let f_br = [t_se[0], t_se[1] + ih];
-                mesh.add_quad_vertices(
-                    [t_sw, t_se, f_br, f_bl],
-                    white_uv,
-                    [col_front; 4],
-                );
+                mesh.add_quad_vertices([t_sw, t_se, f_br, f_bl], white_uv, [col_front; 4]);
 
                 // Right Face
                 let r_br = [t_ne[0], t_ne[1] + ih];
-                mesh.add_quad_vertices(
-                    [t_se, t_ne, r_br, f_br],
-                    white_uv,
-                    [col_side; 4],
-                );
+                mesh.add_quad_vertices([t_se, t_ne, r_br, f_br], white_uv, [col_side; 4]);
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
@@ -1327,7 +1489,8 @@ impl UiBuilder {
                         [0.32, 0.88, 0.92, 1.0],
                         [0.18, 0.65, 0.72, 1.0],
                     ),
-                    _ => ( // Coal
+                    _ => (
+                        // Coal
                         [0.34, 0.34, 0.38, 1.0],
                         [0.22, 0.22, 0.26, 1.0],
                         [0.16, 0.16, 0.19, 1.0],
@@ -1339,28 +1502,16 @@ impl UiBuilder {
                 let c_tl = [cc[0] - cs * 0.75, cc[1] - cs * 0.30];
                 let c_tr = [cc[0] + cs * 0.75, cc[1] - cs * 0.30];
                 let c_mid = [cc[0] + cs * 0.10, cc[1] + cs * 0.10];
-                mesh.add_quad_vertices(
-                    [c_tl, c_top, c_tr, c_mid],
-                    white_uv,
-                    [col_f1; 4],
-                );
+                mesh.add_quad_vertices([c_tl, c_top, c_tr, c_mid], white_uv, [col_f1; 4]);
 
                 // Facet 2: Front-left facet
                 let c_bl = [cc[0] - cs * 0.60, cc[1] + cs * 0.75];
                 let c_bm = [cc[0], cc[1] + cs * 0.95];
-                mesh.add_quad_vertices(
-                    [c_tl, c_mid, c_bm, c_bl],
-                    white_uv,
-                    [col_f2; 4],
-                );
+                mesh.add_quad_vertices([c_tl, c_mid, c_bm, c_bl], white_uv, [col_f2; 4]);
 
                 // Facet 3: Front-right facet
                 let c_br = [cc[0] + cs * 0.70, cc[1] + cs * 0.65];
-                mesh.add_quad_vertices(
-                    [c_mid, c_tr, c_br, c_bm],
-                    white_uv,
-                    [col_f3; 4],
-                );
+                mesh.add_quad_vertices([c_mid, c_tr, c_br, c_bm], white_uv, [col_f3; 4]);
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
@@ -1383,12 +1534,7 @@ impl UiBuilder {
                 let iy = screen_h - size - 40.0 * scale + bob_y + item_punch_y;
 
                 let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-                let icon_uvs = [
-                    [u0, v1],
-                    [u1, v1],
-                    [u1, v0],
-                    [u0, v0],
-                ];
+                let icon_uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
 
                 let p0 = [ix, iy + size];
                 let p1 = [ix + size, iy + size];
@@ -1396,11 +1542,7 @@ impl UiBuilder {
                 let p3 = [ix, iy];
 
                 // Front Face with clean item texture (transparent background, no borders)
-                mesh.add_quad_vertices(
-                    [p0, p1, p2, p3],
-                    icon_uvs,
-                    [[1.0, 1.0, 1.0, 1.0]; 4],
-                );
+                mesh.add_quad_vertices([p0, p1, p2, p3], icon_uvs, [[1.0, 1.0, 1.0, 1.0]; 4]);
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
@@ -1442,7 +1584,15 @@ impl UiBuilder {
         // 2. First-Person Hand or Held Item in lower-right corner - only when alive
         if !stats.is_dead {
             let held_slot = inventory.get(active_slot);
-            Self::draw_held_item(mesh, screen_w, screen_h, held_slot, registry, walk_distance, punch_time);
+            Self::draw_held_item(
+                mesh,
+                screen_w,
+                screen_h,
+                held_slot,
+                registry,
+                walk_distance,
+                punch_time,
+            );
         }
 
         // 3. Hotbar Slots (9 slots, each 50x50 px with 5px gap)
@@ -1507,13 +1657,34 @@ impl UiBuilder {
         for i in 0..10 {
             let hx = start_x + (i as f32) * icon_spacing;
             // Always draw heart container background
-            mesh.add_quad(hx, bars_y, icon_size, icon_size, heart_bg_uv, [1.0, 1.0, 1.0, 1.0]);
+            mesh.add_quad(
+                hx,
+                bars_y,
+                icon_size,
+                icon_size,
+                heart_bg_uv,
+                [1.0, 1.0, 1.0, 1.0],
+            );
 
             let hp_val = (i as f32 + 1.0) * 2.0;
             if stats.health >= hp_val {
-                mesh.add_quad(hx, bars_y, icon_size, icon_size, heart_full_uv, [1.0, 1.0, 1.0, 1.0]);
+                mesh.add_quad(
+                    hx,
+                    bars_y,
+                    icon_size,
+                    icon_size,
+                    heart_full_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
             } else if stats.health >= hp_val - 1.0 {
-                mesh.add_quad(hx, bars_y, icon_size, icon_size, heart_half_uv, [1.0, 1.0, 1.0, 1.0]);
+                mesh.add_quad(
+                    hx,
+                    bars_y,
+                    icon_size,
+                    icon_size,
+                    heart_half_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
             }
         }
 
@@ -1526,13 +1697,34 @@ impl UiBuilder {
         for i in 0..10 {
             let dx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
             // Always draw drumstick container background
-            mesh.add_quad(dx, bars_y, icon_size, icon_size, hunger_bg_uv, [1.0, 1.0, 1.0, 1.0]);
+            mesh.add_quad(
+                dx,
+                bars_y,
+                icon_size,
+                icon_size,
+                hunger_bg_uv,
+                [1.0, 1.0, 1.0, 1.0],
+            );
 
             let hunger_val = (i as f32 + 1.0) * 2.0;
             if stats.hunger >= hunger_val {
-                mesh.add_quad(dx, bars_y, icon_size, icon_size, hunger_full_uv, [1.0, 1.0, 1.0, 1.0]);
+                mesh.add_quad(
+                    dx,
+                    bars_y,
+                    icon_size,
+                    icon_size,
+                    hunger_full_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
             } else if stats.hunger >= hunger_val - 1.0 {
-                mesh.add_quad(dx, bars_y, icon_size, icon_size, hunger_half_uv, [1.0, 1.0, 1.0, 1.0]);
+                mesh.add_quad(
+                    dx,
+                    bars_y,
+                    icon_size,
+                    icon_size,
+                    hunger_half_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
             }
         }
 
@@ -1540,27 +1732,59 @@ impl UiBuilder {
         if stats.damage_flash > 0.0 {
             let flash_alpha = ((stats.damage_flash / 0.5) * 0.40).clamp(0.0, 0.40);
             let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
-            mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.85, 0.08, 0.08, flash_alpha]);
+            mesh.add_quad(
+                0.0,
+                0.0,
+                screen_w,
+                screen_h,
+                white_uv,
+                [0.85, 0.08, 0.08, flash_alpha],
+            );
         }
 
         // 7. Full-screen Death Screen Overlay (When Player is Dead)
         if stats.is_dead {
             let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
             // Deep red backdrop
-            mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.55, 0.06, 0.06, 0.76]);
+            mesh.add_quad(
+                0.0,
+                0.0,
+                screen_w,
+                screen_h,
+                white_uv,
+                [0.55, 0.06, 0.06, 0.76],
+            );
 
             // Big "You Died!" Title
             let title = "You Died!";
             let title_w = title.len() as f32 * 20.0;
             let title_x = (screen_w - title_w) * 0.5;
             let title_y = screen_h * 0.32;
-            Self::draw_string(mesh, title_x, title_y, title, 16.0, 22.0, 4.0, [1.0, 0.95, 0.95, 1.0]);
+            Self::draw_string(
+                mesh,
+                title_x,
+                title_y,
+                title,
+                16.0,
+                22.0,
+                4.0,
+                [1.0, 0.95, 0.95, 1.0],
+            );
 
             // Subtitle
             let subtitle = "Score: 0";
             let sub_w = subtitle.len() as f32 * 10.0;
             let sub_x = (screen_w - sub_w) * 0.5;
-            Self::draw_string(mesh, sub_x, title_y + 36.0, subtitle, 9.0, 13.0, 1.0, [0.85, 0.85, 0.85, 0.95]);
+            Self::draw_string(
+                mesh,
+                sub_x,
+                title_y + 36.0,
+                subtitle,
+                9.0,
+                13.0,
+                1.0,
+                [0.85, 0.85, 0.85, 0.95],
+            );
 
             // "Respawn" Button
             let btn_w = 200.0;
@@ -1569,14 +1793,37 @@ impl UiBuilder {
             let btn_y = screen_h * 0.50;
 
             let border_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
-            mesh.add_quad(btn_x - 2.0, btn_y - 2.0, btn_w + 4.0, btn_h + 4.0, border_uv, [1.0, 1.0, 1.0, 1.0]);
-            mesh.add_quad(btn_x, btn_y, btn_w, btn_h, white_uv, [0.22, 0.22, 0.24, 0.95]);
+            mesh.add_quad(
+                btn_x - 2.0,
+                btn_y - 2.0,
+                btn_w + 4.0,
+                btn_h + 4.0,
+                border_uv,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+            mesh.add_quad(
+                btn_x,
+                btn_y,
+                btn_w,
+                btn_h,
+                white_uv,
+                [0.22, 0.22, 0.24, 0.95],
+            );
 
             let respawn_text = "Respawn";
             let respawn_w = respawn_text.len() as f32 * 11.0;
             let text_x = btn_x + (btn_w - respawn_w) * 0.5;
             let text_y = btn_y + 14.0;
-            Self::draw_string(mesh, text_x, text_y, respawn_text, 10.0, 15.0, 1.0, [1.0, 1.0, 1.0, 1.0]);
+            Self::draw_string(
+                mesh,
+                text_x,
+                text_y,
+                respawn_text,
+                10.0,
+                15.0,
+                1.0,
+                [1.0, 1.0, 1.0, 1.0],
+            );
         }
     }
 
@@ -1601,7 +1848,14 @@ impl UiBuilder {
 
         // 1. Semi-transparent backdrop overlay
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
-        mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            backdrop_uv,
+            [0.0, 0.0, 0.0, 0.65],
+        );
 
         let slot_size = Self::SLOT_SIZE;
         let slot_gap = Self::SLOT_GAP;
@@ -1616,8 +1870,21 @@ impl UiBuilder {
         let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
 
         // Header text above crafting grid
-        let title = if grid_w == 3 { "Crafting Table (3x3)" } else { "Crafting (2x2)" };
-        Self::draw_string(mesh, craft_x, craft_y - 18.0, title, 8.0, 10.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+        let title = if grid_w == 3 {
+            "Crafting Table (3x3)"
+        } else {
+            "Crafting (2x2)"
+        };
+        Self::draw_string(
+            mesh,
+            craft_x,
+            craft_y - 18.0,
+            title,
+            8.0,
+            10.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
 
         for cy in 0..grid_h {
             for cx in 0..grid_w {
@@ -1806,14 +2073,7 @@ impl UiBuilder {
                 let hold_size = 36.0;
                 let hx = cursor_pos[0] - hold_size * 0.5;
                 let hy = cursor_pos[1] - hold_size * 0.5;
-                mesh.add_quad(
-                    hx,
-                    hy,
-                    hold_size,
-                    hold_size,
-                    icon_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
+                mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
                 Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
             }
         }
@@ -1845,7 +2105,14 @@ impl UiBuilder {
 
         // 1. Semi-transparent backdrop overlay
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
-        mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            backdrop_uv,
+            [0.0, 0.0, 0.0, 0.65],
+        );
 
         let slot_size = Self::SLOT_SIZE;
         let slot_gap = Self::SLOT_GAP;
@@ -2031,14 +2298,7 @@ impl UiBuilder {
                 let hold_size = 36.0;
                 let hx = cursor_pos[0] - hold_size * 0.5;
                 let hy = cursor_pos[1] - hold_size * 0.5;
-                mesh.add_quad(
-                    hx,
-                    hy,
-                    hold_size,
-                    hold_size,
-                    icon_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
+                mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
                 Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
             }
         }
@@ -2075,7 +2335,14 @@ impl UiBuilder {
 
         // 1. Semi-transparent backdrop overlay
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
-        mesh.add_quad(0.0, 0.0, screen_w, screen_h, backdrop_uv, [0.0, 0.0, 0.0, 0.65]);
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            backdrop_uv,
+            [0.0, 0.0, 0.0, 0.65],
+        );
 
         let slot_size = Self::SLOT_SIZE;
         let slot_gap = Self::SLOT_GAP;
@@ -2107,7 +2374,14 @@ impl UiBuilder {
         let fuel_y = flame_y + flame_size + 8.0;
 
         // Input Slot
-        mesh.add_quad(center_x, input_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        mesh.add_quad(
+            center_x,
+            input_y,
+            slot_size,
+            slot_size,
+            slot_uv,
+            [1.0, 1.0, 1.0, 0.95],
+        );
         let in_slot = furnace.input;
         if !in_slot.is_empty() {
             if let Some(def) = registry.get(in_slot.item_id) {
@@ -2123,8 +2397,10 @@ impl UiBuilder {
                 );
                 Self::draw_stack_number(mesh, center_x, input_y, slot_size, in_slot.count);
 
-                if cursor_pos[0] >= center_x && cursor_pos[0] <= center_x + slot_size
-                    && cursor_pos[1] >= input_y && cursor_pos[1] <= input_y + slot_size
+                if cursor_pos[0] >= center_x
+                    && cursor_pos[0] <= center_x + slot_size
+                    && cursor_pos[1] >= input_y
+                    && cursor_pos[1] <= input_y + slot_size
                 {
                     hovered_item_name = Some(def.display_name);
                 }
@@ -2134,7 +2410,14 @@ impl UiBuilder {
         // Animated Flame (between Input and Fuel)
         // Background / Empty flame icon
         let flame_empty_uv = TextureAtlas::get_uv_bounds(Self::FLAME_CONTAINER_TILE);
-        mesh.add_quad(flame_x, flame_y, flame_size, flame_size, flame_empty_uv, [0.35, 0.35, 0.35, 0.85]);
+        mesh.add_quad(
+            flame_x,
+            flame_y,
+            flame_size,
+            flame_size,
+            flame_empty_uv,
+            [0.35, 0.35, 0.35, 0.85],
+        );
 
         if furnace.burn_time_remaining > 0.0 && furnace.max_burn_time > 0.0 {
             let burn_ratio = (furnace.burn_time_remaining / furnace.max_burn_time).clamp(0.0, 1.0);
@@ -2153,7 +2436,14 @@ impl UiBuilder {
         }
 
         // Fuel Slot
-        mesh.add_quad(center_x, fuel_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        mesh.add_quad(
+            center_x,
+            fuel_y,
+            slot_size,
+            slot_size,
+            slot_uv,
+            [1.0, 1.0, 1.0, 0.95],
+        );
         let fuel_slot = furnace.fuel;
         if !fuel_slot.is_empty() {
             if let Some(def) = registry.get(fuel_slot.item_id) {
@@ -2169,8 +2459,10 @@ impl UiBuilder {
                 );
                 Self::draw_stack_number(mesh, center_x, fuel_y, slot_size, fuel_slot.count);
 
-                if cursor_pos[0] >= center_x && cursor_pos[0] <= center_x + slot_size
-                    && cursor_pos[1] >= fuel_y && cursor_pos[1] <= fuel_y + slot_size
+                if cursor_pos[0] >= center_x
+                    && cursor_pos[0] <= center_x + slot_size
+                    && cursor_pos[1] >= fuel_y
+                    && cursor_pos[1] <= fuel_y + slot_size
                 {
                     hovered_item_name = Some(def.display_name);
                 }
@@ -2180,7 +2472,16 @@ impl UiBuilder {
         // Cook Progress Arrow & Output Slot to the right
         let arrow_x = center_x + slot_size + 24.0;
         let arrow_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 7.0;
-        Self::draw_string(mesh, arrow_x, arrow_y, "===>", 10.0, 14.0, 1.0, [0.45, 0.45, 0.50, 1.0]);
+        Self::draw_string(
+            mesh,
+            arrow_x,
+            arrow_y,
+            "===>",
+            10.0,
+            14.0,
+            1.0,
+            [0.45, 0.45, 0.50, 1.0],
+        );
 
         // Highlight cooking arrow progress
         let cook_ratio = (furnace.cook_progress / FurnaceState::FURNACE_COOK_TIME).clamp(0.0, 1.0);
@@ -2188,14 +2489,30 @@ impl UiBuilder {
             let progress_chars = (cook_ratio * 4.0).ceil() as usize;
             let full_arrow = "===>";
             let active_part = &full_arrow[..progress_chars.min(4)];
-            Self::draw_string(mesh, arrow_x, arrow_y, active_part, 10.0, 14.0, 1.0, [1.0, 0.85, 0.20, 1.0]);
+            Self::draw_string(
+                mesh,
+                arrow_x,
+                arrow_y,
+                active_part,
+                10.0,
+                14.0,
+                1.0,
+                [1.0, 0.85, 0.20, 1.0],
+            );
         }
 
         // Output Slot (enlarged 56x56, warm golden tinted background)
         let out_x = arrow_x + 64.0;
         let out_y = input_y + (fuel_y + slot_size - input_y) * 0.5 - 28.0;
         let out_size = 56.0;
-        mesh.add_quad(out_x, out_y, out_size, out_size, slot_uv, [1.0, 0.95, 0.70, 1.0]);
+        mesh.add_quad(
+            out_x,
+            out_y,
+            out_size,
+            out_size,
+            slot_uv,
+            [1.0, 0.95, 0.70, 1.0],
+        );
         let out_slot = furnace.output;
         if !out_slot.is_empty() {
             if let Some(def) = registry.get(out_slot.item_id) {
@@ -2211,8 +2528,10 @@ impl UiBuilder {
                 );
                 Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
 
-                if cursor_pos[0] >= out_x && cursor_pos[0] <= out_x + out_size
-                    && cursor_pos[1] >= out_y && cursor_pos[1] <= out_y + out_size
+                if cursor_pos[0] >= out_x
+                    && cursor_pos[0] <= out_x + out_size
+                    && cursor_pos[1] >= out_y
+                    && cursor_pos[1] <= out_y + out_size
                 {
                     hovered_item_name = Some(def.display_name);
                 }
@@ -2345,14 +2664,7 @@ impl UiBuilder {
                 let hold_size = 36.0;
                 let hx = cursor_pos[0] - hold_size * 0.5;
                 let hy = cursor_pos[1] - hold_size * 0.5;
-                mesh.add_quad(
-                    hx,
-                    hy,
-                    hold_size,
-                    hold_size,
-                    icon_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
+                mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
                 Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
             }
         }
@@ -2392,25 +2704,62 @@ impl UiBuilder {
 
         // Prev Button [<]
         let prev_x = start_x;
-        let prev_hovered = cursor_pos[0] >= prev_x && cursor_pos[0] <= prev_x + btn_w
-            && cursor_pos[1] >= page_y && cursor_pos[1] <= page_y + btn_h;
-        let prev_color = if prev_hovered { [0.35, 0.35, 0.40, 1.0] } else { [0.20, 0.20, 0.22, 1.0] };
+        let prev_hovered = cursor_pos[0] >= prev_x
+            && cursor_pos[0] <= prev_x + btn_w
+            && cursor_pos[1] >= page_y
+            && cursor_pos[1] <= page_y + btn_h;
+        let prev_color = if prev_hovered {
+            [0.35, 0.35, 0.40, 1.0]
+        } else {
+            [0.20, 0.20, 0.22, 1.0]
+        };
         mesh.add_quad(prev_x, page_y, btn_w, btn_h, white_uv, prev_color);
-        Self::draw_char(mesh, prev_x + 9.0, page_y + 4.0, 8.0, 12.0, b'<', [0.95, 0.95, 0.95, 1.0]);
+        Self::draw_char(
+            mesh,
+            prev_x + 9.0,
+            page_y + 4.0,
+            8.0,
+            12.0,
+            b'<',
+            [0.95, 0.95, 0.95, 1.0],
+        );
 
         // Page Indicator: "1 / 2"
         let page_text = format!("{} / {}", params.page + 1, params.total_pages.max(1));
         let text_w = page_text.len() as f32 * 9.0;
         let text_x = start_x + (panel_w - text_w) * 0.5;
-        Self::draw_string(mesh, text_x, page_y + 4.0, &page_text, 8.0, 12.0, 1.0, [0.85, 0.85, 0.90, 1.0]);
+        Self::draw_string(
+            mesh,
+            text_x,
+            page_y + 4.0,
+            &page_text,
+            8.0,
+            12.0,
+            1.0,
+            [0.85, 0.85, 0.90, 1.0],
+        );
 
         // Next Button [>]
         let next_x = start_x + panel_w - btn_w;
-        let next_hovered = cursor_pos[0] >= next_x && cursor_pos[0] <= next_x + btn_w
-            && cursor_pos[1] >= page_y && cursor_pos[1] <= page_y + btn_h;
-        let next_color = if next_hovered { [0.35, 0.35, 0.40, 1.0] } else { [0.20, 0.20, 0.22, 1.0] };
+        let next_hovered = cursor_pos[0] >= next_x
+            && cursor_pos[0] <= next_x + btn_w
+            && cursor_pos[1] >= page_y
+            && cursor_pos[1] <= page_y + btn_h;
+        let next_color = if next_hovered {
+            [0.35, 0.35, 0.40, 1.0]
+        } else {
+            [0.20, 0.20, 0.22, 1.0]
+        };
         mesh.add_quad(next_x, page_y, btn_w, btn_h, white_uv, next_color);
-        Self::draw_char(mesh, next_x + 9.0, page_y + 4.0, 8.0, 12.0, b'>', [0.95, 0.95, 0.95, 1.0]);
+        Self::draw_char(
+            mesh,
+            next_x + 9.0,
+            page_y + 4.0,
+            8.0,
+            12.0,
+            b'>',
+            [0.95, 0.95, 0.95, 1.0],
+        );
 
         // 2. 6x8 Item Catalog Grid (48 items per page)
         let items_per_page = cols * rows;
@@ -2438,8 +2787,10 @@ impl UiBuilder {
                             [1.0, 1.0, 1.0, 1.0],
                         );
 
-                        if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size
-                            && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size
+                        if cursor_pos[0] >= sx
+                            && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy
+                            && cursor_pos[1] <= sy + slot_size
                         {
                             mesh.add_quad(
                                 sx - 2.0,
@@ -2465,19 +2816,51 @@ impl UiBuilder {
             [0.40, 0.40, 0.45, 1.0]
         };
         // Outer border
-        mesh.add_quad(start_x - 1.0, search_y - 1.0, panel_w + 2.0, search_h + 2.0, white_uv, border_color);
+        mesh.add_quad(
+            start_x - 1.0,
+            search_y - 1.0,
+            panel_w + 2.0,
+            search_h + 2.0,
+            white_uv,
+            border_color,
+        );
         // Inner box
-        mesh.add_quad(start_x, search_y, panel_w, search_h, white_uv, [0.08, 0.08, 0.10, 0.96]);
+        mesh.add_quad(
+            start_x,
+            search_y,
+            panel_w,
+            search_h,
+            white_uv,
+            [0.08, 0.08, 0.10, 0.96],
+        );
 
         if params.search_query.is_empty() && !params.search_focused {
-            Self::draw_string(mesh, start_x + 6.0, search_y + 6.0, "Search...", 8.0, 12.0, 0.0, [0.55, 0.55, 0.60, 1.0]);
+            Self::draw_string(
+                mesh,
+                start_x + 6.0,
+                search_y + 6.0,
+                "Search...",
+                8.0,
+                12.0,
+                0.0,
+                [0.55, 0.55, 0.60, 1.0],
+            );
         } else {
             let display_query = if params.search_focused {
                 format!("{}_", params.search_query)
             } else {
                 params.search_query.to_string()
             };
-            Self::draw_string(mesh, start_x + 6.0, search_y + 6.0, &display_query, 8.0, 12.0, 0.0, [1.0, 1.0, 0.95, 1.0]);
+            Self::draw_string(
+                mesh,
+                start_x + 6.0,
+                search_y + 6.0,
+                &display_query,
+                8.0,
+                12.0,
+                0.0,
+                [1.0, 1.0, 0.95, 1.0],
+            );
         }
     }
 
@@ -2496,7 +2879,14 @@ impl UiBuilder {
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
 
         // 1. Dark overlay behind modal
-        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.72]);
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.0, 0.0, 0.0, 0.72],
+        );
 
         // 2. Modal Window Frame
         let modal_w = 460.0;
@@ -2505,7 +2895,14 @@ impl UiBuilder {
         let my = (screen_h - modal_h) * 0.5;
 
         // Shadow & outer border
-        mesh.add_quad(mx - 3.0, my - 3.0, modal_w + 6.0, modal_h + 6.0, white_uv, [0.04, 0.04, 0.05, 0.98]);
+        mesh.add_quad(
+            mx - 3.0,
+            my - 3.0,
+            modal_w + 6.0,
+            modal_h + 6.0,
+            white_uv,
+            [0.04, 0.04, 0.05, 0.98],
+        );
         // Main window background
         mesh.add_quad(mx, my, modal_w, modal_h, white_uv, [0.18, 0.18, 0.20, 0.98]);
         // Top header banner
@@ -2515,18 +2912,47 @@ impl UiBuilder {
         let close_size = 24.0;
         let close_x = mx + modal_w - close_size - 6.0;
         let close_y = my + 6.0;
-        let close_hovered = cursor_pos[0] >= close_x && cursor_pos[0] <= close_x + close_size
-            && cursor_pos[1] >= close_y && cursor_pos[1] <= close_y + close_size;
-        let close_col = if close_hovered { [0.85, 0.25, 0.25, 1.0] } else { [0.65, 0.18, 0.18, 1.0] };
-        mesh.add_quad(close_x, close_y, close_size, close_size, white_uv, close_col);
-        Self::draw_char(mesh, close_x + 8.0, close_y + 6.0, 8.0, 12.0, b'X', [1.0, 1.0, 1.0, 1.0]);
+        let close_hovered = cursor_pos[0] >= close_x
+            && cursor_pos[0] <= close_x + close_size
+            && cursor_pos[1] >= close_y
+            && cursor_pos[1] <= close_y + close_size;
+        let close_col = if close_hovered {
+            [0.85, 0.25, 0.25, 1.0]
+        } else {
+            [0.65, 0.18, 0.18, 1.0]
+        };
+        mesh.add_quad(
+            close_x, close_y, close_size, close_size, white_uv, close_col,
+        );
+        Self::draw_char(
+            mesh,
+            close_x + 8.0,
+            close_y + 6.0,
+            8.0,
+            12.0,
+            b'X',
+            [1.0, 1.0, 1.0, 1.0],
+        );
 
         // Header Title
         let target_def = registry.get(params.target_item);
         let target_name = target_def.map(|d| d.display_name).unwrap_or("Item");
-        let header_prefix = if params.is_usage_mode { "Uses: " } else { "Recipe: " };
+        let header_prefix = if params.is_usage_mode {
+            "Uses: "
+        } else {
+            "Recipe: "
+        };
         let full_title = format!("{}{}", header_prefix, target_name);
-        Self::draw_string(mesh, mx + 12.0, my + 12.0, &full_title, 8.0, 12.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+        Self::draw_string(
+            mesh,
+            mx + 12.0,
+            my + 12.0,
+            &full_title,
+            8.0,
+            12.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
 
         // Subheader: Recipe Cycle buttons & Category
         let sub_y = my + 44.0;
@@ -2536,20 +2962,57 @@ impl UiBuilder {
             let btn_w = 22.0;
             let btn_h = 20.0;
 
-            let prev_hov = cursor_pos[0] >= prev_rx && cursor_pos[0] <= prev_rx + btn_w
-                && cursor_pos[1] >= sub_y && cursor_pos[1] <= sub_y + btn_h;
-            let prev_col = if prev_hov { [0.35, 0.35, 0.40, 1.0] } else { [0.22, 0.22, 0.25, 1.0] };
+            let prev_hov = cursor_pos[0] >= prev_rx
+                && cursor_pos[0] <= prev_rx + btn_w
+                && cursor_pos[1] >= sub_y
+                && cursor_pos[1] <= sub_y + btn_h;
+            let prev_col = if prev_hov {
+                [0.35, 0.35, 0.40, 1.0]
+            } else {
+                [0.22, 0.22, 0.25, 1.0]
+            };
             mesh.add_quad(prev_rx, sub_y, btn_w, btn_h, white_uv, prev_col);
-            Self::draw_char(mesh, prev_rx + 7.0, sub_y + 4.0, 8.0, 12.0, b'<', [0.95, 0.95, 0.95, 1.0]);
+            Self::draw_char(
+                mesh,
+                prev_rx + 7.0,
+                sub_y + 4.0,
+                8.0,
+                12.0,
+                b'<',
+                [0.95, 0.95, 0.95, 1.0],
+            );
 
-            let next_hov = cursor_pos[0] >= next_rx && cursor_pos[0] <= next_rx + btn_w
-                && cursor_pos[1] >= sub_y && cursor_pos[1] <= sub_y + btn_h;
-            let next_col = if next_hov { [0.35, 0.35, 0.40, 1.0] } else { [0.22, 0.22, 0.25, 1.0] };
+            let next_hov = cursor_pos[0] >= next_rx
+                && cursor_pos[0] <= next_rx + btn_w
+                && cursor_pos[1] >= sub_y
+                && cursor_pos[1] <= sub_y + btn_h;
+            let next_col = if next_hov {
+                [0.35, 0.35, 0.40, 1.0]
+            } else {
+                [0.22, 0.22, 0.25, 1.0]
+            };
             mesh.add_quad(next_rx, sub_y, btn_w, btn_h, white_uv, next_col);
-            Self::draw_char(mesh, next_rx + 7.0, sub_y + 4.0, 8.0, 12.0, b'>', [0.95, 0.95, 0.95, 1.0]);
+            Self::draw_char(
+                mesh,
+                next_rx + 7.0,
+                sub_y + 4.0,
+                8.0,
+                12.0,
+                b'>',
+                [0.95, 0.95, 0.95, 1.0],
+            );
 
             let count_text = format!("({} of {})", params.recipe_index + 1, params.total_recipes);
-            Self::draw_string(mesh, next_rx + 30.0, sub_y + 4.0, &count_text, 8.0, 12.0, 1.0, [0.75, 0.75, 0.80, 1.0]);
+            Self::draw_string(
+                mesh,
+                next_rx + 30.0,
+                sub_y + 4.0,
+                &count_text,
+                8.0,
+                12.0,
+                1.0,
+                [0.75, 0.75, 0.80, 1.0],
+            );
         }
 
         // Category Badge
@@ -2559,14 +3022,30 @@ impl UiBuilder {
             blockgame_core::crafting::RecipeCategory::Smelting => "[ Smelting / Cooking ]",
         };
         let cat_x = mx + modal_w - (cat_str.len() as f32 * 9.0) - 20.0;
-        Self::draw_string(mesh, cat_x, sub_y + 4.0, cat_str, 8.0, 12.0, 1.0, [0.35, 0.85, 0.95, 1.0]);
+        Self::draw_string(
+            mesh,
+            cat_x,
+            sub_y + 4.0,
+            cat_str,
+            8.0,
+            12.0,
+            1.0,
+            [0.35, 0.85, 0.95, 1.0],
+        );
 
         // 3. Recipe Content Box
         let box_x = mx + 20.0;
         let box_y = my + 76.0;
         let box_w = modal_w - 40.0;
         let box_h = modal_h - 96.0;
-        mesh.add_quad(box_x, box_y, box_w, box_h, white_uv, [0.12, 0.12, 0.14, 0.95]);
+        mesh.add_quad(
+            box_x,
+            box_y,
+            box_w,
+            box_h,
+            white_uv,
+            [0.12, 0.12, 0.14, 0.95],
+        );
 
         let slot_size = Self::SLOT_SIZE;
         let slot_gap = Self::SLOT_GAP;
@@ -2595,8 +3074,10 @@ impl UiBuilder {
                             [1.0, 1.0, 1.0, 1.0],
                         );
 
-                        if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size
-                            && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size
+                        if cursor_pos[0] >= sx
+                            && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy
+                            && cursor_pos[1] <= sy + slot_size
                         {
                             mesh.add_quad(
                                 sx - 2.0,
@@ -2616,13 +3097,29 @@ impl UiBuilder {
         // Arrow ===>
         let arrow_x = grid_start_x + 3.0 * (slot_size + slot_gap) + 24.0;
         let arrow_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 6.0;
-        Self::draw_string(mesh, arrow_x, arrow_y, "===>", 10.0, 14.0, 1.0, [0.85, 0.85, 0.90, 1.0]);
+        Self::draw_string(
+            mesh,
+            arrow_x,
+            arrow_y,
+            "===>",
+            10.0,
+            14.0,
+            1.0,
+            [0.85, 0.85, 0.90, 1.0],
+        );
 
         // Output Slot
         let out_x = arrow_x + 64.0;
         let out_y = grid_start_y + (slot_size + slot_gap) * 1.5 - 28.0;
         let out_size = 56.0;
-        mesh.add_quad(out_x, out_y, out_size, out_size, slot_uv, [1.0, 1.0, 1.0, 1.0]);
+        mesh.add_quad(
+            out_x,
+            out_y,
+            out_size,
+            out_size,
+            slot_uv,
+            [1.0, 1.0, 1.0, 1.0],
+        );
 
         let out_slot = params.recipe.output;
         if !out_slot.is_empty() {
@@ -2639,8 +3136,10 @@ impl UiBuilder {
                 );
                 Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
 
-                if cursor_pos[0] >= out_x && cursor_pos[0] <= out_x + out_size
-                    && cursor_pos[1] >= out_y && cursor_pos[1] <= out_y + out_size
+                if cursor_pos[0] >= out_x
+                    && cursor_pos[0] <= out_x + out_size
+                    && cursor_pos[1] >= out_y
+                    && cursor_pos[1] <= out_y + out_size
                 {
                     mesh.add_quad(
                         out_x - 2.0,
@@ -2656,7 +3155,16 @@ impl UiBuilder {
         }
 
         // Recipe Name at bottom of box
-        Self::draw_string(mesh, box_x + 20.0, box_y + box_h - 22.0, params.recipe.name, 8.0, 12.0, 0.5, [0.70, 0.70, 0.75, 1.0]);
+        Self::draw_string(
+            mesh,
+            box_x + 20.0,
+            box_y + box_h - 22.0,
+            params.recipe.name,
+            8.0,
+            12.0,
+            0.5,
+            [0.70, 0.70, 0.75, 1.0],
+        );
     }
 }
 
@@ -2694,7 +3202,9 @@ mod tests {
         let registry = ItemRegistry::new();
         let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats,
+        );
         assert!(mesh.indices.len() > 0);
     }
 
@@ -2706,7 +3216,9 @@ mod tests {
         let stats = PlayerStats::new();
 
         // Empty hand draws the player's arm and fist
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 1.5, 0.2, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 1.5, 0.2, &stats,
+        );
         assert!(mesh.indices.len() > 0);
     }
 
@@ -2718,7 +3230,9 @@ mod tests {
         let registry = ItemRegistry::new();
         let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats,
+        );
         assert!(mesh.indices.len() > 0);
     }
 
@@ -2730,7 +3244,9 @@ mod tests {
         let registry = ItemRegistry::new();
         let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.3, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.3, &stats,
+        );
         assert!(mesh.indices.len() > 0);
     }
 
@@ -2742,7 +3258,9 @@ mod tests {
         let registry = ItemRegistry::new();
         let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats,
+        );
         assert!(mesh.indices.len() > 0);
     }
 
@@ -2754,12 +3272,24 @@ mod tests {
         let registry = ItemRegistry::new();
         let stats = PlayerStats::new();
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats,
+        );
         assert!(mesh.indices.len() > 0);
 
         let mut mesh_coal = UiMesh::new();
         inv.set(0, ItemSlot::new(ItemId::COAL, 3));
-        UiBuilder::build_hud(&mut mesh_coal, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh_coal,
+            1280.0,
+            720.0,
+            &inv,
+            0,
+            &registry,
+            0.0,
+            0.0,
+            &stats,
+        );
         assert!(mesh_coal.indices.len() > 0);
     }
 
@@ -2772,7 +3302,9 @@ mod tests {
         stats.health = 15.0; // 7 full hearts + 1 half heart + 2 empty hearts
         stats.hunger = 17.0; // 8 full drumsticks + 1 half drumstick + 1 empty drumstick
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats,
+        );
         assert!(mesh.indices.len() > 0);
     }
 
@@ -2785,7 +3317,9 @@ mod tests {
         stats.health = 0.0;
         stats.is_dead = true;
 
-        UiBuilder::build_hud(&mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats);
+        UiBuilder::build_hud(
+            &mut mesh, 1280.0, 720.0, &inv, 0, &registry, 0.0, 0.0, &stats,
+        );
         // Generates death screen quads (red backdrop, You Died text, Score text, Respawn button)
         assert!(mesh.indices.len() > 0);
     }
@@ -2829,7 +3363,15 @@ mod tests {
             search_focused: true,
         };
         let mut hovered = None;
-        UiBuilder::draw_jei_panel(&mut mesh, 1280.0, 720.0, &params, [1050.0, 200.0], &registry, &mut hovered);
+        UiBuilder::draw_jei_panel(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &params,
+            [1050.0, 200.0],
+            &registry,
+            &mut hovered,
+        );
         assert!(mesh.indices.len() > 0);
         assert!(mesh.vertices.len() > 0);
     }
@@ -2842,9 +3384,15 @@ mod tests {
             name: "Diamond Pickaxe",
             category: blockgame_core::crafting::RecipeCategory::Crafting3x3,
             inputs: [
-                Some(ItemId::DIAMOND), Some(ItemId::DIAMOND), Some(ItemId::DIAMOND),
-                None, Some(ItemId::STICK), None,
-                None, Some(ItemId::STICK), None,
+                Some(ItemId::DIAMOND),
+                Some(ItemId::DIAMOND),
+                Some(ItemId::DIAMOND),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
             ],
             output: ItemSlot::new(ItemId::DIAMOND_PICKAXE, 1),
         };
@@ -2856,7 +3404,15 @@ mod tests {
             is_usage_mode: false,
         };
         let mut hovered = None;
-        UiBuilder::draw_recipe_modal(&mut mesh, 1280.0, 720.0, &params, [640.0, 360.0], &registry, &mut hovered);
+        UiBuilder::draw_recipe_modal(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &params,
+            [640.0, 360.0],
+            &registry,
+            &mut hovered,
+        );
         assert!(mesh.indices.len() > 0);
         assert!(mesh.vertices.len() > 0);
     }

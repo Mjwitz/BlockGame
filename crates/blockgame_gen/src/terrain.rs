@@ -377,11 +377,21 @@ mod tests {
                 for cy in 0..3 {
                     let chunk = gen.generate_chunk(ChunkPos::new(cx, cy, cz));
                     for b in chunk.raw_blocks() {
-                        if *b == BlockId::COAL_ORE { found_coal = true; }
-                        if *b == BlockId::IRON_ORE { found_iron = true; }
-                        if *b == BlockId::COPPER_ORE { found_copper = true; }
-                        if *b == BlockId::GOLD_ORE { found_gold = true; }
-                        if *b == BlockId::DIAMOND_ORE { found_diamond = true; }
+                        if *b == BlockId::COAL_ORE {
+                            found_coal = true;
+                        }
+                        if *b == BlockId::IRON_ORE {
+                            found_iron = true;
+                        }
+                        if *b == BlockId::COPPER_ORE {
+                            found_copper = true;
+                        }
+                        if *b == BlockId::GOLD_ORE {
+                            found_gold = true;
+                        }
+                        if *b == BlockId::DIAMOND_ORE {
+                            found_diamond = true;
+                        }
                     }
                 }
             }
@@ -391,6 +401,9 @@ mod tests {
         assert!(found_iron, "Expected iron ore to generate underground");
         assert!(found_copper, "Expected copper ore to generate underground");
         assert!(found_gold, "Expected gold ore to generate underground");
-        assert!(found_diamond, "Expected diamond ore to generate underground");
+        assert!(
+            found_diamond,
+            "Expected diamond ore to generate underground"
+        );
     }
 }

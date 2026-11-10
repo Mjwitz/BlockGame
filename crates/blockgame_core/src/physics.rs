@@ -26,11 +26,7 @@ impl AABB {
     #[inline]
     pub fn from_player(position: Vec3, half_width: f32, height: f32) -> Self {
         Self {
-            min: Vec3::new(
-                position.x - half_width,
-                position.y,
-                position.z - half_width,
-            ),
+            min: Vec3::new(position.x - half_width, position.y, position.z - half_width),
             max: Vec3::new(
                 position.x + half_width,
                 position.y + height,
@@ -119,7 +115,11 @@ impl PlayerPhysics {
 
     #[inline]
     pub fn eye_position(&self) -> Vec3 {
-        Vec3::new(self.position.x, self.position.y + self.eye_offset, self.position.z)
+        Vec3::new(
+            self.position.x,
+            self.position.y + self.eye_offset,
+            self.position.z,
+        )
     }
 
     #[inline]
@@ -325,14 +325,7 @@ mod tests {
 
         // Step simulation for 1.0 second
         for _ in 0..60 {
-            player.update(
-                1.0 / 60.0,
-                Vec3::ZERO,
-                false,
-                false,
-                &world,
-                &registry,
-            );
+            player.update(1.0 / 60.0, Vec3::ZERO, false, false, &world, &registry);
         }
 
         // Player must have landed on top of block at y = 1.0
@@ -359,20 +352,16 @@ mod tests {
         let mut total_fall_damage = 0.0;
 
         for _ in 0..60 {
-            let dmg = player.update(
-                1.0 / 60.0,
-                Vec3::ZERO,
-                false,
-                false,
-                &world,
-                &registry,
-            );
+            let dmg = player.update(1.0 / 60.0, Vec3::ZERO, false, false, &world, &registry);
             total_fall_damage += dmg;
         }
 
         assert!(player.on_ground);
         // Fell 9.0 blocks, threshold is 3.0 blocks -> ~6.0 damage (3 hearts)
-        assert!(total_fall_damage > 5.5 && total_fall_damage < 6.5, "Expected ~6.0 fall damage, got {}", total_fall_damage);
+        assert!(
+            total_fall_damage > 5.5 && total_fall_damage < 6.5,
+            "Expected ~6.0 fall damage, got {}",
+            total_fall_damage
+        );
     }
 }
-

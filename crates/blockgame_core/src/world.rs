@@ -230,7 +230,8 @@ impl World {
             for z in 0..CHUNK_SIZE_Z {
                 for x in 0..CHUNK_SIZE_X {
                     if chunk.get_unchecked(x, y, z) == BlockId::TORCH {
-                        self.light_sources.insert(origin + IVec3::new(x as i32, y as i32, z as i32));
+                        self.light_sources
+                            .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
                     }
                 }
             }
@@ -258,9 +259,12 @@ impl World {
         let max_z = origin.z + CHUNK_SIZE_Z as i32 + max_reach;
 
         for &pos in &self.light_sources {
-            if pos.x >= min_x && pos.x <= max_x
-                && pos.y >= min_y && pos.y <= max_y
-                && pos.z >= min_z && pos.z <= max_z
+            if pos.x >= min_x
+                && pos.x <= max_x
+                && pos.y >= min_y
+                && pos.y <= max_y
+                && pos.z >= min_z
+                && pos.z <= max_z
             {
                 let rel = pos - origin;
                 sources.push((rel, 14));

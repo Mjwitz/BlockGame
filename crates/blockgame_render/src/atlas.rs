@@ -52,8 +52,9 @@ impl TextureAtlas {
     /// Loads the authentic Faithful 32x texture atlas containing all blocks, items, tools,
     /// entities, ores, crops, GUI components, and font glyphs.
     pub fn generate_default() -> Self {
-        let dynamic_img = image::load_from_memory(FAITHFUL_ATLAS_PNG)
-            .expect("Failed to load embedded Faithful 32x texture atlas (assets/faithful_atlas_512.png)");
+        let dynamic_img = image::load_from_memory(FAITHFUL_ATLAS_PNG).expect(
+            "Failed to load embedded Faithful 32x texture atlas (assets/faithful_atlas_512.png)",
+        );
         let image = dynamic_img.to_rgba8();
         Self { image }
     }
@@ -81,7 +82,8 @@ impl TextureAtlas {
 
         for py in 0..TILE_SIZE.min(tile_image.height()) {
             for px in 0..TILE_SIZE.min(tile_image.width()) {
-                self.image.put_pixel(tile_x + px, tile_y + py, *tile_image.get_pixel(px, py));
+                self.image
+                    .put_pixel(tile_x + px, tile_y + py, *tile_image.get_pixel(px, py));
             }
         }
     }

@@ -270,9 +270,11 @@ where
                         && next.z >= 0
                         && next.z < CHUNK_SIZE_Z as i32
                     {
-                        registry.is_transparent(
-                            chunk.get_unchecked(next.x as usize, next.y as usize, next.z as usize),
-                        )
+                        registry.is_transparent(chunk.get_unchecked(
+                            next.x as usize,
+                            next.y as usize,
+                            next.z as usize,
+                        ))
                     } else {
                         registry.is_transparent(query_block(next.x, next.y, next.z))
                     };
@@ -300,11 +302,10 @@ where
 }
 
 /// Standalone chunk lighting calculation without external light sources.
-pub fn calculate_chunk_lighting(
-    chunk: &Chunk,
-    registry: &BlockRegistry,
-) -> ChunkLightMap {
-    calculate_chunk_lighting_with_sources(chunk, registry, &[], |_, _, _| crate::block::BlockId::AIR)
+pub fn calculate_chunk_lighting(chunk: &Chunk, registry: &BlockRegistry) -> ChunkLightMap {
+    calculate_chunk_lighting_with_sources(chunk, registry, &[], |_, _, _| {
+        crate::block::BlockId::AIR
+    })
 }
 
 #[cfg(test)]
@@ -387,7 +388,12 @@ mod tests {
 
         // Torch located across the chunk boundary at rel (-1, 5, 8) with luminance 14
         let neighbor_sources = vec![(IVec3::new(-1, 5, 8), 14)];
-        let light = calculate_chunk_lighting_with_sources(&chunk, &registry, &neighbor_sources, |_, _, _| BlockId::AIR);
+        let light = calculate_chunk_lighting_with_sources(
+            &chunk,
+            &registry,
+            &neighbor_sources,
+            |_, _, _| BlockId::AIR,
+        );
 
         // Torch penetrates across border: at x = 0 (1 step away), light level is 13!
         assert_eq!(light.get_block(0, 5, 8), 13);

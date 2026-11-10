@@ -45,9 +45,21 @@ pub fn raycast_voxel(
     let step_y = if dir.y > 0.0 { 1 } else { -1 };
     let step_z = if dir.z > 0.0 { 1 } else { -1 };
 
-    let delta_x = if dir.x.abs() > 1e-6 { (1.0 / dir.x).abs() } else { f32::INFINITY };
-    let delta_y = if dir.y.abs() > 1e-6 { (1.0 / dir.y).abs() } else { f32::INFINITY };
-    let delta_z = if dir.z.abs() > 1e-6 { (1.0 / dir.z).abs() } else { f32::INFINITY };
+    let delta_x = if dir.x.abs() > 1e-6 {
+        (1.0 / dir.x).abs()
+    } else {
+        f32::INFINITY
+    };
+    let delta_y = if dir.y.abs() > 1e-6 {
+        (1.0 / dir.y).abs()
+    } else {
+        f32::INFINITY
+    };
+    let delta_z = if dir.z.abs() > 1e-6 {
+        (1.0 / dir.z).abs()
+    } else {
+        f32::INFINITY
+    };
 
     let mut t_max_x = if step_x > 0 {
         ((current.x + 1) as f32 - origin.x) * delta_x
@@ -75,17 +87,29 @@ pub fn raycast_voxel(
             distance = t_max_x;
             t_max_x += delta_x;
             current.x += step_x;
-            hit_face = if step_x > 0 { Direction::NegX } else { Direction::PosX };
+            hit_face = if step_x > 0 {
+                Direction::NegX
+            } else {
+                Direction::PosX
+            };
         } else if t_max_y < t_max_z {
             distance = t_max_y;
             t_max_y += delta_y;
             current.y += step_y;
-            hit_face = if step_y > 0 { Direction::NegY } else { Direction::PosY };
+            hit_face = if step_y > 0 {
+                Direction::NegY
+            } else {
+                Direction::PosY
+            };
         } else {
             distance = t_max_z;
             t_max_z += delta_z;
             current.z += step_z;
-            hit_face = if step_z > 0 { Direction::NegZ } else { Direction::PosZ };
+            hit_face = if step_z > 0 {
+                Direction::NegZ
+            } else {
+                Direction::PosZ
+            };
         }
 
         if distance > max_distance {

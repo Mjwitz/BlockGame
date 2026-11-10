@@ -76,7 +76,9 @@ impl ItemDrop {
 
         let (cp, lx, ly, lz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
         let is_solid = if let Some(chunk) = world.get_chunk(cp) {
-            chunk.get(lx, ly, lz).map_or(false, |b| !registry.is_transparent(b))
+            chunk
+                .get(lx, ly, lz)
+                .map_or(false, |b| !registry.is_transparent(b))
         } else {
             false
         };
@@ -126,6 +128,9 @@ mod tests {
 
         // Player standing directly at item drop
         let status = drop.update(0.1, &world, &registry, Vec3::new(0.0, 5.0 + 1.62, 0.0));
-        assert_eq!(status, ItemDropStatus::Collected(ItemSlot::new(ItemId::WOOD_LOG, 2)));
+        assert_eq!(
+            status,
+            ItemDropStatus::Collected(ItemSlot::new(ItemId::WOOD_LOG, 2))
+        );
     }
 }

@@ -131,11 +131,15 @@ impl<'a> ChunkMesher<'a> {
                         if self.registry.is_transparent(neighbor_id) {
                             let tile_id = self.registry.get_texture(block_id, dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
-                            
+
                             // Sample light from adjacent air block (supports boundary voxels from [-1..16])
-                            let light = if nx >= 0 && nx < CHUNK_SIZE_X as i32
-                                && ny >= 0 && ny < CHUNK_SIZE_Y as i32
-                                && nz >= 0 && nz < CHUNK_SIZE_Z as i32 {
+                            let light = if nx >= 0
+                                && nx < CHUNK_SIZE_X as i32
+                                && ny >= 0
+                                && ny < CHUNK_SIZE_Y as i32
+                                && nz >= 0
+                                && nz < CHUNK_SIZE_Z as i32
+                            {
                                 let lv = light_map.get(nx as usize, ny as usize, nz as usize);
                                 [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
                             } else {
@@ -143,7 +147,17 @@ impl<'a> ChunkMesher<'a> {
                                 [1.0, blk as f32 / 15.0]
                             };
 
-                            self.build_face(&mut mesh, chunk.pos, ix, iy, iz, dir, uv, light, &query_block);
+                            self.build_face(
+                                &mut mesh,
+                                chunk.pos,
+                                ix,
+                                iy,
+                                iz,
+                                dir,
+                                uv,
+                                light,
+                                &query_block,
+                            );
                         }
                     }
                 }
@@ -320,42 +334,72 @@ impl<'a> ChunkMesher<'a> {
         // 1. South Face (+Z)
         add_quad(
             [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
-            [[u_side_left, v_side_bottom], [u_side_right, v_side_bottom], [u_side_right, v_side_top], [u_side_left, v_side_top]],
+            [
+                [u_side_left, v_side_bottom],
+                [u_side_right, v_side_bottom],
+                [u_side_right, v_side_top],
+                [u_side_left, v_side_top],
+            ],
             [0.0, 0.0, 1.0],
         );
 
         // 2. North Face (-Z)
         add_quad(
             [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
-            [[u_side_right, v_side_bottom], [u_side_left, v_side_bottom], [u_side_left, v_side_top], [u_side_right, v_side_top]],
+            [
+                [u_side_right, v_side_bottom],
+                [u_side_left, v_side_bottom],
+                [u_side_left, v_side_top],
+                [u_side_right, v_side_top],
+            ],
             [0.0, 0.0, -1.0],
         );
 
         // 3. East Face (+X)
         add_quad(
             [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
-            [[u_side_left, v_side_bottom], [u_side_right, v_side_bottom], [u_side_right, v_side_top], [u_side_left, v_side_top]],
+            [
+                [u_side_left, v_side_bottom],
+                [u_side_right, v_side_bottom],
+                [u_side_right, v_side_top],
+                [u_side_left, v_side_top],
+            ],
             [1.0, 0.0, 0.0],
         );
 
         // 4. West Face (-X)
         add_quad(
             [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
-            [[u_side_left, v_side_bottom], [u_side_right, v_side_bottom], [u_side_right, v_side_top], [u_side_left, v_side_top]],
+            [
+                [u_side_left, v_side_bottom],
+                [u_side_right, v_side_bottom],
+                [u_side_right, v_side_top],
+                [u_side_left, v_side_top],
+            ],
             [-1.0, 0.0, 0.0],
         );
 
         // 5. Top Face (+Y)
         add_quad(
             [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]],
-            [[u_top_left, v_top_max], [u_top_right, v_top_max], [u_top_right, v_top_min], [u_top_left, v_top_min]],
+            [
+                [u_top_left, v_top_max],
+                [u_top_right, v_top_max],
+                [u_top_right, v_top_min],
+                [u_top_left, v_top_min],
+            ],
             [0.0, 1.0, 0.0],
         );
 
         // 6. Bottom Face (-Y)
         add_quad(
             [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
-            [[u_top_left, v_top_min], [u_top_right, v_top_min], [u_top_right, v_top_max], [u_top_left, v_top_max]],
+            [
+                [u_top_left, v_top_min],
+                [u_top_right, v_top_min],
+                [u_top_right, v_top_max],
+                [u_top_left, v_top_max],
+            ],
             [0.0, -1.0, 0.0],
         );
     }
@@ -417,8 +461,18 @@ impl<'a> ChunkMesher<'a> {
             [fx, fy + 1.0, fz],
             [fx + 1.0, fy + 1.0, fz + 1.0],
         ];
-        let uv_front = [[u_min, v_max], [u_max, v_max], [u_max, v_min], [u_min, v_min]];
-        let uv_back = [[u_max, v_max], [u_min, v_max], [u_min, v_min], [u_max, v_min]];
+        let uv_front = [
+            [u_min, v_max],
+            [u_max, v_max],
+            [u_max, v_min],
+            [u_min, v_min],
+        ];
+        let uv_back = [
+            [u_max, v_max],
+            [u_min, v_max],
+            [u_min, v_min],
+            [u_max, v_min],
+        ];
 
         add_quad(diag1_front, uv_front, [0.707, 0.0, -0.707]);
         add_quad(diag1_back, uv_back, [-0.707, 0.0, 0.707]);
@@ -440,14 +494,7 @@ impl<'a> ChunkMesher<'a> {
         add_quad(diag2_back, uv_back, [-0.707, 0.0, -0.707]);
     }
 
-    fn calculate_face_ao<F>(
-        &self,
-        x: i32,
-        y: i32,
-        z: i32,
-        dir: Direction,
-        query: &F,
-    ) -> [f32; 4]
+    fn calculate_face_ao<F>(&self, x: i32, y: i32, z: i32, dir: Direction, query: &F) -> [f32; 4]
     where
         F: Fn(i32, i32, i32) -> BlockId,
     {
@@ -560,7 +607,7 @@ pub fn build_item_drops_mesh(
         if drop.item.item_id == blockgame_core::item::ItemId::TORCH {
             // Slender 3D Torch Model
             let rw = 0.035; // width radius
-            let rh = 0.12;  // height radius (total height ~0.24)
+            let rh = 0.12; // height radius (total height ~0.24)
             let light = [1.0, 1.0]; // Self-illuminated warm torch glow
             let ao = 1.0;
 
@@ -891,54 +938,92 @@ fn add_animal_box(
     };
 
     let to_world_normal = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
-        [
-            nx * cos_y + nz * sin_y,
-            ny,
-            -nx * sin_y + nz * cos_y,
-        ]
+        [nx * cos_y + nz * sin_y, ny, -nx * sin_y + nz * cos_y]
     };
 
     // PosZ
     add_animal_face(
         mesh,
-        [to_world(x0, y0, z1), to_world(x1, y0, z1), to_world(x1, y1, z1), to_world(x0, y1, z1)],
+        [
+            to_world(x0, y0, z1),
+            to_world(x1, y0, z1),
+            to_world(x1, y1, z1),
+            to_world(x0, y1, z1),
+        ],
         to_world_normal(0.0, 0.0, 1.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // NegZ
     add_animal_face(
         mesh,
-        [to_world(x1, y0, z0), to_world(x0, y0, z0), to_world(x0, y1, z0), to_world(x1, y1, z0)],
+        [
+            to_world(x1, y0, z0),
+            to_world(x0, y0, z0),
+            to_world(x0, y1, z0),
+            to_world(x1, y1, z0),
+        ],
         to_world_normal(0.0, 0.0, -1.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // PosX
     add_animal_face(
         mesh,
-        [to_world(x1, y0, z1), to_world(x1, y0, z0), to_world(x1, y1, z0), to_world(x1, y1, z1)],
+        [
+            to_world(x1, y0, z1),
+            to_world(x1, y0, z0),
+            to_world(x1, y1, z0),
+            to_world(x1, y1, z1),
+        ],
         to_world_normal(1.0, 0.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // NegX
     add_animal_face(
         mesh,
-        [to_world(x0, y0, z0), to_world(x0, y0, z1), to_world(x0, y1, z1), to_world(x0, y1, z0)],
+        [
+            to_world(x0, y0, z0),
+            to_world(x0, y0, z1),
+            to_world(x0, y1, z1),
+            to_world(x0, y1, z0),
+        ],
         to_world_normal(-1.0, 0.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // PosY
     add_animal_face(
         mesh,
-        [to_world(x0, y1, z1), to_world(x1, y1, z1), to_world(x1, y1, z0), to_world(x0, y1, z0)],
+        [
+            to_world(x0, y1, z1),
+            to_world(x1, y1, z1),
+            to_world(x1, y1, z0),
+            to_world(x0, y1, z0),
+        ],
         to_world_normal(0.0, 1.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // NegY
     add_animal_face(
         mesh,
-        [to_world(x0, y0, z0), to_world(x1, y0, z0), to_world(x1, y0, z1), to_world(x0, y0, z1)],
+        [
+            to_world(x0, y0, z0),
+            to_world(x1, y0, z0),
+            to_world(x1, y0, z1),
+            to_world(x0, y0, z1),
+        ],
         to_world_normal(0.0, -1.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
 }
 
@@ -986,44 +1071,86 @@ fn add_animal_leg_box(
     // PosZ
     add_animal_face(
         mesh,
-        [leg_point(x0, y0, z1), leg_point(x1, y0, z1), leg_point(x1, y1, z1), leg_point(x0, y1, z1)],
+        [
+            leg_point(x0, y0, z1),
+            leg_point(x1, y0, z1),
+            leg_point(x1, y1, z1),
+            leg_point(x0, y1, z1),
+        ],
         leg_normal(0.0, 0.0, 1.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // NegZ
     add_animal_face(
         mesh,
-        [leg_point(x1, y0, z0), leg_point(x0, y0, z0), leg_point(x0, y1, z0), leg_point(x1, y1, z0)],
+        [
+            leg_point(x1, y0, z0),
+            leg_point(x0, y0, z0),
+            leg_point(x0, y1, z0),
+            leg_point(x1, y1, z0),
+        ],
         leg_normal(0.0, 0.0, -1.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // PosX
     add_animal_face(
         mesh,
-        [leg_point(x1, y0, z1), leg_point(x1, y0, z0), leg_point(x1, y1, z0), leg_point(x1, y1, z1)],
+        [
+            leg_point(x1, y0, z1),
+            leg_point(x1, y0, z0),
+            leg_point(x1, y1, z0),
+            leg_point(x1, y1, z1),
+        ],
         leg_normal(1.0, 0.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // NegX
     add_animal_face(
         mesh,
-        [leg_point(x0, y0, z0), leg_point(x0, y0, z1), leg_point(x0, y1, z1), leg_point(x0, y1, z0)],
+        [
+            leg_point(x0, y0, z0),
+            leg_point(x0, y0, z1),
+            leg_point(x0, y1, z1),
+            leg_point(x0, y1, z0),
+        ],
         leg_normal(-1.0, 0.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // PosY
     add_animal_face(
         mesh,
-        [leg_point(x0, y1, z1), leg_point(x1, y1, z1), leg_point(x1, y1, z0), leg_point(x0, y1, z0)],
+        [
+            leg_point(x0, y1, z1),
+            leg_point(x1, y1, z1),
+            leg_point(x1, y1, z0),
+            leg_point(x0, y1, z0),
+        ],
         leg_normal(0.0, 1.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
     // NegY
     add_animal_face(
         mesh,
-        [leg_point(x0, y0, z0), leg_point(x1, y0, z0), leg_point(x1, y0, z1), leg_point(x0, y0, z1)],
+        [
+            leg_point(x0, y0, z0),
+            leg_point(x1, y0, z0),
+            leg_point(x1, y0, z1),
+            leg_point(x0, y0, z1),
+        ],
         leg_normal(0.0, -1.0, 0.0),
-        uvs, ao, light,
+        uvs,
+        ao,
+        light,
     );
 }
 
@@ -1065,48 +1192,318 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
         match animal.kind {
             AnimalKind::Cow => {
                 // Body
-                add_animal_box(&mut mesh, [-0.35, 0.45, -0.55], [0.35, 1.1, 0.55], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.35, 0.45, -0.55],
+                    [0.35, 1.1, 0.55],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Head
-                add_animal_box(&mut mesh, [-0.22, 0.85, 0.55], [0.22, 1.3, 1.0], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.22, 0.85, 0.55],
+                    [0.22, 1.3, 1.0],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Snout
-                add_animal_box(&mut mesh, [-0.15, 0.85, 1.0], [0.15, 1.08, 1.16], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.15, 0.85, 1.0],
+                    [0.15, 1.08, 1.16],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Horns
-                add_animal_box(&mut mesh, [-0.25, 1.3, 0.7], [-0.18, 1.45, 0.76], &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_box(&mut mesh, [0.18, 1.3, 0.7], [0.25, 1.45, 0.76], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.25, 1.3, 0.7],
+                    [-0.18, 1.45, 0.76],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.18, 1.3, 0.7],
+                    [0.25, 1.45, 0.76],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // 4 Legs
-                add_animal_leg_box(&mut mesh, [-0.32, 0.0, 0.3], [-0.14, 0.45, 0.48], 0.45, 0.39, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [0.14, 0.0, 0.3], [0.32, 0.45, 0.48], 0.45, 0.39, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [-0.32, 0.0, -0.48], [-0.14, 0.45, -0.3], 0.45, -0.39, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [0.14, 0.0, -0.48], [0.32, 0.45, -0.3], 0.45, -0.39, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.32, 0.0, 0.3],
+                    [-0.14, 0.45, 0.48],
+                    0.45,
+                    0.39,
+                    leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.14, 0.0, 0.3],
+                    [0.32, 0.45, 0.48],
+                    0.45,
+                    0.39,
+                    -leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.32, 0.0, -0.48],
+                    [-0.14, 0.45, -0.3],
+                    0.45,
+                    -0.39,
+                    -leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.14, 0.0, -0.48],
+                    [0.32, 0.45, -0.3],
+                    0.45,
+                    -0.39,
+                    leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
             }
             AnimalKind::Pig => {
                 // Body
-                add_animal_box(&mut mesh, [-0.3, 0.32, -0.45], [0.3, 0.82, 0.45], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.3, 0.32, -0.45],
+                    [0.3, 0.82, 0.45],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Head
-                add_animal_box(&mut mesh, [-0.2, 0.5, 0.45], [0.2, 0.9, 0.85], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.2, 0.5, 0.45],
+                    [0.2, 0.9, 0.85],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Snout
-                add_animal_box(&mut mesh, [-0.12, 0.52, 0.85], [0.12, 0.72, 0.98], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.12, 0.52, 0.85],
+                    [0.12, 0.72, 0.98],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // 4 Legs
-                add_animal_leg_box(&mut mesh, [-0.28, 0.0, 0.22], [-0.12, 0.32, 0.38], 0.32, 0.3, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [0.12, 0.0, 0.22], [0.28, 0.32, 0.38], 0.32, 0.3, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [-0.28, 0.0, -0.38], [-0.12, 0.32, -0.22], 0.32, -0.3, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [0.12, 0.0, -0.38], [0.28, 0.32, -0.22], 0.32, -0.3, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.28, 0.0, 0.22],
+                    [-0.12, 0.32, 0.38],
+                    0.32,
+                    0.3,
+                    leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.12, 0.0, 0.22],
+                    [0.28, 0.32, 0.38],
+                    0.32,
+                    0.3,
+                    -leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.28, 0.0, -0.38],
+                    [-0.12, 0.32, -0.22],
+                    0.32,
+                    -0.3,
+                    -leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.12, 0.0, -0.38],
+                    [0.28, 0.32, -0.22],
+                    0.32,
+                    -0.3,
+                    leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
             }
             AnimalKind::Chicken => {
                 // Body
-                add_animal_box(&mut mesh, [-0.18, 0.25, -0.22], [0.18, 0.55, 0.22], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.18, 0.25, -0.22],
+                    [0.18, 0.55, 0.22],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Head
-                add_animal_box(&mut mesh, [-0.1, 0.45, 0.15], [0.1, 0.75, 0.35], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.1, 0.45, 0.15],
+                    [0.1, 0.75, 0.35],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Beak
-                add_animal_box(&mut mesh, [-0.06, 0.52, 0.35], [0.06, 0.62, 0.48], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.06, 0.52, 0.35],
+                    [0.06, 0.62, 0.48],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Wattle
-                add_animal_box(&mut mesh, [-0.03, 0.44, 0.26], [0.03, 0.52, 0.34], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.03, 0.44, 0.26],
+                    [0.03, 0.52, 0.34],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // Wings
-                add_animal_box(&mut mesh, [-0.22, 0.3, -0.18], [-0.18, 0.52, 0.18], &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_box(&mut mesh, [0.18, 0.3, -0.18], [0.22, 0.52, 0.18], &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_box(
+                    &mut mesh,
+                    [-0.22, 0.3, -0.18],
+                    [-0.18, 0.52, 0.18],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.18, 0.3, -0.18],
+                    [0.22, 0.52, 0.18],
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
                 // 2 Legs
-                add_animal_leg_box(&mut mesh, [-0.12, 0.0, -0.05], [-0.04, 0.25, 0.05], 0.25, 0.0, leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
-                add_animal_leg_box(&mut mesh, [0.04, 0.0, -0.05], [0.12, 0.25, 0.05], 0.25, 0.0, -leg_swing, &uvs, ao, light, pos, cos_y, sin_y);
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.12, 0.0, -0.05],
+                    [-0.04, 0.25, 0.05],
+                    0.25,
+                    0.0,
+                    leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.04, 0.0, -0.05],
+                    [0.12, 0.25, 0.05],
+                    0.25,
+                    0.0,
+                    -leg_swing,
+                    &uvs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
             }
         }
     }
@@ -1192,12 +1589,10 @@ mod tests {
     #[test]
     fn test_build_item_drops_mesh() {
         let item_registry = blockgame_core::item::ItemRegistry::new();
-        let drops = vec![
-            blockgame_core::entity::ItemDrop::new(
-                glam::Vec3::new(10.0, 5.0, 10.0),
-                blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 3),
-            ),
-        ];
+        let drops = vec![blockgame_core::entity::ItemDrop::new(
+            glam::Vec3::new(10.0, 5.0, 10.0),
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 3),
+        )];
 
         let mesh = build_item_drops_mesh(&drops, &item_registry);
         // Mini cube has 6 faces (24 vertices, 36 indices)
@@ -1206,12 +1601,10 @@ mod tests {
         assert_eq!(mesh.indices.len(), 36);
 
         // Torch drop
-        let torch_drops = vec![
-            blockgame_core::entity::ItemDrop::new(
-                glam::Vec3::new(10.0, 5.0, 10.0),
-                blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TORCH, 1),
-            ),
-        ];
+        let torch_drops = vec![blockgame_core::entity::ItemDrop::new(
+            glam::Vec3::new(10.0, 5.0, 10.0),
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TORCH, 1),
+        )];
         let torch_mesh = build_item_drops_mesh(&torch_drops, &item_registry);
         assert_eq!(torch_mesh.face_count(), 6);
         assert_eq!(torch_mesh.vertices.len(), 24);
@@ -1220,12 +1613,10 @@ mod tests {
         assert_eq!(torch_mesh.vertices[0].light, [1.0, 1.0]);
 
         // Flat item drops (e.g. Coal, Raw Iron) have 2 faces (front & back: 8 vertices, 12 indices)
-        let coal_drops = vec![
-            blockgame_core::entity::ItemDrop::new(
-                glam::Vec3::new(10.0, 5.0, 10.0),
-                blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 1),
-            ),
-        ];
+        let coal_drops = vec![blockgame_core::entity::ItemDrop::new(
+            glam::Vec3::new(10.0, 5.0, 10.0),
+            blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::COAL, 1),
+        )];
         let coal_mesh = build_item_drops_mesh(&coal_drops, &item_registry);
         assert_eq!(coal_mesh.face_count(), 2);
         assert_eq!(coal_mesh.vertices.len(), 8);
@@ -1261,4 +1652,3 @@ mod tests {
         assert!(mesh.indices.len() > 100);
     }
 }
-

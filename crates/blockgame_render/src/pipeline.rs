@@ -22,6 +22,103 @@ impl GpuMeshBuffers {
     }
 }
 
+/// Reusable GPU buffer pair that avoids per-frame device buffer allocations.
+/// Writes directly through `queue.write_buffer` and only reallocates if capacity is exceeded.
+pub struct DynamicMeshBuffers {
+    pub vertex_buffer: Option<wgpu::Buffer>,
+    pub vertex_capacity: usize,
+    pub index_buffer: Option<wgpu::Buffer>,
+    pub index_capacity: usize,
+    pub index_count: u32,
+    pub label: &'static str,
+}
+
+impl DynamicMeshBuffers {
+    pub fn new(label: &'static str) -> Self {
+        Self {
+            vertex_buffer: None,
+            vertex_capacity: 0,
+            index_buffer: None,
+            index_capacity: 0,
+            index_count: 0,
+            label,
+        }
+    }
+
+    /// Resets the mesh to empty without deallocating existing GPU memory.
+    pub fn clear(&mut self) {
+        self.index_count = 0;
+    }
+
+    /// Updates existing vertex/index GPU buffers in-place via `queue.write_buffer`.
+    /// Reallocates with 1.5x headroom only when the data exceeds existing capacity.
+    pub fn update<V: bytemuck::Pod>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[V],
+        indices: &[u32],
+    ) {
+        if indices.is_empty() || vertices.is_empty() {
+            self.index_count = 0;
+            return;
+        }
+
+        let vert_bytes: &[u8] = bytemuck::cast_slice(vertices);
+        let idx_bytes: &[u8] = bytemuck::cast_slice(indices);
+
+        // Update vertex buffer
+        let need_realloc_v = match &self.vertex_buffer {
+            Some(_) => vert_bytes.len() > self.vertex_capacity,
+            None => true,
+        };
+        if need_realloc_v {
+            let new_cap = (vert_bytes.len() * 3 / 2).max(1024);
+            self.vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(self.label),
+                size: new_cap as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.vertex_capacity = new_cap;
+        }
+        if let Some(ref buf) = self.vertex_buffer {
+            queue.write_buffer(buf, 0, vert_bytes);
+        }
+
+        // Update index buffer
+        let need_realloc_i = match &self.index_buffer {
+            Some(_) => idx_bytes.len() > self.index_capacity,
+            None => true,
+        };
+        if need_realloc_i {
+            let new_cap = (idx_bytes.len() * 3 / 2).max(1024);
+            self.index_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(self.label),
+                size: new_cap as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.index_capacity = new_cap;
+        }
+        if let Some(ref buf) = self.index_buffer {
+            queue.write_buffer(buf, 0, idx_bytes);
+        }
+
+        self.index_count = indices.len() as u32;
+    }
+
+    pub fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+        if self.index_count > 0 {
+            if let (Some(vbuf), Some(ibuf)) = (&self.vertex_buffer, &self.index_buffer) {
+                render_pass.set_vertex_buffer(0, vbuf.slice(..));
+                render_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+            }
+        }
+    }
+}
+
 pub struct VoxelPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
     pub camera_buffer: wgpu::Buffer,
@@ -166,7 +263,7 @@ impl VoxelPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Voxel Pipeline Layout"),
             bind_group_layouts: &[&camera_bind_group_layout, &texture_bind_group_layout],
-            push_constant_ranges: &[ ],
+            push_constant_ranges: &[],
         });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

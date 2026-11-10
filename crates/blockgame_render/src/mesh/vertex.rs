@@ -6,7 +6,7 @@ pub struct VoxelVertex {
     pub position: [f32; 3],
     pub uv: [f32; 2],
     pub normal: [f32; 3],
-    pub ao: f32, // Ambient occlusion factor (0.4 to 1.0)
+    pub ao: f32,         // Ambient occlusion factor (0.4 to 1.0)
     pub light: [f32; 2], // [sunlight, blocklight] normalized 0.0 to 1.0
 }
 

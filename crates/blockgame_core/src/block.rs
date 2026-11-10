@@ -488,7 +488,12 @@ impl BlockRegistry {
     }
 
     #[inline]
-    pub fn can_harvest(&self, id: BlockId, held_tool_type: Option<ToolType>, held_tier: ToolTier) -> bool {
+    pub fn can_harvest(
+        &self,
+        id: BlockId,
+        held_tool_type: Option<ToolType>,
+        held_tier: ToolTier,
+    ) -> bool {
         if let Some(def) = self.get(id) {
             if def.hardness < 0.0 {
                 return false;
@@ -508,12 +513,18 @@ impl BlockRegistry {
     }
 
     #[inline]
-    pub fn get_break_time(&self, id: BlockId, held_tool_type: Option<ToolType>, held_tier: ToolTier) -> f32 {
+    pub fn get_break_time(
+        &self,
+        id: BlockId,
+        held_tool_type: Option<ToolType>,
+        held_tier: ToolTier,
+    ) -> f32 {
         if let Some(def) = self.get(id) {
             if def.hardness < 0.0 {
                 return f32::INFINITY;
             }
-            let is_effective_tool = def.required_tool.is_some() && def.required_tool == held_tool_type;
+            let is_effective_tool =
+                def.required_tool.is_some() && def.required_tool == held_tool_type;
             let speed = if is_effective_tool {
                 held_tier.speed_multiplier()
             } else {
@@ -532,7 +543,12 @@ impl BlockRegistry {
     }
 
     #[inline]
-    pub fn get_drop(&self, id: BlockId, held_tool_type: Option<ToolType>, held_tier: ToolTier) -> Option<(ItemId, u16)> {
+    pub fn get_drop(
+        &self,
+        id: BlockId,
+        held_tool_type: Option<ToolType>,
+        held_tier: ToolTier,
+    ) -> Option<(ItemId, u16)> {
         if let Some(def) = self.get(id) {
             if self.can_harvest(id, held_tool_type, held_tier) {
                 def.drop_item.map(|item_id| (item_id, def.drop_count.0))
@@ -556,32 +572,76 @@ mod tests {
         // 1. Bedrock is unbreakable
         assert_eq!(reg.get_hardness(BlockId::BEDROCK), -1.0);
         assert!(!reg.can_harvest(BlockId::BEDROCK, Some(ToolType::Pickaxe), ToolTier::Diamond));
-        assert!(reg.get_break_time(BlockId::BEDROCK, Some(ToolType::Pickaxe), ToolTier::Diamond).is_infinite());
+        assert!(reg
+            .get_break_time(BlockId::BEDROCK, Some(ToolType::Pickaxe), ToolTier::Diamond)
+            .is_infinite());
 
         // 2. Dirt can be harvested with hand or shovel
         assert!(reg.can_harvest(BlockId::DIRT, None, ToolTier::None));
-        assert_eq!(reg.get_drop(BlockId::DIRT, None, ToolTier::None), Some((ItemId::DIRT, 1)));
+        assert_eq!(
+            reg.get_drop(BlockId::DIRT, None, ToolTier::None),
+            Some((ItemId::DIRT, 1))
+        );
 
         // 3. Stone requires Wood Pickaxe or better
         assert!(!reg.can_harvest(BlockId::STONE, None, ToolTier::None));
         assert_eq!(reg.get_drop(BlockId::STONE, None, ToolTier::None), None);
         assert!(reg.can_harvest(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood));
-        assert_eq!(reg.get_drop(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood), Some((ItemId::COBBLESTONE, 1)));
+        assert_eq!(
+            reg.get_drop(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood),
+            Some((ItemId::COBBLESTONE, 1))
+        );
 
         // 4. Diamond Ore requires Iron Pickaxe or better
-        assert!(!reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Wood));
-        assert!(!reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Stone));
-        assert_eq!(reg.get_drop(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Stone), None);
-        assert!(reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Iron));
-        assert_eq!(reg.get_drop(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Iron), Some((ItemId::DIAMOND, 1)));
-        assert!(reg.can_harvest(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Diamond));
-        assert_eq!(reg.get_drop(BlockId::DIAMOND_ORE, Some(ToolType::Pickaxe), ToolTier::Diamond), Some((ItemId::DIAMOND, 1)));
+        assert!(!reg.can_harvest(
+            BlockId::DIAMOND_ORE,
+            Some(ToolType::Pickaxe),
+            ToolTier::Wood
+        ));
+        assert!(!reg.can_harvest(
+            BlockId::DIAMOND_ORE,
+            Some(ToolType::Pickaxe),
+            ToolTier::Stone
+        ));
+        assert_eq!(
+            reg.get_drop(
+                BlockId::DIAMOND_ORE,
+                Some(ToolType::Pickaxe),
+                ToolTier::Stone
+            ),
+            None
+        );
+        assert!(reg.can_harvest(
+            BlockId::DIAMOND_ORE,
+            Some(ToolType::Pickaxe),
+            ToolTier::Iron
+        ));
+        assert_eq!(
+            reg.get_drop(
+                BlockId::DIAMOND_ORE,
+                Some(ToolType::Pickaxe),
+                ToolTier::Iron
+            ),
+            Some((ItemId::DIAMOND, 1))
+        );
+        assert!(reg.can_harvest(
+            BlockId::DIAMOND_ORE,
+            Some(ToolType::Pickaxe),
+            ToolTier::Diamond
+        ));
+        assert_eq!(
+            reg.get_drop(
+                BlockId::DIAMOND_ORE,
+                Some(ToolType::Pickaxe),
+                ToolTier::Diamond
+            ),
+            Some((ItemId::DIAMOND, 1))
+        );
 
         // 5. Tool speed reduces break time
         let wood_time = reg.get_break_time(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Wood);
-        let diamond_time = reg.get_break_time(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Diamond);
+        let diamond_time =
+            reg.get_break_time(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Diamond);
         assert!(diamond_time < wood_time);
     }
 }
-
-

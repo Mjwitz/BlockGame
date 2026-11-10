@@ -37,11 +37,7 @@ pub struct WorldManager {
 }
 
 impl WorldManager {
-    pub fn new(
-        seed: u32,
-        render_distance: i32,
-        registry: Arc<BlockRegistry>,
-    ) -> Self {
+    pub fn new(seed: u32, render_distance: i32, registry: Arc<BlockRegistry>) -> Self {
         let (mesh_tx, mesh_rx) = mpsc::channel();
 
         Self {
@@ -65,7 +61,10 @@ impl WorldManager {
 
     /// Synchronously pre-generates and meshes the initial area around the spawn point.
     pub fn init_spawn_area(&mut self, device: &wgpu::Device, pipeline: &VoxelPipeline) {
-        log::info!("Generating initial spawn chunks (radius {})...", self.render_distance);
+        log::info!(
+            "Generating initial spawn chunks (radius {})...",
+            self.render_distance
+        );
 
         let mut chunks_to_generate = Vec::new();
         let r = self.render_distance;
@@ -166,12 +165,7 @@ impl WorldManager {
     }
 
     /// Periodic update called every frame: streams chunks and uploads completed background meshes.
-    pub fn update(
-        &mut self,
-        player_pos: Vec3,
-        device: &wgpu::Device,
-        pipeline: &VoxelPipeline,
-    ) {
+    pub fn update(&mut self, player_pos: Vec3, device: &wgpu::Device, pipeline: &VoxelPipeline) {
         // 1. Ingest background mesh results (all completed meshes uploaded)
         while let Ok((pos, mesh)) = self.mesh_rx.try_recv() {
             self.queued_meshing.remove(&pos);
@@ -188,128 +182,160 @@ impl WorldManager {
             player_pos.y.floor() as i32,
             player_pos.z.floor() as i32,
         ));
-        self.last_player_chunk = current_chunk;
 
+        let player_chunk_changed = current_chunk != self.last_player_chunk;
         let pcx = current_chunk.0.x;
         let pcz = current_chunk.0.z;
         let r = self.render_distance;
 
-        // 3. Scan render distance for any chunks that need generation or remeshing
-        let mut to_generate = Vec::new();
-        let mut to_mesh = Vec::new();
-
+        // 3. Scan render distance only when player enters a new chunk or there is pending generation/meshing
+        if player_chunk_changed
+            || !self.queued_generation.is_empty()
+            || !self.queued_meshing.is_empty()
         {
-            let world_guard = self.world.lock().unwrap();
-            for cy in 0..=2 {
-                for dz in -r..=r {
-                    for dx in -r..=r {
-                        if dx * dx + dz * dz <= (r + 1) * (r + 1) {
-                            let pos = ChunkPos::new(pcx + dx, cy, pcz + dz);
-                            if !self.gpu_chunks.contains_key(&pos)
-                                && !self.queued_meshing.contains(&pos)
-                                && !self.queued_generation.contains(&pos)
-                            {
-                                if world_guard.has_chunk(pos) {
-                                    self.queued_meshing.insert(pos);
-                                    to_mesh.push(pos);
-                                } else {
-                                    self.queued_generation.insert(pos);
-                                    to_generate.push(pos);
+            self.last_player_chunk = current_chunk;
+
+            let mut to_generate = Vec::new();
+            let mut to_mesh = Vec::new();
+
+            {
+                let world_guard = self.world.lock().unwrap();
+                for cy in 0..=2 {
+                    for dz in -r..=r {
+                        for dx in -r..=r {
+                            if dx * dx + dz * dz <= (r + 1) * (r + 1) {
+                                let pos = ChunkPos::new(pcx + dx, cy, pcz + dz);
+                                if !self.gpu_chunks.contains_key(&pos)
+                                    && !self.queued_meshing.contains(&pos)
+                                    && !self.queued_generation.contains(&pos)
+                                {
+                                    if world_guard.has_chunk(pos) {
+                                        self.queued_meshing.insert(pos);
+                                        to_mesh.push(pos);
+                                    } else {
+                                        self.queued_generation.insert(pos);
+                                        to_generate.push(pos);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // 4. Dispatch terrain generation + meshing asynchronously
-        if !to_generate.is_empty() {
-            let generator = self.generator.clone();
-            let world_arc = self.world.clone();
-            let registry = self.registry.clone();
-            let tx = self.mesh_tx.clone();
+            // 4. Dispatch terrain generation + meshing asynchronously
+            if !to_generate.is_empty() {
+                let generator = self.generator.clone();
+                let world_arc = self.world.clone();
+                let registry = self.registry.clone();
+                let tx = self.mesh_tx.clone();
 
-            rayon::spawn(move || {
-                let new_chunks: Vec<Chunk> = to_generate
-                    .par_iter()
-                    .map(|&pos| {
-                        let mut chunk = generator.generate_chunk(pos);
-                        generator.populate_chunk_features(&mut chunk);
-                        chunk
-                    })
-                    .collect();
+                rayon::spawn(move || {
+                    let new_chunks: Vec<Chunk> = to_generate
+                        .par_iter()
+                        .map(|&pos| {
+                            let mut chunk = generator.generate_chunk(pos);
+                            generator.populate_chunk_features(&mut chunk);
+                            chunk
+                        })
+                        .collect();
 
-                let mut world = world_arc.lock().unwrap();
-                for chunk in new_chunks {
-                    world.insert_chunk(chunk);
-                }
-
-                let mesher = ChunkMesher::new(&registry);
-                for &pos in &to_generate {
-                    if let Some(chunk) = world.get_chunk(pos) {
-                        let origin = pos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
-                            world.get_block(origin + IVec3::new(lx, ly, lz))
-                        });
-                        let _ = tx.send((pos, mesh));
+                    let mut world = world_arc.lock().unwrap();
+                    for chunk in new_chunks {
+                        world.insert_chunk(chunk);
                     }
-                }
-            });
-        }
 
-        // 5. Dispatch meshing for already-generated chunks needing GPU buffers
-        if !to_mesh.is_empty() {
-            let world_arc = self.world.clone();
-            let registry = self.registry.clone();
-            let tx = self.mesh_tx.clone();
-
-            rayon::spawn(move || {
-                let world = world_arc.lock().unwrap();
-                let mesher = ChunkMesher::new(&registry);
-                for pos in to_mesh {
-                    if let Some(chunk) = world.get_chunk(pos) {
-                        let origin = pos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
-                            world.get_block(origin + IVec3::new(lx, ly, lz))
-                        });
-                        let _ = tx.send((pos, mesh));
+                    let mesher = ChunkMesher::new(&registry);
+                    for &pos in &to_generate {
+                        if let Some(chunk) = world.get_chunk(pos) {
+                            let origin = pos.to_world_origin();
+                            let sources = world.get_light_sources_near(origin, 15);
+                            let mesh =
+                                mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
+                                    world.get_block(origin + IVec3::new(lx, ly, lz))
+                                });
+                            let _ = tx.send((pos, mesh));
+                        }
                     }
-                }
-            });
-        }
-
-        // 6. Unload distant chunks outside radius + 2 to free VRAM
-        let unload_radius_sq = (r + 2) * (r + 2);
-        let mut to_remove = Vec::new();
-        for &pos in self.gpu_chunks.keys() {
-            let dx = pos.0.x - pcx;
-            let dz = pos.0.z - pcz;
-            if dx * dx + dz * dz > unload_radius_sq {
-                to_remove.push(pos);
+                });
             }
-        }
 
-        for pos in to_remove {
-            self.gpu_chunks.remove(&pos);
-            self.loaded_chunks_set.remove(&pos);
-            self.queued_meshing.remove(&pos);
-            self.queued_generation.remove(&pos);
+            // 5. Dispatch meshing for already-generated chunks needing GPU buffers
+            if !to_mesh.is_empty() {
+                let world_arc = self.world.clone();
+                let registry = self.registry.clone();
+                let tx = self.mesh_tx.clone();
+
+                rayon::spawn(move || {
+                    let world = world_arc.lock().unwrap();
+                    let mesher = ChunkMesher::new(&registry);
+                    for pos in to_mesh {
+                        if let Some(chunk) = world.get_chunk(pos) {
+                            let origin = pos.to_world_origin();
+                            let sources = world.get_light_sources_near(origin, 15);
+                            let mesh =
+                                mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
+                                    world.get_block(origin + IVec3::new(lx, ly, lz))
+                                });
+                            let _ = tx.send((pos, mesh));
+                        }
+                    }
+                });
+            }
+
+            // 6. Unload distant chunks outside radius + 2 to free VRAM
+            let unload_radius_sq = (r + 2) * (r + 2);
+            let mut to_remove = Vec::new();
+            for &pos in self.gpu_chunks.keys() {
+                let dx = pos.0.x - pcx;
+                let dz = pos.0.z - pcz;
+                if dx * dx + dz * dz > unload_radius_sq {
+                    to_remove.push(pos);
+                }
+            }
+
+            for pos in to_remove {
+                self.gpu_chunks.remove(&pos);
+                self.loaded_chunks_set.remove(&pos);
+                self.queued_meshing.remove(&pos);
+                self.queued_generation.remove(&pos);
+            }
         }
     }
 
-    /// Renders all currently loaded GPU chunk meshes.
-    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
-        for gpu_mesh in self.gpu_chunks.values() {
+    /// Renders loaded GPU chunk meshes with optional camera view frustum culling.
+    pub fn render_with_frustum<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+    ) {
+        for (&pos, gpu_mesh) in &self.gpu_chunks {
+            if gpu_mesh.index_count == 0 {
+                continue;
+            }
+
+            if let Some(f) = frustum {
+                let min = Vec3::new(
+                    pos.0.x as f32 * 16.0,
+                    pos.0.y as f32 * 16.0,
+                    pos.0.z as f32 * 16.0,
+                );
+                let max = min + Vec3::splat(16.0);
+                if !f.is_box_visible(min, max) {
+                    continue;
+                }
+            }
+
             render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(
-                gpu_mesh.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
+            render_pass
+                .set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
+    }
+
+    /// Renders all currently loaded GPU chunk meshes without frustum culling.
+    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+        self.render_with_frustum(render_pass, None);
     }
 
     pub fn world(&self) -> &Arc<Mutex<World>> {
@@ -326,22 +352,50 @@ impl WorldManager {
         let mut chunks_to_rebuild = vec![chunk_pos];
 
         if lx == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x - 1, chunk_pos.0.y, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x - 1,
+                chunk_pos.0.y,
+                chunk_pos.0.z,
+            ));
         } else if lx == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x + 1, chunk_pos.0.y, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x + 1,
+                chunk_pos.0.y,
+                chunk_pos.0.z,
+            ));
         }
         if ly == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y - 1, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y - 1,
+                chunk_pos.0.z,
+            ));
         } else if ly == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y + 1, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y + 1,
+                chunk_pos.0.z,
+            ));
         }
         if lz == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z - 1));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y,
+                chunk_pos.0.z - 1,
+            ));
         } else if lz == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y,
+                chunk_pos.0.z + 1,
+            ));
         }
 
-        let (broken_block, new_meshes, dropped_chest_items): (BlockId, Vec<(ChunkPos, ChunkMesh)>, Vec<ItemSlot>) = {
+        let (broken_block, new_meshes, dropped_chest_items): (
+            BlockId,
+            Vec<(ChunkPos, ChunkMesh)>,
+            Vec<ItemSlot>,
+        ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             if current.is_air() {
@@ -353,9 +407,15 @@ impl WorldManager {
             } else if current == BlockId::FURNACE || current == BlockId::FURNACE_LIT {
                 if let Some(f) = world.remove_furnace(pos) {
                     let mut items = Vec::new();
-                    if !f.input.is_empty() { items.push(f.input); }
-                    if !f.fuel.is_empty() { items.push(f.fuel); }
-                    if !f.output.is_empty() { items.push(f.output); }
+                    if !f.input.is_empty() {
+                        items.push(f.input);
+                    }
+                    if !f.fuel.is_empty() {
+                        items.push(f.fuel);
+                    }
+                    if !f.output.is_empty() {
+                        items.push(f.output);
+                    }
                     items
                 } else {
                     Vec::new()
@@ -460,19 +520,43 @@ impl WorldManager {
         let mut chunks_to_rebuild = vec![chunk_pos];
 
         if lx == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x - 1, chunk_pos.0.y, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x - 1,
+                chunk_pos.0.y,
+                chunk_pos.0.z,
+            ));
         } else if lx == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x + 1, chunk_pos.0.y, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x + 1,
+                chunk_pos.0.y,
+                chunk_pos.0.z,
+            ));
         }
         if ly == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y - 1, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y - 1,
+                chunk_pos.0.z,
+            ));
         } else if ly == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y + 1, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y + 1,
+                chunk_pos.0.z,
+            ));
         }
         if lz == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z - 1));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y,
+                chunk_pos.0.z - 1,
+            ));
         } else if lz == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y,
+                chunk_pos.0.z + 1,
+            ));
         }
 
         let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
@@ -553,7 +637,13 @@ impl WorldManager {
     }
 
     /// Performs raycast attack against closest animal within reach.
-    pub fn attack_animal(&mut self, ray_origin: Vec3, ray_dir: Vec3, reach: f32, damage: f32) -> bool {
+    pub fn attack_animal(
+        &mut self,
+        ray_origin: Vec3,
+        ray_dir: Vec3,
+        reach: f32,
+        damage: f32,
+    ) -> bool {
         let mut closest_dist = reach;
         let mut hit_idx = None;
 
@@ -590,19 +680,43 @@ impl WorldManager {
         let mut chunks_to_rebuild = vec![chunk_pos];
 
         if lx == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x - 1, chunk_pos.0.y, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x - 1,
+                chunk_pos.0.y,
+                chunk_pos.0.z,
+            ));
         } else if lx == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x + 1, chunk_pos.0.y, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x + 1,
+                chunk_pos.0.y,
+                chunk_pos.0.z,
+            ));
         }
         if ly == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y - 1, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y - 1,
+                chunk_pos.0.z,
+            ));
         } else if ly == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y + 1, chunk_pos.0.z));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y + 1,
+                chunk_pos.0.z,
+            ));
         }
         if lz == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z - 1));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y,
+                chunk_pos.0.z - 1,
+            ));
         } else if lz == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(chunk_pos.0.x, chunk_pos.0.y, chunk_pos.0.z + 1));
+            chunks_to_rebuild.push(ChunkPos::new(
+                chunk_pos.0.x,
+                chunk_pos.0.y,
+                chunk_pos.0.z + 1,
+            ));
         }
 
         let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
@@ -651,12 +765,7 @@ impl WorldManager {
     }
 
     /// Periodically grows planted crops to their next stage.
-    pub fn update_crops(
-        &mut self,
-        dt: f32,
-        device: &wgpu::Device,
-        pipeline: &VoxelPipeline,
-    ) {
+    pub fn update_crops(&mut self, dt: f32, device: &wgpu::Device, pipeline: &VoxelPipeline) {
         let mut changed_chunks = HashSet::new();
         {
             let mut world = self.world.lock().unwrap();
@@ -710,12 +819,7 @@ impl WorldManager {
 
     /// Periodically updates all active furnaces, cooking smeltable items, burning fuels,
     /// and updating world block states between FURNACE and FURNACE_LIT.
-    pub fn update_furnaces(
-        &mut self,
-        dt: f32,
-        device: &wgpu::Device,
-        pipeline: &VoxelPipeline,
-    ) {
+    pub fn update_furnaces(&mut self, dt: f32, device: &wgpu::Device, pipeline: &VoxelPipeline) {
         let mut changed_chunks = HashSet::new();
         {
             let mut world = self.world.lock().unwrap();
@@ -763,6 +867,9 @@ impl WorldManager {
 
     #[allow(dead_code)]
     pub fn total_visible_faces(&self) -> usize {
-        self.gpu_chunks.values().map(|g| (g.index_count / 6) as usize).sum()
+        self.gpu_chunks
+            .values()
+            .map(|g| (g.index_count / 6) as usize)
+            .sum()
     }
 }

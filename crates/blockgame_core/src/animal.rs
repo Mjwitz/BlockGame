@@ -64,7 +64,7 @@ pub struct AnimalEntity {
     pub kind: AnimalKind,
     pub position: Vec3, // Feet position
     pub velocity: Vec3,
-    pub yaw: f32,       // Horizontal angle in radians
+    pub yaw: f32, // Horizontal angle in radians
     pub health: f32,
     pub max_health: f32,
     pub hurt_timer: f32,
@@ -176,7 +176,11 @@ impl AnimalEntity {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
                 // Change state: moving or standing still
-                let pseudo_rand = ((self.position.x * 12.9898 + self.position.z * 78.233).sin().fract() + 1.0) * 0.5;
+                let pseudo_rand = ((self.position.x * 12.9898 + self.position.z * 78.233)
+                    .sin()
+                    .fract()
+                    + 1.0)
+                    * 0.5;
                 if pseudo_rand > 0.45 {
                     self.is_moving = true;
                     // Pick a random direction
@@ -211,7 +215,8 @@ impl AnimalEntity {
         self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
         self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
 
-        let horiz_speed = (self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z).sqrt();
+        let horiz_speed =
+            (self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z).sqrt();
         if horiz_speed > 0.05 {
             self.walk_anim_timer += dt * horiz_speed * 4.0;
             if self.flee_timer <= 0.0 {

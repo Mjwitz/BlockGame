@@ -8,10 +8,12 @@ pub mod ui;
 pub mod wireframe;
 
 pub use atlas::TextureAtlas;
-pub use camera::{Camera, CameraUniform};
+pub use camera::{Camera, CameraUniform, Frustum, FrustumPlane};
 pub use day_night::DayNightCycle;
 pub use mesh::{build_animals_mesh, build_item_drops_mesh, ChunkMesh, ChunkMesher, VoxelVertex};
-pub use pipeline::{create_depth_texture, GpuMeshBuffers, VoxelPipeline, DEPTH_FORMAT};
+pub use pipeline::{
+    create_depth_texture, DynamicMeshBuffers, GpuMeshBuffers, VoxelPipeline, DEPTH_FORMAT,
+};
 pub use ui::{UiBuilder, UiMesh, UiPipeline, UiVertex};
 pub use wireframe::{LineVertex, WireframePipeline};
 
