@@ -17,7 +17,7 @@ pub use block::{BlockDefinition, BlockId, BlockRegistry};
 pub use chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, CHUNK_VOLUME};
 pub use crafting::{CraftingGrid, CraftingManager, Recipe};
 pub use direction::Direction;
-pub use entity::{ItemDrop, ItemDropStatus};
+pub use entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus};
 pub use item::{FoodDef, Inventory, ItemDef, ItemId, ItemRegistry, ItemSlot};
 pub use lighting::{calculate_chunk_lighting, ChunkLightMap, LightValue};
 pub use physics::{PlayerPhysics, AABB};

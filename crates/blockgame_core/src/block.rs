@@ -133,6 +133,27 @@ impl BlockId {
             _ => true,
         }
     }
+
+    /// Whether this block is affected by gravity (falls when unsupported).
+    #[inline]
+    pub const fn has_gravity(&self) -> bool {
+        matches!(*self, Self::SAND | Self::RED_SAND | Self::GRAVEL)
+    }
+
+    /// Whether this block is fragile and gets crushed/dropped when a falling block lands on it.
+    #[inline]
+    pub const fn is_fragile(&self) -> bool {
+        matches!(
+            *self,
+            Self::TORCH
+                | Self::TALL_GRASS
+                | Self::WHEAT_0
+                | Self::WHEAT_1
+                | Self::WHEAT_2
+                | Self::WHEAT_3
+                | Self::LILY_PAD
+        )
+    }
 }
 
 impl From<u8> for BlockId {
@@ -1308,20 +1329,33 @@ pub fn get_support_break_drops(
     }
 }
 
-/// Checks for and breaks any unsupported attached blocks adjacent to or dependent on `trigger_pos`.
-/// This performs an upward cascade for stacked blocks like cactuses, and breaks crops, tall grass,
-/// and torches that have lost their substrate or anchor.
+/// Checks for and breaks any unsupported attached blocks adjacent to or dependent on `trigger_pos`,
+/// and detects any gravity-affected blocks (Sand, Gravel, Red Sand) that lose support and must fall.
 ///
 /// Returns:
-/// - A list of dropped item slots with their block positions `(pos, item_slot)`.
-/// - A list of modified block positions `Vec<IVec3>`.
+/// - `extra_drops`: List of dropped item slots with their block positions `(pos, item_slot)`.
+/// - `modified_positions`: List of modified block positions `Vec<IVec3>`.
+/// - `falling_blocks`: List of gravity blocks that lost support `(BlockId, IVec3)`.
 pub fn break_unsupported_attached(
     trigger_pos: IVec3,
     world: &mut crate::world::World,
     registry: &BlockRegistry,
-) -> (Vec<(IVec3, ItemSlot)>, Vec<IVec3>) {
+) -> (Vec<(IVec3, ItemSlot)>, Vec<IVec3>, Vec<(BlockId, IVec3)>) {
     let mut extra_drops = Vec::new();
     let mut modified_positions = Vec::new();
+    let mut falling_blocks = Vec::new();
+
+    // Check if any gravity blocks above trigger_pos should fall
+    let mut grav_y = trigger_pos.y + 1;
+    while world.get_block(IVec3::new(trigger_pos.x, grav_y, trigger_pos.z)).has_gravity() {
+        let grav_pos = IVec3::new(trigger_pos.x, grav_y, trigger_pos.z);
+        let grav_id = world.get_block(grav_pos);
+        world.set_block(grav_pos, BlockId::AIR);
+        modified_positions.push(grav_pos);
+        falling_blocks.push((grav_id, grav_pos));
+        grav_y += 1;
+    }
+
     let mut check_queue = vec![
         trigger_pos + IVec3::Y,
         trigger_pos + IVec3::X,
@@ -1357,6 +1391,18 @@ pub fn break_unsupported_attached(
             for drop in drops {
                 extra_drops.push((check_pos, drop));
             }
+
+            // Check if any gravity blocks above check_pos should fall now that check_pos is broken
+            let mut gy = check_pos.y + 1;
+            while world.get_block(IVec3::new(check_pos.x, gy, check_pos.z)).has_gravity() {
+                let gp = IVec3::new(check_pos.x, gy, check_pos.z);
+                let gid = world.get_block(gp);
+                world.set_block(gp, BlockId::AIR);
+                modified_positions.push(gp);
+                falling_blocks.push((gid, gp));
+                gy += 1;
+            }
+
             // Cascade upward (e.g. cactus or stacked plants) and neighbors
             check_queue.push(check_pos + IVec3::Y);
             check_queue.push(check_pos + IVec3::X);
@@ -1366,7 +1412,7 @@ pub fn break_unsupported_attached(
         }
     }
 
-    (extra_drops, modified_positions)
+    (extra_drops, modified_positions, falling_blocks)
 }
 
 #[cfg(test)]
@@ -1540,7 +1586,7 @@ mod tests {
 
         // Breaking the base sand block cascades all 3 cactus blocks!
         world.set_block(IVec3::new(5, 1, 5), BlockId::AIR);
-        let (drops, modified) = break_unsupported_attached(IVec3::new(5, 1, 5), &mut world, &reg);
+        let (drops, modified, _) = break_unsupported_attached(IVec3::new(5, 1, 5), &mut world, &reg);
 
         assert_eq!(modified.len(), 3);
         assert_eq!(world.get_block(IVec3::new(5, 2, 5)), BlockId::AIR);
@@ -1558,7 +1604,7 @@ mod tests {
 
         // Breaking grass block breaks tall grass and drops wheat seeds
         world.set_block(IVec3::new(8, 1, 8), BlockId::AIR);
-        let (drops_grass, modified_grass) =
+        let (drops_grass, modified_grass, _) =
             break_unsupported_attached(IVec3::new(8, 1, 8), &mut world, &reg);
         assert_eq!(modified_grass, vec![IVec3::new(8, 2, 8)]);
         assert_eq!(world.get_block(IVec3::new(8, 2, 8)), BlockId::AIR);
@@ -1570,7 +1616,7 @@ mod tests {
         world.set_block(IVec3::new(3, 2, 3), BlockId::WHEAT_3);
 
         world.set_block(IVec3::new(3, 1, 3), BlockId::AIR);
-        let (drops_wheat, modified_wheat) =
+        let (drops_wheat, modified_wheat, _) =
             break_unsupported_attached(IVec3::new(3, 1, 3), &mut world, &reg);
         assert_eq!(modified_wheat, vec![IVec3::new(3, 2, 3)]);
         assert_eq!(world.get_block(IVec3::new(3, 2, 3)), BlockId::AIR);
@@ -1583,10 +1629,25 @@ mod tests {
         world.set_block(IVec3::new(12, 2, 12), BlockId::CACTUS);
         // Place cobblestone at (11, 2, 12) next to cactus
         world.set_block(IVec3::new(11, 2, 12), BlockId::COBBLESTONE);
-        let (drops_cactus, modified_cactus) =
+        let (drops_cactus, modified_cactus, _) =
             break_unsupported_attached(IVec3::new(11, 2, 12), &mut world, &reg);
         assert_eq!(modified_cactus, vec![IVec3::new(12, 2, 12)]);
         assert_eq!(world.get_block(IVec3::new(12, 2, 12)), BlockId::AIR);
         assert_eq!(drops_cactus[0].1.item_id, ItemId::CACTUS);
+
+        // 5. Breaking block beneath sand column triggers falling blocks
+        world.set_block(IVec3::new(2, 1, 2), BlockId::STONE);
+        world.set_block(IVec3::new(2, 2, 2), BlockId::SAND);
+        world.set_block(IVec3::new(2, 3, 2), BlockId::GRAVEL);
+        world.set_block(IVec3::new(2, 1, 2), BlockId::AIR);
+        let (_, modified_sand, falling) =
+            break_unsupported_attached(IVec3::new(2, 1, 2), &mut world, &reg);
+        assert_eq!(falling.len(), 2);
+        assert_eq!(falling[0], (BlockId::SAND, IVec3::new(2, 2, 2)));
+        assert_eq!(falling[1], (BlockId::GRAVEL, IVec3::new(2, 3, 2)));
+        assert_eq!(world.get_block(IVec3::new(2, 2, 2)), BlockId::AIR);
+        assert_eq!(world.get_block(IVec3::new(2, 3, 2)), BlockId::AIR);
+        assert!(modified_sand.contains(&IVec3::new(2, 2, 2)));
+        assert!(modified_sand.contains(&IVec3::new(2, 3, 2)));
     }
 }

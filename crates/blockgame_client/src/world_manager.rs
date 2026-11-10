@@ -8,7 +8,7 @@ use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{break_unsupported_attached, can_block_survive, BlockId, BlockRegistry},
     chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
-    entity::{ItemDrop, ItemDropStatus},
+    entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus},
     item::ItemSlot,
     physics::AABB,
     world::{world_to_chunk_coords, World},
@@ -32,6 +32,7 @@ pub struct WorldManager {
     mesh_tx: Sender<(ChunkPos, ChunkMesh)>,
     last_player_chunk: ChunkPos,
     pub item_drops: Vec<ItemDrop>,
+    pub falling_blocks: Vec<FallingBlock>,
     pub animals: Vec<AnimalEntity>,
     pub next_animal_id: u32,
     pub planted_crops: Vec<(IVec3, f32)>,
@@ -56,6 +57,7 @@ impl WorldManager {
             mesh_tx,
             last_player_chunk: ChunkPos::new(i32::MAX, i32::MAX, i32::MAX),
             item_drops: Vec::new(),
+            falling_blocks: Vec::new(),
             animals: Vec::new(),
             next_animal_id: 1,
             planted_crops: Vec::new(),
@@ -499,6 +501,10 @@ impl WorldManager {
         &self.world
     }
 
+    pub fn registry(&self) -> &Arc<BlockRegistry> {
+        &self.registry
+    }
+
     #[inline]
     fn add_chunk_and_neighbors(pos: IVec3, chunks: &mut Vec<ChunkPos>) {
         let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
@@ -553,11 +559,12 @@ impl WorldManager {
         let mut chunks_to_rebuild = Vec::new();
         Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
 
-        let (broken_block, new_meshes, dropped_chest_items, extra_drops): (
+        let (broken_block, new_meshes, dropped_chest_items, extra_drops, spawned_falling): (
             BlockId,
             Vec<(ChunkPos, ChunkMesh)>,
             Vec<ItemSlot>,
             Vec<(Vec3, ItemSlot)>,
+            Vec<(BlockId, IVec3)>,
         ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
@@ -594,7 +601,7 @@ impl WorldManager {
             world.set_block(pos, replacement);
 
             // Check unsupported attached blocks that depend on pos
-            let (unsupported_drops, modified_positions) =
+            let (unsupported_drops, modified_positions, spawned_falling) =
                 break_unsupported_attached(pos, &mut world, &self.registry);
 
             for mpos in modified_positions {
@@ -637,7 +644,7 @@ impl WorldManager {
                     })
                 })
                 .collect();
-            (current, meshes, dropped_chest_items, extra_drops)
+            (current, meshes, dropped_chest_items, extra_drops, spawned_falling)
         };
 
         for (cpos, mesh) in new_meshes {
@@ -654,6 +661,9 @@ impl WorldManager {
             if !item.is_empty() {
                 self.spawn_item_drop(extra_pos, item);
             }
+        }
+        for (block_id, fpos) in spawned_falling {
+            self.falling_blocks.push(FallingBlock::new(block_id, fpos));
         }
 
         // Clean up planted crops if wheat was removed
@@ -710,16 +720,35 @@ impl WorldManager {
             }
         }
 
+        // If gravity block is placed and the block below is not solid, spawn as falling block entity
+        if block_id.has_gravity() {
+            let world_guard = self.world.lock().unwrap();
+            let current = world_guard.get_block(pos);
+            let can_place = current.is_air() || current == BlockId::WATER;
+            if can_place {
+                let below = world_guard.get_block(pos - IVec3::Y);
+                if !self.registry.is_solid(below) {
+                    drop(world_guard);
+                    self.falling_blocks.push(FallingBlock::new(block_id, pos));
+                    return true;
+                }
+            }
+        }
+
         let mut chunks_to_rebuild = Vec::new();
         Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
 
-        let (new_meshes, extra_drops): (Vec<(ChunkPos, ChunkMesh)>, Vec<(Vec3, ItemSlot)>) = {
+        let (new_meshes, extra_drops, spawned_falling): (
+            Vec<(ChunkPos, ChunkMesh)>,
+            Vec<(Vec3, ItemSlot)>,
+            Vec<(BlockId, IVec3)>,
+        ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             let can_place = if current.is_air() {
                 true
             } else if current == BlockId::WATER {
-                block_id.can_exist_in_water()
+                block_id.can_exist_in_water() || block_id.has_gravity() || self.registry.is_solid(block_id)
             } else {
                 false
             };
@@ -748,8 +777,9 @@ impl WorldManager {
 
             // If a solid block is placed, check if any horizontal cactus neighbors are invalidated
             let mut extra_drops = Vec::new();
+            let mut spawned_falling = Vec::new();
             if self.registry.is_solid(block_id) {
-                let (unsupported_drops, modified_positions) =
+                let (unsupported_drops, modified_positions, fall_blocks) =
                     break_unsupported_attached(pos, &mut world, &self.registry);
 
                 for mpos in modified_positions {
@@ -759,6 +789,7 @@ impl WorldManager {
                     let drop_pos = mpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
                     extra_drops.push((drop_pos, drop));
                 }
+                spawned_falling = fall_blocks;
             }
 
             if is_light_source {
@@ -792,7 +823,7 @@ impl WorldManager {
                     })
                 })
                 .collect();
-            (meshes, extra_drops)
+            (meshes, extra_drops, spawned_falling)
         };
 
         for (cpos, mesh) in new_meshes {
@@ -803,6 +834,9 @@ impl WorldManager {
             if !item.is_empty() {
                 self.spawn_item_drop(extra_pos, item);
             }
+        }
+        for (block_id, fpos) in spawned_falling {
+            self.falling_blocks.push(FallingBlock::new(block_id, fpos));
         }
 
         true
@@ -873,7 +907,11 @@ impl WorldManager {
         let mut chunks_to_rebuild = Vec::new();
         Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
 
-        let (new_meshes, extra_drops): (Vec<(ChunkPos, ChunkMesh)>, Vec<(Vec3, ItemSlot)>) = {
+        let (new_meshes, extra_drops, spawned_falling): (
+            Vec<(ChunkPos, ChunkMesh)>,
+            Vec<(Vec3, ItemSlot)>,
+            Vec<(BlockId, IVec3)>,
+        ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             let above = world.get_block(pos + IVec3::Y);
@@ -885,7 +923,7 @@ impl WorldManager {
 
             world.set_block(pos, BlockId::FARMLAND);
 
-            let (unsupported_drops, modified_positions) =
+            let (unsupported_drops, modified_positions, spawned_falling) =
                 break_unsupported_attached(pos, &mut world, &self.registry);
 
             for mpos in modified_positions {
@@ -914,7 +952,7 @@ impl WorldManager {
                     })
                 })
                 .collect();
-            (meshes, extra_drops)
+            (meshes, extra_drops, spawned_falling)
         };
 
         for (cpos, mesh) in new_meshes {
@@ -925,6 +963,9 @@ impl WorldManager {
             if !item.is_empty() {
                 self.spawn_item_drop(extra_pos, item);
             }
+        }
+        for (block_id, fpos) in spawned_falling {
+            self.falling_blocks.push(FallingBlock::new(block_id, fpos));
         }
 
         true
@@ -1042,6 +1083,121 @@ impl WorldManager {
             }
             for (cpos, mesh) in meshes {
                 self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
+    }
+
+    /// Updates all active falling gravity blocks (Sand, Red Sand, Gravel), moves them with gravity,
+    /// solidifies them when they hit ground, displaces water, drops fragile blocks, and remeshes affected chunks.
+    pub fn update_falling_blocks(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        if self.falling_blocks.is_empty() {
+            return;
+        }
+
+        let mut landed_blocks: Vec<(BlockId, IVec3)> = Vec::new();
+        let mut dropped_items: Vec<(Vec3, ItemSlot)> = Vec::new();
+
+        {
+            let mut world = self.world.lock().unwrap();
+            self.falling_blocks.retain_mut(|fb| {
+                match fb.update(dt, &world, &self.registry) {
+                    FallingBlockStatus::Falling => true,
+                    FallingBlockStatus::Landed(land_pos) => {
+                        let old_block = world.get_block(land_pos);
+                        // If old_block is fragile (wheat, tall grass, torch, lily pad), drop it
+                        if old_block.is_fragile() {
+                            let drop_item = match old_block {
+                                BlockId::TORCH => {
+                                    ItemSlot::new(blockgame_core::item::ItemId::TORCH, 1)
+                                }
+                                BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 => {
+                                    ItemSlot::new(blockgame_core::item::ItemId::WHEAT_SEEDS, 1)
+                                }
+                                BlockId::WHEAT_3 => {
+                                    ItemSlot::new(blockgame_core::item::ItemId::WHEAT, 1)
+                                }
+                                BlockId::TALL_GRASS => {
+                                    ItemSlot::new(blockgame_core::item::ItemId::WHEAT_SEEDS, 1)
+                                }
+                                BlockId::LILY_PAD => {
+                                    ItemSlot::new(blockgame_core::item::ItemId::LILY_PAD, 1)
+                                }
+                                _ => ItemSlot::EMPTY,
+                            };
+                            if !drop_item.is_empty() {
+                                dropped_items.push((
+                                    land_pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                    drop_item,
+                                ));
+                            }
+                        }
+                        // Solidify at land_pos (displacing air, water, or crushed fragile block)
+                        world.set_block(land_pos, fb.block_id);
+                        landed_blocks.push((fb.block_id, land_pos));
+                        false
+                    }
+                    FallingBlockStatus::Despawned => false,
+                }
+            });
+        }
+
+        for (pos, item) in dropped_items {
+            self.spawn_item_drop(pos, item);
+        }
+
+        if !landed_blocks.is_empty() {
+            let mut chunks_to_rebuild = Vec::new();
+            let (new_meshes, extra_drops, more_falling) = {
+                let mut world = self.world.lock().unwrap();
+                let mut extra_drops = Vec::new();
+                let mut more_falling = Vec::new();
+
+                for (_, land_pos) in &landed_blocks {
+                    Self::add_chunk_and_neighbors(*land_pos, &mut chunks_to_rebuild);
+                    let (u_drops, mod_pos, fall_blocks) =
+                        break_unsupported_attached(*land_pos, &mut world, &self.registry);
+                    for mpos in mod_pos {
+                        Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                    }
+                    for (mpos, drop) in u_drops {
+                        extra_drops.push((mpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
+                    }
+                    more_falling.extend(fall_blocks);
+                }
+
+                chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+                chunks_to_rebuild.dedup();
+
+                let mesher = ChunkMesher::new(&self.registry);
+                let meshes: Vec<(ChunkPos, ChunkMesh)> = chunks_to_rebuild
+                    .into_iter()
+                    .filter_map(|cpos| {
+                        world.get_chunk(cpos).map(|chunk| {
+                            let origin = cpos.to_world_origin();
+                            let sources = world.get_light_sources_near(origin, 15);
+                            let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                                world.get_block(origin + IVec3::new(x, y, z))
+                            });
+                            (cpos, mesh)
+                        })
+                    })
+                    .collect();
+                (meshes, extra_drops, more_falling)
+            };
+
+            for (cpos, mesh) in new_meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+            for (pos, item) in extra_drops {
+                self.spawn_item_drop(pos, item);
+            }
+            for (block_id, fpos) in more_falling {
+                self.falling_blocks.push(FallingBlock::new(block_id, fpos));
             }
         }
     }

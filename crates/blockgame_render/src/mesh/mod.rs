@@ -5,6 +5,7 @@ use blockgame_core::{
     block::{BlockId, BlockRegistry},
     chunk::{Chunk, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z},
     direction::Direction,
+    entity::FallingBlock,
 };
 pub use vertex::VoxelVertex;
 
@@ -1795,6 +1796,94 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
     mesh
 }
 
+/// Builds dynamic 3D meshes for active falling gravity blocks (Sand, Red Sand, Gravel).
+pub fn build_falling_blocks_mesh(
+    falling_blocks: &[FallingBlock],
+    registry: &BlockRegistry,
+) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+
+    for fb in falling_blocks {
+        let fx = fb.position.x;
+        let fy = fb.position.y;
+        let fz = fb.position.z;
+        let light = [1.0, 0.0];
+        let ao = 1.0;
+
+        for dir in Direction::ALL {
+            let tile_id = registry.get_texture(fb.block_id, dir);
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+            let normal = dir.normal_f32();
+            let positions = match dir {
+                Direction::PosY => [
+                    [fx, fy + 1.0, fz + 1.0],
+                    [fx + 1.0, fy + 1.0, fz + 1.0],
+                    [fx + 1.0, fy + 1.0, fz],
+                    [fx, fy + 1.0, fz],
+                ],
+                Direction::NegY => [
+                    [fx, fy, fz],
+                    [fx + 1.0, fy, fz],
+                    [fx + 1.0, fy, fz + 1.0],
+                    [fx, fy, fz + 1.0],
+                ],
+                Direction::PosZ => [
+                    [fx, fy, fz + 1.0],
+                    [fx + 1.0, fy, fz + 1.0],
+                    [fx + 1.0, fy + 1.0, fz + 1.0],
+                    [fx, fy + 1.0, fz + 1.0],
+                ],
+                Direction::NegZ => [
+                    [fx + 1.0, fy, fz],
+                    [fx, fy, fz],
+                    [fx, fy + 1.0, fz],
+                    [fx + 1.0, fy + 1.0, fz],
+                ],
+                Direction::PosX => [
+                    [fx + 1.0, fy, fz + 1.0],
+                    [fx + 1.0, fy, fz],
+                    [fx + 1.0, fy + 1.0, fz],
+                    [fx + 1.0, fy + 1.0, fz + 1.0],
+                ],
+                Direction::NegX => [
+                    [fx, fy, fz],
+                    [fx, fy, fz + 1.0],
+                    [fx, fy + 1.0, fz + 1.0],
+                    [fx, fy + 1.0, fz],
+                ],
+            };
+
+            let uvs = [
+                [u_min, v_max],
+                [u_max, v_max],
+                [u_max, v_min],
+                [u_min, v_min],
+            ];
+
+            let start_idx = mesh.vertices.len() as u32;
+            for i in 0..4 {
+                mesh.vertices.push(VoxelVertex {
+                    position: positions[i],
+                    uv: uvs[i],
+                    normal,
+                    ao,
+                    light,
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                start_idx + 0,
+                start_idx + 1,
+                start_idx + 2,
+                start_idx + 2,
+                start_idx + 3,
+                start_idx + 0,
+            ]);
+        }
+    }
+
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2015,5 +2104,19 @@ mod tests {
         let mesh = build_animals_mesh(&[cow]);
         assert!(!mesh.vertices.is_empty(), "Cow mesh vertices must not be empty");
         assert!(!mesh.indices.is_empty(), "Cow mesh indices must not be empty");
+    }
+
+    #[test]
+    fn test_build_falling_blocks_mesh() {
+        let registry = BlockRegistry::new();
+        let falling = vec![
+            blockgame_core::entity::FallingBlock::new(BlockId::SAND, glam::IVec3::new(5, 10, 5)),
+            blockgame_core::entity::FallingBlock::new(BlockId::GRAVEL, glam::IVec3::new(6, 12, 6)),
+        ];
+
+        let mesh = build_falling_blocks_mesh(&falling, &registry);
+        assert_eq!(mesh.face_count(), 12);
+        assert_eq!(mesh.vertices.len(), 48);
+        assert_eq!(mesh.indices.len(), 72);
     }
 }

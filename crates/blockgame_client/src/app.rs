@@ -75,6 +75,7 @@ pub struct AppState {
     pub ui_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub item_drop_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub total_time: f32,
     pub walk_distance: f32,
     pub punch_timer: f32,
@@ -311,6 +312,9 @@ impl ApplicationHandler for BlockGameApp {
                 "Dynamic Item Drop Mesh",
             ),
             animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Animal Mesh"),
+            falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Falling Block Mesh",
+            ),
             total_time: 0.0,
             walk_distance: 0.0,
             punch_timer: 0.0,
@@ -1059,6 +1063,9 @@ impl ApplicationHandler for BlockGameApp {
                 state
                     .world_manager
                     .update_furnaces(dt, &state.device, &state.pipeline);
+                state
+                    .world_manager
+                    .update_falling_blocks(dt, &state.device, &state.pipeline);
 
                 // 4. Update Camera position and atmosphere uniform
                 state.camera.position = state.player.eye_position();
@@ -1485,6 +1492,22 @@ impl ApplicationHandler for BlockGameApp {
                     state.animal_dynamic_mesh.clear();
                 }
 
+                // Upload dynamic 3D Falling Blocks mesh
+                if !state.world_manager.falling_blocks.is_empty() {
+                    let falling_mesh = blockgame_render::build_falling_blocks_mesh(
+                        &state.world_manager.falling_blocks,
+                        state.world_manager.registry(),
+                    );
+                    state.falling_block_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &falling_mesh.vertices,
+                        &falling_mesh.indices,
+                    );
+                } else {
+                    state.falling_block_dynamic_mesh.clear();
+                }
+
                 // 8. Render frame
                 let output = match state.surface.get_current_texture() {
                     Ok(frame) => frame,
@@ -1581,6 +1604,9 @@ impl ApplicationHandler for BlockGameApp {
 
                     // Render active 3D animals
                     state.animal_dynamic_mesh.draw(&mut render_pass);
+
+                    // Render falling gravity blocks (Sand, Gravel, Red Sand)
+                    state.falling_block_dynamic_mesh.draw(&mut render_pass);
 
                     // Render targeted block selection wireframe or progressive cracking overlay
                     if let Some((crack_buf, vertex_count)) = &state.cracking_buffer {

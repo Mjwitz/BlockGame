@@ -1,10 +1,87 @@
 use glam::{IVec3, Vec3};
 
 use crate::{
-    block::BlockRegistry,
+    block::{BlockId, BlockRegistry},
     item::ItemSlot,
     world::{world_to_chunk_coords, World},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallingBlockStatus {
+    Falling,
+    Landed(IVec3),
+    Despawned,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FallingBlock {
+    pub block_id: BlockId,
+    pub position: Vec3,
+    pub velocity_y: f32,
+    pub time_falling: f32,
+}
+
+impl FallingBlock {
+    pub fn new(block_id: BlockId, initial_pos: IVec3) -> Self {
+        Self {
+            block_id,
+            position: initial_pos.as_vec3(),
+            velocity_y: 0.0,
+            time_falling: 0.0,
+        }
+    }
+
+    pub fn with_velocity(block_id: BlockId, position: Vec3, velocity_y: f32) -> Self {
+        Self {
+            block_id,
+            position,
+            velocity_y,
+            time_falling: 0.0,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        dt: f32,
+        world: &World,
+        registry: &BlockRegistry,
+    ) -> FallingBlockStatus {
+        self.time_falling += dt;
+
+        // Apply gravity acceleration
+        let gravity = 20.0;
+        self.velocity_y -= gravity * dt;
+        self.velocity_y = self.velocity_y.max(-25.0);
+
+        let target_y = self.position.y + self.velocity_y * dt;
+
+        // Despawn if falling into void below y = -64 or after 30 seconds
+        if self.position.y < -64.0 || target_y < -64.0 || self.time_falling > 30.0 {
+            return FallingBlockStatus::Despawned;
+        }
+
+        let curr_bottom_int = self.position.y.floor() as i32;
+        let target_bottom_int = target_y.floor() as i32;
+        let x_int = self.position.x.floor() as i32;
+        let z_int = self.position.z.floor() as i32;
+
+        if target_bottom_int < curr_bottom_int {
+            for check_y in (target_bottom_int..curr_bottom_int).rev() {
+                let check_pos = IVec3::new(x_int, check_y, z_int);
+                let block = world.get_block(check_pos);
+
+                if registry.is_solid(block) {
+                    let land_pos = check_pos + IVec3::Y;
+                    self.position.y = land_pos.y as f32;
+                    return FallingBlockStatus::Landed(land_pos);
+                }
+            }
+        }
+
+        self.position.y = target_y;
+        FallingBlockStatus::Falling
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemDropStatus {
@@ -177,5 +254,55 @@ mod tests {
             new_dist < initial_dist,
             "Magnetism should attract item toward player"
         );
+    }
+
+    #[test]
+    fn test_falling_sand_and_gravel() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let chunk = crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0));
+        world.insert_chunk(chunk);
+
+        // 1. Sand falls through air onto solid stone
+        world.set_block(IVec3::new(5, 5, 5), BlockId::STONE);
+        let mut sand = FallingBlock::new(BlockId::SAND, IVec3::new(5, 10, 5));
+
+        let mut landed_pos = None;
+        for _ in 0..100 {
+            match sand.update(0.05, &world, &registry) {
+                FallingBlockStatus::Falling => {}
+                FallingBlockStatus::Landed(pos) => {
+                    landed_pos = Some(pos);
+                    break;
+                }
+                FallingBlockStatus::Despawned => break,
+            }
+        }
+        assert_eq!(landed_pos, Some(IVec3::new(5, 6, 5)));
+
+        // 2. Gravel falls through water and lands on riverbed
+        world.set_block(IVec3::new(8, 2, 8), BlockId::DIRT);
+        world.set_block(IVec3::new(8, 3, 8), BlockId::WATER);
+        world.set_block(IVec3::new(8, 4, 8), BlockId::WATER);
+        let mut gravel = FallingBlock::new(BlockId::GRAVEL, IVec3::new(8, 7, 8));
+
+        let mut gravel_landed = None;
+        for _ in 0..100 {
+            match gravel.update(0.05, &world, &registry) {
+                FallingBlockStatus::Falling => {}
+                FallingBlockStatus::Landed(pos) => {
+                    gravel_landed = Some(pos);
+                    break;
+                }
+                FallingBlockStatus::Despawned => break,
+            }
+        }
+        // Lands at (8, 3, 8) directly on top of DIRT bed at (8, 2, 8), displacing the water at y=3
+        assert_eq!(gravel_landed, Some(IVec3::new(8, 3, 8)));
+
+        // 3. Falling block into void despawns
+        let mut void_sand = FallingBlock::with_velocity(BlockId::SAND, Vec3::new(0.0, -60.0, 0.0), -20.0);
+        let status = void_sand.update(0.5, &world, &registry);
+        assert_eq!(status, FallingBlockStatus::Despawned);
     }
 }

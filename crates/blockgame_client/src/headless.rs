@@ -285,6 +285,9 @@ pub async fn render_world_to_image(
     let animals_mesh = blockgame_render::build_animals_mesh(&world_manager.animals);
     let animal_gpu_mesh = pipeline.upload_mesh(&device, &animals_mesh);
 
+    let falling_mesh = blockgame_render::build_falling_blocks_mesh(&world_manager.falling_blocks, &registry);
+    let falling_gpu_mesh = pipeline.upload_mesh(&device, &falling_mesh);
+
     // 3. Perform DDA raycast from crosshair
     let hit = {
         let world_guard = world_manager.world().lock().unwrap();
@@ -356,6 +359,10 @@ pub async fn render_world_to_image(
 
         if let Some(anim_mesh) = &animal_gpu_mesh {
             anim_mesh.draw(&mut render_pass);
+        }
+
+        if let Some(fall_mesh) = &falling_gpu_mesh {
+            fall_mesh.draw(&mut render_pass);
         }
 
         if let Some(buf) = &wireframe_buffer {
