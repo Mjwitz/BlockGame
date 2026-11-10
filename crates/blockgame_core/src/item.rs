@@ -99,6 +99,8 @@ impl ItemId {
     pub const PRISMARINE: Self = Self(89);
     pub const SEA_LANTERN: Self = Self(90);
     pub const SEAGRASS: Self = Self(91);
+    pub const BUCKET: Self = Self(92);
+    pub const WATER_BUCKET: Self = Self(93);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1395,6 +1397,30 @@ impl ItemRegistry {
             tool_tier: None,
             icon_tile: 239,
         });
+
+        self.register(ItemDef {
+            id: ItemId::BUCKET,
+            name: "blockgame:bucket",
+            display_name: "Bucket",
+            max_stack: 16,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 242,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::WATER_BUCKET,
+            name: "blockgame:water_bucket",
+            display_name: "Water Bucket",
+            max_stack: 1,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 243,
+        });
     }
 }
 
@@ -1435,6 +1461,8 @@ impl Inventory {
         inv.slots[9] = ItemSlot::new(ItemId::IRON_HOE, 1);
         inv.slots[10] = ItemSlot::new(ItemId::WHEAT_SEEDS, 16);
         inv.slots[11] = ItemSlot::new(ItemId::BREAD, 4);
+        inv.slots[12] = ItemSlot::new(ItemId::BUCKET, 1);
+        inv.slots[13] = ItemSlot::new(ItemId::WATER_BUCKET, 1);
         inv
     }
 

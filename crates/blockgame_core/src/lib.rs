@@ -13,7 +13,7 @@ pub mod tool;
 pub mod world;
 
 pub use animal::{AnimalEntity, AnimalKind};
-pub use block::{apply_water_fill, BlockDefinition, BlockId, BlockRegistry};
+pub use block::{apply_water_fill, place_water_source, BlockDefinition, BlockId, BlockRegistry};
 pub use chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, CHUNK_VOLUME};
 pub use crafting::{CraftingGrid, CraftingManager, Recipe};
 pub use direction::Direction;

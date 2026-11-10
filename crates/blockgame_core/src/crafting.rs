@@ -315,6 +315,16 @@ pub fn get_item_source_info(item_id: ItemId) -> Option<ItemSourceInfo> {
             tool_required: "Shears (drops seagrass) or Hand",
             notes: "Underwater marine vegetation.",
         }),
+        ItemId::BUCKET => Some(ItemSourceInfo {
+            location: "Crafted with 3 Iron Ingots in a V-shape",
+            tool_required: "Crafting Table",
+            notes: "Used to scoop and transport water.",
+        }),
+        ItemId::WATER_BUCKET => Some(ItemSourceInfo {
+            location: "Filled by right-clicking water with an empty Bucket",
+            tool_required: "Bucket + Water Source",
+            notes: "Places water block and cascades downward.",
+        }),
         ItemId::CORAL_BLOCK => Some(ItemSourceInfo {
             location: "Warm coral reef ocean shallows",
             tool_required: "Pickaxe with Silk Touch",
@@ -1531,6 +1541,24 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::SEA_LANTERN, 1),
         });
+
+        // Bucket: 3 Iron Ingots in a V-shape (Shaped 3x2)
+        // [Iron Ingot, None, Iron Ingot]
+        // [None, Iron Ingot, None]
+        self.register(Recipe::Shaped {
+            name: "Bucket",
+            width: 3,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT),
+                None,
+                Some(ItemId::IRON_INGOT),
+                None,
+                Some(ItemId::IRON_INGOT),
+                None,
+            ],
+            output: ItemSlot::new(ItemId::BUCKET, 1),
+        });
     }
 }
 
@@ -1930,5 +1958,19 @@ mod tests {
         // 6. Fuel burn time: Dark Oak logs & planks burn for 15.0s
         assert_eq!(get_fuel_burn_time(ItemId::DARK_OAK_LOG), 15.0);
         assert_eq!(get_fuel_burn_time(ItemId::DARK_OAK_PLANKS), 15.0);
+    }
+
+    #[test]
+    fn test_bucket_crafting() {
+        let cm = CraftingManager::new();
+        let mut grid = CraftingGrid::new_3x3();
+        // V-shape placed in bottom two rows
+        grid.set(0, 1, ItemSlot::new(ItemId::IRON_INGOT, 1));
+        grid.set(2, 1, ItemSlot::new(ItemId::IRON_INGOT, 1));
+        grid.set(1, 2, ItemSlot::new(ItemId::IRON_INGOT, 1));
+
+        let output = cm.craft(&mut grid);
+        assert_eq!(output, Some(ItemSlot::new(ItemId::BUCKET, 1)));
+        assert!(grid.is_empty());
     }
 }

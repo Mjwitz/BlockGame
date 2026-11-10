@@ -1417,6 +1417,20 @@ pub fn break_unsupported_attached(
 }
 
 /// Checks if `pos` (which is AIR or fragile) is adjacent to WATER, and if so,
+/// Places a water source at `pos` (from a Water Bucket), replacing open air or fragile blocks
+/// and cascading downward.
+pub fn place_water_source(
+    pos: IVec3,
+    world: &mut World,
+) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
+    let current = world.get_block(pos);
+    if !current.is_air() && !current.is_fragile() {
+        return (Vec::new(), Vec::new());
+    }
+    cascade_water_downward(pos, world)
+}
+
+/// Applies water inflow when an adjacent block is broken: checks if `pos` has a water neighbor,
 /// fills `pos` with WATER and cascades downward into open air or fragile blocks.
 pub fn apply_water_fill(
     pos: IVec3,
@@ -1444,8 +1458,32 @@ pub fn apply_water_fill(
         return (Vec::new(), Vec::new());
     }
 
+    cascade_water_downward(pos, world)
+}
+
+fn cascade_water_downward(
+    pos: IVec3,
+    world: &mut World,
+) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
     let mut modified_positions = Vec::new();
     let mut extra_drops = Vec::new();
+
+    let current = world.get_block(pos);
+    if current.is_fragile() {
+        let drop_item = match current {
+            BlockId::TORCH => ItemSlot::new(crate::item::ItemId::TORCH, 1),
+            BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 => {
+                ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1)
+            }
+            BlockId::WHEAT_3 => ItemSlot::new(crate::item::ItemId::WHEAT, 1),
+            BlockId::TALL_GRASS => ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1),
+            BlockId::LILY_PAD => ItemSlot::new(crate::item::ItemId::LILY_PAD, 1),
+            _ => ItemSlot::EMPTY,
+        };
+        if !drop_item.is_empty() {
+            extra_drops.push((pos, drop_item));
+        }
+    }
 
     // Fill pos with water
     world.set_block(pos, BlockId::WATER);
@@ -1790,6 +1828,40 @@ mod tests {
         world.set_block(IVec3::new(5, 2, 5), BlockId::COBBLESTONE);
         assert_eq!(world.get_block(IVec3::new(5, 2, 5)), BlockId::COBBLESTONE);
         assert!(reg.is_solid(world.get_block(IVec3::new(5, 2, 5))));
+    }
+
+    #[test]
+    fn test_bucket_scoop_and_water_place_mechanics() {
+        let mut world = World::new();
+        let reg = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Water at (2, 5, 2), lily pad on top at (2, 6, 2)
+        world.set_block(IVec3::new(2, 5, 2), BlockId::WATER);
+        world.set_block(IVec3::new(2, 6, 2), BlockId::LILY_PAD);
+
+        // 1. Scoop water at (2, 5, 2)
+        world.set_block(IVec3::new(2, 5, 2), BlockId::AIR);
+        let (unsupported_drops, modified, _) = break_unsupported_attached(IVec3::new(2, 5, 2), &mut world, &reg);
+
+        // Lily pad above has lost its water support and breaks into item drop
+        assert_eq!(world.get_block(IVec3::new(2, 5, 2)), BlockId::AIR);
+        assert_eq!(world.get_block(IVec3::new(2, 6, 2)), BlockId::AIR);
+        assert!(unsupported_drops.iter().any(|(p, slot)| *p == IVec3::new(2, 6, 2) && slot.item_id == ItemId::LILY_PAD));
+        assert!(modified.contains(&IVec3::new(2, 6, 2)));
+
+        // 2. Place water at (2, 5, 2) with air below at (2, 4, 2) and torch at (2, 3, 2)
+        world.set_block(IVec3::new(2, 4, 2), BlockId::AIR);
+        world.set_block(IVec3::new(2, 3, 2), BlockId::TORCH);
+        world.set_block(IVec3::new(2, 2, 2), BlockId::STONE);
+
+        let (water_filled, drops) = place_water_source(IVec3::new(2, 5, 2), &mut world);
+        assert_eq!(water_filled.len(), 3);
+        assert_eq!(world.get_block(IVec3::new(2, 5, 2)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(2, 4, 2)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(2, 3, 2)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(2, 2, 2)), BlockId::STONE);
+        assert!(drops.iter().any(|(p, slot)| *p == IVec3::new(2, 3, 2) && slot.item_id == ItemId::TORCH));
     }
 }
 

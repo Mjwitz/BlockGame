@@ -7,7 +7,8 @@ use std::sync::{
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{
-        apply_water_fill, break_unsupported_attached, can_block_survive, BlockId, BlockRegistry,
+        apply_water_fill, break_unsupported_attached, can_block_survive, place_water_source,
+        BlockId, BlockRegistry,
     },
     chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
     entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus},
@@ -848,6 +849,151 @@ impl WorldManager {
         }
         for (block_id, fpos) in spawned_falling {
             self.falling_blocks.push(FallingBlock::new(block_id, fpos));
+        }
+
+        true
+    }
+
+    /// Scoops a water block at `pos` with an empty bucket, replacing it with AIR and updating meshes.
+    pub fn scoop_water(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let (scooped, new_meshes, extra_drops, spawned_falling): (
+            bool,
+            Vec<(ChunkPos, ChunkMesh)>,
+            Vec<(Vec3, ItemSlot)>,
+            Vec<(BlockId, IVec3)>,
+        ) = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            if !current.is_water() {
+                return false;
+            }
+
+            world.set_block(pos, BlockId::AIR);
+
+            // Break any blocks above or adjacent that required support or water (e.g. lily pads, seagrass)
+            let (unsupported_drops, modified_positions, spawned_falling) =
+                break_unsupported_attached(pos, &mut world, &self.registry);
+            for p in modified_positions {
+                Self::add_chunk_and_neighbors(p, &mut chunks_to_rebuild);
+            }
+            let mut extra_drops = Vec::new();
+            for (p, drop) in unsupported_drops {
+                let drop_pos = p.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
+                extra_drops.push((drop_pos, drop));
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            let mesher = ChunkMesher::new(&self.registry);
+            let meshes = chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect();
+
+            (true, meshes, extra_drops, spawned_falling)
+        };
+
+        if !scooped {
+            return false;
+        }
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+
+        for (extra_pos, item) in extra_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(extra_pos, item);
+            }
+        }
+        for (block_id, fpos) in spawned_falling {
+            self.falling_blocks.push(FallingBlock::new(block_id, fpos));
+        }
+
+        true
+    }
+
+    /// Places a water block at `pos` from a water bucket, cascading downward and washing fragile blocks.
+    pub fn place_water(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let (placed, new_meshes, extra_drops): (
+            bool,
+            Vec<(ChunkPos, ChunkMesh)>,
+            Vec<(Vec3, ItemSlot)>,
+        ) = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            if !current.is_air() && !current.is_fragile() {
+                return false;
+            }
+
+            let (modified_positions, water_drops) = place_water_source(pos, &mut world);
+            for mpos in modified_positions {
+                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+            }
+            let mut extra_drops = Vec::new();
+            for (p, drop) in water_drops {
+                extra_drops.push((p.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            let mesher = ChunkMesher::new(&self.registry);
+            let meshes = chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect();
+
+            (true, meshes, extra_drops)
+        };
+
+        if !placed {
+            return false;
+        }
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+
+        for (extra_pos, item) in extra_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(extra_pos, item);
+            }
         }
 
         true

@@ -615,6 +615,73 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
+                        // 4b. Empty Bucket: Scoop Water
+                        if held_slot.item_id == ItemId::BUCKET {
+                            if let Some(hit) = state.targeted_block {
+                                let is_water = {
+                                    let world_guard = state.world_manager.world().lock().unwrap();
+                                    world_guard.get_block(hit.hit_voxel).is_water()
+                                };
+                                if is_water {
+                                    let scooped = state.world_manager.scoop_water(
+                                        hit.hit_voxel,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                    if scooped {
+                                        state.punch_timer = 0.2;
+                                        if held_slot.count <= 1 {
+                                            state.inventory.set(
+                                                state.active_hotbar_slot,
+                                                ItemSlot::new(ItemId::WATER_BUCKET, 1),
+                                            );
+                                        } else {
+                                            state.inventory.slots[state.active_hotbar_slot].take(1);
+                                            let overflow = state.inventory.add_item(
+                                                ItemSlot::new(ItemId::WATER_BUCKET, 1),
+                                                &state.item_registry,
+                                            );
+                                            if let Some(left) = overflow {
+                                                state.world_manager.spawn_item_drop(
+                                                    state.player.position,
+                                                    left,
+                                                );
+                                            }
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4c. Water Bucket: Place Water Source
+                        if held_slot.item_id == ItemId::WATER_BUCKET {
+                            if let Some(hit) = state.targeted_block {
+                                let target_pos = {
+                                    let world_guard = state.world_manager.world().lock().unwrap();
+                                    let hit_b = world_guard.get_block(hit.hit_voxel);
+                                    if hit_b.is_fragile() {
+                                        hit.hit_voxel
+                                    } else {
+                                        hit.place_voxel
+                                    }
+                                };
+                                let placed = state.world_manager.place_water(
+                                    target_pos,
+                                    &state.device,
+                                    &state.pipeline,
+                                );
+                                if placed {
+                                    state.punch_timer = 0.2;
+                                    state.inventory.set(
+                                        state.active_hotbar_slot,
+                                        ItemSlot::new(ItemId::BUCKET, 1),
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+
                         // 5. Otherwise place active block from hotbar slot
                         let slot = state.inventory.get(state.active_hotbar_slot);
                         if !slot.is_empty() {
@@ -1117,15 +1184,16 @@ impl ApplicationHandler for BlockGameApp {
                         .get(held_item)
                         .and_then(|d| d.placeable_block)
                         .is_some();
+                    let is_bucket = held_item == ItemId::BUCKET || held_item == ItemId::WATER_BUCKET;
                     let mut hit = raycast_voxel_with_water(
                         state.camera.position,
                         state.camera.forward(),
                         5.0, // 5 blocks reach
                         &world_guard,
                         &self.registry,
-                        held_item == ItemId::LILY_PAD,
+                        held_item == ItemId::LILY_PAD || held_item == ItemId::BUCKET,
                     );
-                    if hit.is_none() && is_placeable {
+                    if hit.is_none() && (is_placeable || is_bucket) {
                         hit = raycast_voxel_with_water(
                             state.camera.position,
                             state.camera.forward(),
