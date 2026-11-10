@@ -92,6 +92,25 @@ impl Camera {
         cycle: &DayNightCycle,
         is_underwater: bool,
     ) {
+        self.update_uniform_with_atmosphere_water_tint(
+            uniform,
+            aspect,
+            cycle,
+            is_underwater,
+            [0.60, 0.78, 0.98],
+            [1.0, 1.0, 1.0],
+        );
+    }
+
+    pub fn update_uniform_with_atmosphere_water_tint(
+        &self,
+        uniform: &mut CameraUniform,
+        aspect: f32,
+        cycle: &DayNightCycle,
+        is_underwater: bool,
+        biome_fog: [f32; 3],
+        biome_tint: [f32; 3],
+    ) {
         let view_proj = self.build_view_projection_matrix(aspect);
         uniform.view_proj = view_proj.to_cols_array_2d();
         uniform.camera_pos = [self.position.x, self.position.y, self.position.z, 1.0];
@@ -102,8 +121,18 @@ impl Camera {
             uniform.sun_color = [0.2, 0.55, 0.85, 0.6];
             uniform.sky_color = [0.05, 0.22, 0.45, 2.0]; // Alpha = 2.0 signals underwater fog
         } else {
-            uniform.sun_color = cycle.light_color_and_intensity();
-            uniform.sky_color = cycle.sky_color();
+            let mut sun_color = cycle.light_color_and_intensity();
+            sun_color[0] *= biome_tint[0];
+            sun_color[1] *= biome_tint[1];
+            sun_color[2] *= biome_tint[2];
+            uniform.sun_color = sun_color;
+
+            let cycle_sky = cycle.sky_color();
+            let day_intensity = (cycle_sky[0] + cycle_sky[1] + cycle_sky[2]) / 3.0;
+            let sky_r = (cycle_sky[0] * 0.45 + biome_fog[0] * 0.55 * day_intensity.max(0.15)).min(1.0);
+            let sky_g = (cycle_sky[1] * 0.45 + biome_fog[1] * 0.55 * day_intensity.max(0.15)).min(1.0);
+            let sky_b = (cycle_sky[2] * 0.45 + biome_fog[2] * 0.55 * day_intensity.max(0.15)).min(1.0);
+            uniform.sky_color = [sky_r, sky_g, sky_b, cycle_sky[3]];
         }
     }
 }

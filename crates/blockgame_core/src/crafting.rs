@@ -387,6 +387,11 @@ impl CraftingManager {
             inputs: vec![ItemId::ACACIA_LOG],
             output: ItemSlot::new(ItemId::ACACIA_PLANKS, 4),
         });
+        self.register(Recipe::Shapeless {
+            name: "Jungle Planks from Jungle Log",
+            inputs: vec![ItemId::JUNGLE_LOG],
+            output: ItemSlot::new(ItemId::JUNGLE_PLANKS, 4),
+        });
 
         // 2. 2 Planks vertically -> 4 Sticks (Shaped 1x2)
         self.register(Recipe::Shaped {
@@ -415,6 +420,13 @@ impl CraftingManager {
             width: 1,
             height: 2,
             pattern: vec![Some(ItemId::ACACIA_PLANKS), Some(ItemId::ACACIA_PLANKS)],
+            output: ItemSlot::new(ItemId::STICK, 4),
+        });
+        self.register(Recipe::Shaped {
+            name: "Sticks from Jungle Planks",
+            width: 1,
+            height: 2,
+            pattern: vec![Some(ItemId::JUNGLE_PLANKS), Some(ItemId::JUNGLE_PLANKS)],
             output: ItemSlot::new(ItemId::STICK, 4),
         });
 
@@ -467,6 +479,18 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::CRAFTING_TABLE, 1),
         });
+        self.register(Recipe::Shaped {
+            name: "Crafting Table (Jungle)",
+            width: 2,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::CRAFTING_TABLE, 1),
+        });
 
         // 4. 1 Coal over 1 Stick -> 4 Torches (Shaped 1x2)
         self.register(Recipe::Shaped {
@@ -504,6 +528,13 @@ impl CraftingManager {
             width: 1,
             height: 2,
             pattern: vec![Some(ItemId::ACACIA_PLANKS), Some(ItemId::STICK)],
+            output: ItemSlot::new(ItemId::TORCH, 4),
+        });
+        self.register(Recipe::Shaped {
+            name: "Torches from Jungle Planks",
+            width: 1,
+            height: 2,
+            pattern: vec![Some(ItemId::JUNGLE_PLANKS), Some(ItemId::STICK)],
             output: ItemSlot::new(ItemId::TORCH, 4),
         });
 
@@ -567,6 +598,23 @@ impl CraftingManager {
                 Some(ItemId::ACACIA_PLANKS),
                 Some(ItemId::ACACIA_PLANKS),
                 Some(ItemId::ACACIA_PLANKS),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
+            ],
+            output: ItemSlot::new(ItemId::WOODEN_PICKAXE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Wooden Pickaxe (Jungle)",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
                 None,
                 Some(ItemId::STICK),
                 None,
@@ -702,6 +750,13 @@ impl CraftingManager {
         );
         register_axe(
             self,
+            "Wooden Axe (Jungle Left)",
+            "Wooden Axe (Jungle Right)",
+            ItemId::JUNGLE_PLANKS,
+            ItemId::WOODEN_AXE,
+        );
+        register_axe(
+            self,
             "Stone Axe (Left)",
             "Stone Axe (Right)",
             ItemId::COBBLESTONE,
@@ -738,6 +793,7 @@ impl CraftingManager {
         register_shovel(self, "Wooden Shovel (Birch)", ItemId::BIRCH_PLANKS, ItemId::WOODEN_SHOVEL);
         register_shovel(self, "Wooden Shovel (Spruce)", ItemId::SPRUCE_PLANKS, ItemId::WOODEN_SHOVEL);
         register_shovel(self, "Wooden Shovel (Acacia)", ItemId::ACACIA_PLANKS, ItemId::WOODEN_SHOVEL);
+        register_shovel(self, "Wooden Shovel (Jungle)", ItemId::JUNGLE_PLANKS, ItemId::WOODEN_SHOVEL);
         register_shovel(
             self,
             "Stone Shovel",
@@ -853,6 +909,13 @@ impl CraftingManager {
             "Wooden Hoe (Acacia Left)",
             "Wooden Hoe (Acacia Right)",
             ItemId::ACACIA_PLANKS,
+            ItemId::WOODEN_HOE,
+        );
+        register_hoe(
+            self,
+            "Wooden Hoe (Jungle Left)",
+            "Wooden Hoe (Jungle Right)",
+            ItemId::JUNGLE_PLANKS,
             ItemId::WOODEN_HOE,
         );
         register_hoe(
@@ -978,6 +1041,23 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::CHEST, 1),
         });
+        self.register(Recipe::Shaped {
+            name: "Chest (Jungle)",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                None,
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+                Some(ItemId::JUNGLE_PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::CHEST, 1),
+        });
 
         // Sandstone: 4 Sand in a 2x2 square
         self.register(Recipe::Shaped {
@@ -989,6 +1069,18 @@ impl CraftingManager {
                 Some(ItemId::SAND),
                 Some(ItemId::SAND),
                 Some(ItemId::SAND),
+            ],
+            output: ItemSlot::new(ItemId::SANDSTONE, 4),
+        });
+        self.register(Recipe::Shaped {
+            name: "Sandstone from Red Sand",
+            width: 2,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::RED_SAND),
+                Some(ItemId::RED_SAND),
+                Some(ItemId::RED_SAND),
+                Some(ItemId::RED_SAND),
             ],
             output: ItemSlot::new(ItemId::SANDSTONE, 4),
         });
@@ -1025,6 +1117,13 @@ impl CraftingManager {
             input: ItemId::SAND,
             output: ItemSlot::new(ItemId::GLASS, 1),
         });
+
+        // Furnace Smelting: Clay -> Terracotta
+        self.register(Recipe::Smelting {
+            name: "Terracotta from Clay",
+            input: ItemId::CLAY,
+            output: ItemSlot::new(ItemId::TERRACOTTA, 1),
+        });
     }
 }
 
@@ -1036,6 +1135,7 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
         ItemId::RAW_COPPER | ItemId::COPPER_ORE => Some(ItemId::COPPER_INGOT),
         ItemId::COBBLESTONE => Some(ItemId::STONE),
         ItemId::SAND => Some(ItemId::GLASS),
+        ItemId::CLAY => Some(ItemId::TERRACOTTA),
         ItemId::RAW_BEEF => Some(ItemId::COOKED_STEAK),
         ItemId::RAW_PORKCHOP => Some(ItemId::COOKED_PORKCHOP),
         ItemId::RAW_CHICKEN => Some(ItemId::COOKED_CHICKEN),
@@ -1052,10 +1152,12 @@ pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
         | ItemId::BIRCH_LOG
         | ItemId::SPRUCE_LOG
         | ItemId::ACACIA_LOG
+        | ItemId::JUNGLE_LOG
         | ItemId::PLANKS
         | ItemId::BIRCH_PLANKS
         | ItemId::SPRUCE_PLANKS
         | ItemId::ACACIA_PLANKS
+        | ItemId::JUNGLE_PLANKS
         | ItemId::CRAFTING_TABLE
         | ItemId::CHEST
         | ItemId::FURNACE => 15.0,
@@ -1290,9 +1392,9 @@ mod tests {
         assert_eq!(dia_pick_recipes[0].inputs[4], Some(ItemId::STICK));
         assert_eq!(dia_pick_recipes[0].inputs[7], Some(ItemId::STICK));
 
-        // 2. Recipes producing Chest (Oak, Birch, Spruce, Acacia variants)
+        // 2. Recipes producing Chest (Oak, Birch, Spruce, Acacia, Jungle variants)
         let chest_recipes = cm.get_recipes_for_output(ItemId::CHEST);
-        assert_eq!(chest_recipes.len(), 4);
+        assert_eq!(chest_recipes.len(), 5);
         assert_eq!(chest_recipes[0].category, RecipeCategory::Crafting3x3);
 
         // 3. Recipes producing Planks (from Wood Log)
@@ -1310,5 +1412,36 @@ mod tests {
         assert!(iron_ingot_recipes
             .iter()
             .any(|r| r.category == RecipeCategory::Smelting));
+
+        let terracotta_recipes = cm.get_recipes_for_output(ItemId::TERRACOTTA);
+        assert_eq!(terracotta_recipes.len(), 1);
+        assert_eq!(terracotta_recipes[0].category, RecipeCategory::Smelting);
+    }
+
+    #[test]
+    fn test_phase_3_jungle_and_badlands_recipes() {
+        let mut cm = CraftingManager::new();
+
+        // 1. Jungle Log -> 4 Jungle Planks (Shapeless)
+        let mut grid_shapeless = CraftingGrid::new_2x2();
+        grid_shapeless.set(0, 0, ItemSlot::new(ItemId::JUNGLE_LOG, 1));
+        let out = cm.craft(&mut grid_shapeless);
+        assert_eq!(out, Some(ItemSlot::new(ItemId::JUNGLE_PLANKS, 4)));
+
+        // 2. Sandstone from 4 Red Sand (Shaped 2x2)
+        let mut grid_red_sand = CraftingGrid::new_2x2();
+        grid_red_sand.set(0, 0, ItemSlot::new(ItemId::RED_SAND, 1));
+        grid_red_sand.set(1, 0, ItemSlot::new(ItemId::RED_SAND, 1));
+        grid_red_sand.set(0, 1, ItemSlot::new(ItemId::RED_SAND, 1));
+        grid_red_sand.set(1, 1, ItemSlot::new(ItemId::RED_SAND, 1));
+        let out_sandstone = cm.craft(&mut grid_red_sand);
+        assert_eq!(out_sandstone, Some(ItemSlot::new(ItemId::SANDSTONE, 4)));
+
+        // 3. Furnace smelting: Clay -> Terracotta
+        assert_eq!(get_smelting_output(ItemId::CLAY), Some(ItemId::TERRACOTTA));
+
+        // 4. Furnace fuel: Jungle Log and Jungle Planks burn for 15.0s
+        assert_eq!(get_fuel_burn_time(ItemId::JUNGLE_LOG), 15.0);
+        assert_eq!(get_fuel_burn_time(ItemId::JUNGLE_PLANKS), 15.0);
     }
 }

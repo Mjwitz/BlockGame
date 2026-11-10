@@ -1072,11 +1072,21 @@ impl ApplicationHandler for BlockGameApp {
                     let world = state.world_manager.world().lock().unwrap();
                     world.get_block(camera_block_pos) == BlockId::WATER
                 };
-                state.camera.update_uniform_with_atmosphere_water(
+                let player_pos = state.player.position;
+                let current_biome = state.world_manager.generator.get_biome(
+                    player_pos.x.floor() as i32,
+                    player_pos.z.floor() as i32,
+                    player_pos.y.floor() as i32,
+                );
+                let biome_fog = current_biome.fog_color();
+                let biome_tint = current_biome.sky_tint();
+                state.camera.update_uniform_with_atmosphere_water_tint(
                     &mut state.camera_uniform,
                     aspect,
                     &state.day_night,
                     is_camera_underwater,
+                    biome_fog,
+                    biome_tint,
                 );
                 state
                     .pipeline

@@ -20,7 +20,7 @@ use rayon::prelude::*;
 
 pub struct WorldManager {
     world: Arc<Mutex<World>>,
-    generator: Arc<TerrainGenerator>,
+    pub generator: Arc<TerrainGenerator>,
     registry: Arc<BlockRegistry>,
     render_distance: i32,
     loaded_chunks_set: HashSet<ChunkPos>,
@@ -192,13 +192,15 @@ impl WorldManager {
         // - Swamp: 55% spawn chance (mud wallowing pigs and chickens)
         // - SnowyTundra: 25% spawn chance (cold adapted chickens, cows, pigs)
         let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
-            Biome::Desert | Biome::Ocean => return,
+            Biome::Desert | Biome::Ocean | Biome::Badlands => return,
             Biome::Plains => (0.65, [(AnimalKind::Cow, 0.40), (AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25)], 2, 4),
             Biome::Forest => (0.50, [(AnimalKind::Pig, 0.45), (AnimalKind::Chicken, 0.35), (AnimalKind::Cow, 0.20)], 2, 3),
             Biome::Mountains => (0.20, [(AnimalKind::Chicken, 0.50), (AnimalKind::Cow, 0.30), (AnimalKind::Pig, 0.20)], 1, 2),
             Biome::Savanna => (0.60, [(AnimalKind::Cow, 0.55), (AnimalKind::Pig, 0.25), (AnimalKind::Chicken, 0.20)], 2, 4),
             Biome::Swamp => (0.55, [(AnimalKind::Pig, 0.60), (AnimalKind::Chicken, 0.30), (AnimalKind::Cow, 0.10)], 2, 4),
             Biome::SnowyTundra => (0.25, [(AnimalKind::Chicken, 0.45), (AnimalKind::Cow, 0.35), (AnimalKind::Pig, 0.20)], 1, 3),
+            Biome::Jungle => (0.65, [(AnimalKind::Chicken, 0.50), (AnimalKind::Pig, 0.35), (AnimalKind::Cow, 0.15)], 2, 5),
+            Biome::Beach => (0.30, [(AnimalKind::Chicken, 0.70), (AnimalKind::Pig, 0.20), (AnimalKind::Cow, 0.10)], 1, 3),
         };
 
         // Deterministic pseudo-random seed per chunk column
@@ -244,7 +246,7 @@ impl WorldManager {
             let mut ay = (VERTICAL_CHUNKS * 16) - 2;
             while ay > 1 {
                 let b = world.get_block(IVec3::new(ax, ay, az));
-                if b == BlockId::GRASS || b == BlockId::DIRT || b == BlockId::SNOW_BLOCK || b == BlockId::CLAY {
+                if b == BlockId::GRASS || b == BlockId::DIRT || b == BlockId::SNOW_BLOCK || b == BlockId::CLAY || b == BlockId::SAND {
                     break;
                 }
                 ay -= 1;

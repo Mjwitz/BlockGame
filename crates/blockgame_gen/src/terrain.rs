@@ -14,6 +14,45 @@ pub enum Biome {
     Swamp,
     Savanna,
     Ocean,
+    Jungle,
+    Badlands,
+    Beach,
+}
+
+impl Biome {
+    /// Atmospheric fog RGB color associated with this biome.
+    #[inline]
+    pub fn fog_color(&self) -> [f32; 3] {
+        match self {
+            Biome::Desert => [0.82, 0.70, 0.52],       // Warm golden-amber desert haze
+            Biome::Badlands => [0.85, 0.58, 0.44],     // Terracotta canyon dust
+            Biome::SnowyTundra => [0.78, 0.84, 0.92], // Cool arctic pale-blue mist
+            Biome::Swamp => [0.44, 0.52, 0.38],       // Murky moss-green swamp fog
+            Biome::Jungle => [0.50, 0.72, 0.50],      // Vibrant tropical emerald mist
+            Biome::Savanna => [0.86, 0.80, 0.60],     // Sun-drenched golden afternoon
+            Biome::Mountains => [0.65, 0.75, 0.90],   // Crisp alpine thin mist
+            Biome::Ocean => [0.38, 0.58, 0.86],       // Deep marine azure
+            Biome::Beach => [0.75, 0.82, 0.92],       // Sunny coastal breeze
+            Biome::Forest | Biome::Plains => [0.60, 0.78, 0.98], // Clear temperate sky
+        }
+    }
+
+    /// Atmospheric sky tint RGB factor to modulate with sun light.
+    #[inline]
+    pub fn sky_tint(&self) -> [f32; 3] {
+        match self {
+            Biome::Desert => [1.05, 0.95, 0.80],
+            Biome::Badlands => [1.08, 0.88, 0.75],
+            Biome::SnowyTundra => [0.92, 0.96, 1.05],
+            Biome::Swamp => [0.85, 0.92, 0.80],
+            Biome::Jungle => [0.90, 1.05, 0.88],
+            Biome::Savanna => [1.04, 0.98, 0.85],
+            Biome::Mountains => [0.95, 0.98, 1.05],
+            Biome::Ocean => [0.88, 0.95, 1.08],
+            Biome::Beach => [1.00, 1.00, 1.02],
+            Biome::Forest | Biome::Plains => [1.00, 1.00, 1.00],
+        }
+    }
 }
 
 pub struct TerrainGenerator {
@@ -81,29 +120,40 @@ impl TerrainGenerator {
             return Biome::Ocean;
         }
 
-        if height > 58 {
-            return Biome::Mountains;
-        }
-
         let fx = x as f64 * 0.003;
         let fz = z as f64 * 0.003;
 
         let temp = self.temp_noise.get([fx, fz]);
         let moisture = self.moisture_noise.get([fx, fz]);
 
+        // Coastal beach transition: 1 to 2 blocks above water level bordering water
+        if height <= self.water_level + 2 && temp > -0.20 {
+            return Biome::Beach;
+        }
+
+        if height > 58 {
+            return Biome::Mountains;
+        }
+
         // Cold regions: Snowy Tundra
         if temp < -0.18 {
             Biome::SnowyTundra
-        } else if temp > 0.30 && moisture < -0.12 {
+        } else if temp > 0.28 && moisture < -0.15 {
+            // Hyper-arid hot plateaus: Badlands
+            Biome::Badlands
+        } else if temp > 0.25 && moisture < 0.0 {
             // Arid hot regions: Desert
             Biome::Desert
+        } else if temp > 0.15 && moisture > 0.15 {
+            // Warm and tropical high moisture: Jungle
+            Biome::Jungle
         } else if temp > 0.10 && moisture < 0.05 {
             // Warm semi-arid plateaus: Savanna
             Biome::Savanna
         } else if height <= self.water_level + 4 && moisture > 0.18 {
             // Lowlands near water level with high humidity: Swamp
             Biome::Swamp
-        } else if moisture > 0.15 {
+        } else if moisture > 0.10 {
             // High humidity temperate: Forest
             Biome::Forest
         } else {
@@ -168,6 +218,14 @@ impl TerrainGenerator {
                             } else {
                                 match biome {
                                     Biome::Desert => BlockId::SAND,
+                                    Biome::Beach => BlockId::SAND,
+                                    Biome::Badlands => {
+                                        if (surface_y / 2) % 2 == 0 {
+                                            BlockId::RED_SAND
+                                        } else {
+                                            BlockId::TERRACOTTA
+                                        }
+                                    }
                                     Biome::SnowyTundra => BlockId::SNOW_BLOCK,
                                     Biome::Mountains if surface_y > 64 => BlockId::SNOW_BLOCK,
                                     Biome::Mountains if surface_y > 58 => BlockId::STONE,
@@ -194,6 +252,23 @@ impl TerrainGenerator {
                                             BlockId::SANDSTONE
                                         } else {
                                             BlockId::SAND
+                                        }
+                                    }
+                                    Biome::Beach => {
+                                        if wy < surface_y - 2 {
+                                            BlockId::SANDSTONE
+                                        } else {
+                                            BlockId::SAND
+                                        }
+                                    }
+                                    Biome::Badlands => {
+                                        let layer = (wy / 2) % 3;
+                                        if layer == 0 {
+                                            BlockId::TERRACOTTA
+                                        } else if layer == 1 {
+                                            BlockId::RED_SAND
+                                        } else {
+                                            BlockId::TERRACOTTA
                                         }
                                     }
                                     Biome::Swamp if surface_y <= self.water_level + 2 && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) => BlockId::CLAY,
@@ -352,6 +427,7 @@ impl TerrainGenerator {
                             Biome::Forest => 12,
                             Biome::Savanna => 25,
                             Biome::Swamp => 15,
+                            Biome::Jungle => 35,
                             _ => 0,
                         };
                         if grass_chance > 0
@@ -601,6 +677,50 @@ impl TerrainGenerator {
                             }
                         }
                     }
+                    Biome::Jungle => {
+                        if th % 16 == 0 {
+                            // Towering Jungle Tree: 6 to 9 blocks high trunk with lush wide canopy
+                            let trunk_h = 6 + ((th >> 4) % 4) as usize;
+                            for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, ty, lz, BlockId::JUNGLE_LOG);
+                            }
+                            let top_y = ly + trunk_h;
+                            for cy in (top_y - 2)..=(top_y + 1).min(CHUNK_SIZE_Y - 1) {
+                                let radius: i32 = if cy == top_y + 1 { 1 } else if cy >= top_y - 1 { 2 } else { 1 };
+                                for dz in -radius..=radius {
+                                    for dx in -radius..=radius {
+                                        if radius == 2 && dx.abs() == 2 && dz.abs() == 2 && (dx + dz) % 2 == 0 {
+                                            continue;
+                                        }
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
+                                                chunk.set(cx as usize, cy, cz as usize, BlockId::JUNGLE_LEAVES);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if th % 22 == 0 {
+                            // Jungle floor bush: 1 JUNGLE_LOG surrounded by JUNGLE_LEAVES
+                            chunk.set(lx, ly, lz, BlockId::JUNGLE_LOG);
+                            for dz in -1..=1 {
+                                for dx in -1..=1 {
+                                    let cx = lx as i32 + dx;
+                                    let cz = lz as i32 + dz;
+                                    if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                        if chunk.get(cx as usize, ly, cz as usize) == Some(BlockId::AIR) {
+                                            chunk.set(cx as usize, ly, cz as usize, BlockId::JUNGLE_LEAVES);
+                                        }
+                                        if ly + 1 < CHUNK_SIZE_Y && chunk.get(cx as usize, ly + 1, cz as usize) == Some(BlockId::AIR) {
+                                            chunk.set(cx as usize, ly + 1, cz as usize, BlockId::JUNGLE_LEAVES);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -706,16 +826,16 @@ mod tests {
         let gen = TerrainGenerator::new(1337);
         let mut biomes_found = std::collections::HashSet::new();
 
-        // Sample a 400x400 block region
-        for z in (-200..200).step_by(16) {
-            for x in (-200..200).step_by(16) {
+        // Sample an 800x800 block region
+        for z in (-400..400).step_by(16) {
+            for x in (-400..400).step_by(16) {
                 let h = gen.surface_height(x, z);
                 let biome = gen.get_biome(x, z, h);
                 biomes_found.insert(biome);
             }
         }
 
-        // Verify that varied climate biomes are generated
+        // Verify that all 11 varied climate biomes are generated
         assert!(biomes_found.contains(&Biome::Plains), "Expected Plains biome");
         assert!(biomes_found.contains(&Biome::Forest), "Expected Forest biome");
         assert!(biomes_found.contains(&Biome::Mountains), "Expected Mountains biome");
@@ -724,5 +844,8 @@ mod tests {
         assert!(biomes_found.contains(&Biome::Savanna), "Expected Savanna biome");
         assert!(biomes_found.contains(&Biome::Swamp), "Expected Swamp biome");
         assert!(biomes_found.contains(&Biome::Ocean), "Expected Ocean biome");
+        assert!(biomes_found.contains(&Biome::Jungle), "Expected Jungle biome");
+        assert!(biomes_found.contains(&Biome::Badlands), "Expected Badlands biome");
+        assert!(biomes_found.contains(&Biome::Beach), "Expected Beach biome");
     }
 }

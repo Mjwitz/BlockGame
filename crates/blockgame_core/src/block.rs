@@ -51,6 +51,11 @@ impl BlockId {
     pub const CACTUS: Self = Self(42);
     pub const SANDSTONE: Self = Self(43);
     pub const GRAVEL: Self = Self(44);
+    pub const JUNGLE_LOG: Self = Self(45);
+    pub const JUNGLE_PLANKS: Self = Self(46);
+    pub const JUNGLE_LEAVES: Self = Self(47);
+    pub const TERRACOTTA: Self = Self(48);
+    pub const RED_SAND: Self = Self(49);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -724,6 +729,79 @@ impl BlockRegistry {
             required_tool: Some(ToolType::Shovel),
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::GRAVEL),
+            drop_count: (1, 1),
+        });
+
+        // Jungle Wood Family
+        registry.register(BlockDefinition {
+            id: BlockId::JUNGLE_LOG,
+            name: "Jungle Log",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 218, NegY: 218, Sides: 217
+            textures: [218, 218, 217, 217, 217, 217],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::JUNGLE_LOG),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::JUNGLE_PLANKS,
+            name: "Jungle Planks",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [219; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::JUNGLE_PLANKS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::JUNGLE_LEAVES,
+            name: "Jungle Leaves",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [220; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::APPLE),
+            drop_count: (0, 1),
+        });
+
+        // Badlands / Mesa Blocks
+        registry.register(BlockDefinition {
+            id: BlockId::TERRACOTTA,
+            name: "Terracotta",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [221; 6],
+            hardness: 1.25,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::TERRACOTTA),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::RED_SAND,
+            name: "Red Sand",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [222; 6],
+            hardness: 0.5,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::RED_SAND),
             drop_count: (1, 1),
         });
 

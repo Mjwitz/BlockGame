@@ -80,6 +80,11 @@ impl ItemId {
     pub const CACTUS: Self = Self(70);
     pub const SANDSTONE: Self = Self(71);
     pub const GRAVEL: Self = Self(72);
+    pub const JUNGLE_LOG: Self = Self(73);
+    pub const JUNGLE_PLANKS: Self = Self(74);
+    pub const JUNGLE_LEAVES: Self = Self(75);
+    pub const TERRACOTTA: Self = Self(76);
+    pub const RED_SAND: Self = Self(77);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1143,6 +1148,68 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 216,
+        });
+
+        // Jungle Wood Items
+        self.register(ItemDef {
+            id: ItemId::JUNGLE_LOG,
+            name: "blockgame:jungle_log",
+            display_name: "Jungle Log",
+            max_stack: 64,
+            placeable_block: Some(BlockId::JUNGLE_LOG),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 217,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::JUNGLE_PLANKS,
+            name: "blockgame:jungle_planks",
+            display_name: "Jungle Planks",
+            max_stack: 64,
+            placeable_block: Some(BlockId::JUNGLE_PLANKS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 219,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::JUNGLE_LEAVES,
+            name: "blockgame:jungle_leaves",
+            display_name: "Jungle Leaves",
+            max_stack: 64,
+            placeable_block: Some(BlockId::JUNGLE_LEAVES),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 220,
+        });
+
+        // Badlands Items
+        self.register(ItemDef {
+            id: ItemId::TERRACOTTA,
+            name: "blockgame:terracotta",
+            display_name: "Terracotta",
+            max_stack: 64,
+            placeable_block: Some(BlockId::TERRACOTTA),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 221,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::RED_SAND,
+            name: "blockgame:red_sand",
+            display_name: "Red Sand",
+            max_stack: 64,
+            placeable_block: Some(BlockId::RED_SAND),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 222,
         });
     }
 }

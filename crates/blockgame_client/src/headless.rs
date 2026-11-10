@@ -2754,5 +2754,191 @@ pub async fn render_world_to_image(
         log::info!("Successfully saved Biome Expansion showcase image to biome_expansion_render.png");
     }
 
+    // 14. Phase 3 Showcase Render (Jungle, Badlands Strata, and Biome Atmospheric Fog/Tint)
+    {
+        let p3_x = -16;
+        let p3_z = -4;
+        let p3_y = base_y;
+        let dummy_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+
+        // Badlands Canyon Sedimentary Strata (Terracotta and Red Sand)
+        world_manager.place_block(IVec3::new(p3_x, p3_y, p3_z), BlockId::TERRACOTTA, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x, p3_y + 1, p3_z), BlockId::RED_SAND, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x, p3_y + 2, p3_z), BlockId::TERRACOTTA, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 1, p3_y + 1, p3_z), BlockId::RED_SAND, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 1, p3_y + 2, p3_z), BlockId::TERRACOTTA, &dummy_box, &device, &pipeline);
+
+        // Jungle Tree Section (Jungle Log, Leaves, Planks)
+        world_manager.place_block(IVec3::new(p3_x + 3, p3_y + 1, p3_z + 1), BlockId::JUNGLE_PLANKS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 4, p3_y + 1, p3_z + 1), BlockId::JUNGLE_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 4, p3_y + 2, p3_z + 1), BlockId::JUNGLE_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 4, p3_y + 3, p3_z + 1), BlockId::JUNGLE_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 4, p3_y + 4, p3_z + 1), BlockId::JUNGLE_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 3, p3_y + 3, p3_z + 1), BlockId::JUNGLE_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(p3_x + 5, p3_y + 3, p3_z + 1), BlockId::JUNGLE_LEAVES, &dummy_box, &device, &pipeline);
+
+        // Camera viewing the Badlands & Jungle scene with Badlands/Jungle atmospheric tinting
+        let p3_day_night = DayNightCycle::new();
+        let p3_cam_pos = Vec3::new((p3_x as f32) + 2.0, (p3_y as f32) + 2.5, (p3_z as f32) + 4.5);
+        let p3_cam = Camera::new(p3_cam_pos, (-140.0_f32).to_radians(), (-12.0_f32).to_radians());
+        let mut p3_uniform = CameraUniform::default();
+        let badlands_fog = [0.85, 0.58, 0.44];
+        let badlands_tint = [1.08, 0.88, 0.75];
+        p3_cam.update_uniform_with_atmosphere_water_tint(
+            &mut p3_uniform,
+            width as f32 / height as f32,
+            &p3_day_night,
+            false,
+            badlands_fog,
+            badlands_tint,
+        );
+        pipeline.update_camera(&queue, &p3_uniform);
+
+        let mut p3_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Phase 3 Biome Atmosphere Encoder"),
+        });
+
+        {
+            let mut render_pass = p3_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Phase 3 3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.82,
+                            g: 0.62,
+                            b: 0.50,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            render_pass.set_pipeline(&pipeline.water_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render_water(&mut render_pass);
+        }
+
+        // Draw HUD overlay with Phase 3 items in hotbar
+        let mut p3_ui_mesh = UiMesh::new();
+        let stats = blockgame_core::PlayerStats::new();
+        let mut p3_inv = inventory.clone();
+        p3_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::JUNGLE_PLANKS, 64);
+        p3_inv.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::JUNGLE_LOG, 32);
+        p3_inv.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::JUNGLE_LEAVES, 16);
+        p3_inv.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TERRACOTTA, 48);
+        p3_inv.slots[4] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::RED_SAND, 64);
+        p3_inv.slots[5] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SANDSTONE, 32);
+        p3_inv.slots[6] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CLAY, 16);
+        p3_inv.slots[7] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CACTUS, 16);
+        p3_inv.slots[8] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::ACACIA_PLANKS, 64);
+        UiBuilder::build_hud(&mut p3_ui_mesh, screen_w, screen_h, &p3_inv, 0, &item_registry, 0.0, 0.0, &stats);
+
+        if !p3_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Phase 3 UI VB"),
+                contents: bytemuck::cast_slice(&p3_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Phase 3 UI IB"),
+                contents: bytemuck::cast_slice(&p3_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = p3_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Phase 3 UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..p3_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        p3_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(p3_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut p3_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            p3_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "phase_3_biome_atmosphere_render.png",
+            &p3_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Phase 3 Biome Atmosphere showcase image to phase_3_biome_atmosphere_render.png");
+    }
+
     Ok(())
 }
