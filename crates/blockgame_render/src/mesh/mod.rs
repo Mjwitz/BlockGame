@@ -119,6 +119,11 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    if block_id == BlockId::LILY_PAD {
+                        self.build_lily_pad(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                        continue;
+                    }
+
                     if block_id == BlockId::WATER {
                         for dir in Direction::ALL {
                             let normal = dir.normal_ivec();
@@ -634,6 +639,66 @@ impl<'a> ChunkMesher<'a> {
         ];
         add_quad(diag2_front, uv_front, [0.707, 0.0, 0.707]);
         add_quad(diag2_back, uv_back, [-0.707, 0.0, -0.707]);
+    }
+
+    /// Generates flat horizontal two-sided water surface quad for lily pads.
+    fn build_lily_pad(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32 + 0.04;
+        let fz = (origin.z + z) as f32;
+
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(206);
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        let base_index = mesh.vertices.len() as u32;
+        let positions = [
+            [fx, fy, fz + 1.0],
+            [fx + 1.0, fy, fz + 1.0],
+            [fx + 1.0, fy, fz],
+            [fx, fy, fz],
+        ];
+        let uvs = [
+            [u_min, v_max],
+            [u_max, v_max],
+            [u_max, v_min],
+            [u_min, v_min],
+        ];
+
+        for i in 0..4 {
+            mesh.vertices.push(VoxelVertex {
+                position: positions[i],
+                uv: uvs[i],
+                normal: [0.0, 1.0, 0.0],
+                ao: 1.0,
+                light,
+            });
+        }
+
+        mesh.indices.extend_from_slice(&[
+            base_index,
+            base_index + 1,
+            base_index + 2,
+            base_index,
+            base_index + 2,
+            base_index + 3,
+            // Back face
+            base_index + 2,
+            base_index + 1,
+            base_index,
+            base_index + 3,
+            base_index + 2,
+            base_index,
+        ]);
     }
 
     fn calculate_face_ao<F>(&self, x: i32, y: i32, z: i32, dir: Direction, query: &F) -> [f32; 4]

@@ -957,10 +957,16 @@ impl ApplicationHandler for BlockGameApp {
                     (state.player.position.y + 1.62).floor() as i32,
                     state.player.position.z.floor() as i32,
                 );
-                let is_head_submerged = {
+                let (is_head_submerged, is_touching_cactus) = {
                     let world = state.world_manager.world().lock().unwrap();
-                    world.get_block(head_block_pos) == BlockId::WATER
+                    let submerged = world.get_block(head_block_pos) == BlockId::WATER;
+                    let touching_cactus = state.player.is_touching_cactus(&world);
+                    (submerged, touching_cactus)
                 };
+
+                if is_touching_cactus {
+                    state.player_stats.take_damage(1.0);
+                }
 
                 // Update player stats (regeneration, starvation, void damage, breath/drowning)
                 state.player_stats.update(dt, state.player.position.y, is_head_submerged);

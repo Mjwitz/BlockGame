@@ -184,15 +184,21 @@ impl WorldManager {
         let biome = self.generator.get_biome(center_x, center_z, surface_y);
 
         // Biome spawn probabilities & herd compositions:
-        // - Desert: 0% spawn chance
+        // - Desert & Ocean: 0% spawn chance
         // - Plains: 65% spawn chance (pasture grazing: cows, pigs, chickens)
         // - Forest: 50% spawn chance (woodland foraging: pigs, chickens, occasional cows)
         // - Mountains: 20% spawn chance (high-altitude chickens, occasional cows/pigs)
+        // - Savanna: 60% spawn chance (grazing cows and pigs)
+        // - Swamp: 55% spawn chance (mud wallowing pigs and chickens)
+        // - SnowyTundra: 25% spawn chance (cold adapted chickens, cows, pigs)
         let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
-            Biome::Desert => return,
+            Biome::Desert | Biome::Ocean => return,
             Biome::Plains => (0.65, [(AnimalKind::Cow, 0.40), (AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25)], 2, 4),
             Biome::Forest => (0.50, [(AnimalKind::Pig, 0.45), (AnimalKind::Chicken, 0.35), (AnimalKind::Cow, 0.20)], 2, 3),
             Biome::Mountains => (0.20, [(AnimalKind::Chicken, 0.50), (AnimalKind::Cow, 0.30), (AnimalKind::Pig, 0.20)], 1, 2),
+            Biome::Savanna => (0.60, [(AnimalKind::Cow, 0.55), (AnimalKind::Pig, 0.25), (AnimalKind::Chicken, 0.20)], 2, 4),
+            Biome::Swamp => (0.55, [(AnimalKind::Pig, 0.60), (AnimalKind::Chicken, 0.30), (AnimalKind::Cow, 0.10)], 2, 4),
+            Biome::SnowyTundra => (0.25, [(AnimalKind::Chicken, 0.45), (AnimalKind::Cow, 0.35), (AnimalKind::Pig, 0.20)], 1, 3),
         };
 
         // Deterministic pseudo-random seed per chunk column
@@ -238,7 +244,7 @@ impl WorldManager {
             let mut ay = (VERTICAL_CHUNKS * 16) - 2;
             while ay > 1 {
                 let b = world.get_block(IVec3::new(ax, ay, az));
-                if b == BlockId::GRASS || b == BlockId::DIRT {
+                if b == BlockId::GRASS || b == BlockId::DIRT || b == BlockId::SNOW_BLOCK || b == BlockId::CLAY {
                     break;
                 }
                 ay -= 1;

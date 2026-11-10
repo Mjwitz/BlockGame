@@ -41,6 +41,16 @@ impl BlockId {
     pub const SPRUCE_LOG: Self = Self(32);
     pub const SPRUCE_PLANKS: Self = Self(33);
     pub const SPRUCE_LEAVES: Self = Self(34);
+    pub const SNOW_BLOCK: Self = Self(35);
+    pub const ICE: Self = Self(36);
+    pub const CLAY: Self = Self(37);
+    pub const LILY_PAD: Self = Self(38);
+    pub const ACACIA_LOG: Self = Self(39);
+    pub const ACACIA_PLANKS: Self = Self(40);
+    pub const ACACIA_LEAVES: Self = Self(41);
+    pub const CACTUS: Self = Self(42);
+    pub const SANDSTONE: Self = Self(43);
+    pub const GRAVEL: Self = Self(44);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -567,6 +577,154 @@ impl BlockRegistry {
             min_tier: ToolTier::None,
             drop_item: None,
             drop_count: (0, 0),
+        });
+
+        // Snowy Biome Blocks
+        registry.register(BlockDefinition {
+            id: BlockId::SNOW_BLOCK,
+            name: "Snow Block",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [203; 6],
+            hardness: 0.2,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SNOW_BLOCK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ICE,
+            name: "Ice",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [204; 6],
+            hardness: 0.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
+        });
+
+        // Swamp & Waterway Blocks
+        registry.register(BlockDefinition {
+            id: BlockId::CLAY,
+            name: "Clay",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [205; 6],
+            hardness: 0.6,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::CLAY),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::LILY_PAD,
+            name: "Lily Pad",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [206; 6],
+            hardness: 0.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::LILY_PAD),
+            drop_count: (1, 1),
+        });
+
+        // Savanna Acacia Wood Family
+        registry.register(BlockDefinition {
+            id: BlockId::ACACIA_LOG,
+            name: "Acacia Log",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 208, NegY: 208, Sides: 207
+            textures: [208, 208, 207, 207, 207, 207],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::ACACIA_LOG),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ACACIA_PLANKS,
+            name: "Acacia Planks",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [209; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::ACACIA_PLANKS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ACACIA_LEAVES,
+            name: "Acacia Leaves",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [210; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::APPLE),
+            drop_count: (0, 1),
+        });
+
+        // Desert Blocks
+        registry.register(BlockDefinition {
+            id: BlockId::CACTUS,
+            name: "Cactus",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 212, NegY: 212, Sides: 211
+            textures: [212, 212, 211, 211, 211, 211],
+            hardness: 0.4,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::CACTUS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::SANDSTONE,
+            name: "Sandstone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 214, NegY: 215, Sides: 213
+            textures: [214, 215, 213, 213, 213, 213],
+            hardness: 0.8,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SANDSTONE),
+            drop_count: (1, 1),
+        });
+
+        // Ocean & Subsurface Aggregate
+        registry.register(BlockDefinition {
+            id: BlockId::GRAVEL,
+            name: "Gravel",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [216; 6],
+            hardness: 0.6,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::GRAVEL),
+            drop_count: (1, 1),
         });
 
         registry

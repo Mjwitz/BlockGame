@@ -4,12 +4,16 @@ use blockgame_core::{
 };
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Biome {
     Plains,
     Forest,
     Desert,
     Mountains,
+    SnowyTundra,
+    Swamp,
+    Savanna,
+    Ocean,
 }
 
 pub struct TerrainGenerator {
@@ -73,6 +77,10 @@ impl TerrainGenerator {
     /// Determines the biome at global coordinate (x, z).
     #[inline]
     pub fn get_biome(&self, x: i32, z: i32, height: i32) -> Biome {
+        if height <= self.water_level {
+            return Biome::Ocean;
+        }
+
         if height > 58 {
             return Biome::Mountains;
         }
@@ -83,11 +91,23 @@ impl TerrainGenerator {
         let temp = self.temp_noise.get([fx, fz]);
         let moisture = self.moisture_noise.get([fx, fz]);
 
-        if temp > 0.3 && moisture < -0.1 {
+        // Cold regions: Snowy Tundra
+        if temp < -0.18 {
+            Biome::SnowyTundra
+        } else if temp > 0.30 && moisture < -0.12 {
+            // Arid hot regions: Desert
             Biome::Desert
+        } else if temp > 0.10 && moisture < 0.05 {
+            // Warm semi-arid plateaus: Savanna
+            Biome::Savanna
+        } else if height <= self.water_level + 4 && moisture > 0.18 {
+            // Lowlands near water level with high humidity: Swamp
+            Biome::Swamp
         } else if moisture > 0.15 {
+            // High humidity temperate: Forest
             Biome::Forest
         } else {
+            // Temperate grasslands: Plains
             Biome::Plains
         }
     }
@@ -134,20 +154,49 @@ impl TerrainGenerator {
                             BlockId::AIR
                         } else if wy == surface_y - 1 {
                             if is_underwater || surface_y <= self.water_level + 1 {
-                                BlockId::SAND
+                                if biome == Biome::Ocean {
+                                    // Alternating sand and gravel ocean bed
+                                    let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31)).unsigned_abs() % 3;
+                                    if gh == 0 {
+                                        BlockId::GRAVEL
+                                    } else {
+                                        BlockId::SAND
+                                    }
+                                } else {
+                                    BlockId::SAND
+                                }
                             } else {
                                 match biome {
                                     Biome::Desert => BlockId::SAND,
-                                    Biome::Mountains if surface_y > 62 => BlockId::STONE,
+                                    Biome::SnowyTundra => BlockId::SNOW_BLOCK,
+                                    Biome::Mountains if surface_y > 64 => BlockId::SNOW_BLOCK,
+                                    Biome::Mountains if surface_y > 58 => BlockId::STONE,
+                                    Biome::Swamp if surface_y <= self.water_level + 2 && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) => BlockId::CLAY,
                                     _ => BlockId::GRASS,
                                 }
                             }
                         } else if wy >= surface_y - 4 {
                             if is_underwater || surface_y <= self.water_level + 1 {
-                                BlockId::SAND
+                                if biome == Biome::Ocean {
+                                    let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31)).unsigned_abs() % 3;
+                                    if gh == 0 {
+                                        BlockId::GRAVEL
+                                    } else {
+                                        BlockId::SAND
+                                    }
+                                } else {
+                                    BlockId::SAND
+                                }
                             } else {
                                 match biome {
-                                    Biome::Desert => BlockId::SAND,
+                                    Biome::Desert => {
+                                        if wy < surface_y - 2 {
+                                            BlockId::SANDSTONE
+                                        } else {
+                                            BlockId::SAND
+                                        }
+                                    }
+                                    Biome::Swamp if surface_y <= self.water_level + 2 && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) => BlockId::CLAY,
                                     _ => BlockId::DIRT,
                                 }
                             }
@@ -156,7 +205,12 @@ impl TerrainGenerator {
                             self.get_subsurface_block(wx, wy, wz)
                         }
                     } else if wy <= self.water_level {
-                        BlockId::WATER
+                        // Freezing water in Snowy Tundra turns surface to ICE
+                        if biome == Biome::SnowyTundra && wy == self.water_level {
+                            BlockId::ICE
+                        } else {
+                            BlockId::WATER
+                        }
                     } else {
                         BlockId::AIR
                     };
@@ -265,12 +319,27 @@ impl TerrainGenerator {
                 let wx = origin.x + lx as i32;
 
                 let surface_y = self.surface_height(wx, wz);
+                let biome = self.get_biome(wx, wz, surface_y);
                 if surface_y <= self.water_level {
+                    // Check for lily pads in Swamp on top of still water
+                    if biome == Biome::Swamp {
+                        let local_water_top = (self.water_level + 1) - origin.y;
+                        if local_water_top >= 1 && local_water_top < CHUNK_SIZE_Y as i32 {
+                            let ly = local_water_top as usize;
+                            if chunk.get(lx, ly - 1, lz) == Some(BlockId::WATER)
+                                && chunk.get(lx, ly, lz) == Some(BlockId::AIR)
+                            {
+                                let lh = tree_hash(wx, wz, self.seed.wrapping_add(999));
+                                if lh % 11 == 0 {
+                                    chunk.set(lx, ly, lz, BlockId::LILY_PAD);
+                                }
+                            }
+                        }
+                    }
                     continue; // No trees or tall grass underwater
                 }
 
                 let local_surface_y = surface_y - origin.y;
-                let biome = self.get_biome(wx, wz, surface_y);
 
                 // Tall grass scattering on surface grass blocks
                 if local_surface_y >= 1 && local_surface_y < CHUNK_SIZE_Y as i32 {
@@ -281,12 +350,30 @@ impl TerrainGenerator {
                         let grass_chance = match biome {
                             Biome::Plains => 20,
                             Biome::Forest => 12,
+                            Biome::Savanna => 25,
+                            Biome::Swamp => 15,
                             _ => 0,
                         };
                         if grass_chance > 0
                             && (tree_hash(wx, wz, self.seed.wrapping_add(777)) % 100) < grass_chance
                         {
                             chunk.set(lx, ly, lz, BlockId::TALL_GRASS);
+                        }
+                    }
+                }
+
+                // Desert Cacti on sand
+                if biome == Biome::Desert && local_surface_y >= 1 && local_surface_y < (CHUNK_SIZE_Y as i32 - 4) {
+                    let ly = local_surface_y as usize;
+                    if chunk.get(lx, ly - 1, lz) == Some(BlockId::SAND)
+                        && chunk.get(lx, ly, lz) == Some(BlockId::AIR)
+                    {
+                        let ch = tree_hash(wx, wz, self.seed.wrapping_add(888));
+                        if ch % 45 == 0 {
+                            let cactus_height = 1 + ((ch >> 4) % 3) as usize; // 1 to 3 blocks
+                            for cy in ly..(ly + cactus_height).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, cy, lz, BlockId::CACTUS);
+                            }
                         }
                     }
                 }
@@ -301,7 +388,13 @@ impl TerrainGenerator {
                 }
 
                 let ly = local_surface_y as usize;
-                if chunk.get(lx, ly - 1, lz) != Some(BlockId::GRASS) {
+                let ground = chunk.get(lx, ly - 1, lz);
+                let valid_ground = match biome {
+                    Biome::SnowyTundra => ground == Some(BlockId::SNOW_BLOCK) || ground == Some(BlockId::GRASS),
+                    Biome::Swamp => ground == Some(BlockId::GRASS) || ground == Some(BlockId::CLAY),
+                    _ => ground == Some(BlockId::GRASS),
+                };
+                if !valid_ground {
                     continue;
                 }
 
@@ -381,6 +474,92 @@ impl TerrainGenerator {
                                             }
                                             if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
                                                 chunk.set(cx as usize, cy, cz as usize, BlockId::LEAVES);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Biome::Savanna => {
+                        if th % 45 == 0 {
+                            let trunk_h = 5;
+                            for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, ty, lz, BlockId::ACACIA_LOG);
+                            }
+                            let top_y = ly + trunk_h;
+                            for cy in (top_y - 1)..=(top_y + 1).min(CHUNK_SIZE_Y - 1) {
+                                let radius: i32 = if cy == top_y + 1 { 1 } else if cy == top_y { 2 } else { 1 };
+                                for dz in -radius..=radius {
+                                    for dx in -radius..=radius {
+                                        if radius == 2 && dx.abs() == 2 && dz.abs() == 2 {
+                                            continue;
+                                        }
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
+                                                chunk.set(cx as usize, cy, cz as usize, BlockId::ACACIA_LEAVES);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Biome::Swamp => {
+                        if th % 30 == 0 {
+                            let trunk_h = 4;
+                            for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, ty, lz, BlockId::WOOD_LOG);
+                            }
+                            let crown_start = ly + 2;
+                            let crown_end = (ly + 5).min(CHUNK_SIZE_Y - 1);
+                            for cy in crown_start..=crown_end {
+                                let radius: i32 = 2;
+                                for dz in -radius..=radius {
+                                    for dx in -radius..=radius {
+                                        if dx.abs() == 2 && dz.abs() == 2 && (dx + dz) % 2 == 0 {
+                                            continue;
+                                        }
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
+                                                chunk.set(cx as usize, cy, cz as usize, BlockId::LEAVES);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Biome::SnowyTundra => {
+                        if th % 35 == 0 {
+                            let trunk_height = 5 + ((th >> 4) % 2) as usize;
+                            for ty in ly..(ly + trunk_height).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, ty, lz, BlockId::SPRUCE_LOG);
+                            }
+                            let top_y = ly + trunk_height;
+                            if top_y < CHUNK_SIZE_Y {
+                                chunk.set(lx, top_y, lz, BlockId::SPRUCE_LEAVES);
+                            }
+                            for dy in 1..=trunk_height.min(4) {
+                                if dy > top_y {
+                                    break;
+                                }
+                                let cy = top_y - dy;
+                                let radius: i32 = if dy % 2 == 1 { 1 } else { 2 };
+                                for dz in -radius..=radius {
+                                    for dx in -radius..=radius {
+                                        if dx.abs() == 2 && dz.abs() == 2 {
+                                            continue;
+                                        }
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
+                                                chunk.set(cx as usize, cy, cz as usize, BlockId::SPRUCE_LEAVES);
                                             }
                                         }
                                     }
@@ -520,5 +699,30 @@ mod tests {
             found_diamond,
             "Expected diamond ore to generate underground"
         );
+    }
+
+    #[test]
+    fn test_biome_diversity_and_features() {
+        let gen = TerrainGenerator::new(1337);
+        let mut biomes_found = std::collections::HashSet::new();
+
+        // Sample a 400x400 block region
+        for z in (-200..200).step_by(16) {
+            for x in (-200..200).step_by(16) {
+                let h = gen.surface_height(x, z);
+                let biome = gen.get_biome(x, z, h);
+                biomes_found.insert(biome);
+            }
+        }
+
+        // Verify that varied climate biomes are generated
+        assert!(biomes_found.contains(&Biome::Plains), "Expected Plains biome");
+        assert!(biomes_found.contains(&Biome::Forest), "Expected Forest biome");
+        assert!(biomes_found.contains(&Biome::Mountains), "Expected Mountains biome");
+        assert!(biomes_found.contains(&Biome::Desert), "Expected Desert biome");
+        assert!(biomes_found.contains(&Biome::SnowyTundra), "Expected SnowyTundra biome");
+        assert!(biomes_found.contains(&Biome::Savanna), "Expected Savanna biome");
+        assert!(biomes_found.contains(&Biome::Swamp), "Expected Swamp biome");
+        assert!(biomes_found.contains(&Biome::Ocean), "Expected Ocean biome");
     }
 }

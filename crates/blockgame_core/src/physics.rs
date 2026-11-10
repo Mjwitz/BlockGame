@@ -161,6 +161,34 @@ impl PlayerPhysics {
         false
     }
 
+    /// Returns whether the player's bounding box is touching or brushing against a cactus block.
+    pub fn is_touching_cactus(&self, world: &World) -> bool {
+        let box_check = AABB::new(
+            self.position - Vec3::new(self.half_width + 0.05, 0.0, self.half_width + 0.05),
+            self.position + Vec3::new(self.half_width + 0.05, self.height, self.half_width + 0.05),
+        );
+        let min_x = box_check.min.x.floor() as i32;
+        let max_x = box_check.max.x.floor() as i32;
+        let min_y = (box_check.min.y.floor() as i32).max(0);
+        let max_y = (box_check.max.y.floor() as i32).min((crate::chunk::VERTICAL_CHUNKS * 16) - 1);
+        let min_z = box_check.min.z.floor() as i32;
+        let max_z = box_check.max.z.floor() as i32;
+
+        for y in min_y..=max_y {
+            for z in min_z..=max_z {
+                for x in min_x..=max_x {
+                    if world.get_block(IVec3::new(x, y, z)) == BlockId::CACTUS {
+                        let cactus_box = AABB::from_block(IVec3::new(x, y, z));
+                        if box_check.intersects(&cactus_box) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Updates player physics over a delta time `dt` against the voxel `world`.
     /// Returns any fall damage incurred upon landing.
     pub fn update(
@@ -415,5 +443,22 @@ mod tests {
             "Expected ~6.0 fall damage, got {}",
             total_fall_damage
         );
+    }
+
+    #[test]
+    fn test_player_touching_cactus() {
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        chunk.set(5, 1, 5, crate::block::BlockId::CACTUS);
+        world.insert_chunk(chunk);
+
+        // Player positioned right adjacent to the cactus block (cactus is at [5..6, 1..2, 5..6])
+        // Player half_width is 0.3. If player is at x = 4.75, max.x is 5.05 -> brushes against cactus!
+        let player_near = PlayerPhysics::new(Vec3::new(4.75, 1.0, 5.5));
+        assert!(player_near.is_touching_cactus(&world));
+
+        // Player far away at x = 2.0 -> not touching
+        let player_far = PlayerPhysics::new(Vec3::new(2.0, 1.0, 5.5));
+        assert!(!player_far.is_touching_cactus(&world));
     }
 }

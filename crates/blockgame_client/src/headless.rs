@@ -2568,5 +2568,191 @@ pub async fn render_world_to_image(
         log::info!("Successfully saved Underwater showcase image to underwater_render.png");
     }
 
+    // 13. Biome Expansion Showcase Render (Acacia, Cactus, Sandstone, Snow, Ice, Clay, Lily Pad)
+    {
+        let bio_x = -14;
+        let bio_z = 0;
+        let bio_y = base_y;
+        let dummy_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+
+        // Desert Section with Cactus and Sandstone
+        world_manager.place_block(IVec3::new(bio_x, bio_y, bio_z), BlockId::SANDSTONE, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x, bio_y + 1, bio_z), BlockId::SAND, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x, bio_y + 2, bio_z), BlockId::CACTUS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x, bio_y + 3, bio_z), BlockId::CACTUS, &dummy_box, &device, &pipeline);
+
+        // Savanna Acacia Section
+        world_manager.place_block(IVec3::new(bio_x + 2, bio_y + 1, bio_z - 1), BlockId::ACACIA_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x + 2, bio_y + 2, bio_z - 1), BlockId::ACACIA_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x + 2, bio_y + 3, bio_z - 1), BlockId::ACACIA_LEAVES, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x + 1, bio_y + 1, bio_z - 1), BlockId::ACACIA_PLANKS, &dummy_box, &device, &pipeline);
+
+        // Tundra Snow & Ice Section
+        world_manager.place_block(IVec3::new(bio_x + 3, bio_y + 1, bio_z + 1), BlockId::SNOW_BLOCK, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x + 2, bio_y + 1, bio_z + 2), BlockId::ICE, &dummy_box, &device, &pipeline);
+
+        // Swamp Water Pool with Clay & Lily Pad
+        world_manager.place_block(IVec3::new(bio_x - 1, bio_y, bio_z + 1), BlockId::CLAY, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x - 2, bio_y, bio_z + 1), BlockId::WATER, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(bio_x - 2, bio_y + 1, bio_z + 1), BlockId::LILY_PAD, &dummy_box, &device, &pipeline);
+
+        // Camera positioned to view all new biome features
+        let bio_day_night = DayNightCycle::new();
+        let bio_cam_pos = Vec3::new((bio_x as f32) + 2.5, (bio_y as f32) + 2.8, (bio_z as f32) + 4.2);
+        let bio_cam = Camera::new(bio_cam_pos, (-140.0_f32).to_radians(), (-15.0_f32).to_radians());
+        let mut bio_uniform = CameraUniform::default();
+        bio_cam.update_uniform_with_atmosphere_water(
+            &mut bio_uniform,
+            width as f32 / height as f32,
+            &bio_day_night,
+            false,
+        );
+        pipeline.update_camera(&queue, &bio_uniform);
+
+        let mut bio_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Biome Expansion Encoder"),
+        });
+
+        {
+            let mut render_pass = bio_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Biome Expansion 3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.53,
+                            g: 0.81,
+                            b: 0.98,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+
+            render_pass.set_pipeline(&pipeline.water_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render_water(&mut render_pass);
+        }
+
+        // Draw HUD overlay with new biome items in hotbar
+        let mut bio_ui_mesh = UiMesh::new();
+        let stats = blockgame_core::PlayerStats::new();
+        let mut bio_inv = inventory.clone();
+        bio_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::ACACIA_PLANKS, 64);
+        bio_inv.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CACTUS, 16);
+        bio_inv.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SANDSTONE, 32);
+        bio_inv.slots[3] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SNOW_BLOCK, 16);
+        bio_inv.slots[4] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::ICE, 8);
+        bio_inv.slots[5] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::CLAY, 24);
+        bio_inv.slots[6] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::LILY_PAD, 12);
+        bio_inv.slots[7] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::GRAVEL, 32);
+        UiBuilder::build_hud(&mut bio_ui_mesh, screen_w, screen_h, &bio_inv, 0, &item_registry, 0.0, 0.0, &stats);
+
+        if !bio_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Biome UI VB"),
+                contents: bytemuck::cast_slice(&bio_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Biome UI IB"),
+                contents: bytemuck::cast_slice(&bio_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = bio_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Biome UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..bio_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        bio_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(bio_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut bio_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            bio_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "biome_expansion_render.png",
+            &bio_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Biome Expansion showcase image to biome_expansion_render.png");
+    }
+
     Ok(())
 }

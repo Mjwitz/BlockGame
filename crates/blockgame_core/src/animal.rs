@@ -234,6 +234,28 @@ impl AnimalEntity {
             self.breath = (self.breath + dt * 5.0).min(self.max_breath);
         }
 
+        // 0.5 Cactus Contact Damage Check
+        let (half_width, height) = self.kind.dimensions();
+        let min_x = (self.position.x - half_width - 0.05).floor() as i32;
+        let max_x = (self.position.x + half_width + 0.05).floor() as i32;
+        let min_y = (self.position.y.floor() as i32).max(0);
+        let max_y = ((self.position.y + height).floor() as i32).min((crate::chunk::VERTICAL_CHUNKS * 16) - 1);
+        let min_z = (self.position.z - half_width - 0.05).floor() as i32;
+        let max_z = (self.position.z + half_width + 0.05).floor() as i32;
+        'cactus_check: for y in min_y..=max_y {
+            for z in min_z..=max_z {
+                for x in min_x..=max_x {
+                    if world.get_block(IVec3::new(x, y, z)) == BlockId::CACTUS {
+                        if self.hurt_timer <= 0.0 {
+                            let cactus_center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+                            self.take_damage(1.0, cactus_center);
+                        }
+                        break 'cactus_check;
+                    }
+                }
+            }
+        }
+
         // 1. AI Decision Making
         let mut wish_dir = Vec3::ZERO;
 

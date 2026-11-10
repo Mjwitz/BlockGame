@@ -70,6 +70,16 @@ impl ItemId {
     pub const SPRUCE_PLANKS: Self = Self(60);
     pub const SPRUCE_LEAVES: Self = Self(61);
     pub const TALL_GRASS: Self = Self(62);
+    pub const SNOW_BLOCK: Self = Self(63);
+    pub const ICE: Self = Self(64);
+    pub const CLAY: Self = Self(65);
+    pub const LILY_PAD: Self = Self(66);
+    pub const ACACIA_LOG: Self = Self(67);
+    pub const ACACIA_PLANKS: Self = Self(68);
+    pub const ACACIA_LEAVES: Self = Self(69);
+    pub const CACTUS: Self = Self(70);
+    pub const SANDSTONE: Self = Self(71);
+    pub const GRAVEL: Self = Self(72);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1013,6 +1023,126 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 200,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SNOW_BLOCK,
+            name: "blockgame:snow_block",
+            display_name: "Snow Block",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SNOW_BLOCK),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 203,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::ICE,
+            name: "blockgame:ice",
+            display_name: "Ice",
+            max_stack: 64,
+            placeable_block: Some(BlockId::ICE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 204,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::CLAY,
+            name: "blockgame:clay",
+            display_name: "Clay",
+            max_stack: 64,
+            placeable_block: Some(BlockId::CLAY),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 205,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::LILY_PAD,
+            name: "blockgame:lily_pad",
+            display_name: "Lily Pad",
+            max_stack: 64,
+            placeable_block: Some(BlockId::LILY_PAD),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 206,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::ACACIA_LOG,
+            name: "blockgame:acacia_log",
+            display_name: "Acacia Log",
+            max_stack: 64,
+            placeable_block: Some(BlockId::ACACIA_LOG),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 207,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::ACACIA_PLANKS,
+            name: "blockgame:acacia_planks",
+            display_name: "Acacia Planks",
+            max_stack: 64,
+            placeable_block: Some(BlockId::ACACIA_PLANKS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 209,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::ACACIA_LEAVES,
+            name: "blockgame:acacia_leaves",
+            display_name: "Acacia Leaves",
+            max_stack: 64,
+            placeable_block: Some(BlockId::ACACIA_LEAVES),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 210,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::CACTUS,
+            name: "blockgame:cactus",
+            display_name: "Cactus",
+            max_stack: 64,
+            placeable_block: Some(BlockId::CACTUS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 211,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SANDSTONE,
+            name: "blockgame:sandstone",
+            display_name: "Sandstone",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SANDSTONE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 213,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GRAVEL,
+            name: "blockgame:gravel",
+            display_name: "Gravel",
+            max_stack: 64,
+            placeable_block: Some(BlockId::GRAVEL),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 216,
         });
     }
 }
