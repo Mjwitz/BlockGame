@@ -7,7 +7,7 @@ use blockgame_core::{
     item::{Inventory, ItemId, ItemRegistry, ItemSlot},
     physics::PlayerPhysics,
     player::PlayerStats,
-    raycast::{raycast_voxel, RaycastHit},
+    raycast::{raycast_voxel_with_water, RaycastHit},
     tool::ToolTier,
 };
 use blockgame_render::{
@@ -1095,12 +1095,15 @@ impl ApplicationHandler for BlockGameApp {
                 // 5. Perform Fast Voxel Traversal (DDA) raycast from crosshair
                 {
                     let world_guard = state.world_manager.world().lock().unwrap();
-                    let hit = raycast_voxel(
+                    let held_item = state.inventory.get(state.active_hotbar_slot).item_id;
+                    let target_water = held_item == ItemId::LILY_PAD;
+                    let hit = raycast_voxel_with_water(
                         state.camera.position,
                         state.camera.forward(),
                         5.0, // 5 blocks reach
                         &world_guard,
                         &self.registry,
+                        target_water,
                     );
 
                     if let Some(h) = hit {

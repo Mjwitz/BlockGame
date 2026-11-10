@@ -6,7 +6,7 @@ use std::sync::{
 
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
-    block::{BlockId, BlockRegistry},
+    block::{break_unsupported_attached, can_block_survive, BlockId, BlockRegistry},
     chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
     entity::{ItemDrop, ItemDropStatus},
     item::ItemSlot,
@@ -499,59 +499,65 @@ impl WorldManager {
         &self.world
     }
 
-    pub fn break_block(
-        &mut self,
-        pos: IVec3,
-        device: &wgpu::Device,
-        pipeline: &VoxelPipeline,
-    ) -> Option<BlockId> {
+    #[inline]
+    fn add_chunk_and_neighbors(pos: IVec3, chunks: &mut Vec<ChunkPos>) {
         let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
-        let mut chunks_to_rebuild = vec![chunk_pos];
-
+        chunks.push(chunk_pos);
         if lx == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
+            chunks.push(ChunkPos::new(
                 chunk_pos.0.x - 1,
                 chunk_pos.0.y,
                 chunk_pos.0.z,
             ));
         } else if lx == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
+            chunks.push(ChunkPos::new(
                 chunk_pos.0.x + 1,
                 chunk_pos.0.y,
                 chunk_pos.0.z,
             ));
         }
         if ly == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
+            chunks.push(ChunkPos::new(
                 chunk_pos.0.x,
                 chunk_pos.0.y - 1,
                 chunk_pos.0.z,
             ));
         } else if ly == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
+            chunks.push(ChunkPos::new(
                 chunk_pos.0.x,
                 chunk_pos.0.y + 1,
                 chunk_pos.0.z,
             ));
         }
         if lz == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
+            chunks.push(ChunkPos::new(
                 chunk_pos.0.x,
                 chunk_pos.0.y,
                 chunk_pos.0.z - 1,
             ));
         } else if lz == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
+            chunks.push(ChunkPos::new(
                 chunk_pos.0.x,
                 chunk_pos.0.y,
                 chunk_pos.0.z + 1,
             ));
         }
+    }
 
-        let (broken_block, new_meshes, dropped_chest_items): (
+    pub fn break_block(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> Option<BlockId> {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let (broken_block, new_meshes, dropped_chest_items, extra_drops): (
             BlockId,
             Vec<(ChunkPos, ChunkMesh)>,
             Vec<ItemSlot>,
+            Vec<(Vec3, ItemSlot)>,
         ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
@@ -587,7 +593,21 @@ impl WorldManager {
             };
             world.set_block(pos, replacement);
 
+            // Check unsupported attached blocks that depend on pos
+            let (unsupported_drops, modified_positions) =
+                break_unsupported_attached(pos, &mut world, &self.registry);
+
+            for mpos in modified_positions {
+                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+            }
+            let mut extra_drops = Vec::new();
+            for (mpos, drop) in unsupported_drops {
+                let drop_pos = mpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
+                extra_drops.push((drop_pos, drop));
+            }
+
             if is_light_source {
+                let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {
@@ -617,7 +637,7 @@ impl WorldManager {
                     })
                 })
                 .collect();
-            (current, meshes, dropped_chest_items)
+            (current, meshes, dropped_chest_items, extra_drops)
         };
 
         for (cpos, mesh) in new_meshes {
@@ -629,6 +649,20 @@ impl WorldManager {
             if !item.is_empty() {
                 self.spawn_item_drop(drop_pos, item);
             }
+        }
+        for (extra_pos, item) in extra_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(extra_pos, item);
+            }
+        }
+
+        // Clean up planted crops if wheat was removed
+        {
+            let world = self.world.lock().unwrap();
+            self.planted_crops.retain(|(p, _)| {
+                let b = world.get_block(*p);
+                b == BlockId::WHEAT_0 || b == BlockId::WHEAT_1 || b == BlockId::WHEAT_2
+            });
         }
 
         Some(broken_block)
@@ -668,69 +702,67 @@ impl WorldManager {
         device: &wgpu::Device,
         pipeline: &VoxelPipeline,
     ) -> bool {
-        // Prevent placing inside player collider
-        let block_box = AABB::from_block(pos);
-        if player_aabb.intersects(&block_box) {
-            return false;
+        // Prevent placing inside player collider if block is solid
+        if self.registry.is_solid(block_id) {
+            let block_box = AABB::from_block(pos);
+            if player_aabb.intersects(&block_box) {
+                return false;
+            }
         }
 
-        let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
-        let mut chunks_to_rebuild = vec![chunk_pos];
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
 
-        if lx == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x - 1,
-                chunk_pos.0.y,
-                chunk_pos.0.z,
-            ));
-        } else if lx == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x + 1,
-                chunk_pos.0.y,
-                chunk_pos.0.z,
-            ));
-        }
-        if ly == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y - 1,
-                chunk_pos.0.z,
-            ));
-        } else if ly == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y + 1,
-                chunk_pos.0.z,
-            ));
-        }
-        if lz == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y,
-                chunk_pos.0.z - 1,
-            ));
-        } else if lz == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y,
-                chunk_pos.0.z + 1,
-            ));
-        }
-
-        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+        let (new_meshes, extra_drops): (Vec<(ChunkPos, ChunkMesh)>, Vec<(Vec3, ItemSlot)>) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            let can_place = current.is_air() || (current == BlockId::WATER && block_id == BlockId::SEAGRASS);
+            let can_place = if current.is_air() {
+                true
+            } else if current == BlockId::WATER {
+                block_id.can_exist_in_water()
+            } else {
+                false
+            };
             if !can_place {
                 return false;
             }
+
+            // Check if block can survive at pos
+            if block_id.requires_support() {
+                let can_survive = can_block_survive(
+                    block_id,
+                    pos,
+                    &self.registry,
+                    |p| if p == pos { block_id } else { world.get_block(p) },
+                );
+                if !can_survive {
+                    return false;
+                }
+            }
+
             let is_light_source = block_id.is_emissive();
             world.set_block(pos, block_id);
             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
                 world.get_or_create_furnace(pos);
             }
 
+            // If a solid block is placed, check if any horizontal cactus neighbors are invalidated
+            let mut extra_drops = Vec::new();
+            if self.registry.is_solid(block_id) {
+                let (unsupported_drops, modified_positions) =
+                    break_unsupported_attached(pos, &mut world, &self.registry);
+
+                for mpos in modified_positions {
+                    Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                }
+                for (mpos, drop) in unsupported_drops {
+                    let drop_pos = mpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
+                    extra_drops.push((drop_pos, drop));
+                }
+            }
+
             if is_light_source {
+                let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         for dz in -1..=1 {
@@ -747,7 +779,7 @@ impl WorldManager {
             chunks_to_rebuild.dedup();
 
             let mesher = ChunkMesher::new(&self.registry);
-            chunks_to_rebuild
+            let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
                     world.get_chunk(cpos).map(|chunk| {
@@ -759,11 +791,18 @@ impl WorldManager {
                         (cpos, mesh)
                     })
                 })
-                .collect()
+                .collect();
+            (meshes, extra_drops)
         };
 
         for (cpos, mesh) in new_meshes {
             self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+
+        for (extra_pos, item) in extra_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(extra_pos, item);
+            }
         }
 
         true
@@ -831,64 +870,38 @@ impl WorldManager {
         device: &wgpu::Device,
         pipeline: &VoxelPipeline,
     ) -> bool {
-        let (chunk_pos, lx, ly, lz) = world_to_chunk_coords(pos);
-        let mut chunks_to_rebuild = vec![chunk_pos];
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
 
-        if lx == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x - 1,
-                chunk_pos.0.y,
-                chunk_pos.0.z,
-            ));
-        } else if lx == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x + 1,
-                chunk_pos.0.y,
-                chunk_pos.0.z,
-            ));
-        }
-        if ly == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y - 1,
-                chunk_pos.0.z,
-            ));
-        } else if ly == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y + 1,
-                chunk_pos.0.z,
-            ));
-        }
-        if lz == 0 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y,
-                chunk_pos.0.z - 1,
-            ));
-        } else if lz == 15 {
-            chunks_to_rebuild.push(ChunkPos::new(
-                chunk_pos.0.x,
-                chunk_pos.0.y,
-                chunk_pos.0.z + 1,
-            ));
-        }
-
-        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+        let (new_meshes, extra_drops): (Vec<(ChunkPos, ChunkMesh)>, Vec<(Vec3, ItemSlot)>) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             let above = world.get_block(pos + IVec3::Y);
-            if (current != BlockId::GRASS && current != BlockId::DIRT) || !above.is_air() {
+            if (current != BlockId::GRASS && current != BlockId::DIRT)
+                || (!above.is_air() && above != BlockId::TALL_GRASS)
+            {
                 return false;
             }
 
             world.set_block(pos, BlockId::FARMLAND);
 
+            let (unsupported_drops, modified_positions) =
+                break_unsupported_attached(pos, &mut world, &self.registry);
+
+            for mpos in modified_positions {
+                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+            }
+            let mut extra_drops = Vec::new();
+            for (mpos, drop) in unsupported_drops {
+                let drop_pos = mpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5);
+                extra_drops.push((drop_pos, drop));
+            }
+
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
             let mesher = ChunkMesher::new(&self.registry);
-            chunks_to_rebuild
+            let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
                     world.get_chunk(cpos).map(|chunk| {
@@ -900,11 +913,18 @@ impl WorldManager {
                         (cpos, mesh)
                     })
                 })
-                .collect()
+                .collect();
+            (meshes, extra_drops)
         };
 
         for (cpos, mesh) in new_meshes {
             self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+
+        for (extra_pos, item) in extra_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(extra_pos, item);
+            }
         }
 
         true

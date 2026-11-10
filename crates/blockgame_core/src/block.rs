@@ -1,5 +1,9 @@
+use std::collections::HashSet;
+
+use glam::IVec3;
+
 use crate::direction::Direction;
-use crate::item::ItemId;
+use crate::item::{ItemId, ItemSlot};
 use crate::tool::{ToolTier, ToolType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -94,6 +98,40 @@ impl BlockId {
     #[inline]
     pub const fn is_emissive(&self) -> bool {
         self.luminance() > 0
+    }
+
+    /// Whether this block requires attachment or substrate support to remain intact.
+    #[inline]
+    pub const fn requires_support(&self) -> bool {
+        matches!(
+            *self,
+            Self::TALL_GRASS
+                | Self::WHEAT_0
+                | Self::WHEAT_1
+                | Self::WHEAT_2
+                | Self::WHEAT_3
+                | Self::CACTUS
+                | Self::TORCH
+                | Self::LILY_PAD
+                | Self::SEAGRASS
+        )
+    }
+
+    /// Whether this block can exist submerged in water.
+    #[inline]
+    pub const fn can_exist_in_water(&self) -> bool {
+        match *self {
+            Self::TORCH
+            | Self::TALL_GRASS
+            | Self::CACTUS
+            | Self::WHEAT_0
+            | Self::WHEAT_1
+            | Self::WHEAT_2
+            | Self::WHEAT_3
+            | Self::LILY_PAD
+            | Self::FARMLAND => false,
+            _ => true,
+        }
     }
 }
 
@@ -1155,6 +1193,182 @@ impl BlockRegistry {
     }
 }
 
+/// Determines if a block of type `id` at position `pos` has sufficient attachment
+/// and environmental support to survive in the world.
+pub fn can_block_survive<F>(
+    id: BlockId,
+    pos: IVec3,
+    registry: &BlockRegistry,
+    mut get_block: F,
+) -> bool
+where
+    F: FnMut(IVec3) -> BlockId,
+{
+    match id {
+        BlockId::TALL_GRASS => {
+            let current = get_block(pos);
+            if current == BlockId::WATER {
+                return false;
+            }
+            let below = get_block(pos + IVec3::NEG_Y);
+            matches!(
+                below,
+                BlockId::GRASS
+                    | BlockId::DIRT
+                    | BlockId::PODZOL
+                    | BlockId::FARMLAND
+                    | BlockId::MYCELIUM
+            )
+        }
+        BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 | BlockId::WHEAT_3 => {
+            let current = get_block(pos);
+            if current == BlockId::WATER {
+                return false;
+            }
+            let below = get_block(pos + IVec3::NEG_Y);
+            below == BlockId::FARMLAND
+        }
+        BlockId::CACTUS => {
+            let current = get_block(pos);
+            if current == BlockId::WATER {
+                return false;
+            }
+            let below = get_block(pos + IVec3::NEG_Y);
+            if below != BlockId::SAND && below != BlockId::RED_SAND && below != BlockId::CACTUS {
+                return false;
+            }
+            for offset in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+                let neighbor = get_block(pos + offset);
+                if registry.is_solid(neighbor) {
+                    return false;
+                }
+            }
+            true
+        }
+        BlockId::TORCH => {
+            let current = get_block(pos);
+            if current == BlockId::WATER {
+                return false;
+            }
+            let below = get_block(pos + IVec3::NEG_Y);
+            if registry.is_solid(below) {
+                return true;
+            }
+            for offset in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+                let neighbor = get_block(pos + offset);
+                if registry.is_solid(neighbor) {
+                    return true;
+                }
+            }
+            false
+        }
+        BlockId::LILY_PAD => {
+            let current = get_block(pos);
+            if current == BlockId::WATER {
+                return false;
+            }
+            let below = get_block(pos + IVec3::NEG_Y);
+            below == BlockId::WATER || below == BlockId::SEAGRASS
+        }
+        BlockId::SEAGRASS => {
+            let below = get_block(pos + IVec3::NEG_Y);
+            registry.is_solid(below)
+        }
+        _ => true,
+    }
+}
+
+/// Convenience helper checking block survival using the `World` container.
+pub fn can_block_survive_in_world(
+    id: BlockId,
+    pos: IVec3,
+    world: &crate::world::World,
+    registry: &BlockRegistry,
+) -> bool {
+    can_block_survive(id, pos, registry, |p| world.get_block(p))
+}
+
+/// Returns the item drops produced when an unsupported block collapses.
+pub fn get_support_break_drops(
+    id: BlockId,
+    pos: IVec3,
+    registry: &BlockRegistry,
+) -> Vec<ItemSlot> {
+    if id == BlockId::WHEAT_3 {
+        let hash = (pos.x.wrapping_mul(1234567) ^ pos.z.wrapping_mul(7654321)) % 2;
+        let seed_count = (hash.abs() + 1) as u16;
+        vec![
+            ItemSlot::new(ItemId::WHEAT, 1),
+            ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
+        ]
+    } else if let Some((drop_item, drop_count)) = registry.get_drop(id, None, ToolTier::None) {
+        vec![ItemSlot::new(drop_item, drop_count)]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Checks for and breaks any unsupported attached blocks adjacent to or dependent on `trigger_pos`.
+/// This performs an upward cascade for stacked blocks like cactuses, and breaks crops, tall grass,
+/// and torches that have lost their substrate or anchor.
+///
+/// Returns:
+/// - A list of dropped item slots with their block positions `(pos, item_slot)`.
+/// - A list of modified block positions `Vec<IVec3>`.
+pub fn break_unsupported_attached(
+    trigger_pos: IVec3,
+    world: &mut crate::world::World,
+    registry: &BlockRegistry,
+) -> (Vec<(IVec3, ItemSlot)>, Vec<IVec3>) {
+    let mut extra_drops = Vec::new();
+    let mut modified_positions = Vec::new();
+    let mut check_queue = vec![
+        trigger_pos + IVec3::Y,
+        trigger_pos + IVec3::X,
+        trigger_pos + IVec3::NEG_X,
+        trigger_pos + IVec3::Z,
+        trigger_pos + IVec3::NEG_Z,
+    ];
+    let mut visited = HashSet::new();
+
+    while let Some(check_pos) = check_queue.pop() {
+        if !visited.insert(check_pos) {
+            continue;
+        }
+        let block_to_check = world.get_block(check_pos);
+        if block_to_check.is_air() || !block_to_check.requires_support() {
+            continue;
+        }
+        let can_survive = can_block_survive(
+            block_to_check,
+            check_pos,
+            registry,
+            |p| world.get_block(p),
+        );
+        if !can_survive {
+            let repl = if block_to_check == BlockId::SEAGRASS {
+                BlockId::WATER
+            } else {
+                BlockId::AIR
+            };
+            world.set_block(check_pos, repl);
+            modified_positions.push(check_pos);
+            let drops = get_support_break_drops(block_to_check, check_pos, registry);
+            for drop in drops {
+                extra_drops.push((check_pos, drop));
+            }
+            // Cascade upward (e.g. cactus or stacked plants) and neighbors
+            check_queue.push(check_pos + IVec3::Y);
+            check_queue.push(check_pos + IVec3::X);
+            check_queue.push(check_pos + IVec3::NEG_X);
+            check_queue.push(check_pos + IVec3::Z);
+            check_queue.push(check_pos + IVec3::NEG_Z);
+        }
+    }
+
+    (extra_drops, modified_positions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1244,5 +1458,135 @@ mod tests {
         let diamond_time =
             reg.get_break_time(BlockId::STONE, Some(ToolType::Pickaxe), ToolTier::Diamond);
         assert!(diamond_time < wood_time);
+    }
+
+    #[test]
+    fn test_block_support_and_attachment_rules() {
+        let reg = BlockRegistry::new();
+        let pos = IVec3::new(10, 64, 10);
+
+        // 1. Tall grass requires soil below and no water at pos
+        assert!(can_block_survive(BlockId::TALL_GRASS, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::GRASS } else { BlockId::AIR }
+        }));
+        assert!(!can_block_survive(BlockId::TALL_GRASS, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::STONE } else { BlockId::AIR }
+        }));
+        assert!(!can_block_survive(BlockId::TALL_GRASS, pos, &reg, |p| {
+            if p == pos { BlockId::WATER } else if p == pos + IVec3::NEG_Y { BlockId::GRASS } else { BlockId::AIR }
+        }));
+
+        // 2. Wheat requires farmland below
+        assert!(can_block_survive(BlockId::WHEAT_2, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::FARMLAND } else { BlockId::AIR }
+        }));
+        assert!(!can_block_survive(BlockId::WHEAT_2, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::DIRT } else { BlockId::AIR }
+        }));
+
+        // 3. Cactus requires sand or cactus below, and NO solid horizontal neighbors
+        assert!(can_block_survive(BlockId::CACTUS, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::SAND } else { BlockId::AIR }
+        }));
+        assert!(can_block_survive(BlockId::CACTUS, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::CACTUS } else { BlockId::AIR }
+        }));
+        assert!(!can_block_survive(BlockId::CACTUS, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::DIRT } else { BlockId::AIR }
+        }));
+        // Cactus with solid neighbor fails
+        assert!(!can_block_survive(BlockId::CACTUS, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y {
+                BlockId::SAND
+            } else if p == pos + IVec3::X {
+                BlockId::COBBLESTONE
+            } else {
+                BlockId::AIR
+            }
+        }));
+
+        // 4. Torch can stand on solid floor or cling to solid wall
+        assert!(can_block_survive(BlockId::TORCH, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::COBBLESTONE } else { BlockId::AIR }
+        }));
+        assert!(can_block_survive(BlockId::TORCH, pos, &reg, |p| {
+            if p == pos + IVec3::X { BlockId::STONE } else { BlockId::AIR }
+        }));
+        assert!(!can_block_survive(BlockId::TORCH, pos, &reg, |_p| {
+            BlockId::AIR
+        }));
+
+        // 5. Lily pad requires water below
+        assert!(can_block_survive(BlockId::LILY_PAD, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::WATER } else { BlockId::AIR }
+        }));
+        assert!(!can_block_survive(BlockId::LILY_PAD, pos, &reg, |p| {
+            if p == pos + IVec3::NEG_Y { BlockId::GRASS } else { BlockId::AIR }
+        }));
+    }
+
+    #[test]
+    fn test_break_unsupported_attached_cascading() {
+        let reg = BlockRegistry::new();
+        let mut world = crate::world::World::new();
+        let chunk = crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0));
+        world.insert_chunk(chunk);
+
+        // 1. Cactus column: Sand at (5, 1, 5), Cactus at (5, 2, 5), (5, 3, 5), (5, 4, 5)
+        world.set_block(IVec3::new(5, 1, 5), BlockId::SAND);
+        world.set_block(IVec3::new(5, 2, 5), BlockId::CACTUS);
+        world.set_block(IVec3::new(5, 3, 5), BlockId::CACTUS);
+        world.set_block(IVec3::new(5, 4, 5), BlockId::CACTUS);
+
+        // Breaking the base sand block cascades all 3 cactus blocks!
+        world.set_block(IVec3::new(5, 1, 5), BlockId::AIR);
+        let (drops, modified) = break_unsupported_attached(IVec3::new(5, 1, 5), &mut world, &reg);
+
+        assert_eq!(modified.len(), 3);
+        assert_eq!(world.get_block(IVec3::new(5, 2, 5)), BlockId::AIR);
+        assert_eq!(world.get_block(IVec3::new(5, 3, 5)), BlockId::AIR);
+        assert_eq!(world.get_block(IVec3::new(5, 4, 5)), BlockId::AIR);
+        assert_eq!(drops.len(), 3);
+        for (_, drop_slot) in drops {
+            assert_eq!(drop_slot.item_id, ItemId::CACTUS);
+            assert_eq!(drop_slot.count, 1);
+        }
+
+        // 2. Tall grass on grass block
+        world.set_block(IVec3::new(8, 1, 8), BlockId::GRASS);
+        world.set_block(IVec3::new(8, 2, 8), BlockId::TALL_GRASS);
+
+        // Breaking grass block breaks tall grass and drops wheat seeds
+        world.set_block(IVec3::new(8, 1, 8), BlockId::AIR);
+        let (drops_grass, modified_grass) =
+            break_unsupported_attached(IVec3::new(8, 1, 8), &mut world, &reg);
+        assert_eq!(modified_grass, vec![IVec3::new(8, 2, 8)]);
+        assert_eq!(world.get_block(IVec3::new(8, 2, 8)), BlockId::AIR);
+        assert_eq!(drops_grass.len(), 1);
+        assert_eq!(drops_grass[0].1.item_id, ItemId::WHEAT_SEEDS);
+
+        // 3. Wheat on farmland
+        world.set_block(IVec3::new(3, 1, 3), BlockId::FARMLAND);
+        world.set_block(IVec3::new(3, 2, 3), BlockId::WHEAT_3);
+
+        world.set_block(IVec3::new(3, 1, 3), BlockId::AIR);
+        let (drops_wheat, modified_wheat) =
+            break_unsupported_attached(IVec3::new(3, 1, 3), &mut world, &reg);
+        assert_eq!(modified_wheat, vec![IVec3::new(3, 2, 3)]);
+        assert_eq!(world.get_block(IVec3::new(3, 2, 3)), BlockId::AIR);
+        // Stage 3 drops wheat and seeds
+        assert!(drops_wheat.iter().any(|d| d.1.item_id == ItemId::WHEAT));
+        assert!(drops_wheat.iter().any(|d| d.1.item_id == ItemId::WHEAT_SEEDS));
+
+        // 4. Placing solid block next to cactus breaks the cactus
+        world.set_block(IVec3::new(12, 1, 12), BlockId::SAND);
+        world.set_block(IVec3::new(12, 2, 12), BlockId::CACTUS);
+        // Place cobblestone at (11, 2, 12) next to cactus
+        world.set_block(IVec3::new(11, 2, 12), BlockId::COBBLESTONE);
+        let (drops_cactus, modified_cactus) =
+            break_unsupported_attached(IVec3::new(11, 2, 12), &mut world, &reg);
+        assert_eq!(modified_cactus, vec![IVec3::new(12, 2, 12)]);
+        assert_eq!(world.get_block(IVec3::new(12, 2, 12)), BlockId::AIR);
+        assert_eq!(drops_cactus[0].1.item_id, ItemId::CACTUS);
     }
 }

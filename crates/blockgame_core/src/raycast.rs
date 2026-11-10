@@ -20,7 +20,19 @@ pub fn raycast_voxel(
     direction: Vec3,
     max_distance: f32,
     world: &World,
+    registry: &BlockRegistry,
+) -> Option<RaycastHit> {
+    raycast_voxel_with_water(origin, direction, max_distance, world, registry, false)
+}
+
+/// Casts a ray through the voxel world, optionally including water blocks as raycast targets.
+pub fn raycast_voxel_with_water(
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: f32,
+    world: &World,
     _registry: &BlockRegistry,
+    include_water: bool,
 ) -> Option<RaycastHit> {
     let dir = direction.normalize();
 
@@ -32,7 +44,12 @@ pub fn raycast_voxel(
 
     // If starting inside a block
     let start_block = world.get_block(current);
-    if !start_block.is_air() && start_block != BlockId::WATER {
+    let is_start_solid = if include_water {
+        !start_block.is_air()
+    } else {
+        !start_block.is_air() && start_block != BlockId::WATER
+    };
+    if is_start_solid {
         return Some(RaycastHit {
             hit_voxel: current,
             hit_face: Direction::PosY,
@@ -117,7 +134,12 @@ pub fn raycast_voxel(
         }
 
         let block = world.get_block(current);
-        if !block.is_air() && block != BlockId::WATER {
+        let is_hit = if include_water {
+            !block.is_air()
+        } else {
+            !block.is_air() && block != BlockId::WATER
+        };
+        if is_hit {
             let place_voxel = current + hit_face.normal_ivec();
             return Some(RaycastHit {
                 hit_voxel: current,
