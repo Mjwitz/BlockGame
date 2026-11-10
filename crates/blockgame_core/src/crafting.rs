@@ -112,6 +112,11 @@ pub enum Recipe {
         pattern: Vec<Option<ItemId>>, // size = width * height
         output: ItemSlot,
     },
+    Smelting {
+        name: &'static str,
+        input: ItemId,
+        output: ItemSlot,
+    },
 }
 
 impl Recipe {
@@ -119,6 +124,7 @@ impl Recipe {
         match self {
             Recipe::Shapeless { output, .. } => *output,
             Recipe::Shaped { output, .. } => *output,
+            Recipe::Smelting { output, .. } => *output,
         }
     }
 
@@ -126,6 +132,7 @@ impl Recipe {
         match self {
             Recipe::Shapeless { name, .. } => name,
             Recipe::Shaped { name, .. } => name,
+            Recipe::Smelting { name, .. } => name,
         }
     }
 
@@ -140,18 +147,7 @@ impl Recipe {
                 for (i, &inp) in inputs.iter().take(9).enumerate() {
                     grid[i] = Some(inp);
                 }
-                let is_smelting = inputs.len() == 1
-                    && (output.item_id == ItemId::IRON_INGOT
-                        || output.item_id == ItemId::COPPER_INGOT
-                        || output.item_id == ItemId::GOLD_INGOT
-                        || output.item_id == ItemId::STONE
-                        || output.item_id == ItemId::GLASS
-                        || output.item_id == ItemId::COOKED_STEAK
-                        || output.item_id == ItemId::COOKED_PORKCHOP
-                        || output.item_id == ItemId::COOKED_CHICKEN);
-                let category = if is_smelting {
-                    RecipeCategory::Smelting
-                } else if inputs.len() <= 4 {
+                let category = if inputs.len() <= 4 {
                     RecipeCategory::Crafting2x2
                 } else {
                     RecipeCategory::Crafting3x3
@@ -186,6 +182,20 @@ impl Recipe {
                 DisplayRecipe {
                     name,
                     category,
+                    inputs: grid,
+                    output: *output,
+                }
+            }
+            Recipe::Smelting {
+                name,
+                input,
+                output,
+            } => {
+                let mut grid = [None; 9];
+                grid[4] = Some(*input); // Centered in the 3x3 display grid
+                DisplayRecipe {
+                    name,
+                    category: RecipeCategory::Smelting,
                     inputs: grid,
                     output: *output,
                 }
@@ -250,6 +260,7 @@ impl Recipe {
 
                 true
             }
+            Recipe::Smelting { .. } => false, // Smelting recipes only work in a furnace, never in crafting grids!
         }
     }
 }
@@ -297,6 +308,7 @@ impl CraftingManager {
             .filter(|r| match r {
                 Recipe::Shapeless { inputs, .. } => inputs.contains(&item_id),
                 Recipe::Shaped { pattern, .. } => pattern.contains(&Some(item_id)),
+                Recipe::Smelting { input, .. } => *input == item_id,
             })
             .map(|r| r.to_display_recipe())
             .collect()
@@ -344,6 +356,9 @@ impl CraftingManager {
                         }
                     }
                 }
+            }
+            Recipe::Smelting { .. } => {
+                unreachable!("Smelting recipes cannot be crafted in a crafting grid")
             }
         }
 
@@ -569,22 +584,40 @@ impl CraftingManager {
             ItemId::DIAMOND_SHOVEL,
         );
 
-        // Smelting Substitute Recipes (1 Raw Ore -> 1 Ingot)
-        self.register(Recipe::Shapeless {
+        // Furnace Smelting Recipes (1 Raw Ore -> 1 Ingot)
+        self.register(Recipe::Smelting {
             name: "Iron Ingot from Raw Iron",
-            inputs: vec![ItemId::RAW_IRON],
+            input: ItemId::RAW_IRON,
             output: ItemSlot::new(ItemId::IRON_INGOT, 1),
         });
 
-        self.register(Recipe::Shapeless {
+        self.register(Recipe::Smelting {
+            name: "Iron Ingot from Iron Ore",
+            input: ItemId::IRON_ORE,
+            output: ItemSlot::new(ItemId::IRON_INGOT, 1),
+        });
+
+        self.register(Recipe::Smelting {
             name: "Copper Ingot from Raw Copper",
-            inputs: vec![ItemId::RAW_COPPER],
+            input: ItemId::RAW_COPPER,
             output: ItemSlot::new(ItemId::COPPER_INGOT, 1),
         });
 
-        self.register(Recipe::Shapeless {
+        self.register(Recipe::Smelting {
+            name: "Copper Ingot from Copper Ore",
+            input: ItemId::COPPER_ORE,
+            output: ItemSlot::new(ItemId::COPPER_INGOT, 1),
+        });
+
+        self.register(Recipe::Smelting {
             name: "Gold Ingot from Raw Gold",
-            inputs: vec![ItemId::RAW_GOLD],
+            input: ItemId::RAW_GOLD,
+            output: ItemSlot::new(ItemId::GOLD_INGOT, 1),
+        });
+
+        self.register(Recipe::Smelting {
+            name: "Gold Ingot from Gold Ore",
+            input: ItemId::GOLD_ORE,
             output: ItemSlot::new(ItemId::GOLD_INGOT, 1),
         });
 
@@ -668,22 +701,22 @@ impl CraftingManager {
             output: ItemSlot::new(ItemId::BREAD, 1),
         });
 
-        // Cooking Meats (1 Raw Meat -> 1 Cooked Meat)
-        self.register(Recipe::Shapeless {
+        // Furnace Cooking Meats (1 Raw Meat -> 1 Cooked Meat)
+        self.register(Recipe::Smelting {
             name: "Cooked Steak from Raw Beef",
-            inputs: vec![ItemId::RAW_BEEF],
+            input: ItemId::RAW_BEEF,
             output: ItemSlot::new(ItemId::COOKED_STEAK, 1),
         });
 
-        self.register(Recipe::Shapeless {
+        self.register(Recipe::Smelting {
             name: "Cooked Porkchop from Raw Porkchop",
-            inputs: vec![ItemId::RAW_PORKCHOP],
+            input: ItemId::RAW_PORKCHOP,
             output: ItemSlot::new(ItemId::COOKED_PORKCHOP, 1),
         });
 
-        self.register(Recipe::Shapeless {
+        self.register(Recipe::Smelting {
             name: "Cooked Chicken from Raw Chicken",
-            inputs: vec![ItemId::RAW_CHICKEN],
+            input: ItemId::RAW_CHICKEN,
             output: ItemSlot::new(ItemId::COOKED_CHICKEN, 1),
         });
 
@@ -725,17 +758,17 @@ impl CraftingManager {
             output: ItemSlot::new(ItemId::FURNACE, 1),
         });
 
-        // Smelting: Cobblestone -> Stone
-        self.register(Recipe::Shapeless {
+        // Furnace Smelting: Cobblestone -> Stone
+        self.register(Recipe::Smelting {
             name: "Stone from Cobblestone",
-            inputs: vec![ItemId::COBBLESTONE],
+            input: ItemId::COBBLESTONE,
             output: ItemSlot::new(ItemId::STONE, 1),
         });
 
-        // Smelting: Sand -> Glass
-        self.register(Recipe::Shapeless {
+        // Furnace Smelting: Sand -> Glass
+        self.register(Recipe::Smelting {
             name: "Glass from Sand",
-            inputs: vec![ItemId::SAND],
+            input: ItemId::SAND,
             output: ItemSlot::new(ItemId::GLASS, 1),
         });
     }
@@ -883,19 +916,66 @@ mod tests {
     }
 
     #[test]
-    fn test_shapeless_recipe_raw_ore_smelting() {
+    fn test_raw_ore_and_meat_must_be_smelted() {
         let cm = CraftingManager::new();
         let mut grid = CraftingGrid::new_2x2();
 
+        // Raw Iron in crafting grid produces nothing
         grid.set(1, 1, ItemSlot::new(ItemId::RAW_IRON, 3));
-        let res = cm.find_match(&grid);
-        assert!(res.is_some());
-        let (_, out) = res.unwrap();
-        assert_eq!(out.item_id, ItemId::IRON_INGOT);
+        assert!(
+            cm.find_match(&grid).is_none(),
+            "Raw Iron cannot be crafted in crafting grid"
+        );
 
-        let crafted = cm.craft(&mut grid).unwrap();
-        assert_eq!(crafted.item_id, ItemId::IRON_INGOT);
-        assert_eq!(grid.get(1, 1).count, 2);
+        // Raw Beef in crafting grid produces nothing
+        grid.set(1, 1, ItemSlot::new(ItemId::RAW_BEEF, 1));
+        assert!(
+            cm.find_match(&grid).is_none(),
+            "Raw Beef cannot be crafted in crafting grid"
+        );
+
+        // Raw Porkchop in crafting grid produces nothing
+        grid.set(1, 1, ItemSlot::new(ItemId::RAW_PORKCHOP, 1));
+        assert!(
+            cm.find_match(&grid).is_none(),
+            "Raw Porkchop cannot be crafted in crafting grid"
+        );
+
+        // Raw Copper in crafting grid produces nothing
+        grid.set(1, 1, ItemSlot::new(ItemId::RAW_COPPER, 1));
+        assert!(
+            cm.find_match(&grid).is_none(),
+            "Raw Copper cannot be crafted in crafting grid"
+        );
+
+        // Smelting display queries return Smelting category recipes
+        let iron_recipes = cm.get_recipes_for_output(ItemId::IRON_INGOT);
+        assert!(iron_recipes
+            .iter()
+            .any(|r| r.category == RecipeCategory::Smelting));
+
+        let steak_recipes = cm.get_recipes_for_output(ItemId::COOKED_STEAK);
+        assert!(steak_recipes
+            .iter()
+            .any(|r| r.category == RecipeCategory::Smelting));
+
+        // Furnace smelting lookup succeeds
+        assert_eq!(
+            get_smelting_output(ItemId::RAW_IRON),
+            Some(ItemId::IRON_INGOT)
+        );
+        assert_eq!(
+            get_smelting_output(ItemId::RAW_BEEF),
+            Some(ItemId::COOKED_STEAK)
+        );
+        assert_eq!(
+            get_smelting_output(ItemId::RAW_PORKCHOP),
+            Some(ItemId::COOKED_PORKCHOP)
+        );
+        assert_eq!(
+            get_smelting_output(ItemId::RAW_COPPER),
+            Some(ItemId::COPPER_INGOT)
+        );
     }
 
     #[test]

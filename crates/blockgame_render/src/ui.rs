@@ -598,7 +598,7 @@ impl UiBuilder {
                 let v_h = v_max - v_min;
                 let u_side_left = u_min + u_w * (7.0 / 16.0);
                 let u_side_right = u_min + u_w * (9.0 / 16.0);
-                let v_side_top = v_min + v_h * (1.0 / 16.0);
+                let v_side_top = v_min + v_h * (6.0 / 16.0);
                 let v_side_bottom = v_min + v_h * (16.0 / 16.0);
 
                 let torch_uvs = [

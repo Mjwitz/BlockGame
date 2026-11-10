@@ -299,13 +299,16 @@ impl<'a> ChunkMesher<'a> {
 
         let u_side_left = u_min + u_width * (7.0 / 16.0);
         let u_side_right = u_min + u_width * (9.0 / 16.0);
-        let v_side_top = v_min + v_height * (1.0 / 16.0);
+        let v_side_top = v_min + v_height * (6.0 / 16.0);
         let v_side_bottom = v_min + v_height * (16.0 / 16.0);
 
         let u_top_left = u_min + u_width * (7.0 / 16.0);
         let u_top_right = u_min + u_width * (9.0 / 16.0);
-        let v_top_min = v_min + v_height * (2.0 / 16.0);
-        let v_top_max = v_min + v_height * (4.0 / 16.0);
+        let v_top_min = v_min + v_height * (6.0 / 16.0);
+        let v_top_max = v_min + v_height * (8.0 / 16.0);
+
+        let v_bottom_min = v_min + v_height * (14.0 / 16.0);
+        let v_bottom_max = v_min + v_height * (16.0 / 16.0);
 
         let light = [1.0, 1.0]; // Self-illuminating warm torch glow
         let ao = 1.0;
@@ -395,10 +398,10 @@ impl<'a> ChunkMesher<'a> {
         add_quad(
             [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
             [
-                [u_top_left, v_top_min],
-                [u_top_right, v_top_min],
-                [u_top_right, v_top_max],
-                [u_top_left, v_top_max],
+                [u_top_left, v_bottom_min],
+                [u_top_right, v_bottom_min],
+                [u_top_right, v_bottom_max],
+                [u_top_left, v_bottom_max],
             ],
             [0.0, -1.0, 0.0],
         );
@@ -617,7 +620,7 @@ pub fn build_item_drops_mesh(
 
             let u_side_left = u_min + u_width * (7.0 / 16.0);
             let u_side_right = u_min + u_width * (9.0 / 16.0);
-            let v_side_top = v_min + v_height * (1.0 / 16.0);
+            let v_side_top = v_min + v_height * (6.0 / 16.0);
             let v_side_bottom = v_min + v_height * (16.0 / 16.0);
 
             let side_uvs = [
@@ -629,8 +632,8 @@ pub fn build_item_drops_mesh(
 
             let u_top_left = u_min + u_width * (7.0 / 16.0);
             let u_top_right = u_min + u_width * (9.0 / 16.0);
-            let v_top_min = v_min + v_height * (2.0 / 16.0);
-            let v_top_max = v_min + v_height * (4.0 / 16.0);
+            let v_top_min = v_min + v_height * (6.0 / 16.0);
+            let v_top_max = v_min + v_height * (8.0 / 16.0);
 
             let top_uvs = [
                 [u_top_left, v_top_max],
@@ -1583,6 +1586,19 @@ mod tests {
             assert!(v.position[0] >= 4.4 && v.position[0] <= 4.6);
             assert!(v.position[2] >= 4.4 && v.position[2] <= 4.6);
             assert!(v.position[1] >= 4.0 && v.position[1] <= 4.7);
+        }
+
+        // Verify top face (+Y normal) has valid non-transparent flame UV coordinates (rows 12..16 / 32, i.e. 6.0/16.0 to 8.0/16.0)
+        let top_verts: Vec<_> = mesh.vertices.iter().filter(|v| v.normal[1] > 0.9).collect();
+        assert_eq!(top_verts.len(), 4, "Torch must have 4 top face vertices");
+        let [_u_min, v_min, _u_max, v_max] = crate::TextureAtlas::get_uv_bounds(13);
+        let v_h = v_max - v_min;
+        for tv in &top_verts {
+            assert!(
+                tv.uv[1] >= v_min + v_h * (5.9 / 16.0) && tv.uv[1] <= v_min + v_h * (8.1 / 16.0),
+                "Top face UV V must sample flame head rows, got {}",
+                tv.uv[1]
+            );
         }
     }
 
