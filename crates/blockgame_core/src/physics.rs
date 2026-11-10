@@ -1,6 +1,9 @@
 use glam::{IVec3, Vec3};
 
-use crate::{block::BlockRegistry, world::World};
+use crate::{
+    block::{BlockId, BlockRegistry},
+    world::World,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AABB {
@@ -136,6 +139,28 @@ impl PlayerPhysics {
         }
     }
 
+    /// Returns whether the player's bounding box is submerged or touching water.
+    pub fn is_in_water(&self, world: &World) -> bool {
+        let player_box = self.aabb();
+        let min_x = player_box.min.x.floor() as i32;
+        let max_x = player_box.max.x.floor() as i32;
+        let min_y = player_box.min.y.floor() as i32;
+        let max_y = player_box.max.y.floor() as i32;
+        let min_z = player_box.min.z.floor() as i32;
+        let max_z = player_box.max.z.floor() as i32;
+
+        for y in min_y..=max_y {
+            for z in min_z..=max_z {
+                for x in min_x..=max_x {
+                    if world.get_block(IVec3::new(x, y, z)) == BlockId::WATER {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Updates player physics over a delta time `dt` against the voxel `world`.
     /// Returns any fall damage incurred upon landing.
     pub fn update(
@@ -157,34 +182,61 @@ impl PlayerPhysics {
             return 0.0;
         }
 
+        let in_water = self.is_in_water(world);
         let prev_y = self.position.y;
         let was_on_ground = self.on_ground;
 
-        // Apply gravity
-        let gravity = -28.0;
-        self.velocity.y += gravity * dt;
-
-        // Ground jumping
-        if self.on_ground && jumping {
-            self.velocity.y = 8.5; // Jump velocity
-            self.on_ground = false;
+        if in_water {
+            // Cancel fall damage in water
             self.fall_distance = 0.0;
+
+            // Water gravity & buoyancy
+            let water_gravity = -6.0;
+            self.velocity.y += water_gravity * dt;
+
+            // Water vertical drag
+            self.velocity.y *= (1.0 - 2.5 * dt).clamp(0.0, 1.0);
+
+            // Swimming upward
+            if jumping {
+                self.velocity.y = 4.0;
+            }
+
+            // Water horizontal movement
+            let target_speed = if sprinting { 3.8 } else { 2.4 };
+            let target_vel = wish_dir * target_speed;
+            let accel = 8.0;
+            self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
+            self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
+        } else {
+            // Apply gravity
+            let gravity = -28.0;
+            self.velocity.y += gravity * dt;
+
+            // Ground jumping
+            if self.on_ground && jumping {
+                self.velocity.y = 8.5; // Jump velocity
+                self.on_ground = false;
+                self.fall_distance = 0.0;
+            }
+
+            // Horizontal movement & acceleration
+            let target_speed = if sprinting { 6.0 } else { 4.3 };
+            let target_vel = wish_dir * target_speed;
+
+            let accel = if self.on_ground { 15.0 } else { 3.0 };
+            self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
+            self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
         }
-
-        // Horizontal movement & acceleration
-        let target_speed = if sprinting { 6.0 } else { 4.3 };
-        let target_vel = wish_dir * target_speed;
-
-        let accel = if self.on_ground { 15.0 } else { 3.0 };
-        self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
-        self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
 
         // Swept axis-separated collision resolution
         self.resolve_movement(dt, world, registry);
 
         // Calculate fall distance and landing damage
         let mut fall_damage = 0.0;
-        if self.on_ground {
+        if in_water {
+            self.fall_distance = 0.0;
+        } else if self.on_ground {
             if !was_on_ground && self.fall_distance > 3.0 {
                 fall_damage = self.fall_distance - 3.0;
             }

@@ -63,6 +63,13 @@ impl ItemId {
     pub const FEATHER: Self = Self(53);
     pub const CHEST: Self = Self(54);
     pub const FURNACE: Self = Self(55);
+    pub const BIRCH_LOG: Self = Self(56);
+    pub const BIRCH_PLANKS: Self = Self(57);
+    pub const BIRCH_LEAVES: Self = Self(58);
+    pub const SPRUCE_LOG: Self = Self(59);
+    pub const SPRUCE_PLANKS: Self = Self(60);
+    pub const SPRUCE_LEAVES: Self = Self(61);
+    pub const TALL_GRASS: Self = Self(62);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -922,6 +929,90 @@ impl ItemRegistry {
             tool_type: None,
             tool_tier: None,
             icon_tile: 182,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BIRCH_LOG,
+            name: "blockgame:birch_log",
+            display_name: "Birch Log",
+            max_stack: 64,
+            placeable_block: Some(BlockId::BIRCH_LOG),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 192,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BIRCH_PLANKS,
+            name: "blockgame:birch_planks",
+            display_name: "Birch Planks",
+            max_stack: 64,
+            placeable_block: Some(BlockId::BIRCH_PLANKS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 194,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BIRCH_LEAVES,
+            name: "blockgame:birch_leaves",
+            display_name: "Birch Leaves",
+            max_stack: 64,
+            placeable_block: Some(BlockId::BIRCH_LEAVES),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 195,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SPRUCE_LOG,
+            name: "blockgame:spruce_log",
+            display_name: "Spruce Log",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SPRUCE_LOG),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 196,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SPRUCE_PLANKS,
+            name: "blockgame:spruce_planks",
+            display_name: "Spruce Planks",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SPRUCE_PLANKS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 198,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::SPRUCE_LEAVES,
+            name: "blockgame:spruce_leaves",
+            display_name: "Spruce Leaves",
+            max_stack: 64,
+            placeable_block: Some(BlockId::SPRUCE_LEAVES),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 199,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::TALL_GRASS,
+            name: "blockgame:tall_grass",
+            display_name: "Tall Grass",
+            max_stack: 64,
+            placeable_block: Some(BlockId::TALL_GRASS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 200,
         });
     }
 }

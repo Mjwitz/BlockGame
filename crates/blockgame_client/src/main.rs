@@ -11,10 +11,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let registry = Arc::new(BlockRegistry::new());
-    let seed: u32 = 1337;
     let render_distance: i32 = 4;
 
     let args: Vec<String> = std::env::args().collect();
+
+    // World seed determination:
+    // If --seed <u32> is provided, use specified seed.
+    // Otherwise, use current system time as random world seed for interactive gameplay.
+    // If running in automated headless test mode without --seed, default to 1337 for determinism.
+    let is_headless = args.iter().any(|a| a == "--headless" || a == "--render-to-image");
+    let seed: u32 = if let Some(idx) = args.iter().position(|a| a == "--seed") {
+        args.get(idx + 1)
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| (d.as_millis() ^ (d.as_nanos() >> 16)) as u32)
+                    .unwrap_or(1337)
+            })
+    } else if is_headless {
+        1337
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_millis() ^ (d.as_nanos() >> 16)) as u32)
+            .unwrap_or(1337)
+    };
 
     // Check if offscreen render mode is requested
     if let Some(idx) = args.iter().position(|a| a == "--render-to-image") {

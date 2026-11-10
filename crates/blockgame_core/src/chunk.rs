@@ -5,6 +5,7 @@ pub const CHUNK_SIZE_X: usize = 16;
 pub const CHUNK_SIZE_Y: usize = 16;
 pub const CHUNK_SIZE_Z: usize = 16;
 pub const CHUNK_VOLUME: usize = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z; // 4096
+pub const VERTICAL_CHUNKS: i32 = 5; // 5 chunks high = 80 blocks vertical world height
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkPos(pub IVec3);

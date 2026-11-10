@@ -33,6 +33,14 @@ impl BlockId {
     pub const CHEST: Self = Self(25);
     pub const FURNACE: Self = Self(26);
     pub const FURNACE_LIT: Self = Self(27);
+    pub const WATER: Self = Self(11);
+    pub const TALL_GRASS: Self = Self(28);
+    pub const BIRCH_LOG: Self = Self(29);
+    pub const BIRCH_PLANKS: Self = Self(30);
+    pub const BIRCH_LEAVES: Self = Self(31);
+    pub const SPRUCE_LOG: Self = Self(32);
+    pub const SPRUCE_PLANKS: Self = Self(33);
+    pub const SPRUCE_LEAVES: Self = Self(34);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -443,6 +451,122 @@ impl BlockRegistry {
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::FURNACE),
             drop_count: (1, 1),
+        });
+
+        // Water: non-solid, transparent liquid with translucent Faithful water texture
+        registry.register(BlockDefinition {
+            id: BlockId::WATER,
+            name: "Water",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [191; 6],
+            hardness: 100.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
+        });
+
+        // Tall Grass: passable transparent wild plant quad, drops wheat seeds
+        registry.register(BlockDefinition {
+            id: BlockId::TALL_GRASS,
+            name: "Tall Grass",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [200; 6],
+            hardness: 0.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::WHEAT_SEEDS),
+            drop_count: (1, 1),
+        });
+
+        // Birch Wood Family
+        registry.register(BlockDefinition {
+            id: BlockId::BIRCH_LOG,
+            name: "Birch Log",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [193, 193, 192, 192, 192, 192],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::BIRCH_LOG),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BIRCH_PLANKS,
+            name: "Birch Planks",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [194; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::BIRCH_PLANKS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BIRCH_LEAVES,
+            name: "Birch Leaves",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [195; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::APPLE),
+            drop_count: (0, 1),
+        });
+
+        // Spruce Wood Family
+        registry.register(BlockDefinition {
+            id: BlockId::SPRUCE_LOG,
+            name: "Spruce Log",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [197, 197, 196, 196, 196, 196],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SPRUCE_LOG),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::SPRUCE_PLANKS,
+            name: "Spruce Planks",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [198; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SPRUCE_PLANKS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::SPRUCE_LEAVES,
+            name: "Spruce Leaves",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [199; 6],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
         });
 
         registry

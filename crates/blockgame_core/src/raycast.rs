@@ -1,6 +1,6 @@
 use glam::{IVec3, Vec3};
 
-use crate::{block::BlockRegistry, direction::Direction, world::World};
+use crate::{block::{BlockId, BlockRegistry}, direction::Direction, world::World};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RaycastHit {
@@ -32,7 +32,7 @@ pub fn raycast_voxel(
 
     // If starting inside a block
     let start_block = world.get_block(current);
-    if !start_block.is_air() {
+    if !start_block.is_air() && start_block != BlockId::WATER {
         return Some(RaycastHit {
             hit_voxel: current,
             hit_face: Direction::PosY,
@@ -117,7 +117,7 @@ pub fn raycast_voxel(
         }
 
         let block = world.get_block(current);
-        if !block.is_air() {
+        if !block.is_air() && block != BlockId::WATER {
             let place_voxel = current + hit_face.normal_ivec();
             return Some(RaycastHit {
                 hit_voxel: current,

@@ -109,6 +109,7 @@ impl<'a> ChunkMesher<'a> {
                         || block_id == BlockId::WHEAT_1
                         || block_id == BlockId::WHEAT_2
                         || block_id == BlockId::WHEAT_3
+                        || block_id == BlockId::TALL_GRASS
                     {
                         self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
                         continue;
@@ -122,8 +123,10 @@ impl<'a> ChunkMesher<'a> {
 
                         let neighbor_id = query_block(nx, ny, nz);
 
-                        // Adjacent glass blocks should not render the internal face between them
-                        if block_id == BlockId::GLASS && neighbor_id == BlockId::GLASS {
+                        // Adjacent glass or water blocks should not render the internal face between them
+                        if (block_id == BlockId::GLASS && neighbor_id == BlockId::GLASS)
+                            || (block_id == BlockId::WATER && neighbor_id == BlockId::WATER)
+                        {
                             continue;
                         }
 

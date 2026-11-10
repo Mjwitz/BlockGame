@@ -103,7 +103,18 @@ pub async fn render_world_to_image(
     );
     let base_x = 0;
     let base_z = 0;
-    let base_y = 24;
+    let base_y = {
+        let world_guard = world_manager.world().lock().unwrap();
+        let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+        while y > 1 {
+            let block = world_guard.get_block(IVec3::new(base_x, y, base_z));
+            if !block.is_air() {
+                break;
+            }
+            y -= 1;
+        }
+        y
+    };
 
     // Build Cobblestone foundation & Planks walls
     for dy in 0_i32..4_i32 {
@@ -215,8 +226,22 @@ pub async fn render_world_to_image(
     day_night.set_time(12200.0); // Rich sunset / dusk transition
     let sky = day_night.sky_color();
 
+    // Find ground elevation at camera location (-3.5, 9.0)
+    let cam_ground_y = {
+        let world_guard = world_manager.world().lock().unwrap();
+        let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+        while y > 1 {
+            let block = world_guard.get_block(IVec3::new(-4, y, 9));
+            if !block.is_air() {
+                break;
+            }
+            y -= 1;
+        }
+        y
+    };
+
     // Position camera with a 3/4 perspective showing cabin, glowing torches, and sunset landscape
-    let eye = Vec3::new(-3.5, (base_y + 2) as f32 + 0.8, 9.0);
+    let eye = Vec3::new(-3.5, (cam_ground_y as f32 + 2.0).max((base_y + 2) as f32 + 1.2), 9.0);
     let camera = Camera::new(eye, (-72.0_f32).to_radians(), (-10.0_f32).to_radians());
     let mut camera_uniform = CameraUniform::default();
     camera.update_uniform_with_atmosphere(
@@ -227,15 +252,27 @@ pub async fn render_world_to_image(
     pipeline.update_camera(&queue, &camera_uniform);
 
     // Spawn item drops on the grass in clear view of the camera: wood log and slender glowing torch
+    let drop_ground_y = {
+        let world_guard = world_manager.world().lock().unwrap();
+        let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+        while y > 1 {
+            let block = world_guard.get_block(IVec3::new(-3, y, 7));
+            if !block.is_air() {
+                break;
+            }
+            y -= 1;
+        }
+        y
+    };
     let mut item_drop = blockgame_core::entity::ItemDrop::new(
-        Vec3::new(-2.8, (base_y + 2) as f32 + 0.15, 7.2),
+        Vec3::new(-2.8, (drop_ground_y as f32 + 1.0) + 0.15, 7.2),
         blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::WOOD_LOG, 4),
     );
     item_drop.age = 1.2;
     world_manager.item_drops.push(item_drop);
 
     let mut torch_drop = blockgame_core::entity::ItemDrop::new(
-        Vec3::new(-2.2, (base_y + 2) as f32 + 0.15, 6.7),
+        Vec3::new(-2.2, (drop_ground_y as f32 + 1.0) + 0.15, 6.7),
         blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TORCH, 2),
     );
     torch_drop.age = 0.8;
@@ -1114,7 +1151,19 @@ pub async fn render_world_to_image(
         let animal_gpu_mesh = pipeline.upload_mesh(&device, &animals_mesh);
 
         // Position camera with open 3/4 perspective showing animals, wheat crops, and cabin
-        let farm_cam_pos = Vec3::new(-3.0, (farm_y + 2) as f32 + 0.3, 8.8);
+        let farm_cam_ground_y = {
+            let world_guard = world_manager.world().lock().unwrap();
+            let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+            while y > 1 {
+                let block = world_guard.get_block(IVec3::new(-3, y, 9));
+                if !block.is_air() {
+                    break;
+                }
+                y -= 1;
+            }
+            y
+        };
+        let farm_cam_pos = Vec3::new(-3.0, (farm_cam_ground_y as f32 + 2.0).max((farm_y + 2) as f32 + 1.2), 8.8);
         let farm_cam = Camera::new(
             farm_cam_pos,
             (-50.0_f32).to_radians(),
@@ -2169,6 +2218,187 @@ pub async fn render_world_to_image(
             image::ExtendedColorType::Rgba8,
         )?;
         log::info!("Successfully saved Furnace UI showcase image to furnace_ui_render.png");
+    }
+
+    // Showcase: Water and New Terrain Features (Birch & Spruce trees, Water pond with sand bed, Tall grass)
+    {
+        let pond_x = -8;
+        let pond_z = -4;
+        let pond_y = base_y;
+
+        let dummy_box = AABB::new(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+
+        // Dig a natural pond and fill with translucent water and sand bed
+        for dx in -3..=3 {
+            for dz in -3..=3 {
+                let dist_sq = dx * dx + dz * dz;
+                if dist_sq <= 9 {
+                    let wx = pond_x + dx;
+                    let wz = pond_z + dz;
+                    // Bed
+                    world_manager.place_block(IVec3::new(wx, pond_y - 1, wz), BlockId::SAND, &dummy_box, &device, &pipeline);
+                    // Water
+                    world_manager.place_block(IVec3::new(wx, pond_y, wz), BlockId::WATER, &dummy_box, &device, &pipeline);
+                    // Clear air above
+                    world_manager.break_block(IVec3::new(wx, pond_y + 1, wz), &device, &pipeline);
+                    world_manager.break_block(IVec3::new(wx, pond_y + 2, wz), &device, &pipeline);
+                }
+            }
+        }
+
+        // Place Birch & Spruce logs and planks on the shoreline
+        world_manager.place_block(IVec3::new(pond_x + 4, pond_y + 1, pond_z), BlockId::BIRCH_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(pond_x + 4, pond_y + 2, pond_z), BlockId::BIRCH_LOG, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(pond_x + 3, pond_y + 1, pond_z + 2), BlockId::SPRUCE_PLANKS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(pond_x + 2, pond_y + 1, pond_z + 3), BlockId::BIRCH_PLANKS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(pond_x - 3, pond_y + 1, pond_z + 2), BlockId::TALL_GRASS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(pond_x - 2, pond_y + 1, pond_z + 3), BlockId::TALL_GRASS, &dummy_box, &device, &pipeline);
+        world_manager.place_block(IVec3::new(pond_x + 1, pond_y + 1, pond_z - 4), BlockId::TALL_GRASS, &dummy_box, &device, &pipeline);
+
+        // Morning sunlight
+        let mut pond_day_night = DayNightCycle::new();
+        pond_day_night.set_time(6000.0); // Bright sunny day
+        let pond_sky = pond_day_night.sky_color();
+
+        let pond_cam_pos = Vec3::new((pond_x as f32) - 4.5, (pond_y as f32) + 3.2, (pond_z as f32) + 5.5);
+        let pond_cam = Camera::new(pond_cam_pos, (-45.0_f32).to_radians(), (-20.0_f32).to_radians());
+        let mut pond_uniform = CameraUniform::default();
+        pond_cam.update_uniform_with_atmosphere(&mut pond_uniform, width as f32 / height as f32, &pond_day_night);
+        pipeline.update_camera(&queue, &pond_uniform);
+
+        let mut water_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Water & Terrain Encoder"),
+        });
+
+        {
+            let mut render_pass = water_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Water & Terrain Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: pond_sky[0] as f64,
+                            g: pond_sky[1] as f64,
+                            b: pond_sky[2] as f64,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            world_manager.render(&mut render_pass);
+        }
+
+        // Draw HUD overlay with Birch Log in hotbar
+        let mut water_ui_mesh = UiMesh::new();
+        let stats = blockgame_core::PlayerStats::new();
+        let mut water_inv = inventory.clone();
+        water_inv.slots[0] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::BIRCH_LOG, 16);
+        water_inv.slots[1] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::SPRUCE_PLANKS, 32);
+        water_inv.slots[2] = blockgame_core::item::ItemSlot::new(blockgame_core::item::ItemId::TALL_GRASS, 8);
+        UiBuilder::build_hud(&mut water_ui_mesh, screen_w, screen_h, &water_inv, 0, &item_registry, 0.0, 0.0, &stats);
+
+        if !water_ui_mesh.indices.is_empty() {
+            let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Water UI VB"),
+                contents: bytemuck::cast_slice(&water_ui_mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Water UI IB"),
+                contents: bytemuck::cast_slice(&water_ui_mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            let mut ui_pass = water_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Water UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &render_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ui_pass.set_pipeline(&ui_pipeline.render_pipeline);
+            ui_pass.set_bind_group(0, &ui_pipeline.screen_bind_group, &[]);
+            ui_pass.set_bind_group(1, &pipeline.texture_bind_group, &[]);
+            ui_pass.set_vertex_buffer(0, vb.slice(..));
+            ui_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            ui_pass.draw_indexed(0..water_ui_mesh.indices.len() as u32, 0, 0..1);
+        }
+
+        water_encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &render_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(water_encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = buffer_slice.get_mapped_range();
+        let mut water_image_bytes = Vec::with_capacity((width * height * 4) as usize);
+
+        for row in 0..height {
+            let start = (row * bytes_per_row) as usize;
+            let end = start + (width * 4) as usize;
+            water_image_bytes.extend_from_slice(&data[start..end]);
+        }
+        drop(data);
+        staging_buffer.unmap();
+
+        image::save_buffer(
+            "terrain_and_water_render.png",
+            &water_image_bytes,
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )?;
+        log::info!("Successfully saved Terrain and Water showcase image to terrain_and_water_render.png");
     }
 
     Ok(())

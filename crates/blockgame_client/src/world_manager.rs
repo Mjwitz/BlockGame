@@ -7,7 +7,7 @@ use std::sync::{
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{BlockId, BlockRegistry},
-    chunk::{Chunk, ChunkPos},
+    chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
     entity::{ItemDrop, ItemDropStatus},
     item::ItemSlot,
     physics::AABB,
@@ -71,8 +71,8 @@ impl WorldManager {
         let mut chunks_to_generate = Vec::new();
         let r = self.render_distance;
 
-        // Vertical chunk range: y from 0 to 2 (world y from 0 to 48)
-        for cy in 0..=2 {
+        // Vertical chunk range: y from 0 to VERTICAL_CHUNKS (world y from 0 to 80)
+        for cy in 0..VERTICAL_CHUNKS {
             for cz in -r..=r {
                 for cx in -r..=r {
                     if cx * cx + cz * cz <= (r + 1) * (r + 1) {
@@ -216,7 +216,7 @@ impl WorldManager {
             let az = center_z + dz;
 
             // Find top solid ground block
-            let mut ay = 48;
+            let mut ay = (VERTICAL_CHUNKS * 16) - 2;
             while ay > 1 {
                 let b = world.get_block(IVec3::new(ax, ay, az));
                 if b == BlockId::GRASS || b == BlockId::DIRT {
@@ -227,7 +227,7 @@ impl WorldManager {
 
             if ay > 1 {
                 let above = world.get_block(IVec3::new(ax, ay + 1, az));
-                if above.is_air() {
+                if above.is_air() || above == BlockId::TALL_GRASS {
                     let mut entity = AnimalEntity::new(
                         self.next_animal_id,
                         selected_kind,
@@ -289,7 +289,7 @@ impl WorldManager {
 
             {
                 let world_guard = self.world.lock().unwrap();
-                for cy in 0..=2 {
+                for cy in 0..VERTICAL_CHUNKS {
                     for dz in -r..=r {
                         for dx in -r..=r {
                             if dx * dx + dz * dz <= (r + 1) * (r + 1) {

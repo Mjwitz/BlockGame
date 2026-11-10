@@ -108,7 +108,7 @@ impl AppState {
         // Find safe surface spawn height at (0, 0)
         let spawn_y = {
             let world_guard = self.world_manager.world().lock().unwrap();
-            let mut y = 60;
+            let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
             while y > 1 {
                 let block = world_guard.get_block(IVec3::new(0, y, 0));
                 if !block.is_air() {
@@ -236,7 +236,19 @@ impl ApplicationHandler for BlockGameApp {
         world_manager.init_spawn_area(&device, &pipeline);
 
         // Spawn player atop the surface
-        let player = PlayerPhysics::new(Vec3::new(0.0, 32.0, 0.0));
+        let spawn_y = {
+            let world_guard = world_manager.world().lock().unwrap();
+            let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+            while y > 1 {
+                let block = world_guard.get_block(IVec3::new(0, y, 0));
+                if !block.is_air() {
+                    break;
+                }
+                y -= 1;
+            }
+            (y + 2) as f32
+        };
+        let player = PlayerPhysics::new(Vec3::new(0.5, spawn_y, 0.5));
 
         let camera = Camera::new(
             player.eye_position(),
