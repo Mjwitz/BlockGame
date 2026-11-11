@@ -281,90 +281,398 @@ impl PlayerPhysics {
     }
 
     fn resolve_movement(&mut self, dt: f32, world: &World, registry: &BlockRegistry) {
-        // Step Y axis
-        self.position.y += self.velocity.y * dt;
-        let mut player_box = self.aabb();
+        resolve_entity_movement(
+            &mut self.position,
+            &mut self.velocity,
+            &mut self.on_ground,
+            self.half_width,
+            self.height,
+            dt,
+            world,
+            registry,
+        );
+    }
+}
 
-        let min_x = (player_box.min.x.floor() as i32) - 1;
-        let max_x = (player_box.max.x.ceil() as i32) + 1;
-        let min_y = (player_box.min.y.floor() as i32) - 1;
-        let max_y = (player_box.max.y.ceil() as i32) + 1;
-        let min_z = (player_box.min.z.floor() as i32) - 1;
-        let max_z = (player_box.max.z.ceil() as i32) + 1;
+const COLLISION_SKIN: f32 = 1e-4;
+const FACE_TOLERANCE: f32 = 1e-3;
 
-        self.on_ground = false;
+/// Returns `true` if the entity AABB (shrunk by `margin` on each face) intersects any solid block.
+pub fn aabb_intersects_solid(
+    position: Vec3,
+    half_width: f32,
+    height: f32,
+    margin: f32,
+    world: &World,
+    registry: &BlockRegistry,
+) -> bool {
+    let hw = (half_width - margin).max(0.01);
+    let min = Vec3::new(position.x - hw, position.y + margin, position.z - hw);
+    let max = Vec3::new(
+        position.x + hw,
+        position.y + (height - margin).max(margin + 0.01),
+        position.z + hw,
+    );
+    let check_box = AABB::new(min, max);
+
+    let min_x = min.x.floor() as i32;
+    let max_x = max.x.floor() as i32;
+    let min_y = min.y.floor() as i32;
+    let max_y = max.y.floor() as i32;
+    let min_z = min.z.floor() as i32;
+    let max_z = max.z.floor() as i32;
+
+    for y in min_y..=max_y {
+        for z in min_z..=max_z {
+            for x in min_x..=max_x {
+                let block = world.get_block(IVec3::new(x, y, z));
+                if registry.is_solid(block) {
+                    let block_box = AABB::from_block(IVec3::new(x, y, z));
+                    if check_box.intersects(&block_box) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// If the entity is currently penetrating any solid block (e.g. from turning off flight mode inside
+/// terrain, a falling block landing on them, or a previously saved stuck state), pushes them out to
+/// the nearest valid non-overlapping position so they never slide through solid blocks.
+pub fn depenetrate_entity(
+    position: &mut Vec3,
+    velocity: &mut Vec3,
+    half_width: f32,
+    height: f32,
+    world: &World,
+    registry: &BlockRegistry,
+) {
+    if !aabb_intersects_solid(*position, half_width, height, COLLISION_SKIN, world, registry) {
+        return;
+    }
+
+    // 1. Try small push-out along the shallowest overlapping block face first (up to 4 iterations)
+    for _ in 0..4 {
+        if !aabb_intersects_solid(*position, half_width, height, COLLISION_SKIN, world, registry) {
+            return;
+        }
+
+        let box_now = AABB::from_player(*position, half_width, height);
+        let min_x = box_now.min.x.floor() as i32;
+        let max_x = box_now.max.x.floor() as i32;
+        let min_y = box_now.min.y.floor() as i32;
+        let max_y = box_now.max.y.floor() as i32;
+        let min_z = box_now.min.z.floor() as i32;
+        let max_z = box_now.max.z.floor() as i32;
+
+        let mut best_candidate: Option<(f32, Vec3)> = None;
 
         for y in min_y..=max_y {
             for z in min_z..=max_z {
                 for x in min_x..=max_x {
-                    let block = world.get_block(IVec3::new(x, y, z));
-                    if registry.is_solid(block) {
-                        let block_box = AABB::from_block(IVec3::new(x, y, z));
-                        if player_box.intersects(&block_box) {
-                            if self.velocity.y < 0.0 {
-                                // Landed on ground
-                                self.position.y = block_box.max.y;
-                                self.velocity.y = 0.0;
-                                self.on_ground = true;
-                            } else if self.velocity.y > 0.0 {
-                                // Hit ceiling
-                                self.position.y = block_box.min.y - self.height;
-                                self.velocity.y = 0.0;
+                    let bpos = IVec3::new(x, y, z);
+                    if !registry.is_solid(world.get_block(bpos)) {
+                        continue;
+                    }
+                    let bbox = AABB::from_block(bpos);
+                    if !box_now.intersects(&bbox) {
+                        continue;
+                    }
+
+                    // Candidate push positions along each face of `bbox`
+                    let candidates = [
+                        Vec3::new(bbox.min.x - half_width - COLLISION_SKIN, position.y, position.z),
+                        Vec3::new(bbox.max.x + half_width + COLLISION_SKIN, position.y, position.z),
+                        Vec3::new(position.x, position.y, bbox.min.z - half_width - COLLISION_SKIN),
+                        Vec3::new(position.x, position.y, bbox.max.z + half_width + COLLISION_SKIN),
+                        Vec3::new(position.x, bbox.max.y, position.z),
+                        Vec3::new(position.x, bbox.min.y - height - COLLISION_SKIN, position.z),
+                    ];
+
+                    for cand in candidates {
+                        let dist = (cand - *position).length();
+                        if dist <= half_width + 0.25
+                            && !aabb_intersects_solid(
+                                cand,
+                                half_width,
+                                height,
+                                COLLISION_SKIN,
+                                world,
+                                registry,
+                            )
+                        {
+                            if best_candidate.map_or(true, |(best_d, _)| dist < best_d) {
+                                best_candidate = Some((dist, cand));
                             }
-                            player_box = self.aabb();
                         }
                     }
                 }
             }
         }
 
-        // Step X axis
-        self.position.x += self.velocity.x * dt;
-        player_box = self.aabb();
+        if let Some((_, resolved_pos)) = best_candidate {
+            *position = resolved_pos;
+            return;
+        } else {
+            break;
+        }
+    }
 
-        for y in min_y..=max_y {
-            for z in min_z..=max_z {
-                for x in min_x..=max_x {
-                    let block = world.get_block(IVec3::new(x, y, z));
-                    if registry.is_solid(block) {
-                        let block_box = AABB::from_block(IVec3::new(x, y, z));
-                        if player_box.intersects(&block_box) {
-                            if self.velocity.x > 0.0 {
-                                self.position.x = block_box.min.x - self.half_width;
-                                self.velocity.x = 0.0;
-                            } else if self.velocity.x < 0.0 {
-                                self.position.x = block_box.max.x + self.half_width;
-                                self.velocity.x = 0.0;
-                            }
-                            player_box = self.aabb();
-                        }
+    // 2. Full burial recovery: if the entity's center is completely encased in solid blocks,
+    // search nearby voxel cells first, then upward to the surface, for a standable space.
+    let base_voxel = IVec3::new(
+        position.x.floor() as i32,
+        position.y.floor() as i32,
+        position.z.floor() as i32,
+    );
+
+    let mut best_escape: Option<(f32, Vec3)> = None;
+    for dy in -1..=3 {
+        for dz in -2..=2 {
+            for dx in -2..=2 {
+                let candidate_pos = Vec3::new(
+                    (base_voxel.x + dx) as f32 + 0.5,
+                    (base_voxel.y + dy) as f32,
+                    (base_voxel.z + dz) as f32 + 0.5,
+                );
+                if !aabb_intersects_solid(
+                    candidate_pos,
+                    half_width,
+                    height,
+                    COLLISION_SKIN,
+                    world,
+                    registry,
+                ) {
+                    let dist_sq = (candidate_pos - *position).length_squared();
+                    if best_escape.map_or(true, |(best_d2, _)| dist_sq < best_d2) {
+                        best_escape = Some((dist_sq, candidate_pos));
                     }
                 }
             }
         }
+    }
 
-        // Step Z axis
-        self.position.z += self.velocity.z * dt;
-        player_box = self.aabb();
+    if let Some((_, escape_pos)) = best_escape {
+        *position = escape_pos;
+        *velocity = Vec3::ZERO;
+        return;
+    }
 
-        for y in min_y..=max_y {
-            for z in min_z..=max_z {
-                for x in min_x..=max_x {
-                    let block = world.get_block(IVec3::new(x, y, z));
-                    if registry.is_solid(block) {
-                        let block_box = AABB::from_block(IVec3::new(x, y, z));
-                        if player_box.intersects(&block_box) {
-                            if self.velocity.z > 0.0 {
-                                self.position.z = block_box.min.z - self.half_width;
-                                self.velocity.z = 0.0;
-                            } else if self.velocity.z < 0.0 {
-                                self.position.z = block_box.max.z + self.half_width;
-                                self.velocity.z = 0.0;
+    // Fallback: pop straight up to the first open space above
+    let max_world_y = (crate::chunk::VERTICAL_CHUNKS * 16) - 2;
+    for y in base_voxel.y..=max_world_y {
+        let candidate_pos = Vec3::new(position.x, y as f32, position.z);
+        if !aabb_intersects_solid(
+            candidate_pos,
+            half_width,
+            height,
+            COLLISION_SKIN,
+            world,
+            registry,
+        ) {
+            *position = candidate_pos;
+            *velocity = Vec3::ZERO;
+            return;
+        }
+    }
+}
+
+/// Swept axis-separated AABB collision resolution with floating-point skin protection.
+/// Guarantees that clamping against a wall on X or Z never leaves a 1-ULP (`f32`) overlap
+/// that could false-trigger vertical floor/ceiling snapping on the Y axis.
+pub fn resolve_entity_movement(
+    position: &mut Vec3,
+    velocity: &mut Vec3,
+    on_ground: &mut bool,
+    half_width: f32,
+    height: f32,
+    dt: f32,
+    world: &World,
+    registry: &BlockRegistry,
+) {
+    // Ensure we never start a movement step already embedded inside a solid block
+    depenetrate_entity(position, velocity, half_width, height, world, registry);
+
+    let total_delta = *velocity * dt;
+    let max_axis_disp = total_delta
+        .x
+        .abs()
+        .max(total_delta.y.abs())
+        .max(total_delta.z.abs());
+    let steps = ((max_axis_disp / 0.35).ceil() as usize).clamp(1, 8);
+    let step_dt = dt / (steps as f32);
+
+    *on_ground = false;
+
+    for _ in 0..steps {
+        // --- 1. Sweep Y axis ---
+        let orig_dy = velocity.y * step_dt;
+        let mut dy = orig_dy;
+        if dy.abs() > 0.0 {
+            let aabb = AABB::from_player(*position, half_width, height);
+            let min_x = (aabb.min.x + COLLISION_SKIN).floor() as i32;
+            let max_x = (aabb.max.x - COLLISION_SKIN).floor() as i32;
+            let min_z = (aabb.min.z + COLLISION_SKIN).floor() as i32;
+            let max_z = (aabb.max.z - COLLISION_SKIN).floor() as i32;
+            let min_y = (aabb.min.y + dy.min(0.0)).floor() as i32 - 1;
+            let max_y = (aabb.max.y + dy.max(0.0)).ceil() as i32 + 1;
+
+            for y in min_y..=max_y {
+                for z in min_z..=max_z {
+                    for x in min_x..=max_x {
+                        let bpos = IVec3::new(x, y, z);
+                        if !registry.is_solid(world.get_block(bpos)) {
+                            continue;
+                        }
+                        let bbox = AABB::from_block(bpos);
+                        if aabb.max.x <= bbox.min.x + COLLISION_SKIN
+                            || aabb.min.x >= bbox.max.x - COLLISION_SKIN
+                            || aabb.max.z <= bbox.min.z + COLLISION_SKIN
+                            || aabb.min.z >= bbox.max.z - COLLISION_SKIN
+                        {
+                            continue;
+                        }
+
+                        if dy < 0.0 && aabb.min.y >= bbox.max.y - FACE_TOLERANCE {
+                            let allowed = (bbox.max.y - aabb.min.y).min(0.0);
+                            if allowed > dy {
+                                dy = allowed;
                             }
-                            player_box = self.aabb();
+                        } else if dy > 0.0 && aabb.max.y <= bbox.min.y + FACE_TOLERANCE {
+                            let allowed =
+                                (bbox.min.y - COLLISION_SKIN - aabb.max.y).max(0.0);
+                            if allowed < dy {
+                                dy = allowed;
+                            }
                         }
                     }
                 }
+            }
+
+            position.y += dy;
+            if (dy - orig_dy).abs() > 1e-6 {
+                if orig_dy < 0.0 {
+                    // Snap cleanly to top surface of the supporting block
+                    position.y = (position.y * 1024.0).round() / 1024.0;
+                    *on_ground = true;
+                }
+                velocity.y = 0.0;
+            }
+        }
+
+        // --- 2. Sweep X axis ---
+        let orig_dx = velocity.x * step_dt;
+        let mut dx = orig_dx;
+        if dx.abs() > 0.0 {
+            let aabb = AABB::from_player(*position, half_width, height);
+            let min_y = (aabb.min.y + COLLISION_SKIN).floor() as i32;
+            let max_y = (aabb.max.y - COLLISION_SKIN).floor() as i32;
+            let min_z = (aabb.min.z + COLLISION_SKIN).floor() as i32;
+            let max_z = (aabb.max.z - COLLISION_SKIN).floor() as i32;
+            let min_x = (aabb.min.x + dx.min(0.0)).floor() as i32 - 1;
+            let max_x = (aabb.max.x + dx.max(0.0)).ceil() as i32 + 1;
+
+            let mut hit_face_x: Option<f32> = None;
+
+            for y in min_y..=max_y {
+                for z in min_z..=max_z {
+                    for x in min_x..=max_x {
+                        let bpos = IVec3::new(x, y, z);
+                        if !registry.is_solid(world.get_block(bpos)) {
+                            continue;
+                        }
+                        let bbox = AABB::from_block(bpos);
+                        if aabb.max.y <= bbox.min.y + COLLISION_SKIN
+                            || aabb.min.y >= bbox.max.y - COLLISION_SKIN
+                            || aabb.max.z <= bbox.min.z + COLLISION_SKIN
+                            || aabb.min.z >= bbox.max.z - COLLISION_SKIN
+                        {
+                            continue;
+                        }
+
+                        if dx > 0.0 && aabb.max.x <= bbox.min.x + FACE_TOLERANCE {
+                            let allowed =
+                                (bbox.min.x - COLLISION_SKIN - aabb.max.x).max(0.0);
+                            if allowed < dx {
+                                dx = allowed;
+                                hit_face_x = Some(bbox.min.x - half_width - COLLISION_SKIN);
+                            }
+                        } else if dx < 0.0 && aabb.min.x >= bbox.max.x - FACE_TOLERANCE {
+                            let allowed =
+                                (bbox.max.x + COLLISION_SKIN - aabb.min.x).min(0.0);
+                            if allowed > dx {
+                                dx = allowed;
+                                hit_face_x = Some(bbox.max.x + half_width + COLLISION_SKIN);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(clamped_x) = hit_face_x {
+                position.x = clamped_x;
+                velocity.x = 0.0;
+            } else {
+                position.x += dx;
+            }
+        }
+
+        // --- 3. Sweep Z axis ---
+        let orig_dz = velocity.z * step_dt;
+        let mut dz = orig_dz;
+        if dz.abs() > 0.0 {
+            let aabb = AABB::from_player(*position, half_width, height);
+            let min_x = (aabb.min.x + COLLISION_SKIN).floor() as i32;
+            let max_x = (aabb.max.x - COLLISION_SKIN).floor() as i32;
+            let min_y = (aabb.min.y + COLLISION_SKIN).floor() as i32;
+            let max_y = (aabb.max.y - COLLISION_SKIN).floor() as i32;
+            let min_z = (aabb.min.z + dz.min(0.0)).floor() as i32 - 1;
+            let max_z = (aabb.max.z + dz.max(0.0)).ceil() as i32 + 1;
+
+            let mut hit_face_z: Option<f32> = None;
+
+            for y in min_y..=max_y {
+                for z in min_z..=max_z {
+                    for x in min_x..=max_x {
+                        let bpos = IVec3::new(x, y, z);
+                        if !registry.is_solid(world.get_block(bpos)) {
+                            continue;
+                        }
+                        let bbox = AABB::from_block(bpos);
+                        if aabb.max.x <= bbox.min.x + COLLISION_SKIN
+                            || aabb.min.x >= bbox.max.x - COLLISION_SKIN
+                            || aabb.max.y <= bbox.min.y + COLLISION_SKIN
+                            || aabb.min.y >= bbox.max.y - COLLISION_SKIN
+                        {
+                            continue;
+                        }
+
+                        if dz > 0.0 && aabb.max.z <= bbox.min.z + FACE_TOLERANCE {
+                            let allowed =
+                                (bbox.min.z - COLLISION_SKIN - aabb.max.z).max(0.0);
+                            if allowed < dz {
+                                dz = allowed;
+                                hit_face_z = Some(bbox.min.z - half_width - COLLISION_SKIN);
+                            }
+                        } else if dz < 0.0 && aabb.min.z >= bbox.max.z - FACE_TOLERANCE {
+                            let allowed =
+                                (bbox.max.z + COLLISION_SKIN - aabb.min.z).min(0.0);
+                            if allowed > dz {
+                                dz = allowed;
+                                hit_face_z = Some(bbox.max.z + half_width + COLLISION_SKIN);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(clamped_z) = hit_face_z {
+                position.z = clamped_z;
+                velocity.z = 0.0;
+            } else {
+                position.z += dz;
             }
         }
     }
@@ -461,4 +769,127 @@ mod tests {
         let player_far = PlayerPhysics::new(Vec3::new(2.0, 1.0, 5.5));
         assert!(!player_far.is_touching_cactus(&world));
     }
+
+    #[test]
+    fn test_player_walking_into_walls_never_glitches_or_climbs_inside() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(Chunk::new(ChunkPos::new(-1, 0, -1)));
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, -1)));
+        world.insert_chunk(Chunk::new(ChunkPos::new(-1, 0, 0)));
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, 0)));
+
+        // Build solid stone floor at y = 0 across [-16..16, -16..16]
+        for z in -16..16 {
+            for x in -16..16 {
+                world.set_block(IVec3::new(x, 0, z), BlockId::STONE);
+            }
+        }
+
+        // Build walls at x = -3 (where (-3.0_f32 - 0.3_f32) + 0.3_f32 > -3.0 in IEEE-754 f32!)
+        // and at x = 2 (where (3.0_f32 + 0.3_f32) - 0.3_f32 < 3.0 in IEEE-754 f32!)
+        // and a corner at z = -3
+        for y in 1..=5 {
+            for z in -8..=8 {
+                world.set_block(IVec3::new(-3, y, z), BlockId::STONE);
+                world.set_block(IVec3::new(2, y, z), BlockId::STONE);
+            }
+            for x in -8..=8 {
+                world.set_block(IVec3::new(x, y, -3), BlockId::STONE);
+            }
+        }
+
+        // 1. Walk +X and diagonally into wall at x = -3 and corner at (-3, -3)
+        let mut player = PlayerPhysics::new(Vec3::new(-3.8, 1.0, -1.5));
+        for _ in 0..180 {
+            player.update(
+                1.0 / 60.0,
+                Vec3::new(1.0, 0.0, -0.5).normalize(),
+                true,
+                false,
+                &world,
+                &registry,
+            );
+            assert!(
+                (player.position.y - 1.0).abs() < 1e-3,
+                "Player must stay on the floor (y=1.0) when pressing into a wall, got y={}",
+                player.position.y
+            );
+            assert!(
+                !aabb_intersects_solid(
+                    player.position,
+                    player.half_width,
+                    player.height,
+                    COLLISION_SKIN,
+                    &world,
+                    &registry
+                ),
+                "Player AABB must never penetrate the wall at {:?}",
+                player.position
+            );
+        }
+
+        // 2. Walk -X into wall at x = 2 (face at x = 3.0)
+        let mut player2 = PlayerPhysics::new(Vec3::new(3.8, 1.0, 0.5));
+        for _ in 0..120 {
+            player2.update(
+                1.0 / 60.0,
+                Vec3::new(-1.0, 0.0, 0.0),
+                true,
+                false,
+                &world,
+                &registry,
+            );
+            assert!((player2.position.y - 1.0).abs() < 1e-3);
+            assert!(player2.position.x - player2.half_width >= 3.0);
+        }
+    }
+
+    #[test]
+    fn test_player_buried_in_blocks_depenetrates_cleanly() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, 0)));
+
+        // Create a 3x3x4 solid stone pillar with floor around it
+        for z in 0..16 {
+            for x in 0..16 {
+                world.set_block(IVec3::new(x, 0, z), BlockId::STONE);
+            }
+        }
+        for y in 1..=3 {
+            for z in 4..=6 {
+                for x in 4..=6 {
+                    world.set_block(IVec3::new(x, y, z), BlockId::STONE);
+                }
+            }
+        }
+
+        // Place player completely stuck inside the center of the solid 3x3x3 stone block mass
+        let mut player = PlayerPhysics::new(Vec3::new(5.5, 1.0, 5.5));
+        assert!(aabb_intersects_solid(
+            player.position,
+            player.half_width,
+            player.height,
+            COLLISION_SKIN,
+            &world,
+            &registry
+        ));
+
+        // Single physics update should immediately depenetrate the player out to a valid open space
+        player.update(1.0 / 60.0, Vec3::X, false, false, &world, &registry);
+        assert!(
+            !aabb_intersects_solid(
+                player.position,
+                player.half_width,
+                player.height,
+                COLLISION_SKIN,
+                &world,
+                &registry
+            ),
+            "Player should be pushed out of solid blocks immediately, got pos={:?}",
+            player.position
+        );
+    }
 }
+

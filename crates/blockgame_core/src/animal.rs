@@ -376,87 +376,16 @@ impl AnimalEntity {
 
     fn resolve_movement(&mut self, dt: f32, world: &World, registry: &BlockRegistry) {
         let (half_width, height) = self.kind.dimensions();
-
-        // Step Y
-        self.position.y += self.velocity.y * dt;
-        let mut bbox = self.aabb();
-
-        let min_x = (bbox.min.x.floor() as i32) - 1;
-        let max_x = (bbox.max.x.ceil() as i32) + 1;
-        let min_y = (bbox.min.y.floor() as i32) - 1;
-        let max_y = (bbox.max.y.ceil() as i32) + 1;
-        let min_z = (bbox.min.z.floor() as i32) - 1;
-        let max_z = (bbox.max.z.ceil() as i32) + 1;
-
-        self.on_ground = false;
-
-        for y in min_y..=max_y {
-            for z in min_z..=max_z {
-                for x in min_x..=max_x {
-                    let block = world.get_block(IVec3::new(x, y, z));
-                    if registry.is_solid(block) {
-                        let block_box = AABB::from_block(IVec3::new(x, y, z));
-                        if bbox.intersects(&block_box) {
-                            if self.velocity.y < 0.0 {
-                                self.position.y = block_box.max.y;
-                                self.velocity.y = 0.0;
-                                self.on_ground = true;
-                            } else if self.velocity.y > 0.0 {
-                                self.position.y = block_box.min.y - height;
-                                self.velocity.y = 0.0;
-                            }
-                            bbox = self.aabb();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step X
-        self.position.x += self.velocity.x * dt;
-        bbox = self.aabb();
-        for y in min_y..=max_y {
-            for z in min_z..=max_z {
-                for x in min_x..=max_x {
-                    let block = world.get_block(IVec3::new(x, y, z));
-                    if registry.is_solid(block) {
-                        let block_box = AABB::from_block(IVec3::new(x, y, z));
-                        if bbox.intersects(&block_box) {
-                            if self.velocity.x > 0.0 {
-                                self.position.x = block_box.min.x - half_width;
-                            } else if self.velocity.x < 0.0 {
-                                self.position.x = block_box.max.x + half_width;
-                            }
-                            self.velocity.x = 0.0;
-                            bbox = self.aabb();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Step Z
-        self.position.z += self.velocity.z * dt;
-        bbox = self.aabb();
-        for y in min_y..=max_y {
-            for z in min_z..=max_z {
-                for x in min_x..=max_x {
-                    let block = world.get_block(IVec3::new(x, y, z));
-                    if registry.is_solid(block) {
-                        let block_box = AABB::from_block(IVec3::new(x, y, z));
-                        if bbox.intersects(&block_box) {
-                            if self.velocity.z > 0.0 {
-                                self.position.z = block_box.min.z - half_width;
-                            } else if self.velocity.z < 0.0 {
-                                self.position.z = block_box.max.z + half_width;
-                            }
-                            self.velocity.z = 0.0;
-                            bbox = self.aabb();
-                        }
-                    }
-                }
-            }
-        }
+        crate::physics::resolve_entity_movement(
+            &mut self.position,
+            &mut self.velocity,
+            &mut self.on_ground,
+            half_width,
+            height,
+            dt,
+            world,
+            registry,
+        );
     }
 }
 
