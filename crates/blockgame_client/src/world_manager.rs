@@ -94,51 +94,78 @@ impl WorldManager {
         }
     }
 
-    /// Synchronously pre-generates and meshes the initial area around the spawn point.
+    /// Synchronously pre-generates and meshes the initial area around the spawn point (0, 0, 0).
     pub fn init_spawn_area(&mut self, device: &wgpu::Device, pipeline: &VoxelPipeline) {
+        self.init_area_around(Vec3::ZERO, device, pipeline);
+    }
+
+    /// Synchronously pre-generates (skipping chunks already loaded from save) and meshes the area
+    /// around `center_pos`.
+    pub fn init_area_around(
+        &mut self,
+        center_pos: Vec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
         log::info!(
-            "Generating initial spawn chunks (radius {})...",
+            "Initializing chunks around ({:.1}, {:.1}) (radius {})...",
+            center_pos.x,
+            center_pos.z,
             self.render_distance
         );
 
-        let mut chunks_to_generate = Vec::new();
+        let (center_chunk, _, _, _) = world_to_chunk_coords(center_pos.floor().as_ivec3());
+        let ccx = center_chunk.0.x;
+        let ccz = center_chunk.0.z;
         let r = self.render_distance;
 
-        // Vertical chunk range: y from 0 to VERTICAL_CHUNKS (world y from 0 to 80)
-        for cy in 0..VERTICAL_CHUNKS {
-            for cz in -r..=r {
-                for cx in -r..=r {
-                    if cx * cx + cz * cz <= (r + 1) * (r + 1) {
-                        chunks_to_generate.push(ChunkPos::new(cx, cy, cz));
+        let mut area_chunks = Vec::new();
+        let mut missing_chunks = Vec::new();
+
+        {
+            let world = self.world.lock().unwrap();
+            for cy in 0..VERTICAL_CHUNKS {
+                for dz in -r..=r {
+                    for dx in -r..=r {
+                        if dx * dx + dz * dz <= (r + 1) * (r + 1) {
+                            let pos = ChunkPos::new(ccx + dx, cy, ccz + dz);
+                            area_chunks.push(pos);
+                            if world.get_chunk(pos).is_none() {
+                                missing_chunks.push(pos);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Parallel chunk terrain generation using Rayon
-        let generator = self.generator.clone();
-        let generated_chunks: Vec<Chunk> = chunks_to_generate
-            .par_iter()
-            .map(|&pos| {
-                let mut chunk = generator.generate_chunk(pos);
-                generator.populate_chunk_features(&mut chunk);
-                chunk
-            })
-            .collect();
+        // Parallel chunk terrain generation using Rayon for any chunks not already loaded from save
+        if !missing_chunks.is_empty() {
+            let generator = self.generator.clone();
+            let generated_chunks: Vec<Chunk> = missing_chunks
+                .par_iter()
+                .map(|&pos| {
+                    let mut chunk = generator.generate_chunk(pos);
+                    generator.populate_chunk_features(&mut chunk);
+                    chunk
+                })
+                .collect();
 
-        {
             let mut world = self.world.lock().unwrap();
             for chunk in generated_chunks {
-                self.loaded_chunks_set.insert(chunk.pos);
                 world.insert_chunk(chunk);
             }
         }
 
-        // Parallel chunk meshing
+        for &pos in &area_chunks {
+            self.loaded_chunks_set.insert(pos);
+        }
+
+        // Parallel chunk meshing for all chunks in the area
         let world_guard = self.world.lock().unwrap();
         let mesher = ChunkMesher::new(&self.registry);
 
-        let meshes: Vec<(ChunkPos, ChunkMesh)> = chunks_to_generate
+        let meshes: Vec<(ChunkPos, ChunkMesh)> = area_chunks
             .par_iter()
             .filter_map(|&pos| {
                 world_guard.get_chunk(pos).map(|chunk| {
@@ -160,22 +187,67 @@ impl WorldManager {
             self.store_mesh(pos, &mesh, device, pipeline);
         }
 
+        self.last_player_chunk = center_chunk;
+
         log::info!(
-            "Spawn area ready: {} chunks loaded, {} visible faces rendered",
+            "Area ready: {} chunks loaded, {} visible faces rendered",
             self.gpu_chunks.len(),
             face_count
         );
 
-        // Biome-aware initial animal herd spawning across spawn chunks
+        // Biome-aware initial animal herd spawning across area columns
         {
             let world_arc = self.world.clone();
             let world_guard = world_arc.lock().unwrap();
-            for cz in -r..=r {
-                for cx in -r..=r {
-                    self.try_spawn_animals_in_column(cx, cz, &world_guard);
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    self.try_spawn_animals_in_column(ccx + dx, ccz + dz, &world_guard);
                 }
             }
         }
+    }
+
+    /// Restores saved world chunks, containers, entities, and simulation timers into this `WorldManager`.
+    #[allow(dead_code)]
+    pub fn apply_save_data(&mut self, data: &blockgame_core::save::WorldSaveData) {
+        {
+            let mut world = self.world.lock().unwrap();
+            data.apply_to_world(&mut world);
+        }
+        self.item_drops = data.item_drops.clone();
+        self.falling_blocks = data.falling_blocks.clone();
+        self.animals = data.animals.clone();
+        self.next_animal_id = data.next_animal_id;
+        self.planted_crops = data.planted_crops.clone();
+        self.active_farmland = data.active_farmland.clone();
+        self.growing_cacti = data.growing_cacti.clone();
+        self.decaying_leaves = data.decaying_leaves.clone();
+        self.animal_spawned_columns = data.animal_spawned_columns.clone();
+    }
+
+    /// Captures all modified chunks, containers, entities, and simulation timers from this `WorldManager`
+    /// into a `WorldSaveData` ready to be written to disk.
+    #[allow(dead_code)]
+    pub fn capture_save_data(
+        &self,
+        metadata: blockgame_core::save::WorldMetadata,
+        player: blockgame_core::save::SavedPlayerState,
+    ) -> blockgame_core::save::WorldSaveData {
+        let mut data = blockgame_core::save::WorldSaveData::new(metadata, player);
+        {
+            let world = self.world.lock().unwrap();
+            data.capture_from_world(&world);
+        }
+        data.item_drops = self.item_drops.clone();
+        data.falling_blocks = self.falling_blocks.clone();
+        data.animals = self.animals.clone();
+        data.next_animal_id = self.next_animal_id;
+        data.planted_crops = self.planted_crops.clone();
+        data.active_farmland = self.active_farmland.clone();
+        data.growing_cacti = self.growing_cacti.clone();
+        data.decaying_leaves = self.decaying_leaves.clone();
+        data.animal_spawned_columns = self.animal_spawned_columns.clone();
+        data
     }
 
     /// Evaluates biome-aware animal spawning in a 16x16 chunk column (cx, cz).

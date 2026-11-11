@@ -1425,7 +1425,7 @@ impl ItemRegistry {
 }
 
 /// Standard Minecraft inventory: 9 hotbar slots + 27 backpack slots = 36 slots total.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Inventory {
     pub slots: Vec<ItemSlot>,
 }

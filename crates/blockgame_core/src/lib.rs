@@ -9,6 +9,7 @@ pub mod lighting;
 pub mod physics;
 pub mod player;
 pub mod raycast;
+pub mod save;
 pub mod tool;
 pub mod world;
 
@@ -27,5 +28,10 @@ pub use lighting::{calculate_chunk_lighting, ChunkLightMap, LightValue};
 pub use physics::{PlayerPhysics, AABB};
 pub use player::PlayerStats;
 pub use raycast::{raycast_voxel, RaycastHit};
+pub use save::{
+    delete_saved_world, list_saved_worlds, load_world_from_dir, load_world_metadata,
+    parse_or_hash_seed, sanitize_folder_name, save_world_to_dir, unique_world_folder_name,
+    SavedPlayerState, WorldMetadata, WorldSaveData,
+};
 pub use tool::{ToolTier, ToolType};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};

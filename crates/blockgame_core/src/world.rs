@@ -136,6 +136,7 @@ impl FurnaceState {
 #[derive(Default)]
 pub struct World {
     chunks: HashMap<ChunkPos, Chunk>,
+    pub dirty_chunks: HashSet<ChunkPos>,
     pub light_sources: HashSet<IVec3>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
@@ -145,6 +146,7 @@ impl World {
     pub fn new() -> Self {
         Self {
             chunks: HashMap::new(),
+            dirty_chunks: HashSet::new(),
             light_sources: HashSet::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
@@ -200,6 +202,7 @@ impl World {
         if let Some(chunk) = self.chunks.get_mut(&cpos) {
             let ok = chunk.set(lx, ly, lz, block_id);
             if ok {
+                self.dirty_chunks.insert(cpos);
                 if block_id.is_emissive() {
                     self.light_sources.insert(world_pos);
                 } else {
@@ -238,6 +241,13 @@ impl World {
             }
         }
         self.chunks.insert(chunk.pos, chunk)
+    }
+
+    /// Inserts a modified chunk loaded from save data and marks it as dirty.
+    #[inline]
+    pub fn insert_dirty_chunk(&mut self, chunk: Chunk) -> Option<Chunk> {
+        self.dirty_chunks.insert(chunk.pos);
+        self.insert_chunk(chunk)
     }
 
     #[inline]
