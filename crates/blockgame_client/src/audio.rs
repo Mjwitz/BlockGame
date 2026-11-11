@@ -548,6 +548,147 @@ pub mod sound_generator {
 
         samples
     }
+
+    /// Synthesizes short, crisp block hitting/chipping audio effects for mining progress.
+    pub fn generate_hit(material: SoundMaterial, variant: usize) -> Vec<f32> {
+        let mut rng = (material as u64 + 43) * 31337 + (variant as u64 * 17921);
+        let duration = 0.08;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            let sample = match material {
+                SoundMaterial::Grass => {
+                    let rustle = lcg_random(&mut rng) * (-progress * 30.0).exp();
+                    let tap = (2.0 * PI * 110.0 * t).sin() * (-progress * 35.0).exp();
+                    0.6 * rustle + 0.4 * tap
+                }
+                SoundMaterial::Dirt => {
+                    let crunch = lcg_random(&mut rng) * (-progress * 32.0).exp();
+                    let thud = (2.0 * PI * 95.0 * t).sin() * (-progress * 38.0).exp();
+                    0.55 * crunch + 0.45 * thud
+                }
+                SoundMaterial::Stone => {
+                    let clink = (2.0 * PI * 2200.0 * t).sin() * (-progress * 60.0).exp();
+                    let spark = lcg_random(&mut rng) * (-progress * 70.0).exp();
+                    let body = (2.0 * PI * 440.0 * t).sin() * (-progress * 45.0).exp();
+                    0.5 * clink + 0.3 * spark + 0.2 * body
+                }
+                SoundMaterial::Wood => {
+                    let chop = (2.0 * PI * 360.0 * t).sin() * (-progress * 40.0).exp();
+                    let pop = lcg_random(&mut rng) * (-progress * 45.0).exp();
+                    0.6 * chop + 0.4 * pop
+                }
+                SoundMaterial::Sand => {
+                    let grit = lcg_random(&mut rng) * (-progress * 25.0).exp();
+                    let thud = (2.0 * PI * 80.0 * t).sin() * (-progress * 30.0).exp();
+                    0.7 * grit + 0.3 * thud
+                }
+                SoundMaterial::Glass => {
+                    let tap = (2.0 * PI * 3400.0 * t).sin() * (-progress * 50.0).exp();
+                    0.8 * tap + 0.2 * lcg_random(&mut rng) * (-progress * 55.0).exp()
+                }
+            };
+
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
+
+    /// Synthesizes visceral player damage / impact sound ("oof"grunt + flesh impact).
+    pub fn generate_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 424242 + (variant as u64 * 99991);
+        let duration = 0.18;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            let freq = (180.0 - progress * 80.0).max(60.0);
+            let oof = (2.0 * PI * freq * t).sin() * (-progress * 16.0).exp();
+            let formant = (2.0 * PI * freq * 2.3 * t).sin() * (-progress * 22.0).exp();
+            let impact = lcg_random(&mut rng) * (-progress * 35.0).exp();
+            let sub = (2.0 * PI * 85.0 * t).sin() * (-progress * 20.0).exp();
+
+            let sample = 0.45 * oof + 0.25 * formant + 0.20 * impact + 0.10 * sub;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
+
+    /// Synthesizes water splash sound effect for entering or leaping out of water.
+    pub fn generate_water_splash(variant: usize) -> Vec<f32> {
+        let mut rng = 13371337 + (variant as u64 * 54321);
+        let duration = 0.35;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            let spray = lcg_random(&mut rng) * (-progress * 12.0).exp();
+            let plunge_freq = (100.0 - progress * 50.0).max(40.0);
+            let plunge = (2.0 * PI * plunge_freq * t).sin() * (-progress * 8.0).exp();
+            let slap = (2.0 * PI * 240.0 * t).sin() * (-progress * 28.0).exp();
+
+            let sample = 0.50 * spray + 0.35 * plunge + 0.15 * slap;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
+
+    /// Synthesizes water wading / swimming paddle sounds.
+    pub fn generate_water_swim(variant: usize) -> Vec<f32> {
+        let mut rng = 887766 + (variant as u64 * 33221);
+        let duration = 0.22;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            let paddle = (2.0 * PI * 75.0 * t).sin() * (-progress * 14.0).exp();
+            let swish = lcg_random(&mut rng) * (progress * (1.0 - progress) * 4.0) * (-progress * 8.0).exp();
+
+            let sample = 0.45 * paddle + 0.55 * swish;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
+
+    /// Synthesizes muffled underwater bubble murmurs.
+    pub fn generate_underwater_bubble(variant: usize) -> Vec<f32> {
+        let mut rng = 991122 + (variant as u64 * 44332);
+        let duration = 0.30;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            let bubble_freq = 320.0 + 550.0 * progress.powi(2);
+            let bubble = (2.0 * PI * bubble_freq * t).sin() * (-progress * 14.0).exp();
+            let murmur = (2.0 * PI * 55.0 * t).sin() * 0.4;
+            let noise = lcg_random(&mut rng) * 0.10 * (-progress * 10.0).exp();
+
+            let sample = 0.65 * bubble + 0.25 * murmur + 0.10 * noise;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
 }
 
 /// Global audio manager orchestrating 3D spatial playback, materials, and mixer device.
@@ -555,8 +696,13 @@ pub struct AudioManager {
     mixer: Arc<Mutex<AudioMixer>>,
     _device: Option<Device<f32>>,
     footsteps: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
+    hits: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
     breaks: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
     places: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
+    hurts: Vec<Arc<Vec<f32>>>,
+    water_splashes: Vec<Arc<Vec<f32>>>,
+    water_swims: Vec<Arc<Vec<f32>>>,
+    underwater_bubbles: Vec<Arc<Vec<f32>>>,
     music_tracks: Vec<Arc<Vec<f32>>>,
     rng_state: u64,
 }
@@ -601,8 +747,13 @@ impl AudioManager {
             mixer,
             _device: device,
             footsteps: HashMap::new(),
+            hits: HashMap::new(),
             breaks: HashMap::new(),
             places: HashMap::new(),
+            hurts: Vec::new(),
+            water_splashes: Vec::new(),
+            water_swims: Vec::new(),
+            underwater_bubbles: Vec::new(),
             music_tracks: Vec::new(),
             rng_state: 888888888,
         };
@@ -684,7 +835,84 @@ impl AudioManager {
             }
         }
 
-        // 4. Ambient Music Tracks (3 calm compositions)
+        // 4. Block Hit / Mining Progress (2 variations per material)
+        for &mat in &materials {
+            for variant in 0..2 {
+                let file_name = format!("hit_{:?}_{}.wav", mat, variant).to_lowercase();
+                let file_path = assets_dir.join(&file_name);
+
+                let buffer = if has_assets && file_path.exists() {
+                    Self::load_audio_file(&file_path)
+                        .unwrap_or_else(|| sound_generator::generate_hit(mat, variant))
+                } else {
+                    sound_generator::generate_hit(mat, variant)
+                };
+
+                self.hits.insert((mat, variant), Arc::new(buffer));
+            }
+        }
+
+        // 5. Player Hurt (2 variations)
+        for variant in 0..2 {
+            let file_name = format!("player_hurt_{}.wav", variant);
+            let file_path = assets_dir.join(&file_name);
+
+            let buffer = if has_assets && file_path.exists() {
+                Self::load_audio_file(&file_path)
+                    .unwrap_or_else(|| sound_generator::generate_hurt(variant))
+            } else {
+                sound_generator::generate_hurt(variant)
+            };
+
+            self.hurts.push(Arc::new(buffer));
+        }
+
+        // 6. Water Splash (2 variations)
+        for variant in 0..2 {
+            let file_name = format!("water_splash_{}.wav", variant);
+            let file_path = assets_dir.join(&file_name);
+
+            let buffer = if has_assets && file_path.exists() {
+                Self::load_audio_file(&file_path)
+                    .unwrap_or_else(|| sound_generator::generate_water_splash(variant))
+            } else {
+                sound_generator::generate_water_splash(variant)
+            };
+
+            self.water_splashes.push(Arc::new(buffer));
+        }
+
+        // 7. Water Swim / Paddle (2 variations)
+        for variant in 0..2 {
+            let file_name = format!("water_swim_{}.wav", variant);
+            let file_path = assets_dir.join(&file_name);
+
+            let buffer = if has_assets && file_path.exists() {
+                Self::load_audio_file(&file_path)
+                    .unwrap_or_else(|| sound_generator::generate_water_swim(variant))
+            } else {
+                sound_generator::generate_water_swim(variant)
+            };
+
+            self.water_swims.push(Arc::new(buffer));
+        }
+
+        // 8. Underwater Ambience / Bubbles (2 variations)
+        for variant in 0..2 {
+            let file_name = format!("underwater_bubble_{}.wav", variant);
+            let file_path = assets_dir.join(&file_name);
+
+            let buffer = if has_assets && file_path.exists() {
+                Self::load_audio_file(&file_path)
+                    .unwrap_or_else(|| sound_generator::generate_underwater_bubble(variant))
+            } else {
+                sound_generator::generate_underwater_bubble(variant)
+            };
+
+            self.underwater_bubbles.push(Arc::new(buffer));
+        }
+
+        // 9. Ambient Music Tracks (3 calm compositions)
         for track_idx in 0..3 {
             let file_name = format!("ambient_track_{}.wav", track_idx + 1);
             let file_path = assets_dir.join(&file_name);
@@ -700,10 +928,15 @@ impl AudioManager {
         }
 
         println!(
-            "[Audio] Initialized {} footstep clips, {} break clips, {} place clips, and {} ambient music tracks.",
+            "[Audio] Initialized {} footstep, {} hit, {} break, {} place, {} hurt, {} splash, {} swim, {} bubble, and {} music tracks.",
             self.footsteps.len(),
+            self.hits.len(),
             self.breaks.len(),
             self.places.len(),
+            self.hurts.len(),
+            self.water_splashes.len(),
+            self.water_swims.len(),
+            self.underwater_bubbles.len(),
             self.music_tracks.len()
         );
     }
@@ -804,6 +1037,98 @@ impl AudioManager {
             if let Ok(mut mixer) = self.mixer.lock() {
                 mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
             }
+        }
+    }
+
+    /// Triggers a 3D spatial hit/tapping sound during block breaking progress.
+    pub fn play_block_hit(
+        &mut self,
+        block: BlockId,
+        pos: Vec3,
+        listener_pos: Vec3,
+        listener_yaw: f32,
+    ) {
+        let mat = SoundMaterial::from_block(block);
+        let variant = (self.random_f32() * 2.0).floor() as usize % 2;
+
+        if let Some(samples) = self.hits.get(&(mat, variant)).cloned() {
+            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 28.0);
+            if atten > 0.001 {
+                let pitch = 0.90 + 0.20 * self.random_f32();
+                let vol_var = 0.85 + 0.15 * self.random_f32();
+                let base_vol = atten * vol_var * 0.65;
+
+                let vol_l = ((1.0 - pan) * 0.5) * base_vol;
+                let vol_r = ((1.0 + pan) * 0.5) * base_vol;
+
+                if let Ok(mut mixer) = self.mixer.lock() {
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, false, 0.0);
+                }
+            }
+        }
+    }
+
+    /// Triggers player damage sound effect ("oof"grunt).
+    pub fn play_hurt(&mut self) {
+        if self.hurts.is_empty() {
+            return;
+        }
+        let variant = (self.random_f32() * self.hurts.len() as f32).floor() as usize
+            % self.hurts.len();
+        let samples = self.hurts[variant].clone();
+        let pitch = 0.90 + 0.20 * self.random_f32();
+        let vol = 0.85 + 0.15 * self.random_f32();
+
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+        }
+    }
+
+    /// Triggers water splash sound when entering or jumping out of water.
+    pub fn play_water_splash(&mut self, volume_scale: f32) {
+        if self.water_splashes.is_empty() {
+            return;
+        }
+        let variant = (self.random_f32() * self.water_splashes.len() as f32).floor() as usize
+            % self.water_splashes.len();
+        let samples = self.water_splashes[variant].clone();
+        let pitch = 0.88 + 0.24 * self.random_f32();
+        let vol = volume_scale * (0.85 + 0.15 * self.random_f32());
+
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+        }
+    }
+
+    /// Triggers water wading / swimming paddle sound while moving through water.
+    pub fn play_water_swim(&mut self, volume_scale: f32) {
+        if self.water_swims.is_empty() {
+            return;
+        }
+        let variant = (self.random_f32() * self.water_swims.len() as f32).floor() as usize
+            % self.water_swims.len();
+        let samples = self.water_swims[variant].clone();
+        let pitch = 0.90 + 0.20 * self.random_f32();
+        let vol = volume_scale * (0.85 + 0.15 * self.random_f32());
+
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+        }
+    }
+
+    /// Triggers subtle underwater bubbling / murmur sound while submerged.
+    pub fn play_underwater_ambience(&mut self) {
+        if self.underwater_bubbles.is_empty() {
+            return;
+        }
+        let variant = (self.random_f32() * self.underwater_bubbles.len() as f32).floor() as usize
+            % self.underwater_bubbles.len();
+        let samples = self.underwater_bubbles[variant].clone();
+        let pitch = 0.95 + 0.10 * self.random_f32();
+        let vol = 0.40 * (0.85 + 0.15 * self.random_f32());
+
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
         }
     }
 
@@ -983,5 +1308,19 @@ mod tests {
             prev = Some(next);
             scheduler.last_played_track = Some(next);
         }
+    }
+
+    #[test]
+    fn test_new_sound_generators() {
+        let hit = sound_generator::generate_hit(SoundMaterial::Stone, 0);
+        assert!(!hit.is_empty());
+        let hurt = sound_generator::generate_hurt(0);
+        assert!(!hurt.is_empty());
+        let splash = sound_generator::generate_water_splash(0);
+        assert!(!splash.is_empty());
+        let swim = sound_generator::generate_water_swim(0);
+        assert!(!swim.is_empty());
+        let bubble = sound_generator::generate_underwater_bubble(0);
+        assert!(!bubble.is_empty());
     }
 }

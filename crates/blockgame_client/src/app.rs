@@ -113,6 +113,9 @@ pub struct AppState {
     pub walk_distance: f32,
     pub punch_timer: f32,
     pub last_footstep_dist: f32,
+    pub break_hit_timer: f32,
+    pub was_in_water: bool,
+    pub underwater_sound_timer: f32,
     pub audio: crate::audio::AudioManager,
     pub music_scheduler: crate::audio::MusicScheduler,
     // Hold-to-break mining state
@@ -214,6 +217,9 @@ impl AppState {
         self.total_time = 0.0;
         self.walk_distance = 0.0;
         self.last_footstep_dist = 0.0;
+        self.break_hit_timer = 0.0;
+        self.was_in_water = false;
+        self.underwater_sound_timer = 0.0;
         self.punch_timer = 0.0;
         self.inventory_open = false;
         self.active_chest_pos = None;
@@ -272,6 +278,9 @@ impl AppState {
         self.total_time = save_data.metadata.total_time;
         self.walk_distance = 0.0;
         self.last_footstep_dist = 0.0;
+        self.break_hit_timer = 0.0;
+        self.was_in_water = false;
+        self.underwater_sound_timer = 0.0;
         self.punch_timer = 0.0;
         self.inventory_open = false;
         self.active_chest_pos = None;
@@ -539,6 +548,9 @@ impl ApplicationHandler for BlockGameApp {
             walk_distance: 0.0,
             punch_timer: 0.0,
             last_footstep_dist: 0.0,
+            break_hit_timer: 0.0,
+            was_in_water: false,
+            underwater_sound_timer: 0.0,
             audio,
             music_scheduler,
             mouse_left_down: false,
@@ -1686,9 +1698,46 @@ impl ApplicationHandler for BlockGameApp {
                         )
                     };
 
-                    // Apply fall damage if landed on ground
+                    // Check if player's head is submerged in water, player is in water, or touching cactus
+                    let head_block_pos = IVec3::new(
+                        state.player.position.x.floor() as i32,
+                        (state.player.position.y + 1.62).floor() as i32,
+                        state.player.position.z.floor() as i32,
+                    );
+                    let (is_head_submerged, is_in_water, is_touching_cactus) = {
+                        let world = state.world_manager.world().lock().unwrap();
+                        let submerged = world.get_block(head_block_pos).is_water();
+                        let in_water = state.player.is_in_water(&world);
+                        let touching_cactus = state.player.is_touching_cactus(&world);
+                        (submerged, in_water, touching_cactus)
+                    };
+
+                    // Water splash on entry and exit
+                    if is_in_water && !state.was_in_water {
+                        state.audio.play_water_splash(0.9);
+                    } else if !is_in_water && state.was_in_water {
+                        state.audio.play_water_splash(0.7);
+                    }
+                    state.was_in_water = is_in_water;
+
+                    // Underwater ambient bubbling when head is submerged
+                    if is_head_submerged && !state.player_stats.is_dead {
+                        state.underwater_sound_timer += dt;
+                        if state.underwater_sound_timer >= 2.2 {
+                            state.underwater_sound_timer = 0.0;
+                            state.audio.play_underwater_ambience();
+                        }
+                    } else {
+                        state.underwater_sound_timer = 1.0;
+                    }
+
+                    // Apply damage and trigger hurt audio on health decrease
+                    let prev_health = state.player_stats.health;
                     if fall_damage > 0.0 && !state.player_stats.is_dead {
                         state.player_stats.take_damage(fall_damage);
+                    }
+                    if is_touching_cactus {
+                        state.player_stats.take_damage(1.0);
                     }
 
                     // Update walking distance & movement exhaustion (advances ONLY when moving)
@@ -1696,59 +1745,53 @@ impl ApplicationHandler for BlockGameApp {
                         || state.moving_backward
                         || state.moving_left
                         || state.moving_right)
-                        && (state.player.on_ground || state.player.flying);
+                        && (state.player.on_ground || state.player.flying || is_in_water);
                     let horiz_speed = (state.player.velocity.x * state.player.velocity.x
                         + state.player.velocity.z * state.player.velocity.z)
                         .sqrt();
                     if is_moving && horiz_speed > 0.1 && !state.player_stats.is_dead {
                         state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
-                        if state.player.on_ground {
-                            state
-                                .player_stats
-                                .add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
+                        if state.player.on_ground || is_in_water {
+                            if state.player.on_ground {
+                                state
+                                    .player_stats
+                                    .add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
+                            }
 
-                            // Dynamic footstep audio based on surface material and stride interval
+                            // Dynamic footstep / water swimming audio based on surface and stride interval
                             let stride_dist = if state.sprinting { 2.4 } else { 1.6 };
                             if state.walk_distance - state.last_footstep_dist >= stride_dist {
                                 state.last_footstep_dist = state.walk_distance;
-                                let foot_block_pos = IVec3::new(
-                                    state.player.position.x.floor() as i32,
-                                    (state.player.position.y - 0.2).floor() as i32,
-                                    state.player.position.z.floor() as i32,
-                                );
-                                let ground_block = {
-                                    let world = state.world_manager.world().lock().unwrap();
-                                    world.get_block(foot_block_pos)
-                                };
-                                let material =
-                                    crate::audio::SoundMaterial::from_block(ground_block);
-                                let volume_scale = if state.sprinting { 1.0 } else { 0.75 };
-                                state.audio.play_footstep(material, volume_scale);
+                                if is_in_water {
+                                    let swim_vol = if state.sprinting { 0.95 } else { 0.70 };
+                                    state.audio.play_water_swim(swim_vol);
+                                } else {
+                                    let foot_block_pos = IVec3::new(
+                                        state.player.position.x.floor() as i32,
+                                        (state.player.position.y - 0.2).floor() as i32,
+                                        state.player.position.z.floor() as i32,
+                                    );
+                                    let ground_block = {
+                                        let world = state.world_manager.world().lock().unwrap();
+                                        world.get_block(foot_block_pos)
+                                    };
+                                    let material =
+                                        crate::audio::SoundMaterial::from_block(ground_block);
+                                    let volume_scale = if state.sprinting { 1.0 } else { 0.75 };
+                                    state.audio.play_footstep(material, volume_scale);
+                                }
                             }
                         }
-                    }
-
-                    // Check if player's head is submerged in water for breath and drowning
-                    let head_block_pos = IVec3::new(
-                        state.player.position.x.floor() as i32,
-                        (state.player.position.y + 1.62).floor() as i32,
-                        state.player.position.z.floor() as i32,
-                    );
-                    let (is_head_submerged, is_touching_cactus) = {
-                        let world = state.world_manager.world().lock().unwrap();
-                        let submerged = world.get_block(head_block_pos).is_water();
-                        let touching_cactus = state.player.is_touching_cactus(&world);
-                        (submerged, touching_cactus)
-                    };
-
-                    if is_touching_cactus {
-                        state.player_stats.take_damage(1.0);
                     }
 
                     // Update player stats (regeneration, starvation, void damage, breath/drowning)
                     state
                         .player_stats
                         .update(dt, state.player.position.y, is_head_submerged);
+
+                    if state.player_stats.health < prev_health && !state.player_stats.is_dead {
+                        state.audio.play_hurt();
+                    }
 
                     // Handle death transition and item scattering
                     if state.player_stats.is_dead {
@@ -1951,6 +1994,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.breaking_voxel = Some(target_voxel);
                                 state.break_progress = 0.0;
                                 state.cracking_buffer = None;
+                                state.break_hit_timer = 0.25; // Trigger immediate initial hit
                             }
 
                             let block_at_voxel = {
@@ -1962,6 +2006,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.breaking_voxel = None;
                                 state.break_progress = 0.0;
                                 state.cracking_buffer = None;
+                                state.break_hit_timer = 0.0;
                             } else {
                                 let held_slot = state.inventory.get(state.active_hotbar_slot);
                                 let (held_tool_type, held_tool_tier) =
@@ -1979,8 +2024,19 @@ impl ApplicationHandler for BlockGameApp {
                                 if break_time.is_infinite() {
                                     state.break_progress = 0.0;
                                     state.cracking_buffer = None;
+                                    state.break_hit_timer = 0.0;
                                 } else {
                                     state.break_progress += dt / break_time;
+                                    state.break_hit_timer += dt;
+                                    if state.break_hit_timer >= 0.25 {
+                                        state.break_hit_timer = 0.0;
+                                        state.audio.play_block_hit(
+                                            block_at_voxel,
+                                            target_voxel.as_vec3() + Vec3::splat(0.5),
+                                            state.camera.position,
+                                            state.camera.yaw,
+                                        );
+                                    }
                                     if state.break_progress >= 1.0 {
                                         // Block break completed!
                                         if let Some(broken) = state.world_manager.break_block(
@@ -2049,6 +2105,7 @@ impl ApplicationHandler for BlockGameApp {
                                         state.breaking_voxel = None;
                                         state.break_progress = 0.0;
                                         state.cracking_buffer = None;
+                                        state.break_hit_timer = 0.0;
                                     } else {
                                         let stage =
                                             ((state.break_progress * 10.0).floor() as usize).min(9);
@@ -2066,11 +2123,13 @@ impl ApplicationHandler for BlockGameApp {
                             state.breaking_voxel = None;
                             state.break_progress = 0.0;
                             state.cracking_buffer = None;
+                            state.break_hit_timer = 0.0;
                         }
                     } else if state.breaking_voxel.is_some() {
                         state.breaking_voxel = None;
                         state.break_progress = 0.0;
                         state.cracking_buffer = None;
+                        state.break_hit_timer = 0.0;
                     }
 
                     // 6. Update chunk streaming around player
