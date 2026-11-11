@@ -11,10 +11,16 @@
 
 use blockgame_core::block::BlockId;
 use glam::Vec3;
-use miniaudio::{Device, DeviceConfig, DeviceType, Format};
+use maudio::{
+    audio::sample_rate::SampleRate,
+    data_source::sources::decoder::{DecoderBuilder, DecoderOps},
+    device::{
+        device_builder::{DeviceBuilder, DeviceBuilderOps},
+        Device,
+    },
+};
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -547,7 +553,7 @@ pub mod sound_generator {
 /// Global audio manager orchestrating 3D spatial playback, materials, and mixer device.
 pub struct AudioManager {
     mixer: Arc<Mutex<AudioMixer>>,
-    _device: Option<Device>,
+    _device: Option<Device<f32>>,
     footsteps: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
     breaks: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
     places: HashMap<(SoundMaterial, usize), Arc<Vec<f32>>>,
@@ -563,27 +569,20 @@ impl AudioManager {
         let mixer = Arc::new(Mutex::new(AudioMixer::new()));
         let mut device = None;
 
-        // Configure miniaudio playback device
-        let mut config = DeviceConfig::new(DeviceType::Playback);
-        config.playback_mut().set_format(Format::F32);
-        config.playback_mut().set_channels(2);
-        config.set_sample_rate(44100);
-
         let mixer_cb = mixer.clone();
-        match Device::new(None, &config) {
+        match DeviceBuilder::playback()
+            .f32()
+            .playback_channels(2)
+            .sample_rate(SampleRate::Sr44100)
+            .with_callback(move |_, out| {
+                out.fill(0.0);
+                if let Ok(mut m) = mixer_cb.lock() {
+                    m.mix(out, 44100);
+                }
+            })
+        {
             Ok(mut dev) => {
-                dev.set_data_callback(move |_dev, output, _input| {
-                    let samples = output.as_samples_mut::<f32>();
-                    // Zero out buffer before mixing
-                    for s in samples.iter_mut() {
-                        *s = 0.0;
-                    }
-                    if let Ok(mut m) = mixer_cb.lock() {
-                        m.mix(samples, 44100);
-                    }
-                });
-
-                if let Err(e) = dev.start() {
+                if let Err(e) = dev.device_start() {
                     eprintln!("[Audio] Warning: Failed to start audio playback device: {:?}", e);
                 } else {
                     println!("[Audio] Playback device successfully initialized at 44.1kHz.");
@@ -711,16 +710,17 @@ impl AudioManager {
 
     /// Attempts to decode an external audio file into 44.1kHz mono PCM f32 samples.
     fn load_audio_file(path: &Path) -> Option<Vec<f32>> {
-        let bytes = fs::read(path).ok()?;
-        let config = miniaudio::DecoderConfig::new(Format::F32, 1, 44100);
-        let decoder = miniaudio::Decoder::from_memory(bytes, Some(&config)).ok()?;
+        let mut decoder = DecoderBuilder::new_f32()
+            .channels(1)
+            .sample_rate(SampleRate::Sr44100)
+            .from_file(path)
+            .ok()?;
+
         let mut samples = Vec::new();
         let mut frame_buf = [0.0_f32; 1024];
 
-        let mut dec = decoder;
         loop {
-            let mut frames = miniaudio::FramesMut::wrap(&mut frame_buf, Format::F32, 1);
-            let frames_read = dec.read_pcm_frames(&mut frames) as usize;
+            let frames_read = decoder.read_pcm_frames_into(&mut frame_buf).unwrap_or(0);
             if frames_read == 0 {
                 break;
             }
