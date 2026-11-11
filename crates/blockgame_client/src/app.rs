@@ -2257,15 +2257,13 @@ impl ApplicationHandler for BlockGameApp {
                     let cam_x = center_x + angle.cos() * 24.0;
                     let cam_z = center_z + angle.sin() * 24.0;
 
-                    // Find highest terrain surface at center and camera orbit point so camera never clips into hills
-                    let safe_surface_y = {
+                    // Compute a constant elevation from fixed points around the orbit center
+                    // (independent of `angle`) so the camera stays at the exact same height while rotating.
+                    let constant_surface_y = {
                         let world_guard = state.world_manager.world().lock().unwrap();
                         let top_y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
                         let mut max_y = 40;
-                        for &(sx, sz) in &[
-                            (center_x.floor() as i32, center_z.floor() as i32),
-                            (cam_x.floor() as i32, cam_z.floor() as i32),
-                        ] {
+                        let mut check_col = |sx: i32, sz: i32| {
                             let mut y = top_y;
                             while y > 1 {
                                 if !world_guard.get_block(IVec3::new(sx, y, sz)).is_air() {
@@ -2276,11 +2274,20 @@ impl ApplicationHandler for BlockGameApp {
                                 }
                                 y -= 1;
                             }
+                        };
+                        check_col(center_x.floor() as i32, center_z.floor() as i32);
+                        for i in 0..16 {
+                            let a = (i as f32) * (std::f32::consts::TAU / 16.0);
+                            let sx = (center_x + a.cos() * 24.0).floor() as i32;
+                            let sz = (center_z + a.sin() * 24.0).floor() as i32;
+                            check_col(sx, sz);
                         }
                         max_y as f32
                     };
 
-                    let target_cam_y = (safe_surface_y + 18.0).max(58.0);
+                    let target_cam_y = (constant_surface_y + 14.0)
+                        .max(state.player.position.y + 18.0)
+                        .max(58.0);
                     state.camera.position = Vec3::new(cam_x, target_cam_y, cam_z);
                     state.camera.yaw = angle + std::f32::consts::PI;
                     state.camera.pitch = -0.24;
