@@ -3396,6 +3396,794 @@ impl UiBuilder {
             );
         }
     }
+
+    // =========================================================================
+    // Phase 2: Title Screen, World Select, Create World, Pause & Settings Menus
+    // =========================================================================
+
+    /// Checks whether `cursor_pos` is inside the rectangle `(x, y, w, h)`.
+    #[inline]
+    pub fn is_rect_hovered(cursor_pos: [f32; 2], x: f32, y: f32, w: f32, h: f32) -> bool {
+        cursor_pos[0] >= x
+            && cursor_pos[0] <= x + w
+            && cursor_pos[1] >= y
+            && cursor_pos[1] <= y + h
+    }
+
+    /// Draws a classic beveled voxel-styled button with drop-shadowed centered label.
+    pub fn draw_menu_button(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        cursor_pos: [f32; 2],
+        enabled: bool,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let hovered = enabled && Self::is_rect_hovered(cursor_pos, x, y, w, h);
+
+        // Outer black frame
+        mesh.add_quad(
+            x - 2.0,
+            y - 2.0,
+            w + 4.0,
+            h + 4.0,
+            white_uv,
+            [0.06, 0.06, 0.08, 0.96],
+        );
+
+        let (bg_color, top_highlight, bottom_shadow, text_color) = if !enabled {
+            (
+                [0.16, 0.16, 0.19, 0.92],
+                [0.22, 0.22, 0.26, 0.92],
+                [0.10, 0.10, 0.12, 0.92],
+                [0.52, 0.52, 0.55, 0.95],
+            )
+        } else if hovered {
+            (
+                [0.34, 0.40, 0.62, 0.96],
+                [0.56, 0.64, 0.90, 0.98],
+                [0.20, 0.24, 0.42, 0.98],
+                [1.0, 1.0, 0.55, 1.0],
+            )
+        } else {
+            (
+                [0.27, 0.28, 0.32, 0.95],
+                [0.45, 0.46, 0.52, 0.95],
+                [0.15, 0.16, 0.19, 0.95],
+                [0.95, 0.95, 0.97, 1.0],
+            )
+        };
+
+        // Main button fill
+        mesh.add_quad(x, y, w, h, white_uv, bg_color);
+        // Top/left 3D bevel highlight
+        mesh.add_quad(x, y, w, 2.0, white_uv, top_highlight);
+        mesh.add_quad(x, y, 2.0, h, white_uv, top_highlight);
+        // Bottom/right 3D bevel shadow
+        mesh.add_quad(x, y + h - 3.0, w, 3.0, white_uv, bottom_shadow);
+        mesh.add_quad(x + w - 2.0, y, 2.0, h, white_uv, bottom_shadow);
+
+        let char_w = 11.0;
+        let char_h = 15.0;
+        let spacing = 1.0;
+        let text_w = Self::string_width(label, char_w, spacing);
+        let tx = x + (w - text_w) * 0.5;
+        let ty = y + (h - char_h) * 0.5;
+
+        // Text drop shadow
+        Self::draw_string(
+            mesh,
+            tx + 1.5,
+            ty + 1.5,
+            label,
+            char_w,
+            char_h,
+            spacing,
+            [0.08, 0.08, 0.10, 0.92],
+        );
+        Self::draw_string(mesh, tx, ty, label, char_w, char_h, spacing, text_color);
+    }
+
+    /// Draws a labeled text input box with blinking caret when focused.
+    pub fn draw_text_input_box(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        value: &str,
+        placeholder: &str,
+        focused: bool,
+        cursor_pos: [f32; 2],
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let hovered = Self::is_rect_hovered(cursor_pos, x, y, w, h);
+
+        // Label above input box
+        Self::draw_string(
+            mesh,
+            x,
+            y - 20.0,
+            label,
+            9.5,
+            13.0,
+            1.0,
+            [0.82, 0.84, 0.88, 1.0],
+        );
+
+        let border_color = if focused {
+            [0.95, 0.85, 0.35, 1.0]
+        } else if hovered {
+            [0.65, 0.68, 0.78, 1.0]
+        } else {
+            [0.42, 0.44, 0.50, 1.0]
+        };
+
+        // Border
+        mesh.add_quad(x - 2.0, y - 2.0, w + 4.0, h + 4.0, white_uv, border_color);
+        // Dark inset background
+        mesh.add_quad(x, y, w, h, white_uv, [0.06, 0.07, 0.09, 0.96]);
+
+        let char_w = 10.5;
+        let char_h = 15.0;
+        let spacing = 1.0;
+        let ty = y + (h - char_h) * 0.5;
+
+        if value.is_empty() && !focused {
+            Self::draw_string(
+                mesh,
+                x + 10.0,
+                ty,
+                placeholder,
+                char_w,
+                char_h,
+                spacing,
+                [0.45, 0.46, 0.52, 0.90],
+            );
+        } else {
+            let display = if focused {
+                format!("{}_", value)
+            } else {
+                value.to_string()
+            };
+            Self::draw_string(
+                mesh,
+                x + 10.0,
+                ty,
+                &display,
+                char_w,
+                char_h,
+                spacing,
+                [0.98, 0.98, 1.0, 1.0],
+            );
+        }
+    }
+
+    /// Returns the 4 main button rectangles `[Singleplayer, Multiplayer, Settings, Quit Game]`
+    /// on the Title Screen as `([x, y, w, h])`.
+    pub fn title_screen_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 4] {
+        let btn_w = 340.0;
+        let btn_h = 44.0;
+        let gap = 14.0;
+        let btn_x = (screen_w - btn_w) * 0.5;
+        let start_y = screen_h * 0.44;
+        [
+            [btn_x, start_y, btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap), btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap) * 3.0 + 8.0, btn_w, btn_h],
+        ]
+    }
+
+    /// Builds the Title Screen & Main Menu overlay.
+    pub fn build_title_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Subtle atmospheric vignette / darkening over the 3D background panorama
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.04, 0.06, 0.10, 0.38],
+        );
+
+        // Title Banner Panel
+        let title_text = "BLOCKGAME";
+        let title_char_w = 28.0;
+        let title_char_h = 38.0;
+        let title_spacing = 4.0;
+        let title_w = Self::string_width(title_text, title_char_w, title_spacing);
+        let title_x = (screen_w - title_w) * 0.5;
+        let title_y = screen_h * 0.17;
+
+        // Deep 3D block shadow for title
+        Self::draw_string(
+            mesh,
+            title_x + 4.0,
+            title_y + 4.0,
+            title_text,
+            title_char_w,
+            title_char_h,
+            title_spacing,
+            [0.08, 0.09, 0.12, 0.95],
+        );
+        Self::draw_string(
+            mesh,
+            title_x,
+            title_y,
+            title_text,
+            title_char_w,
+            title_char_h,
+            title_spacing,
+            [0.95, 0.96, 0.98, 1.0],
+        );
+
+        // Subtitle / Edition Banner
+        let sub_text = "VOXEL SURVIVAL EDITION";
+        let sub_w = Self::string_width(sub_text, 10.5, 2.0);
+        let sub_x = (screen_w - sub_w) * 0.5;
+        let sub_y = title_y + title_char_h + 12.0;
+        Self::draw_string(
+            mesh,
+            sub_x + 1.5,
+            sub_y + 1.5,
+            sub_text,
+            10.5,
+            14.0,
+            2.0,
+            [0.08, 0.08, 0.10, 0.90],
+        );
+        Self::draw_string(
+            mesh,
+            sub_x,
+            sub_y,
+            sub_text,
+            10.5,
+            14.0,
+            2.0,
+            [1.0, 0.86, 0.28, 1.0],
+        );
+
+        let rects = Self::title_screen_button_rects(screen_w, screen_h);
+        let labels = ["Singleplayer", "Multiplayer", "Settings", "Quit Game"];
+        for (rect, label) in rects.iter().zip(labels.iter()) {
+            Self::draw_menu_button(
+                mesh,
+                rect[0],
+                rect[1],
+                rect[2],
+                rect[3],
+                label,
+                cursor_pos,
+                true,
+            );
+        }
+
+        // Bottom footer version text
+        let ver_text = "BlockGame v0.1.0 - Faithful 32x";
+        Self::draw_string(
+            mesh,
+            12.0,
+            screen_h - 22.0,
+            ver_text,
+            8.5,
+            12.0,
+            0.8,
+            [0.80, 0.82, 0.86, 0.85],
+        );
+    }
+
+    /// Returns the world list row rectangles (up to 5 visible slots) and the 4 bottom action buttons
+    /// `[Play Selected World, Create New World, Delete World, Back]` for the World Select screen.
+    pub fn world_select_layout(
+        screen_w: f32,
+        screen_h: f32,
+        world_count: usize,
+    ) -> (Vec<[f32; 4]>, [[f32; 4]; 4]) {
+        let list_w = 560.0_f32.min(screen_w - 60.0);
+        let list_x = (screen_w - list_w) * 0.5;
+        let list_top = 100.0;
+        let row_h = 58.0;
+        let row_gap = 8.0;
+        let max_rows = world_count.min(5);
+
+        let mut rows = Vec::with_capacity(max_rows);
+        for i in 0..max_rows {
+            let ry = list_top + (i as f32) * (row_h + row_gap);
+            rows.push([list_x, ry, list_w, row_h]);
+        }
+
+        let btn_w = 272.0;
+        let btn_h = 40.0;
+        let col_gap = 16.0;
+        let row_btn_gap = 10.0;
+        let left_x = (screen_w - (btn_w * 2.0 + col_gap)) * 0.5;
+        let right_x = left_x + btn_w + col_gap;
+        let top_btn_y = (screen_h - 115.0).max(list_top + 5.0 * (row_h + row_gap) + 16.0);
+        let bot_btn_y = top_btn_y + btn_h + row_btn_gap;
+
+        let buttons = [
+            [left_x, top_btn_y, btn_w, btn_h],  // Play Selected World
+            [right_x, top_btn_y, btn_w, btn_h], // Create New World
+            [left_x, bot_btn_y, btn_w, btn_h],  // Delete World
+            [right_x, bot_btn_y, btn_w, btn_h], // Back
+        ];
+        (rows, buttons)
+    }
+
+    /// Builds the Singleplayer World Selection screen.
+    pub fn build_world_select_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        worlds: &[blockgame_core::save::WorldMetadata],
+        selected_index: Option<usize>,
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Darkened menu backdrop
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.05, 0.06, 0.09, 0.78],
+        );
+
+        // Screen Header
+        let header = "Select World";
+        let header_w = Self::string_width(header, 14.0, 1.5);
+        Self::draw_string(
+            mesh,
+            (screen_w - header_w) * 0.5,
+            38.0,
+            header,
+            14.0,
+            19.0,
+            1.5,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let list_w = 560.0_f32.min(screen_w - 60.0);
+        let list_x = (screen_w - list_w) * 0.5;
+        let list_top = 92.0;
+        let list_h = 338.0;
+
+        // Inset list container panel
+        mesh.add_quad(
+            list_x - 8.0,
+            list_top,
+            list_w + 16.0,
+            list_h,
+            white_uv,
+            [0.02, 0.03, 0.05, 0.85],
+        );
+
+        let (row_rects, btn_rects) = Self::world_select_layout(screen_w, screen_h, worlds.len());
+
+        if worlds.is_empty() {
+            let empty_msg = "No saved worlds found. Click 'Create New World' to start!";
+            let ew = Self::string_width(empty_msg, 9.5, 1.0);
+            Self::draw_string(
+                mesh,
+                (screen_w - ew) * 0.5,
+                list_top + list_h * 0.45,
+                empty_msg,
+                9.5,
+                14.0,
+                1.0,
+                [0.68, 0.70, 0.76, 0.95],
+            );
+        } else {
+            for (i, rect) in row_rects.iter().enumerate() {
+                let world = &worlds[i];
+                let is_selected = selected_index == Some(i);
+                let is_hovered =
+                    Self::is_rect_hovered(cursor_pos, rect[0], rect[1], rect[2], rect[3]);
+
+                let border_color = if is_selected {
+                    [0.95, 0.85, 0.35, 1.0]
+                } else if is_hovered {
+                    [0.48, 0.52, 0.65, 0.95]
+                } else {
+                    [0.22, 0.24, 0.30, 0.90]
+                };
+
+                let fill_color = if is_selected {
+                    [0.16, 0.20, 0.32, 0.95]
+                } else if is_hovered {
+                    [0.12, 0.14, 0.22, 0.92]
+                } else {
+                    [0.08, 0.09, 0.13, 0.90]
+                };
+
+                mesh.add_quad(
+                    rect[0] - 2.0,
+                    rect[1] - 2.0,
+                    rect[2] + 4.0,
+                    rect[3] + 4.0,
+                    white_uv,
+                    border_color,
+                );
+                mesh.add_quad(rect[0], rect[1], rect[2], rect[3], white_uv, fill_color);
+
+                // World Name
+                Self::draw_string(
+                    mesh,
+                    rect[0] + 14.0,
+                    rect[1] + 10.0,
+                    &world.name,
+                    11.0,
+                    15.0,
+                    1.0,
+                    [0.98, 0.98, 1.0, 1.0],
+                );
+
+                // Folder & Seed details
+                let play_mins = (world.total_time / 60.0) as u32;
+                let play_secs = (world.total_time as u32) % 60;
+                let details = format!(
+                    "Folder: {}  |  Seed: {}  |  Played: {}m {}s",
+                    world.folder_name, world.seed, play_mins, play_secs
+                );
+                Self::draw_string(
+                    mesh,
+                    rect[0] + 14.0,
+                    rect[1] + 33.0,
+                    &details,
+                    8.5,
+                    12.0,
+                    0.8,
+                    [0.65, 0.68, 0.75, 0.95],
+                );
+            }
+        }
+
+        let has_selection = selected_index.map(|idx| idx < worlds.len()).unwrap_or(false);
+        Self::draw_menu_button(
+            mesh,
+            btn_rects[0][0],
+            btn_rects[0][1],
+            btn_rects[0][2],
+            btn_rects[0][3],
+            "Play Selected World",
+            cursor_pos,
+            has_selection,
+        );
+        Self::draw_menu_button(
+            mesh,
+            btn_rects[1][0],
+            btn_rects[1][1],
+            btn_rects[1][2],
+            btn_rects[1][3],
+            "Create New World",
+            cursor_pos,
+            true,
+        );
+        Self::draw_menu_button(
+            mesh,
+            btn_rects[2][0],
+            btn_rects[2][1],
+            btn_rects[2][2],
+            btn_rects[2][3],
+            "Delete World",
+            cursor_pos,
+            has_selection,
+        );
+        Self::draw_menu_button(
+            mesh,
+            btn_rects[3][0],
+            btn_rects[3][1],
+            btn_rects[3][2],
+            btn_rects[3][3],
+            "Back",
+            cursor_pos,
+            true,
+        );
+    }
+
+    /// Returns `(name_input_rect, seed_input_rect, create_btn_rect, cancel_btn_rect)`
+    /// for the Create New World screen.
+    pub fn create_world_layout(
+        screen_w: f32,
+        screen_h: f32,
+    ) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+        let box_w = 420.0;
+        let box_h = 42.0;
+        let box_x = (screen_w - box_w) * 0.5;
+        let name_y = screen_h * 0.30;
+        let seed_y = name_y + 95.0;
+
+        let btn_w = 202.0;
+        let btn_h = 42.0;
+        let gap = 16.0;
+        let btn_y = seed_y + 90.0;
+        let create_x = (screen_w - (btn_w * 2.0 + gap)) * 0.5;
+        let cancel_x = create_x + btn_w + gap;
+
+        (
+            [box_x, name_y, box_w, box_h],
+            [box_x, seed_y, box_w, box_h],
+            [create_x, btn_y, btn_w, btn_h],
+            [cancel_x, btn_y, btn_w, btn_h],
+        )
+    }
+
+    /// Builds the Create New World screen.
+    /// `focused_field`: `0` = World Name input, `1` = World Seed input.
+    pub fn build_create_world_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        name_input: &str,
+        seed_input: &str,
+        focused_field: usize,
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Darkened backdrop
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.05, 0.06, 0.09, 0.80],
+        );
+
+        let header = "Create New World";
+        let header_w = Self::string_width(header, 14.0, 1.5);
+        Self::draw_string(
+            mesh,
+            (screen_w - header_w) * 0.5,
+            52.0,
+            header,
+            14.0,
+            19.0,
+            1.5,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let (name_rect, seed_rect, create_rect, cancel_rect) =
+            Self::create_world_layout(screen_w, screen_h);
+
+        Self::draw_text_input_box(
+            mesh,
+            name_rect[0],
+            name_rect[1],
+            name_rect[2],
+            name_rect[3],
+            "World Name:",
+            name_input,
+            "New World",
+            focused_field == 0,
+            cursor_pos,
+        );
+
+        let folder_preview = format!(
+            "Will be saved in: saves/{}",
+            blockgame_core::save::sanitize_folder_name(if name_input.trim().is_empty() {
+                "New World"
+            } else {
+                name_input
+            })
+        );
+        Self::draw_string(
+            mesh,
+            name_rect[0],
+            name_rect[1] + name_rect[3] + 8.0,
+            &folder_preview,
+            8.5,
+            12.0,
+            0.8,
+            [0.60, 0.63, 0.70, 0.95],
+        );
+
+        Self::draw_text_input_box(
+            mesh,
+            seed_rect[0],
+            seed_rect[1],
+            seed_rect[2],
+            seed_rect[3],
+            "Seed for the World Generator (optional):",
+            seed_input,
+            "Leave blank for a random seed",
+            focused_field == 1,
+            cursor_pos,
+        );
+
+        Self::draw_menu_button(
+            mesh,
+            create_rect[0],
+            create_rect[1],
+            create_rect[2],
+            create_rect[3],
+            "Create New World",
+            cursor_pos,
+            !name_input.trim().is_empty(),
+        );
+        Self::draw_menu_button(
+            mesh,
+            cancel_rect[0],
+            cancel_rect[1],
+            cancel_rect[2],
+            cancel_rect[3],
+            "Cancel",
+            cursor_pos,
+            true,
+        );
+    }
+
+    /// Returns the 4 Pause Menu button rectangles:
+    /// `[Back to Game, Save World, Settings, Save & Quit to Title]`.
+    pub fn pause_menu_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 4] {
+        let btn_w = 320.0;
+        let btn_h = 42.0;
+        let gap = 14.0;
+        let btn_x = (screen_w - btn_w) * 0.5;
+        let start_y = screen_h * 0.34;
+        [
+            [btn_x, start_y, btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap), btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap) * 3.0 + 8.0, btn_w, btn_h],
+        ]
+    }
+
+    /// Builds the In-Game Pause Menu overlay.
+    pub fn build_pause_menu(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        cursor_pos: [f32; 2],
+        status_message: Option<&str>,
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Translucent dark overlay over live 3D game world
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.04, 0.05, 0.08, 0.68],
+        );
+
+        let header = "Game Menu";
+        let header_w = Self::string_width(header, 14.0, 1.5);
+        Self::draw_string(
+            mesh,
+            (screen_w - header_w) * 0.5,
+            screen_h * 0.22,
+            header,
+            14.0,
+            19.0,
+            1.5,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let rects = Self::pause_menu_button_rects(screen_w, screen_h);
+        let labels = [
+            "Back to Game",
+            "Save World",
+            "Settings",
+            "Save & Quit to Title",
+        ];
+        for (rect, label) in rects.iter().zip(labels.iter()) {
+            Self::draw_menu_button(
+                mesh,
+                rect[0],
+                rect[1],
+                rect[2],
+                rect[3],
+                label,
+                cursor_pos,
+                true,
+            );
+        }
+
+        if let Some(msg) = status_message {
+            let mw = Self::string_width(msg, 10.0, 1.0);
+            Self::draw_string(
+                mesh,
+                (screen_w - mw) * 0.5,
+                rects[3][1] + rects[3][3] + 22.0,
+                msg,
+                10.0,
+                14.0,
+                1.0,
+                [0.45, 0.95, 0.55, 1.0],
+            );
+        }
+    }
+
+    /// Returns the Back button rectangle for modal/notice/settings screens.
+    pub fn notice_back_button_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
+        let btn_w = 240.0;
+        let btn_h = 42.0;
+        [(screen_w - btn_w) * 0.5, screen_h * 0.66, btn_w, btn_h]
+    }
+
+    /// Builds the Settings screen or Multiplayer notice screen.
+    pub fn build_notice_or_settings_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        title: &str,
+        lines: &[&str],
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.05, 0.06, 0.09, 0.78],
+        );
+
+        let tw = Self::string_width(title, 14.0, 1.5);
+        Self::draw_string(
+            mesh,
+            (screen_w - tw) * 0.5,
+            screen_h * 0.22,
+            title,
+            14.0,
+            19.0,
+            1.5,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let mut y = screen_h * 0.36;
+        for line in lines {
+            let lw = Self::string_width(line, 10.5, 1.0);
+            Self::draw_string(
+                mesh,
+                (screen_w - lw) * 0.5,
+                y,
+                line,
+                10.5,
+                15.0,
+                1.0,
+                [0.82, 0.85, 0.90, 0.96],
+            );
+            y += 28.0;
+        }
+
+        let back_rect = Self::notice_back_button_rect(screen_w, screen_h);
+        Self::draw_menu_button(
+            mesh,
+            back_rect[0],
+            back_rect[1],
+            back_rect[2],
+            back_rect[3],
+            "Done",
+            cursor_pos,
+            true,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3745,5 +4533,83 @@ mod tests {
         UiBuilder::draw_held_item(&mut mesh_seagrass, 1280.0, 720.0, ItemSlot::new(ItemId::SEAGRASS, 1), &registry, 0.0, 0.0);
         let seagrass_quads = mesh_seagrass.indices.len() / 6;
         assert_eq!(seagrass_quads, 1, "Seagrass in hand should generate 1 flat 2D item sprite quad instead of a 3D cube");
+    }
+
+    #[test]
+    fn test_build_title_screen() {
+        let mut mesh = UiMesh::new();
+        UiBuilder::build_title_screen(&mut mesh, 1280.0, 720.0, [640.0, 360.0]);
+        assert!(mesh.indices.len() > 0);
+        assert!(mesh.vertices.len() > 0);
+
+        let rects = UiBuilder::title_screen_button_rects(1280.0, 720.0);
+        assert_eq!(rects.len(), 4);
+        // Hover check inside first button (Singleplayer)
+        let r0 = rects[0];
+        assert!(UiBuilder::is_rect_hovered(
+            [r0[0] + 10.0, r0[1] + 10.0],
+            r0[0],
+            r0[1],
+            r0[2],
+            r0[3]
+        ));
+    }
+
+    #[test]
+    fn test_build_world_select_and_create_screens() {
+        let mut mesh = UiMesh::new();
+        // Empty world list
+        UiBuilder::build_world_select_screen(&mut mesh, 1280.0, 720.0, &[], None, [640.0, 360.0]);
+        assert!(mesh.indices.len() > 0);
+
+        // Populated world list with selection
+        let worlds = vec![
+            blockgame_core::save::WorldMetadata::new("Alpha Survival", 1337),
+            blockgame_core::save::WorldMetadata::new("Creative Islands", 4242),
+        ];
+        UiBuilder::build_world_select_screen(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &worlds,
+            Some(0),
+            [640.0, 200.0],
+        );
+        assert!(mesh.indices.len() > 0);
+
+        // Create New World screen
+        UiBuilder::build_create_world_screen(
+            &mut mesh,
+            1280.0,
+            720.0,
+            "My New World",
+            "12345",
+            0,
+            [640.0, 360.0],
+        );
+        assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_pause_and_settings_menus() {
+        let mut mesh = UiMesh::new();
+        UiBuilder::build_pause_menu(
+            &mut mesh,
+            1280.0,
+            720.0,
+            [640.0, 360.0],
+            Some("World saved successfully!"),
+        );
+        assert!(mesh.indices.len() > 0);
+
+        UiBuilder::build_notice_or_settings_screen(
+            &mut mesh,
+            1280.0,
+            720.0,
+            "Settings",
+            &["Render Distance: 8 Chunks", "FOV: 70 Degrees"],
+            [640.0, 360.0],
+        );
+        assert!(mesh.indices.len() > 0);
     }
 }
