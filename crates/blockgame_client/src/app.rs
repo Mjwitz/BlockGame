@@ -853,6 +853,12 @@ impl ApplicationHandler for BlockGameApp {
                                     // Save & Quit to Title
                                     state.save_active_world();
                                     state.active_world_metadata = None;
+                                    // Ensure all chunks around the panorama center are loaded on GPU
+                                    state.world_manager.init_area_around(
+                                        state.player.position,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
                                     state.screen = AppScreen::Title;
                                     state.mouse_captured = false;
                                     let _ = state
@@ -2237,14 +2243,45 @@ impl ApplicationHandler for BlockGameApp {
                     );
                 } else {
                     // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerNotice):
-                    // Slowly orbit camera over the 3D terrain as a live panoramic background
+                    // Slowly orbit camera over the currently loaded 3D terrain around player.position
                     state.total_time += dt;
-                    let angle = state.total_time * 0.12;
-                    state.camera.position = Vec3::new(
-                        angle.cos() * 24.0,
-                        (state.player.position.y + 18.0).max(58.0),
-                        angle.sin() * 24.0,
+                    state.world_manager.update(
+                        state.player.position,
+                        &state.device,
+                        &state.pipeline,
                     );
+
+                    let angle = state.total_time * 0.12;
+                    let center_x = state.player.position.x;
+                    let center_z = state.player.position.z;
+                    let cam_x = center_x + angle.cos() * 24.0;
+                    let cam_z = center_z + angle.sin() * 24.0;
+
+                    // Find highest terrain surface at center and camera orbit point so camera never clips into hills
+                    let safe_surface_y = {
+                        let world_guard = state.world_manager.world().lock().unwrap();
+                        let top_y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+                        let mut max_y = 40;
+                        for &(sx, sz) in &[
+                            (center_x.floor() as i32, center_z.floor() as i32),
+                            (cam_x.floor() as i32, cam_z.floor() as i32),
+                        ] {
+                            let mut y = top_y;
+                            while y > 1 {
+                                if !world_guard.get_block(IVec3::new(sx, y, sz)).is_air() {
+                                    if y > max_y {
+                                        max_y = y;
+                                    }
+                                    break;
+                                }
+                                y -= 1;
+                            }
+                        }
+                        max_y as f32
+                    };
+
+                    let target_cam_y = (safe_surface_y + 18.0).max(58.0);
+                    state.camera.position = Vec3::new(cam_x, target_cam_y, cam_z);
                     state.camera.yaw = angle + std::f32::consts::PI;
                     state.camera.pitch = -0.24;
                     state.camera.update_uniform_with_atmosphere(
