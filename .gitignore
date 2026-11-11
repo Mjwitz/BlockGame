@@ -1,4 +1,5 @@
 /target
+/saves
 **/*.rs.bk
 Cargo.lock
 *.png

@@ -1762,3 +1762,67 @@ impl WorldManager {
             .sum()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use blockgame_core::item::{Inventory, ItemId, ItemSlot};
+    use blockgame_core::player::PlayerStats;
+    use blockgame_core::save::{SavedPlayerState, WorldMetadata};
+
+    #[test]
+    fn test_world_manager_save_and_restore_state() {
+        let registry = Arc::new(BlockRegistry::new());
+        let mut wm = WorldManager::new(1337, 2, registry.clone());
+
+        // Modify a block and add a chest & furnace in the world
+        let block_pos = IVec3::new(4, 48, 4);
+        let chest_pos = IVec3::new(5, 48, 4);
+        let crop_pos = IVec3::new(6, 49, 4);
+        let farm_pos = IVec3::new(6, 48, 4);
+        {
+            let mut world = wm.world().lock().unwrap();
+            world.insert_chunk(Chunk::new(ChunkPos::new(0, 3, 0)));
+            world.set_block(block_pos, BlockId::DIAMOND_ORE);
+            world.set_block(chest_pos, BlockId::CHEST);
+            let chest = world.get_or_create_chest(chest_pos);
+            chest[0] = ItemSlot::new(ItemId::DIAMOND, 12);
+            world.set_block(farm_pos, BlockId::FARMLAND_MOIST);
+            world.set_block(crop_pos, BlockId::WHEAT_2);
+        }
+        wm.active_farmland.push((farm_pos, 14.0));
+        wm.planted_crops.push((crop_pos, 7.5));
+        wm.spawn_item_drop(Vec3::new(4.5, 50.0, 4.5), ItemSlot::new(ItemId::APPLE, 3));
+
+        let meta = WorldMetadata::new("Test World", 1337);
+        let player_state = SavedPlayerState {
+            position: Vec3::new(4.5, 50.0, 4.5),
+            velocity: Vec3::ZERO,
+            yaw: 1.2,
+            pitch: -0.3,
+            stats: PlayerStats::new(),
+            inventory: Inventory::starter_inventory(),
+            active_hotbar_slot: 2,
+        };
+
+        let save_data = wm.capture_save_data(meta, player_state);
+        assert_eq!(save_data.modified_chunks.len(), 1);
+
+        let mut wm_loaded = WorldManager::new(1337, 2, registry);
+        wm_loaded.apply_save_data(&save_data);
+
+        {
+            let world = wm_loaded.world().lock().unwrap();
+            assert_eq!(world.get_block(block_pos), BlockId::DIAMOND_ORE);
+            assert_eq!(world.get_block(farm_pos), BlockId::FARMLAND_MOIST);
+            assert_eq!(world.get_block(crop_pos), BlockId::WHEAT_2);
+            let chest = world.get_chest(chest_pos).expect("Chest should be restored");
+            assert_eq!(chest[0], ItemSlot::new(ItemId::DIAMOND, 12));
+        }
+        assert_eq!(wm_loaded.active_farmland, vec![(farm_pos, 14.0)]);
+        assert_eq!(wm_loaded.planted_crops, vec![(crop_pos, 7.5)]);
+        assert_eq!(wm_loaded.item_drops.len(), 1);
+        assert_eq!(wm_loaded.item_drops[0].item.item_id, ItemId::APPLE);
+    }
+}
+

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -8,6 +9,10 @@ use blockgame_core::{
     physics::PlayerPhysics,
     player::PlayerStats,
     raycast::{raycast_voxel_with_water, RaycastHit},
+    save::{
+        delete_saved_world, list_saved_worlds, load_world_from_dir, parse_or_hash_seed,
+        save_world_to_dir, unique_world_folder_name, SavedPlayerState, WorldMetadata,
+    },
     tool::ToolTier,
 };
 use blockgame_render::{
@@ -35,6 +40,27 @@ pub struct JeiRecipeModalState {
     pub recipe_index: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppScreen {
+    Title,
+    WorldSelect {
+        selected_index: Option<usize>,
+    },
+    CreateWorld {
+        name_input: String,
+        seed_input: String,
+        focused_field: usize,
+    },
+    Settings {
+        return_to_pause: bool,
+    },
+    MultiplayerNotice,
+    InGame,
+    Paused {
+        status_message: Option<String>,
+    },
+}
+
 pub struct AppState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -53,6 +79,13 @@ pub struct AppState {
     pub day_night: DayNightCycle,
     targeted_block: Option<RaycastHit>,
     wireframe_buffer: Option<wgpu::Buffer>,
+    // Screen & World Persistence State
+    pub screen: AppScreen,
+    pub saves_root: PathBuf,
+    pub saved_worlds: Vec<WorldMetadata>,
+    pub active_world_metadata: Option<WorldMetadata>,
+    pub render_distance: i32,
+    pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
     pub active_hotbar_slot: usize,
@@ -96,6 +129,172 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn refresh_saved_worlds(&mut self) {
+        self.saved_worlds = list_saved_worlds(&self.saves_root);
+    }
+
+    pub fn save_active_world(&mut self) -> bool {
+        let Some(mut meta) = self.active_world_metadata.clone() else {
+            return false;
+        };
+        meta.total_time = self.total_time;
+        meta.day_night_time = self.day_night.time;
+
+        let player_state = SavedPlayerState {
+            position: self.player.position,
+            velocity: self.player.velocity,
+            yaw: self.camera.yaw,
+            pitch: self.camera.pitch,
+            stats: self.player_stats.clone(),
+            inventory: self.inventory.clone(),
+            active_hotbar_slot: self.active_hotbar_slot,
+        };
+
+        let mut save_data = self.world_manager.capture_save_data(meta, player_state);
+        match save_world_to_dir(&self.saves_root, &mut save_data) {
+            Ok(path) => {
+                log::info!(
+                    "Saved world '{}' to {:?}",
+                    save_data.metadata.name,
+                    path
+                );
+                self.active_world_metadata = Some(save_data.metadata);
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to save world: {:?}", e);
+                false
+            }
+        }
+    }
+
+    pub fn create_and_start_world(&mut self, name_input: &str, seed_input: &str) {
+        let display_name = if name_input.trim().is_empty() {
+            "New World".to_string()
+        } else {
+            name_input.trim().to_string()
+        };
+        let seed = parse_or_hash_seed(seed_input);
+        let folder_name = unique_world_folder_name(&self.saves_root, &display_name);
+
+        let mut meta = WorldMetadata::new(&display_name, seed);
+        meta.folder_name = folder_name;
+
+        let mut world_manager =
+            WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.init_spawn_area(&self.device, &self.pipeline);
+
+        // Find safe surface spawn height at (0, 0)
+        let spawn_y = {
+            let world_guard = world_manager.world().lock().unwrap();
+            let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
+            while y > 1 {
+                let block = world_guard.get_block(IVec3::new(0, y, 0));
+                if !block.is_air() {
+                    break;
+                }
+                y -= 1;
+            }
+            (y + 2) as f32
+        };
+
+        self.world_manager = world_manager;
+        self.player = PlayerPhysics::new(Vec3::new(0.5, spawn_y, 0.5));
+        self.player_stats = PlayerStats::new();
+        self.death_handled = false;
+        self.inventory = Inventory::starter_inventory();
+        self.active_hotbar_slot = 0;
+        self.camera.position = self.player.eye_position();
+        self.camera.yaw = (-90.0_f32).to_radians();
+        self.camera.pitch = (-10.0_f32).to_radians();
+        self.day_night = DayNightCycle::new();
+        self.total_time = 0.0;
+        self.walk_distance = 0.0;
+        self.punch_timer = 0.0;
+        self.inventory_open = false;
+        self.active_chest_pos = None;
+        self.active_furnace_pos = None;
+        self.jei_recipe_modal = None;
+        self.jei_search_focused = false;
+        self.cursor_held = ItemSlot::EMPTY;
+        self.mouse_left_down = false;
+        self.breaking_voxel = None;
+        self.break_progress = 0.0;
+        self.cracking_buffer = None;
+        self.active_world_metadata = Some(meta);
+
+        // Immediately save initial state to disk so the world folder exists
+        self.save_active_world();
+
+        self.screen = AppScreen::InGame;
+        self.mouse_captured = true;
+        let _ = self
+            .window
+            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+        self.window.set_cursor_visible(false);
+    }
+
+    pub fn load_and_start_world(&mut self, folder_name: &str) {
+        let save_data = match load_world_from_dir(&self.saves_root, folder_name) {
+            Ok(data) => data,
+            Err(e) => {
+                log::error!("Failed to load world '{}': {:?}", folder_name, e);
+                return;
+            }
+        };
+
+        let seed = save_data.metadata.seed;
+        let mut world_manager =
+            WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.apply_save_data(&save_data);
+        world_manager.init_area_around(
+            save_data.player.position,
+            &self.device,
+            &self.pipeline,
+        );
+
+        self.world_manager = world_manager;
+        self.player = PlayerPhysics::new(save_data.player.position);
+        self.player.velocity = save_data.player.velocity;
+        self.player_stats = save_data.player.stats;
+        self.death_handled = self.player_stats.is_dead;
+        self.inventory = save_data.player.inventory;
+        self.active_hotbar_slot = save_data.player.active_hotbar_slot.min(8);
+        self.camera.position = self.player.eye_position();
+        self.camera.yaw = save_data.player.yaw;
+        self.camera.pitch = save_data.player.pitch;
+        self.day_night = DayNightCycle::new();
+        self.day_night.time = save_data.metadata.day_night_time;
+        self.total_time = save_data.metadata.total_time;
+        self.walk_distance = 0.0;
+        self.punch_timer = 0.0;
+        self.inventory_open = false;
+        self.active_chest_pos = None;
+        self.active_furnace_pos = None;
+        self.jei_recipe_modal = None;
+        self.jei_search_focused = false;
+        self.cursor_held = ItemSlot::EMPTY;
+        self.mouse_left_down = false;
+        self.breaking_voxel = None;
+        self.break_progress = 0.0;
+        self.cracking_buffer = None;
+        self.active_world_metadata = Some(save_data.metadata);
+
+        self.screen = AppScreen::InGame;
+        self.mouse_captured = !self.player_stats.is_dead;
+        if self.mouse_captured {
+            let _ = self
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+            self.window.set_cursor_visible(false);
+        } else {
+            let _ = self
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::None);
+            self.window.set_cursor_visible(true);
+        }
+    }
+
     pub fn respawn_player(&mut self) {
         self.player_stats.reset();
         self.death_handled = false;
@@ -155,7 +354,7 @@ impl ApplicationHandler for BlockGameApp {
         }
 
         let window_attrs = WindowAttributes::default()
-            .with_title("BlockGame - Milestone 5 (Gameplay Loop, Inventory & Crafting)")
+            .with_title("BlockGame")
             .with_inner_size(PhysicalSize::new(1280, 720));
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
@@ -271,6 +470,13 @@ impl ApplicationHandler for BlockGameApp {
         let crafting_manager = CraftingManager::new();
         let crafting_grid = CraftingGrid::new_2x2();
 
+        let saves_root = PathBuf::from("saves");
+        let saved_worlds = list_saved_worlds(&saves_root);
+
+        // Ensure cursor is visible and unlocked on the Title Screen at launch
+        let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
+        window.set_cursor_visible(true);
+
         self.state = Some(AppState {
             window,
             surface,
@@ -289,6 +495,12 @@ impl ApplicationHandler for BlockGameApp {
             day_night,
             targeted_block: None,
             wireframe_buffer: None,
+            screen: AppScreen::Title,
+            saves_root,
+            saved_worlds,
+            active_world_metadata: None,
+            render_distance: self.render_distance,
+            registry: self.registry.clone(),
             inventory,
             active_hotbar_slot: 0,
             item_registry,
@@ -341,6 +553,16 @@ impl ApplicationHandler for BlockGameApp {
 
         match event {
             WindowEvent::CloseRequested => {
+                if matches!(
+                    state.screen,
+                    AppScreen::InGame
+                        | AppScreen::Paused { .. }
+                        | AppScreen::Settings {
+                            return_to_pause: true
+                        }
+                ) {
+                    state.save_active_world();
+                }
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
@@ -359,6 +581,9 @@ impl ApplicationHandler for BlockGameApp {
                 state.cursor_pos = [position.x as f32, position.y as f32];
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if state.screen != AppScreen::InGame {
+                    return;
+                }
                 let scroll = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
@@ -375,6 +600,302 @@ impl ApplicationHandler for BlockGameApp {
                 ..
             } => {
                 let pressed = mouse_btn_state == ElementState::Pressed;
+
+                // Handle Title Screen, World Select, Create World, Settings, and Pause Menu clicks
+                if state.screen != AppScreen::InGame {
+                    if pressed && button == MouseButton::Left {
+                        let screen_w = state.surface_config.width as f32;
+                        let screen_h = state.surface_config.height as f32;
+                        let cpos = state.cursor_pos;
+
+                        match state.screen.clone() {
+                            AppScreen::Title => {
+                                let rects = UiBuilder::title_screen_button_rects(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[0][0],
+                                    rects[0][1],
+                                    rects[0][2],
+                                    rects[0][3],
+                                ) {
+                                    // Singleplayer
+                                    state.refresh_saved_worlds();
+                                    let sel = if state.saved_worlds.is_empty() {
+                                        None
+                                    } else {
+                                        Some(0)
+                                    };
+                                    state.screen = AppScreen::WorldSelect {
+                                        selected_index: sel,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[1][0],
+                                    rects[1][1],
+                                    rects[1][2],
+                                    rects[1][3],
+                                ) {
+                                    // Multiplayer
+                                    state.screen = AppScreen::MultiplayerNotice;
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[2][0],
+                                    rects[2][1],
+                                    rects[2][2],
+                                    rects[2][3],
+                                ) {
+                                    // Settings
+                                    state.screen = AppScreen::Settings {
+                                        return_to_pause: false,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[3][0],
+                                    rects[3][1],
+                                    rects[3][2],
+                                    rects[3][3],
+                                ) {
+                                    // Quit Game
+                                    event_loop.exit();
+                                }
+                            }
+                            AppScreen::WorldSelect { selected_index } => {
+                                let (rows, btns) = UiBuilder::world_select_layout(
+                                    screen_w,
+                                    screen_h,
+                                    state.saved_worlds.len(),
+                                );
+                                for (i, r) in rows.iter().enumerate() {
+                                    if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
+                                        state.screen = AppScreen::WorldSelect {
+                                            selected_index: Some(i),
+                                        };
+                                        return;
+                                    }
+                                }
+                                let has_sel = selected_index
+                                    .map(|idx| idx < state.saved_worlds.len())
+                                    .unwrap_or(false);
+                                if has_sel
+                                    && UiBuilder::is_rect_hovered(
+                                        cpos,
+                                        btns[0][0],
+                                        btns[0][1],
+                                        btns[0][2],
+                                        btns[0][3],
+                                    )
+                                {
+                                    // Play Selected World
+                                    if let Some(idx) = selected_index {
+                                        let folder = state.saved_worlds[idx].folder_name.clone();
+                                        state.load_and_start_world(&folder);
+                                    }
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    btns[1][0],
+                                    btns[1][1],
+                                    btns[1][2],
+                                    btns[1][3],
+                                ) {
+                                    // Create New World
+                                    state.screen = AppScreen::CreateWorld {
+                                        name_input: "New World".to_string(),
+                                        seed_input: String::new(),
+                                        focused_field: 0,
+                                    };
+                                } else if has_sel
+                                    && UiBuilder::is_rect_hovered(
+                                        cpos,
+                                        btns[2][0],
+                                        btns[2][1],
+                                        btns[2][2],
+                                        btns[2][3],
+                                    )
+                                {
+                                    // Delete World
+                                    if let Some(idx) = selected_index {
+                                        let folder = state.saved_worlds[idx].folder_name.clone();
+                                        let _ = delete_saved_world(&state.saves_root, &folder);
+                                        state.refresh_saved_worlds();
+                                        let next_sel = if state.saved_worlds.is_empty() {
+                                            None
+                                        } else {
+                                            Some(idx.min(state.saved_worlds.len() - 1))
+                                        };
+                                        state.screen = AppScreen::WorldSelect {
+                                            selected_index: next_sel,
+                                        };
+                                    }
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    btns[3][0],
+                                    btns[3][1],
+                                    btns[3][2],
+                                    btns[3][3],
+                                ) {
+                                    // Back
+                                    state.screen = AppScreen::Title;
+                                }
+                            }
+                            AppScreen::CreateWorld {
+                                name_input,
+                                seed_input,
+                                focused_field,
+                            } => {
+                                let (name_r, seed_r, create_r, cancel_r) =
+                                    UiBuilder::create_world_layout(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    name_r[0],
+                                    name_r[1],
+                                    name_r[2],
+                                    name_r[3],
+                                ) {
+                                    state.screen = AppScreen::CreateWorld {
+                                        name_input,
+                                        seed_input,
+                                        focused_field: 0,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    seed_r[0],
+                                    seed_r[1],
+                                    seed_r[2],
+                                    seed_r[3],
+                                ) {
+                                    state.screen = AppScreen::CreateWorld {
+                                        name_input,
+                                        seed_input,
+                                        focused_field: 1,
+                                    };
+                                } else if !name_input.trim().is_empty()
+                                    && UiBuilder::is_rect_hovered(
+                                        cpos,
+                                        create_r[0],
+                                        create_r[1],
+                                        create_r[2],
+                                        create_r[3],
+                                    )
+                                {
+                                    state.create_and_start_world(&name_input, &seed_input);
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    cancel_r[0],
+                                    cancel_r[1],
+                                    cancel_r[2],
+                                    cancel_r[3],
+                                ) {
+                                    state.refresh_saved_worlds();
+                                    let sel = if state.saved_worlds.is_empty() {
+                                        None
+                                    } else {
+                                        Some(0)
+                                    };
+                                    state.screen = AppScreen::WorldSelect {
+                                        selected_index: sel,
+                                    };
+                                } else {
+                                    let _ = focused_field;
+                                }
+                            }
+                            AppScreen::Paused { .. } => {
+                                let rects = UiBuilder::pause_menu_button_rects(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[0][0],
+                                    rects[0][1],
+                                    rects[0][2],
+                                    rects[0][3],
+                                ) {
+                                    // Back to Game
+                                    state.screen = AppScreen::InGame;
+                                    state.mouse_captured = true;
+                                    let _ = state
+                                        .window
+                                        .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                    state.window.set_cursor_visible(false);
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[1][0],
+                                    rects[1][1],
+                                    rects[1][2],
+                                    rects[1][3],
+                                ) {
+                                    // Save World
+                                    let ok = state.save_active_world();
+                                    state.screen = AppScreen::Paused {
+                                        status_message: Some(
+                                            if ok {
+                                                "World saved successfully!".to_string()
+                                            } else {
+                                                "Failed to save world.".to_string()
+                                            },
+                                        ),
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[2][0],
+                                    rects[2][1],
+                                    rects[2][2],
+                                    rects[2][3],
+                                ) {
+                                    // Settings
+                                    state.screen = AppScreen::Settings {
+                                        return_to_pause: true,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[3][0],
+                                    rects[3][1],
+                                    rects[3][2],
+                                    rects[3][3],
+                                ) {
+                                    // Save & Quit to Title
+                                    state.save_active_world();
+                                    state.active_world_metadata = None;
+                                    state.screen = AppScreen::Title;
+                                    state.mouse_captured = false;
+                                    let _ = state
+                                        .window
+                                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                    state.window.set_cursor_visible(true);
+                                }
+                            }
+                            AppScreen::Settings { return_to_pause } => {
+                                let back_r = UiBuilder::notice_back_button_rect(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    back_r[0],
+                                    back_r[1],
+                                    back_r[2],
+                                    back_r[3],
+                                ) {
+                                    state.screen = if return_to_pause {
+                                        AppScreen::Paused {
+                                            status_message: None,
+                                        }
+                                    } else {
+                                        AppScreen::Title
+                                    };
+                                }
+                            }
+                            AppScreen::MultiplayerNotice => {
+                                let back_r = UiBuilder::notice_back_button_rect(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    back_r[0],
+                                    back_r[1],
+                                    back_r[2],
+                                    back_r[3],
+                                ) {
+                                    state.screen = AppScreen::Title;
+                                }
+                            }
+                            AppScreen::InGame => {}
+                        }
+                    }
+                    return;
+                }
 
                 // If player is dead, left click on Respawn button respawns
                 if state.player_stats.is_dead {
@@ -727,6 +1248,109 @@ impl ApplicationHandler for BlockGameApp {
             } => {
                 let pressed = key_state == ElementState::Pressed;
 
+                // Handle keyboard input on non-gameplay screens (CreateWorld text entry, Esc navigation)
+                if state.screen != AppScreen::InGame {
+                    if !pressed {
+                        return;
+                    }
+                    match state.screen.clone() {
+                        AppScreen::CreateWorld {
+                            mut name_input,
+                            mut seed_input,
+                            mut focused_field,
+                        } => {
+                            if key == KeyCode::Tab {
+                                focused_field = (focused_field + 1) % 2;
+                                state.screen = AppScreen::CreateWorld {
+                                    name_input,
+                                    seed_input,
+                                    focused_field,
+                                };
+                            } else if key == KeyCode::Escape {
+                                state.refresh_saved_worlds();
+                                let sel = if state.saved_worlds.is_empty() {
+                                    None
+                                } else {
+                                    Some(0)
+                                };
+                                state.screen = AppScreen::WorldSelect {
+                                    selected_index: sel,
+                                };
+                            } else if key == KeyCode::Enter {
+                                if !name_input.trim().is_empty() {
+                                    state.create_and_start_world(&name_input, &seed_input);
+                                }
+                            } else if key == KeyCode::Backspace {
+                                if focused_field == 0 {
+                                    name_input.pop();
+                                } else {
+                                    seed_input.pop();
+                                }
+                                state.screen = AppScreen::CreateWorld {
+                                    name_input,
+                                    seed_input,
+                                    focused_field,
+                                };
+                            } else if let Some(t) = text {
+                                for ch in t.chars() {
+                                    if !ch.is_control() {
+                                        if focused_field == 0 && name_input.len() < 32 {
+                                            name_input.push(ch);
+                                        } else if focused_field == 1 && seed_input.len() < 32 {
+                                            seed_input.push(ch);
+                                        }
+                                    }
+                                }
+                                state.screen = AppScreen::CreateWorld {
+                                    name_input,
+                                    seed_input,
+                                    focused_field,
+                                };
+                            }
+                        }
+                        AppScreen::Paused { .. } => {
+                            if key == KeyCode::Escape {
+                                state.screen = AppScreen::InGame;
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
+                        }
+                        AppScreen::WorldSelect { selected_index } => {
+                            if key == KeyCode::Escape {
+                                state.screen = AppScreen::Title;
+                            } else if key == KeyCode::Enter {
+                                if let Some(idx) = selected_index {
+                                    if idx < state.saved_worlds.len() {
+                                        let folder = state.saved_worlds[idx].folder_name.clone();
+                                        state.load_and_start_world(&folder);
+                                    }
+                                }
+                            }
+                        }
+                        AppScreen::Settings { return_to_pause } => {
+                            if key == KeyCode::Escape {
+                                state.screen = if return_to_pause {
+                                    AppScreen::Paused {
+                                        status_message: None,
+                                    }
+                                } else {
+                                    AppScreen::Title
+                                };
+                            }
+                        }
+                        AppScreen::MultiplayerNotice => {
+                            if key == KeyCode::Escape {
+                                state.screen = AppScreen::Title;
+                            }
+                        }
+                        AppScreen::Title | AppScreen::InGame => {}
+                    }
+                    return;
+                }
+
                 // When dead, Space or Enter triggers respawn
                 if state.player_stats.is_dead {
                     if pressed && (key == KeyCode::Space || key == KeyCode::Enter) {
@@ -926,6 +1550,16 @@ impl ApplicationHandler for BlockGameApp {
                                 .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                             state.window.set_cursor_visible(false);
                         } else {
+                            // Open Pause Menu
+                            state.moving_forward = false;
+                            state.moving_backward = false;
+                            state.moving_left = false;
+                            state.moving_right = false;
+                            state.jumping = false;
+                            state.sprinting = false;
+                            state.screen = AppScreen::Paused {
+                                status_message: None,
+                            };
                             state.mouse_captured = false;
                             let _ = state
                                 .window
@@ -959,600 +1593,741 @@ impl ApplicationHandler for BlockGameApp {
                     .min(0.1);
                 state.last_frame_time = now;
 
-                // Update dynamic Day/Night celestial cycle
-                state.day_night.update(dt);
-                state.total_time += dt;
-
-                // 1. Calculate player wish direction relative to camera yaw
-                let forward =
-                    Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
-                let right =
-                    Vec3::new(-state.camera.yaw.sin(), 0.0, state.camera.yaw.cos()).normalize();
-
-                let mut wish_dir = Vec3::ZERO;
-                if !state.player_stats.is_dead {
-                    if state.moving_forward {
-                        wish_dir += forward;
-                    }
-                    if state.moving_backward {
-                        wish_dir -= forward;
-                    }
-                    if state.moving_right {
-                        wish_dir += right;
-                    }
-                    if state.moving_left {
-                        wish_dir -= right;
-                    }
-                    if wish_dir.length_squared() > 0.0 {
-                        wish_dir = wish_dir.normalize();
-                    }
-
-                    // If flying, vertical movement with Space / Shift
-                    if state.player.flying {
-                        if state.jumping {
-                            wish_dir.y += 1.0;
-                        }
-                    }
-                }
-
-                // 2. Step player physics against voxel world
-                let fall_damage = {
-                    let world_guard = state.world_manager.world().lock().unwrap();
-                    state.player.update(
-                        dt,
-                        wish_dir,
-                        state.sprinting,
-                        state.jumping,
-                        &world_guard,
-                        &self.registry,
-                    )
-                };
-
-                // Apply fall damage if landed on ground
-                if fall_damage > 0.0 && !state.player_stats.is_dead {
-                    state.player_stats.take_damage(fall_damage);
-                }
-
-                // Update walking distance & movement exhaustion (advances ONLY when moving)
-                let is_moving = (state.moving_forward
-                    || state.moving_backward
-                    || state.moving_left
-                    || state.moving_right)
-                    && (state.player.on_ground || state.player.flying);
-                let horiz_speed = (state.player.velocity.x * state.player.velocity.x
-                    + state.player.velocity.z * state.player.velocity.z)
-                    .sqrt();
-                if is_moving && horiz_speed > 0.1 && !state.player_stats.is_dead {
-                    state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
-                    if state.player.on_ground {
-                        state
-                            .player_stats
-                            .add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
-                    }
-                }
-
-                // Check if player's head is submerged in water for breath and drowning
-                let head_block_pos = IVec3::new(
-                    state.player.position.x.floor() as i32,
-                    (state.player.position.y + 1.62).floor() as i32,
-                    state.player.position.z.floor() as i32,
-                );
-                let (is_head_submerged, is_touching_cactus) = {
-                    let world = state.world_manager.world().lock().unwrap();
-                    let submerged = world.get_block(head_block_pos).is_water();
-                    let touching_cactus = state.player.is_touching_cactus(&world);
-                    (submerged, touching_cactus)
-                };
-
-                if is_touching_cactus {
-                    state.player_stats.take_damage(1.0);
-                }
-
-                // Update player stats (regeneration, starvation, void damage, breath/drowning)
-                state.player_stats.update(dt, state.player.position.y, is_head_submerged);
-
-                // Handle death transition and item scattering
-                if state.player_stats.is_dead {
-                    if !state.death_handled {
-                        state.death_handled = true;
-                        state.inventory_open = false;
-                        state.mouse_left_down = false;
-                        state.break_progress = 0.0;
-                        state.breaking_voxel = None;
-                        state.cracking_buffer = None;
-
-                        // Scatter all 36 inventory slots as item drops in world
-                        for slot in state.inventory.slots.iter_mut() {
-                            if !slot.is_empty() {
-                                let drop_slot = std::mem::replace(slot, ItemSlot::EMPTY);
-                                state
-                                    .world_manager
-                                    .spawn_item_drop(state.player.position, drop_slot);
-                            }
-                        }
-                        // Scatter crafting grid items
-                        for slot in state.crafting_grid.slots.drain(..) {
-                            if !slot.is_empty() {
-                                state
-                                    .world_manager
-                                    .spawn_item_drop(state.player.position, slot);
-                            }
-                        }
-                        // Scatter cursor held item
-                        if !state.cursor_held.is_empty() {
-                            let drop_slot =
-                                std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
-                            state
-                                .world_manager
-                                .spawn_item_drop(state.player.position, drop_slot);
-                        }
-
-                        // Unlock mouse so user can click the Respawn button
-                        state.mouse_captured = false;
-                        let _ = state
-                            .window
-                            .set_cursor_grab(winit::window::CursorGrabMode::None);
-                        state.window.set_cursor_visible(true);
-                    }
-                    // Cinematic death camera tilt
-                    let target_pitch = 28.0_f32.to_radians();
-                    state.camera.pitch = (state.camera.pitch + dt * 0.8).min(target_pitch);
-                }
-
-                // Update punch animation timer
-                let punch_time = if state.punch_timer > 0.0 {
-                    state.punch_timer = (state.punch_timer - dt).max(0.0);
-                    1.0 - (state.punch_timer / 0.25)
-                } else {
-                    0.0
-                };
-
-                // 3. Update Item Drops & Magnetism Pickup (only when alive)
-                if !state.player_stats.is_dead {
-                    let collected = state
-                        .world_manager
-                        .update_item_drops(dt, state.player.position);
-                    for item in collected {
-                        let overflow = state.inventory.add_item(item, &state.item_registry);
-                        if let Some(remaining) = overflow {
-                            state
-                                .world_manager
-                                .spawn_item_drop(state.player.position, remaining);
-                        }
-                    }
-                } else {
-                    let _ = state
-                        .world_manager
-                        .update_item_drops(dt, state.player.position);
-                }
-
-                // 3b. Update Animals & Planted Crops
-                let animal_drops = state.world_manager.update_animals(dt);
-                for (pos, drops) in animal_drops {
-                    for drop_slot in drops {
-                        state.world_manager.spawn_item_drop(pos, drop_slot);
-                    }
-                }
-                state
-                    .world_manager
-                    .update_crops(dt, &state.device, &state.pipeline);
-                state
-                    .world_manager
-                    .update_farmland(dt, &state.device, &state.pipeline);
-                state
-                    .world_manager
-                    .update_cacti(dt, &state.device, &state.pipeline);
-                state
-                    .world_manager
-                    .update_decaying_leaves(dt, &state.device, &state.pipeline);
-                state
-                    .world_manager
-                    .update_furnaces(dt, &state.device, &state.pipeline);
-                state
-                    .world_manager
-                    .update_falling_blocks(dt, &state.device, &state.pipeline);
-
-                // 4. Update Camera position and atmosphere uniform
-                state.camera.position = state.player.eye_position();
-                let aspect = state.surface_config.width as f32 / state.surface_config.height as f32;
-                let camera_block_pos = IVec3::new(
-                    state.camera.position.x.floor() as i32,
-                    state.camera.position.y.floor() as i32,
-                    state.camera.position.z.floor() as i32,
-                );
-                let is_camera_underwater = {
-                    let world = state.world_manager.world().lock().unwrap();
-                    world.get_block(camera_block_pos).is_water()
-                };
-                let player_pos = state.player.position;
-                let current_biome = state.world_manager.generator.get_biome(
-                    player_pos.x.floor() as i32,
-                    player_pos.z.floor() as i32,
-                    player_pos.y.floor() as i32,
-                );
-                let biome_fog = current_biome.fog_color();
-                let biome_tint = current_biome.sky_tint();
-                state.camera.update_uniform_with_atmosphere_water_tint(
-                    &mut state.camera_uniform,
-                    aspect,
-                    &state.day_night,
-                    is_camera_underwater,
-                    biome_fog,
-                    biome_tint,
-                );
-                state
-                    .pipeline
-                    .update_camera(&state.queue, &state.camera_uniform);
-
-                // 5. Perform Fast Voxel Traversal (DDA) raycast from crosshair
-                {
-                    let world_guard = state.world_manager.world().lock().unwrap();
-                    let held_item = state.inventory.get(state.active_hotbar_slot).item_id;
-                    let is_placeable = state
-                        .item_registry
-                        .get(held_item)
-                        .and_then(|d| d.placeable_block)
-                        .is_some();
-                    let is_bucket = held_item == ItemId::BUCKET || held_item == ItemId::WATER_BUCKET;
-                    let mut hit = raycast_voxel_with_water(
-                        state.camera.position,
-                        state.camera.forward(),
-                        5.0, // 5 blocks reach
-                        &world_guard,
-                        &self.registry,
-                        held_item == ItemId::LILY_PAD || held_item == ItemId::BUCKET,
-                    );
-                    if hit.is_none() && (is_placeable || is_bucket) {
-                        hit = raycast_voxel_with_water(
-                            state.camera.position,
-                            state.camera.forward(),
-                            5.0,
-                            &world_guard,
-                            &self.registry,
-                            true,
-                        );
-                    }
-
-                    if let Some(h) = hit {
-                        // Recreate wireframe buffer if target voxel changed
-                        if state.targeted_block.map(|t| t.hit_voxel) != Some(h.hit_voxel) {
-                            let block = world_guard.get_block(h.hit_voxel);
-                            let wire_buf = if block == BlockId::TORCH {
-                                WireframePipeline::create_custom_box_buffer(
-                                    &state.device,
-                                    h.hit_voxel,
-                                    Vec3::new(0.35, 0.0, 0.35),
-                                    Vec3::new(0.65, 0.65, 0.65),
-                                )
-                            } else {
-                                WireframePipeline::create_box_buffer(&state.device, h.hit_voxel)
-                            };
-                            state.wireframe_buffer = Some(wire_buf);
-                        }
-                        state.targeted_block = Some(h);
-                    } else {
-                        state.targeted_block = None;
-                        state.wireframe_buffer = None;
-                    }
-                }
-
-                // 5b. Process hold-to-break mining mechanics
-                if state.mouse_left_down
-                    && state.mouse_captured
-                    && !state.inventory_open
-                    && !state.player_stats.is_dead
-                {
-                    if state.punch_timer <= 0.05 {
-                        state.punch_timer = 0.25; // Continuous swing loop while holding down break
-                    }
-
-                    if let Some(hit) = state.targeted_block {
-                        let target_voxel = hit.hit_voxel;
-                        if state.breaking_voxel != Some(target_voxel) {
-                            state.breaking_voxel = Some(target_voxel);
-                            state.break_progress = 0.0;
-                            state.cracking_buffer = None;
-                        }
-
-                        let block_at_voxel = {
-                            let world_guard = state.world_manager.world().lock().unwrap();
-                            world_guard.get_block(target_voxel)
-                        };
-
-                        if block_at_voxel.is_air() {
-                            state.breaking_voxel = None;
-                            state.break_progress = 0.0;
-                            state.cracking_buffer = None;
-                        } else {
-                            let held_slot = state.inventory.get(state.active_hotbar_slot);
-                            let (held_tool_type, held_tool_tier) =
-                                if let Some(def) = state.item_registry.get(held_slot.item_id) {
-                                    (def.tool_type, def.tool_tier.unwrap_or(ToolTier::None))
-                                } else {
-                                    (None, ToolTier::None)
-                                };
-
-                            let break_time = self.registry.get_break_time(
-                                block_at_voxel,
-                                held_tool_type,
-                                held_tool_tier,
-                            );
-                            if break_time.is_infinite() {
-                                state.break_progress = 0.0;
-                                state.cracking_buffer = None;
-                            } else {
-                                state.break_progress += dt / break_time;
-                                if state.break_progress >= 1.0 {
-                                    // Block break completed!
-                                    if let Some(broken) = state.world_manager.break_block(
-                                        target_voxel,
-                                        &state.device,
-                                        &state.pipeline,
-                                    ) {
-                                        state.player_stats.add_exhaustion(0.025);
-                                        if let Some((drop_item, drop_count)) = self
-                                            .registry
-                                            .get_drop(broken, held_tool_type, held_tool_tier)
-                                        {
-                                            state.world_manager.spawn_item_drop(
-                                                target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
-                                                ItemSlot::new(drop_item, drop_count),
-                                            );
-                                        }
-                                        // 15% chance to drop Apple from Leaves
-                                        if broken == BlockId::LEAVES {
-                                            let hash = (target_voxel.x.wrapping_mul(73856093)
-                                                ^ target_voxel.y.wrapping_mul(19349663)
-                                                ^ target_voxel.z.wrapping_mul(83492791))
-                                                % 100;
-                                            if hash.abs() < 15 {
-                                                state.world_manager.spawn_item_drop(
-                                                    target_voxel.as_vec3()
-                                                        + Vec3::new(0.5, 0.5, 0.5),
-                                                    ItemSlot::new(ItemId::APPLE, 1),
-                                                );
-                                            }
-                                        }
-                                        // 12% chance to drop Wheat Seeds from Grass
-                                        if broken == BlockId::GRASS {
-                                            let hash = (target_voxel.x.wrapping_mul(87654321)
-                                                ^ target_voxel.y.wrapping_mul(23456789)
-                                                ^ target_voxel.z.wrapping_mul(98765432))
-                                                % 100;
-                                            if hash.abs() < 12 {
-                                                state.world_manager.spawn_item_drop(
-                                                    target_voxel.as_vec3()
-                                                        + Vec3::new(0.5, 0.5, 0.5),
-                                                    ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
-                                                );
-                                            }
-                                        }
-                                        // Ripe Wheat Crop drops additional 1..2 seeds
-                                        if broken == BlockId::WHEAT_3 {
-                                            let hash = (target_voxel.x.wrapping_mul(1234567)
-                                                ^ target_voxel.z.wrapping_mul(7654321))
-                                                % 2;
-                                            let seed_count = (hash.abs() + 1) as u16;
-                                            state.world_manager.spawn_item_drop(
-                                                target_voxel.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
-                                                ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
-                                            );
-                                        }
-                                    }
-                                    state.breaking_voxel = None;
-                                    state.break_progress = 0.0;
-                                    state.cracking_buffer = None;
-                                } else {
-                                    let stage =
-                                        ((state.break_progress * 10.0).floor() as usize).min(9);
-                                    let (crack_buf, count) =
-                                        WireframePipeline::create_cracking_box_buffer(
-                                            &state.device,
-                                            target_voxel,
-                                            stage,
-                                        );
-                                    state.cracking_buffer = Some((crack_buf, count));
-                                }
-                            }
-                        }
-                    } else {
-                        state.breaking_voxel = None;
-                        state.break_progress = 0.0;
-                        state.cracking_buffer = None;
-                    }
-                } else if state.breaking_voxel.is_some() {
-                    state.breaking_voxel = None;
-                    state.break_progress = 0.0;
-                    state.cracking_buffer = None;
-                }
-
-                // 6. Update chunk streaming around player
-                state
-                    .world_manager
-                    .update(state.player.position, &state.device, &state.pipeline);
-
-                if let Some(furnace_pos) = state.active_furnace_pos {
-                    let dist_sq = (state.player.position
-                        - (furnace_pos.as_vec3() + Vec3::splat(0.5)))
-                    .length_squared();
-                    if dist_sq > 36.0 {
-                        state.active_furnace_pos = None;
-                        state.inventory_open = false;
-                        state.mouse_captured = true;
-                        let _ = state
-                            .window
-                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                        state.window.set_cursor_visible(false);
-                    }
-                }
-
-                if let Some(chest_pos) = state.active_chest_pos {
-                    let dist_sq = (state.player.position
-                        - (chest_pos.as_vec3() + Vec3::splat(0.5)))
-                    .length_squared();
-                    if dist_sq > 36.0 {
-                        state.active_chest_pos = None;
-                        state.inventory_open = false;
-                        state.mouse_captured = true;
-                        let _ = state
-                            .window
-                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                        state.window.set_cursor_visible(false);
-                    }
-                }
-
-                // 7. Build 2D UI Overlay (HUD or Inventory/Crafting Screen)
                 let screen_w = state.surface_config.width as f32;
                 let screen_h = state.surface_config.height as f32;
+                let aspect = screen_w / screen_h;
                 state
                     .ui_pipeline
                     .update_screen_size(&state.queue, screen_w, screen_h);
 
-                if state.inventory_open {
-                    // 1. Prepare JEI Item Index Catalog & Filter
-                    let search_lower = state.jei_search_text.trim().to_lowercase();
-                    let catalog: Vec<ItemId> = state
-                        .item_registry
-                        .all_items()
-                        .into_iter()
-                        .filter(|def| {
-                            if search_lower.is_empty() {
-                                true
-                            } else {
-                                def.display_name.to_lowercase().contains(&search_lower)
+                if state.screen == AppScreen::InGame {
+                    // Update dynamic Day/Night celestial cycle
+                    state.day_night.update(dt);
+                    state.total_time += dt;
+
+                    // 1. Calculate player wish direction relative to camera yaw
+                    let forward =
+                        Vec3::new(state.camera.yaw.cos(), 0.0, state.camera.yaw.sin()).normalize();
+                    let right =
+                        Vec3::new(-state.camera.yaw.sin(), 0.0, state.camera.yaw.cos()).normalize();
+
+                    let mut wish_dir = Vec3::ZERO;
+                    if !state.player_stats.is_dead {
+                        if state.moving_forward {
+                            wish_dir += forward;
+                        }
+                        if state.moving_backward {
+                            wish_dir -= forward;
+                        }
+                        if state.moving_right {
+                            wish_dir += right;
+                        }
+                        if state.moving_left {
+                            wish_dir -= right;
+                        }
+                        if wish_dir.length_squared() > 0.0 {
+                            wish_dir = wish_dir.normalize();
+                        }
+
+                        // If flying, vertical movement with Space / Shift
+                        if state.player.flying {
+                            if state.jumping {
+                                wish_dir.y += 1.0;
                             }
-                        })
-                        .map(|def| def.id)
-                        .collect();
-                    let items_per_page = 6 * 8;
-                    let total_pages =
-                        ((catalog.len() + items_per_page - 1) / items_per_page).max(1);
-                    if state.jei_page >= total_pages {
-                        state.jei_page = total_pages.saturating_sub(1);
+                        }
                     }
 
-                    let jei_params = blockgame_render::ui::JeiParams {
-                        catalog_items: &catalog,
-                        page: state.jei_page,
-                        total_pages,
-                        search_query: &state.jei_search_text,
-                        search_focused: state.jei_search_focused,
+                    // 2. Step player physics against voxel world
+                    let fall_damage = {
+                        let world_guard = state.world_manager.world().lock().unwrap();
+                        state.player.update(
+                            dt,
+                            wish_dir,
+                            state.sprinting,
+                            state.jumping,
+                            &world_guard,
+                            &self.registry,
+                        )
                     };
 
-                    // 2. Prepare Recipe Modal State if active
-                    let display_recipe_storage: Option<blockgame_core::crafting::DisplayRecipe>;
-                    let mut modal_params: Option<blockgame_render::ui::RecipeModalParams> = None;
-                    if let Some(m) = &state.jei_recipe_modal {
-                        let recipes = if m.is_usage_mode {
+                    // Apply fall damage if landed on ground
+                    if fall_damage > 0.0 && !state.player_stats.is_dead {
+                        state.player_stats.take_damage(fall_damage);
+                    }
+
+                    // Update walking distance & movement exhaustion (advances ONLY when moving)
+                    let is_moving = (state.moving_forward
+                        || state.moving_backward
+                        || state.moving_left
+                        || state.moving_right)
+                        && (state.player.on_ground || state.player.flying);
+                    let horiz_speed = (state.player.velocity.x * state.player.velocity.x
+                        + state.player.velocity.z * state.player.velocity.z)
+                        .sqrt();
+                    if is_moving && horiz_speed > 0.1 && !state.player_stats.is_dead {
+                        state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
+                        if state.player.on_ground {
                             state
-                                .crafting_manager
-                                .get_recipes_using_input(m.target_item)
-                        } else {
-                            state.crafting_manager.get_recipes_for_output(m.target_item)
-                        };
-                        let total_rec = recipes.len();
-                        if total_rec > 0 {
-                            let clamped_idx = m.recipe_index.min(total_rec - 1);
-                            display_recipe_storage = Some(recipes[clamped_idx].clone());
-                        } else {
-                            let item_name = state
-                                .item_registry
-                                .get(m.target_item)
-                                .map(|d| d.display_name)
-                                .unwrap_or("Item");
-                            display_recipe_storage =
-                                Some(blockgame_core::crafting::DisplayRecipe {
-                                    name: item_name,
-                                    category: blockgame_core::crafting::RecipeCategory::WorldGen,
-                                    inputs: [None; 9],
-                                    output: ItemSlot::new(m.target_item, 1),
-                                });
-                        }
-                        if let Some(ref disp) = display_recipe_storage {
-                            modal_params = Some(blockgame_render::ui::RecipeModalParams {
-                                target_item: m.target_item,
-                                recipe: disp,
-                                recipe_index: m.recipe_index.min(total_rec.max(1) - 1),
-                                total_recipes: total_rec.max(1),
-                                is_usage_mode: m.is_usage_mode,
-                            });
+                                .player_stats
+                                .add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
                         }
                     }
 
-                    if let Some(furnace_pos) = state.active_furnace_pos {
-                        let furnace = {
-                            let world_guard = state.world_manager.world().lock().unwrap();
-                            world_guard
-                                .get_furnace(furnace_pos)
-                                .cloned()
-                                .unwrap_or_default()
-                        };
-                        UiBuilder::build_furnace_screen(
-                            &mut state.ui_mesh,
-                            screen_w,
-                            screen_h,
-                            &furnace,
-                            &state.inventory,
-                            state.active_hotbar_slot,
-                            &state.cursor_held,
-                            state.cursor_pos,
-                            &state.item_registry,
-                            Some(&jei_params),
-                            modal_params.as_ref(),
-                        );
-                    } else if let Some(chest_pos) = state.active_chest_pos {
-                        let chest_slots = {
-                            let world_guard = state.world_manager.world().lock().unwrap();
-                            world_guard
-                                .get_chest(chest_pos)
-                                .cloned()
-                                .unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
-                        };
-                        UiBuilder::build_chest_screen(
-                            &mut state.ui_mesh,
-                            screen_w,
-                            screen_h,
-                            &chest_slots,
-                            &state.inventory,
-                            state.active_hotbar_slot,
-                            &state.cursor_held,
-                            state.cursor_pos,
-                            &state.item_registry,
-                            Some(&jei_params),
-                            modal_params.as_ref(),
-                        );
+                    // Check if player's head is submerged in water for breath and drowning
+                    let head_block_pos = IVec3::new(
+                        state.player.position.x.floor() as i32,
+                        (state.player.position.y + 1.62).floor() as i32,
+                        state.player.position.z.floor() as i32,
+                    );
+                    let (is_head_submerged, is_touching_cactus) = {
+                        let world = state.world_manager.world().lock().unwrap();
+                        let submerged = world.get_block(head_block_pos).is_water();
+                        let touching_cactus = state.player.is_touching_cactus(&world);
+                        (submerged, touching_cactus)
+                    };
+
+                    if is_touching_cactus {
+                        state.player_stats.take_damage(1.0);
+                    }
+
+                    // Update player stats (regeneration, starvation, void damage, breath/drowning)
+                    state
+                        .player_stats
+                        .update(dt, state.player.position.y, is_head_submerged);
+
+                    // Handle death transition and item scattering
+                    if state.player_stats.is_dead {
+                        if !state.death_handled {
+                            state.death_handled = true;
+                            state.inventory_open = false;
+                            state.mouse_left_down = false;
+                            state.break_progress = 0.0;
+                            state.breaking_voxel = None;
+                            state.cracking_buffer = None;
+
+                            // Scatter all 36 inventory slots as item drops in world
+                            for slot in state.inventory.slots.iter_mut() {
+                                if !slot.is_empty() {
+                                    let drop_slot = std::mem::replace(slot, ItemSlot::EMPTY);
+                                    state
+                                        .world_manager
+                                        .spawn_item_drop(state.player.position, drop_slot);
+                                }
+                            }
+                            // Scatter crafting grid items
+                            for slot in state.crafting_grid.slots.drain(..) {
+                                if !slot.is_empty() {
+                                    state
+                                        .world_manager
+                                        .spawn_item_drop(state.player.position, slot);
+                                }
+                            }
+                            // Scatter cursor held item
+                            if !state.cursor_held.is_empty() {
+                                let drop_slot =
+                                    std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                                state
+                                    .world_manager
+                                    .spawn_item_drop(state.player.position, drop_slot);
+                            }
+
+                            // Unlock mouse so user can click the Respawn button
+                            state.mouse_captured = false;
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None);
+                            state.window.set_cursor_visible(true);
+                        }
+                        // Cinematic death camera tilt
+                        let target_pitch = 28.0_f32.to_radians();
+                        state.camera.pitch = (state.camera.pitch + dt * 0.8).min(target_pitch);
+                    }
+
+                    // Update punch animation timer
+                    let punch_time = if state.punch_timer > 0.0 {
+                        state.punch_timer = (state.punch_timer - dt).max(0.0);
+                        1.0 - (state.punch_timer / 0.25)
                     } else {
-                        state.crafting_result = state
-                            .crafting_manager
-                            .find_match(&state.crafting_grid)
-                            .map(|(_, out)| out);
-                        UiBuilder::build_inventory_screen(
+                        0.0
+                    };
+
+                    // 3. Update Item Drops & Magnetism Pickup (only when alive)
+                    if !state.player_stats.is_dead {
+                        let collected = state
+                            .world_manager
+                            .update_item_drops(dt, state.player.position);
+                        for item in collected {
+                            let overflow = state.inventory.add_item(item, &state.item_registry);
+                            if let Some(remaining) = overflow {
+                                state
+                                    .world_manager
+                                    .spawn_item_drop(state.player.position, remaining);
+                            }
+                        }
+                    } else {
+                        let _ = state
+                            .world_manager
+                            .update_item_drops(dt, state.player.position);
+                    }
+
+                    // 3b. Update Animals & Planted Crops
+                    let animal_drops = state.world_manager.update_animals(dt);
+                    for (pos, drops) in animal_drops {
+                        for drop_slot in drops {
+                            state.world_manager.spawn_item_drop(pos, drop_slot);
+                        }
+                    }
+                    state
+                        .world_manager
+                        .update_crops(dt, &state.device, &state.pipeline);
+                    state
+                        .world_manager
+                        .update_farmland(dt, &state.device, &state.pipeline);
+                    state
+                        .world_manager
+                        .update_cacti(dt, &state.device, &state.pipeline);
+                    state
+                        .world_manager
+                        .update_decaying_leaves(dt, &state.device, &state.pipeline);
+                    state
+                        .world_manager
+                        .update_furnaces(dt, &state.device, &state.pipeline);
+                    state
+                        .world_manager
+                        .update_falling_blocks(dt, &state.device, &state.pipeline);
+
+                    // 4. Update Camera position and atmosphere uniform
+                    state.camera.position = state.player.eye_position();
+                    let camera_block_pos = IVec3::new(
+                        state.camera.position.x.floor() as i32,
+                        state.camera.position.y.floor() as i32,
+                        state.camera.position.z.floor() as i32,
+                    );
+                    let is_camera_underwater = {
+                        let world = state.world_manager.world().lock().unwrap();
+                        world.get_block(camera_block_pos).is_water()
+                    };
+                    let player_pos = state.player.position;
+                    let current_biome = state.world_manager.generator.get_biome(
+                        player_pos.x.floor() as i32,
+                        player_pos.z.floor() as i32,
+                        player_pos.y.floor() as i32,
+                    );
+                    let biome_fog = current_biome.fog_color();
+                    let biome_tint = current_biome.sky_tint();
+                    state.camera.update_uniform_with_atmosphere_water_tint(
+                        &mut state.camera_uniform,
+                        aspect,
+                        &state.day_night,
+                        is_camera_underwater,
+                        biome_fog,
+                        biome_tint,
+                    );
+                    state
+                        .pipeline
+                        .update_camera(&state.queue, &state.camera_uniform);
+
+                    // 5. Perform Fast Voxel Traversal (DDA) raycast from crosshair
+                    {
+                        let world_guard = state.world_manager.world().lock().unwrap();
+                        let held_item = state.inventory.get(state.active_hotbar_slot).item_id;
+                        let is_placeable = state
+                            .item_registry
+                            .get(held_item)
+                            .and_then(|d| d.placeable_block)
+                            .is_some();
+                        let is_bucket =
+                            held_item == ItemId::BUCKET || held_item == ItemId::WATER_BUCKET;
+                        let mut hit = raycast_voxel_with_water(
+                            state.camera.position,
+                            state.camera.forward(),
+                            5.0, // 5 blocks reach
+                            &world_guard,
+                            &self.registry,
+                            held_item == ItemId::LILY_PAD || held_item == ItemId::BUCKET,
+                        );
+                        if hit.is_none() && (is_placeable || is_bucket) {
+                            hit = raycast_voxel_with_water(
+                                state.camera.position,
+                                state.camera.forward(),
+                                5.0,
+                                &world_guard,
+                                &self.registry,
+                                true,
+                            );
+                        }
+
+                        if let Some(h) = hit {
+                            // Recreate wireframe buffer if target voxel changed
+                            if state.targeted_block.map(|t| t.hit_voxel) != Some(h.hit_voxel) {
+                                let block = world_guard.get_block(h.hit_voxel);
+                                let wire_buf = if block == BlockId::TORCH {
+                                    WireframePipeline::create_custom_box_buffer(
+                                        &state.device,
+                                        h.hit_voxel,
+                                        Vec3::new(0.35, 0.0, 0.35),
+                                        Vec3::new(0.65, 0.65, 0.65),
+                                    )
+                                } else {
+                                    WireframePipeline::create_box_buffer(&state.device, h.hit_voxel)
+                                };
+                                state.wireframe_buffer = Some(wire_buf);
+                            }
+                            state.targeted_block = Some(h);
+                        } else {
+                            state.targeted_block = None;
+                            state.wireframe_buffer = None;
+                        }
+                    }
+
+                    // 5b. Process hold-to-break mining mechanics
+                    if state.mouse_left_down
+                        && state.mouse_captured
+                        && !state.inventory_open
+                        && !state.player_stats.is_dead
+                    {
+                        if state.punch_timer <= 0.05 {
+                            state.punch_timer = 0.25; // Continuous swing loop while holding down break
+                        }
+
+                        if let Some(hit) = state.targeted_block {
+                            let target_voxel = hit.hit_voxel;
+                            if state.breaking_voxel != Some(target_voxel) {
+                                state.breaking_voxel = Some(target_voxel);
+                                state.break_progress = 0.0;
+                                state.cracking_buffer = None;
+                            }
+
+                            let block_at_voxel = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                world_guard.get_block(target_voxel)
+                            };
+
+                            if block_at_voxel.is_air() {
+                                state.breaking_voxel = None;
+                                state.break_progress = 0.0;
+                                state.cracking_buffer = None;
+                            } else {
+                                let held_slot = state.inventory.get(state.active_hotbar_slot);
+                                let (held_tool_type, held_tool_tier) =
+                                    if let Some(def) = state.item_registry.get(held_slot.item_id) {
+                                        (def.tool_type, def.tool_tier.unwrap_or(ToolTier::None))
+                                    } else {
+                                        (None, ToolTier::None)
+                                    };
+
+                                let break_time = self.registry.get_break_time(
+                                    block_at_voxel,
+                                    held_tool_type,
+                                    held_tool_tier,
+                                );
+                                if break_time.is_infinite() {
+                                    state.break_progress = 0.0;
+                                    state.cracking_buffer = None;
+                                } else {
+                                    state.break_progress += dt / break_time;
+                                    if state.break_progress >= 1.0 {
+                                        // Block break completed!
+                                        if let Some(broken) = state.world_manager.break_block(
+                                            target_voxel,
+                                            &state.device,
+                                            &state.pipeline,
+                                        ) {
+                                            state.player_stats.add_exhaustion(0.025);
+                                            if let Some((drop_item, drop_count)) = self
+                                                .registry
+                                                .get_drop(broken, held_tool_type, held_tool_tier)
+                                            {
+                                                state.world_manager.spawn_item_drop(
+                                                    target_voxel.as_vec3()
+                                                        + Vec3::new(0.5, 0.5, 0.5),
+                                                    ItemSlot::new(drop_item, drop_count),
+                                                );
+                                            }
+                                            // 15% chance to drop Apple from Leaves
+                                            if broken == BlockId::LEAVES {
+                                                let hash = (target_voxel.x.wrapping_mul(73856093)
+                                                    ^ target_voxel.y.wrapping_mul(19349663)
+                                                    ^ target_voxel.z.wrapping_mul(83492791))
+                                                    % 100;
+                                                if hash.abs() < 15 {
+                                                    state.world_manager.spawn_item_drop(
+                                                        target_voxel.as_vec3()
+                                                            + Vec3::new(0.5, 0.5, 0.5),
+                                                        ItemSlot::new(ItemId::APPLE, 1),
+                                                    );
+                                                }
+                                            }
+                                            // 12% chance to drop Wheat Seeds from Grass
+                                            if broken == BlockId::GRASS {
+                                                let hash = (target_voxel.x.wrapping_mul(87654321)
+                                                    ^ target_voxel.y.wrapping_mul(23456789)
+                                                    ^ target_voxel.z.wrapping_mul(98765432))
+                                                    % 100;
+                                                if hash.abs() < 12 {
+                                                    state.world_manager.spawn_item_drop(
+                                                        target_voxel.as_vec3()
+                                                            + Vec3::new(0.5, 0.5, 0.5),
+                                                        ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
+                                                    );
+                                                }
+                                            }
+                                            // Ripe Wheat Crop drops additional 1..2 seeds
+                                            if broken == BlockId::WHEAT_3 {
+                                                let hash = (target_voxel.x.wrapping_mul(1234567)
+                                                    ^ target_voxel.z.wrapping_mul(7654321))
+                                                    % 2;
+                                                let seed_count = (hash.abs() + 1) as u16;
+                                                state.world_manager.spawn_item_drop(
+                                                    target_voxel.as_vec3()
+                                                        + Vec3::new(0.5, 0.5, 0.5),
+                                                    ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
+                                                );
+                                            }
+                                        }
+                                        state.breaking_voxel = None;
+                                        state.break_progress = 0.0;
+                                        state.cracking_buffer = None;
+                                    } else {
+                                        let stage =
+                                            ((state.break_progress * 10.0).floor() as usize).min(9);
+                                        let (crack_buf, count) =
+                                            WireframePipeline::create_cracking_box_buffer(
+                                                &state.device,
+                                                target_voxel,
+                                                stage,
+                                            );
+                                        state.cracking_buffer = Some((crack_buf, count));
+                                    }
+                                }
+                            }
+                        } else {
+                            state.breaking_voxel = None;
+                            state.break_progress = 0.0;
+                            state.cracking_buffer = None;
+                        }
+                    } else if state.breaking_voxel.is_some() {
+                        state.breaking_voxel = None;
+                        state.break_progress = 0.0;
+                        state.cracking_buffer = None;
+                    }
+
+                    // 6. Update chunk streaming around player
+                    state
+                        .world_manager
+                        .update(state.player.position, &state.device, &state.pipeline);
+
+                    if let Some(furnace_pos) = state.active_furnace_pos {
+                        let dist_sq = (state.player.position
+                            - (furnace_pos.as_vec3() + Vec3::splat(0.5)))
+                        .length_squared();
+                        if dist_sq > 36.0 {
+                            state.active_furnace_pos = None;
+                            state.inventory_open = false;
+                            state.mouse_captured = true;
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                            state.window.set_cursor_visible(false);
+                        }
+                    }
+
+                    if let Some(chest_pos) = state.active_chest_pos {
+                        let dist_sq = (state.player.position
+                            - (chest_pos.as_vec3() + Vec3::splat(0.5)))
+                        .length_squared();
+                        if dist_sq > 36.0 {
+                            state.active_chest_pos = None;
+                            state.inventory_open = false;
+                            state.mouse_captured = true;
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                            state.window.set_cursor_visible(false);
+                        }
+                    }
+
+                    // 7. Build 2D UI Overlay (HUD or Inventory/Crafting Screen)
+                    if state.inventory_open {
+                        // 1. Prepare JEI Item Index Catalog & Filter
+                        let search_lower = state.jei_search_text.trim().to_lowercase();
+                        let catalog: Vec<ItemId> = state
+                            .item_registry
+                            .all_items()
+                            .into_iter()
+                            .filter(|def| {
+                                if search_lower.is_empty() {
+                                    true
+                                } else {
+                                    def.display_name.to_lowercase().contains(&search_lower)
+                                }
+                            })
+                            .map(|def| def.id)
+                            .collect();
+                        let items_per_page = 6 * 8;
+                        let total_pages =
+                            ((catalog.len() + items_per_page - 1) / items_per_page).max(1);
+                        if state.jei_page >= total_pages {
+                            state.jei_page = total_pages.saturating_sub(1);
+                        }
+
+                        let jei_params = blockgame_render::ui::JeiParams {
+                            catalog_items: &catalog,
+                            page: state.jei_page,
+                            total_pages,
+                            search_query: &state.jei_search_text,
+                            search_focused: state.jei_search_focused,
+                        };
+
+                        // 2. Prepare Recipe Modal State if active
+                        let display_recipe_storage: Option<blockgame_core::crafting::DisplayRecipe>;
+                        let mut modal_params: Option<blockgame_render::ui::RecipeModalParams> =
+                            None;
+                        if let Some(m) = &state.jei_recipe_modal {
+                            let recipes = if m.is_usage_mode {
+                                state
+                                    .crafting_manager
+                                    .get_recipes_using_input(m.target_item)
+                            } else {
+                                state.crafting_manager.get_recipes_for_output(m.target_item)
+                            };
+                            let total_rec = recipes.len();
+                            if total_rec > 0 {
+                                let clamped_idx = m.recipe_index.min(total_rec - 1);
+                                display_recipe_storage = Some(recipes[clamped_idx].clone());
+                            } else {
+                                let item_name = state
+                                    .item_registry
+                                    .get(m.target_item)
+                                    .map(|d| d.display_name)
+                                    .unwrap_or("Item");
+                                display_recipe_storage =
+                                    Some(blockgame_core::crafting::DisplayRecipe {
+                                        name: item_name,
+                                        category:
+                                            blockgame_core::crafting::RecipeCategory::WorldGen,
+                                        inputs: [None; 9],
+                                        output: ItemSlot::new(m.target_item, 1),
+                                    });
+                            }
+                            if let Some(ref disp) = display_recipe_storage {
+                                modal_params = Some(blockgame_render::ui::RecipeModalParams {
+                                    target_item: m.target_item,
+                                    recipe: disp,
+                                    recipe_index: m.recipe_index.min(total_rec.max(1) - 1),
+                                    total_recipes: total_rec.max(1),
+                                    is_usage_mode: m.is_usage_mode,
+                                });
+                            }
+                        }
+
+                        if let Some(furnace_pos) = state.active_furnace_pos {
+                            let furnace = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                world_guard
+                                    .get_furnace(furnace_pos)
+                                    .cloned()
+                                    .unwrap_or_default()
+                            };
+                            UiBuilder::build_furnace_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &furnace,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                state.cursor_pos,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if let Some(chest_pos) = state.active_chest_pos {
+                            let chest_slots = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                world_guard
+                                    .get_chest(chest_pos)
+                                    .cloned()
+                                    .unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
+                            };
+                            UiBuilder::build_chest_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &chest_slots,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                state.cursor_pos,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else {
+                            state.crafting_result = state
+                                .crafting_manager
+                                .find_match(&state.crafting_grid)
+                                .map(|(_, out)| out);
+                            UiBuilder::build_inventory_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.crafting_grid,
+                                state.crafting_result,
+                                &state.cursor_held,
+                                state.cursor_pos,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        }
+                    } else {
+                        UiBuilder::build_hud(
                             &mut state.ui_mesh,
                             screen_w,
                             screen_h,
                             &state.inventory,
                             state.active_hotbar_slot,
-                            &state.crafting_grid,
-                            state.crafting_result,
-                            &state.cursor_held,
-                            state.cursor_pos,
                             &state.item_registry,
-                            Some(&jei_params),
-                            modal_params.as_ref(),
+                            state.walk_distance,
+                            punch_time,
+                            &state.player_stats,
                         );
                     }
-                } else {
-                    UiBuilder::build_hud(
+                } else if let AppScreen::Paused { ref status_message } = state.screen {
+                    // Game is paused: keep camera at player eye position without stepping simulation
+                    state.camera.position = state.player.eye_position();
+                    let camera_block_pos = IVec3::new(
+                        state.camera.position.x.floor() as i32,
+                        state.camera.position.y.floor() as i32,
+                        state.camera.position.z.floor() as i32,
+                    );
+                    let is_camera_underwater = {
+                        let world = state.world_manager.world().lock().unwrap();
+                        world.get_block(camera_block_pos).is_water()
+                    };
+                    let player_pos = state.player.position;
+                    let current_biome = state.world_manager.generator.get_biome(
+                        player_pos.x.floor() as i32,
+                        player_pos.z.floor() as i32,
+                        player_pos.y.floor() as i32,
+                    );
+                    let biome_fog = current_biome.fog_color();
+                    let biome_tint = current_biome.sky_tint();
+                    state.camera.update_uniform_with_atmosphere_water_tint(
+                        &mut state.camera_uniform,
+                        aspect,
+                        &state.day_night,
+                        is_camera_underwater,
+                        biome_fog,
+                        biome_tint,
+                    );
+                    state
+                        .pipeline
+                        .update_camera(&state.queue, &state.camera_uniform);
+
+                    UiBuilder::build_pause_menu(
                         &mut state.ui_mesh,
                         screen_w,
                         screen_h,
-                        &state.inventory,
-                        state.active_hotbar_slot,
-                        &state.item_registry,
-                        state.walk_distance,
-                        punch_time,
-                        &state.player_stats,
+                        state.cursor_pos,
+                        status_message.as_deref(),
                     );
+                } else {
+                    // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerNotice):
+                    // Slowly orbit camera over the 3D terrain as a live panoramic background
+                    state.total_time += dt;
+                    let angle = state.total_time * 0.12;
+                    state.camera.position = Vec3::new(
+                        angle.cos() * 24.0,
+                        (state.player.position.y + 18.0).max(58.0),
+                        angle.sin() * 24.0,
+                    );
+                    state.camera.yaw = angle + std::f32::consts::PI;
+                    state.camera.pitch = -0.24;
+                    state.camera.update_uniform_with_atmosphere(
+                        &mut state.camera_uniform,
+                        aspect,
+                        &state.day_night,
+                    );
+                    state
+                        .pipeline
+                        .update_camera(&state.queue, &state.camera_uniform);
+                    state.targeted_block = None;
+                    state.wireframe_buffer = None;
+                    state.cracking_buffer = None;
+
+                    match &state.screen {
+                        AppScreen::Title => {
+                            UiBuilder::build_title_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                state.cursor_pos,
+                            );
+                        }
+                        AppScreen::WorldSelect { selected_index } => {
+                            UiBuilder::build_world_select_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &state.saved_worlds,
+                                *selected_index,
+                                state.cursor_pos,
+                            );
+                        }
+                        AppScreen::CreateWorld {
+                            name_input,
+                            seed_input,
+                            focused_field,
+                        } => {
+                            UiBuilder::build_create_world_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                name_input,
+                                seed_input,
+                                *focused_field,
+                                state.cursor_pos,
+                            );
+                        }
+                        AppScreen::Settings { .. } => {
+                            let render_dist_line =
+                                format!("Render Distance: {} chunks", state.render_distance);
+                            let lines = [
+                                render_dist_line.as_str(),
+                                "Controls: WASD Move | Space Jump | Ctrl Sprint | F Fly",
+                                "E Inventory | R Recipe | U Uses | Esc Pause & Save",
+                                "Textures: Faithful 32x Procedural Atlas",
+                            ];
+                            UiBuilder::build_notice_or_settings_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                "Settings",
+                                &lines,
+                                state.cursor_pos,
+                            );
+                        }
+                        AppScreen::MultiplayerNotice => {
+                            let lines = [
+                                "Multiplayer server browser and LAN worlds",
+                                "are planned for an upcoming expansion phase.",
+                                "Use Singleplayer to create and save worlds!",
+                            ];
+                            UiBuilder::build_notice_or_settings_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                "Multiplayer",
+                                &lines,
+                                state.cursor_pos,
+                            );
+                        }
+                        AppScreen::InGame | AppScreen::Paused { .. } => {}
+                    }
                 }
 
                 state.ui_dynamic_mesh.update(
@@ -1771,7 +2546,10 @@ impl ApplicationHandler for BlockGameApp {
         event: DeviceEvent,
     ) {
         if let Some(state) = &mut self.state {
-            if state.mouse_captured && !state.player_stats.is_dead {
+            if state.screen == AppScreen::InGame
+                && state.mouse_captured
+                && !state.player_stats.is_dead
+            {
                 if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
                     let sensitivity = 0.003;
                     state.camera.yaw += (dx as f32) * sensitivity;
