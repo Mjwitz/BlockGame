@@ -1490,7 +1490,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Wood.max_durability()),
             tool_type: Some(ToolType::Sword),
             tool_tier: Some(ToolTier::Wood),
-            icon_tile: 21,
+            icon_tile: 256,
         });
 
         self.register(ItemDef {
@@ -1502,7 +1502,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Stone.max_durability()),
             tool_type: Some(ToolType::Sword),
             tool_tier: Some(ToolTier::Stone),
-            icon_tile: 22,
+            icon_tile: 257,
         });
 
         self.register(ItemDef {
@@ -1514,7 +1514,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Copper.max_durability()),
             tool_type: Some(ToolType::Sword),
             tool_tier: Some(ToolTier::Copper),
-            icon_tile: 23,
+            icon_tile: 258,
         });
 
         self.register(ItemDef {
@@ -1526,7 +1526,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Iron.max_durability()),
             tool_type: Some(ToolType::Sword),
             tool_tier: Some(ToolTier::Iron),
-            icon_tile: 24,
+            icon_tile: 259,
         });
 
         self.register(ItemDef {
@@ -1538,7 +1538,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Diamond.max_durability()),
             tool_type: Some(ToolType::Sword),
             tool_tier: Some(ToolTier::Diamond),
-            icon_tile: 25,
+            icon_tile: 260,
         });
 
         self.register(ItemDef {
@@ -1550,7 +1550,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Gold.max_durability()),
             tool_type: Some(ToolType::Sword),
             tool_tier: Some(ToolTier::Gold),
-            icon_tile: 26,
+            icon_tile: 261,
         });
 
         // Copper Tools (Durability: 190)
@@ -1563,7 +1563,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Copper.max_durability()),
             tool_type: Some(ToolType::Pickaxe),
             tool_tier: Some(ToolTier::Copper),
-            icon_tile: 27,
+            icon_tile: 262,
         });
 
         self.register(ItemDef {
@@ -1575,7 +1575,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Copper.max_durability()),
             tool_type: Some(ToolType::Axe),
             tool_tier: Some(ToolTier::Copper),
-            icon_tile: 28,
+            icon_tile: 263,
         });
 
         self.register(ItemDef {
@@ -1587,7 +1587,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Copper.max_durability()),
             tool_type: Some(ToolType::Shovel),
             tool_tier: Some(ToolTier::Copper),
-            icon_tile: 29,
+            icon_tile: 264,
         });
 
         self.register(ItemDef {
@@ -1599,7 +1599,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Copper.max_durability()),
             tool_type: Some(ToolType::Hoe),
             tool_tier: Some(ToolTier::Copper),
-            icon_tile: 30,
+            icon_tile: 265,
         });
 
         // Gold Tools (Durability: 32)
@@ -1612,7 +1612,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Gold.max_durability()),
             tool_type: Some(ToolType::Pickaxe),
             tool_tier: Some(ToolTier::Gold),
-            icon_tile: 32,
+            icon_tile: 266,
         });
 
         self.register(ItemDef {
@@ -1624,7 +1624,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Gold.max_durability()),
             tool_type: Some(ToolType::Axe),
             tool_tier: Some(ToolTier::Gold),
-            icon_tile: 33,
+            icon_tile: 267,
         });
 
         self.register(ItemDef {
@@ -1636,7 +1636,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Gold.max_durability()),
             tool_type: Some(ToolType::Shovel),
             tool_tier: Some(ToolTier::Gold),
-            icon_tile: 34,
+            icon_tile: 268,
         });
 
         self.register(ItemDef {
@@ -1648,7 +1648,7 @@ impl ItemRegistry {
             durability: Some(ToolTier::Gold.max_durability()),
             tool_type: Some(ToolType::Hoe),
             tool_tier: Some(ToolTier::Gold),
-            icon_tile: 35,
+            icon_tile: 269,
         });
     }
 }

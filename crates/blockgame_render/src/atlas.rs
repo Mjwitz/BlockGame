@@ -7,9 +7,10 @@ pub const TILE_SIZE: u32 = 32;
 /// Number of tiles horizontally and vertically across the atlas grid.
 pub const ATLAS_TILES_PER_ROW: u32 = 16;
 
-/// Total width and height of the texture atlas in pixels (32 * 16 = 512).
+/// Total width and height of the texture atlas in pixels.
+/// The atlas grid is 16 tiles wide by 32 tiles high (512x1024), providing 512 total tile slots.
 pub const ATLAS_WIDTH: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW; // 512
-pub const ATLAS_HEIGHT: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW; // 512
+pub const ATLAS_HEIGHT: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW * 2; // 1024
 
 /// Embedded high-resolution Faithful 32x texture atlas.
 const FAITHFUL_ATLAS_PNG: &[u8] = include_bytes!("../assets/faithful_atlas_512.png");
@@ -39,7 +40,7 @@ impl TextureAtlas {
 
         let pixel_u = 1.0 / ATLAS_WIDTH as f32;
         let pixel_v = 1.0 / ATLAS_HEIGHT as f32;
-        let eps = 0.00025; // Clamped subpixel offset to prevent texture bleed at 512x512
+        let eps = 0.00025; // Clamped subpixel offset to prevent texture bleed at 512x1024
 
         let u_min = (tile_x * TILE_SIZE as f32) * pixel_u + eps;
         let v_min = (tile_y * TILE_SIZE as f32) * pixel_v + eps;
@@ -55,33 +56,34 @@ impl TextureAtlas {
         let dynamic_img = image::load_from_memory(FAITHFUL_ATLAS_PNG).expect(
             "Failed to load embedded Faithful 32x texture atlas (assets/faithful_atlas_512.png)",
         );
-        let image = dynamic_img.to_rgba8();
-        let mut atlas = Self { image };
+        let src_image = dynamic_img.to_rgba8();
+        let mut atlas = Self::new();
+        image::imageops::overlay(&mut atlas.image, &src_image, 0, 0);
 
         // Paint procedural tiles for Bucket (242), Water Bucket (243), and Moist Farmland (244)
         paint_bucket_sprite(&mut atlas, 242, false);
         paint_bucket_sprite(&mut atlas, 243, true);
         paint_moist_farmland_tile(&mut atlas, 244, 150);
 
-        // Paint Sword sprites (21 to 26)
-        paint_sword_sprite(&mut atlas, 21, [180, 130, 80], [150, 105, 60], [115, 75, 40], [120, 80, 45]);
-        paint_sword_sprite(&mut atlas, 22, [185, 185, 190], [140, 140, 145], [100, 100, 105], [110, 110, 115]);
-        paint_sword_sprite(&mut atlas, 23, [235, 145, 105], [200, 100, 70], [150, 70, 45], [175, 85, 55]);
-        paint_sword_sprite(&mut atlas, 24, [240, 242, 245], [195, 200, 208], [145, 150, 160], [160, 165, 175]);
-        paint_sword_sprite(&mut atlas, 25, [160, 250, 240], [85, 220, 210], [45, 170, 160], [50, 180, 170]);
-        paint_sword_sprite(&mut atlas, 26, [255, 248, 120], [245, 215, 50], [190, 155, 25], [210, 170, 30]);
+        // Paint Sword sprites (256 to 261)
+        paint_sword_sprite(&mut atlas, 256, [180, 130, 80], [150, 105, 60], [115, 75, 40], [120, 80, 45]); // Wooden Sword
+        paint_sword_sprite(&mut atlas, 257, [185, 185, 190], [140, 140, 145], [100, 100, 105], [110, 110, 115]); // Stone Sword
+        paint_sword_sprite(&mut atlas, 258, [235, 145, 105], [200, 100, 70], [150, 70, 45], [175, 85, 55]); // Copper Sword
+        paint_sword_sprite(&mut atlas, 259, [240, 242, 245], [195, 200, 208], [145, 150, 160], [160, 165, 175]); // Iron Sword
+        paint_sword_sprite(&mut atlas, 260, [160, 250, 240], [85, 220, 210], [45, 170, 160], [50, 180, 170]); // Diamond Sword
+        paint_sword_sprite(&mut atlas, 261, [255, 248, 120], [245, 215, 50], [190, 155, 25], [210, 170, 30]); // Gold Sword
 
-        // Copy and tint Copper Tools (27 to 30) from Iron tool icons
-        copy_and_tint_tool(&mut atlas, 20, 27, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Pickaxe
-        copy_and_tint_tool(&mut atlas, 143, 28, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Axe
-        copy_and_tint_tool(&mut atlas, 147, 29, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Shovel
-        copy_and_tint_tool(&mut atlas, 157, 30, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Hoe
+        // Copy and tint Copper Tools (262 to 265) from Iron tool icons (Pickaxe: 20, Axe: 142, Shovel: 146, Hoe: 156)
+        copy_and_tint_tool(&mut atlas, 20, 262, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Pickaxe
+        copy_and_tint_tool(&mut atlas, 142, 263, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Axe
+        copy_and_tint_tool(&mut atlas, 146, 264, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Shovel
+        copy_and_tint_tool(&mut atlas, 156, 265, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Hoe
 
-        // Copy and tint Gold Tools (32 to 35) from Iron tool icons
-        copy_and_tint_tool(&mut atlas, 20, 32, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Pickaxe
-        copy_and_tint_tool(&mut atlas, 143, 33, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Axe
-        copy_and_tint_tool(&mut atlas, 147, 34, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Shovel
-        copy_and_tint_tool(&mut atlas, 157, 35, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Hoe
+        // Copy and tint Gold Tools (266 to 269) from Iron tool icons (Pickaxe: 20, Axe: 142, Shovel: 146, Hoe: 156)
+        copy_and_tint_tool(&mut atlas, 20, 266, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Pickaxe
+        copy_and_tint_tool(&mut atlas, 142, 267, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Axe
+        copy_and_tint_tool(&mut atlas, 146, 268, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Shovel
+        copy_and_tint_tool(&mut atlas, 156, 269, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Hoe
 
         atlas
     }
@@ -411,15 +413,21 @@ mod tests {
     fn test_atlas_dimensions_and_tiles() {
         assert_eq!(TILE_SIZE, 32);
         assert_eq!(ATLAS_WIDTH, 512);
-        assert_eq!(ATLAS_HEIGHT, 512);
+        assert_eq!(ATLAS_HEIGHT, 1024);
 
         let atlas = TextureAtlas::generate_default();
         assert_eq!(atlas.image.width(), 512);
-        assert_eq!(atlas.image.height(), 512);
+        assert_eq!(atlas.image.height(), 1024);
 
         // Verify stone tile (Tile 1) is non-transparent
         let stone_px = atlas.image.get_pixel(32 + 16, 16);
         assert_eq!(stone_px[3], 255);
+
+        // Verify WHITE_TILE (Tile 24) is pure opaque white for clean UI element rendering
+        let wx = (24 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let wy = (24 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let white_px = atlas.image.get_pixel(wx + 16, wy + 16);
+        assert_eq!(*white_px, image::Rgba([255, 255, 255, 255]));
 
         // Verify UV bounds are well-formed within 0.0..=1.0
         let uv = TextureAtlas::get_uv_bounds(1);

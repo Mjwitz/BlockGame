@@ -690,10 +690,17 @@ impl ApplicationHandler for BlockGameApp {
                                 );
                                 for (i, r) in rows.iter().enumerate() {
                                     if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
-                                        state.screen = AppScreen::WorldSelect {
-                                            selected_index: Some(i),
-                                        };
-                                        return;
+                                        if selected_index == Some(i) {
+                                            // Clicking already-selected world directly launches it
+                                            let folder = state.saved_worlds[i].folder_name.clone();
+                                            state.load_and_start_world(&folder);
+                                            return;
+                                        } else {
+                                            state.screen = AppScreen::WorldSelect {
+                                                selected_index: Some(i),
+                                            };
+                                            return;
+                                        }
                                     }
                                 }
                                 let has_sel = selected_index
