@@ -21,3 +21,4 @@ pollster = "1.0"
 winit = "0.30.9"
 wgpu = "24.0.0"
 rayon.workspace = true
+miniaudio = "0.10.0"

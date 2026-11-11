@@ -1,4 +1,5 @@
 mod app;
+pub mod audio;
 mod headless;
 mod world_manager;
 

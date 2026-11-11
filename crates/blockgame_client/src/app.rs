@@ -112,6 +112,9 @@ pub struct AppState {
     pub total_time: f32,
     pub walk_distance: f32,
     pub punch_timer: f32,
+    pub last_footstep_dist: f32,
+    pub audio: crate::audio::AudioManager,
+    pub music_scheduler: crate::audio::MusicScheduler,
     // Hold-to-break mining state
     pub mouse_left_down: bool,
     pub breaking_voxel: Option<IVec3>,
@@ -210,6 +213,7 @@ impl AppState {
         self.day_night = DayNightCycle::new();
         self.total_time = 0.0;
         self.walk_distance = 0.0;
+        self.last_footstep_dist = 0.0;
         self.punch_timer = 0.0;
         self.inventory_open = false;
         self.active_chest_pos = None;
@@ -267,6 +271,7 @@ impl AppState {
         self.day_night.time = save_data.metadata.day_night_time;
         self.total_time = save_data.metadata.total_time;
         self.walk_distance = 0.0;
+        self.last_footstep_dist = 0.0;
         self.punch_timer = 0.0;
         self.inventory_open = false;
         self.active_chest_pos = None;
@@ -477,6 +482,9 @@ impl ApplicationHandler for BlockGameApp {
         let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
         window.set_cursor_visible(true);
 
+        let audio = crate::audio::AudioManager::new();
+        let music_scheduler = crate::audio::MusicScheduler::new(audio.music_track_count());
+
         self.state = Some(AppState {
             window,
             surface,
@@ -530,6 +538,9 @@ impl ApplicationHandler for BlockGameApp {
             total_time: 0.0,
             walk_distance: 0.0,
             punch_timer: 0.0,
+            last_footstep_dist: 0.0,
+            audio,
+            music_scheduler,
             mouse_left_down: false,
             breaking_voxel: None,
             break_progress: 0.0,
@@ -1122,6 +1133,12 @@ impl ApplicationHandler for BlockGameApp {
                                         &state.pipeline,
                                     );
                                     if planted {
+                                        state.audio.play_block_place(
+                                            BlockId::WHEAT_0,
+                                            hit.place_voxel.as_vec3() + Vec3::splat(0.5),
+                                            state.camera.position,
+                                            state.camera.yaw,
+                                        );
                                         state.world_manager.plant_crop(hit.place_voxel);
                                         state.inventory.slots[state.active_hotbar_slot].take(1);
                                         state.punch_timer = 0.2;
@@ -1199,6 +1216,12 @@ impl ApplicationHandler for BlockGameApp {
                                     &state.pipeline,
                                 );
                                 if placed {
+                                    state.audio.play_block_place(
+                                        BlockId::WATER,
+                                        target_pos.as_vec3() + Vec3::splat(0.5),
+                                        state.camera.position,
+                                        state.camera.yaw,
+                                    );
                                     state.punch_timer = 0.2;
                                     state.inventory.set(
                                         state.active_hotbar_slot,
@@ -1232,6 +1255,12 @@ impl ApplicationHandler for BlockGameApp {
                                             &state.pipeline,
                                         );
                                         if placed {
+                                            state.audio.play_block_place(
+                                                block_id,
+                                                target_pos.as_vec3() + Vec3::splat(0.5),
+                                                state.camera.position,
+                                                state.camera.yaw,
+                                            );
                                             state.inventory.slots[state.active_hotbar_slot].take(1);
                                         }
                                     }
@@ -1598,6 +1627,7 @@ impl ApplicationHandler for BlockGameApp {
                     .as_secs_f32()
                     .min(0.1);
                 state.last_frame_time = now;
+                state.music_scheduler.update(dt, &mut state.audio);
 
                 let screen_w = state.surface_config.width as f32;
                 let screen_h = state.surface_config.height as f32;
@@ -1676,6 +1706,25 @@ impl ApplicationHandler for BlockGameApp {
                             state
                                 .player_stats
                                 .add_exhaustion(dt * if state.sprinting { 0.1 } else { 0.02 });
+
+                            // Dynamic footstep audio based on surface material and stride interval
+                            let stride_dist = if state.sprinting { 2.4 } else { 1.6 };
+                            if state.walk_distance - state.last_footstep_dist >= stride_dist {
+                                state.last_footstep_dist = state.walk_distance;
+                                let foot_block_pos = IVec3::new(
+                                    state.player.position.x.floor() as i32,
+                                    (state.player.position.y - 0.2).floor() as i32,
+                                    state.player.position.z.floor() as i32,
+                                );
+                                let ground_block = {
+                                    let world = state.world_manager.world().lock().unwrap();
+                                    world.get_block(foot_block_pos)
+                                };
+                                let material =
+                                    crate::audio::SoundMaterial::from_block(ground_block);
+                                let volume_scale = if state.sprinting { 1.0 } else { 0.75 };
+                                state.audio.play_footstep(material, volume_scale);
+                            }
                         }
                     }
 
@@ -1939,6 +1988,12 @@ impl ApplicationHandler for BlockGameApp {
                                             &state.device,
                                             &state.pipeline,
                                         ) {
+                                            state.audio.play_block_break(
+                                                broken,
+                                                target_voxel.as_vec3() + Vec3::splat(0.5),
+                                                state.camera.position,
+                                                state.camera.yaw,
+                                            );
                                             state.player_stats.add_exhaustion(0.025);
                                             if let Some((drop_item, drop_count)) = self
                                                 .registry
