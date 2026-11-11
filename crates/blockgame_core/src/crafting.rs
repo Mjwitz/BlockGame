@@ -1014,6 +1014,44 @@ impl CraftingManager {
             output: ItemSlot::new(ItemId::DIAMOND_PICKAXE, 1),
         });
 
+        // Copper Pickaxe: 3 Copper Ingots top row, 2 Sticks center column
+        self.register(Recipe::Shaped {
+            name: "Copper Pickaxe",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::COPPER_INGOT),
+                Some(ItemId::COPPER_INGOT),
+                Some(ItemId::COPPER_INGOT),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
+            ],
+            output: ItemSlot::new(ItemId::COPPER_PICKAXE, 1),
+        });
+
+        // Golden Pickaxe: 3 Gold Ingots top row, 2 Sticks center column
+        self.register(Recipe::Shaped {
+            name: "Golden Pickaxe",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::GOLD_INGOT),
+                Some(ItemId::GOLD_INGOT),
+                Some(ItemId::GOLD_INGOT),
+                None,
+                Some(ItemId::STICK),
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
+            ],
+            output: ItemSlot::new(ItemId::GOLD_PICKAXE, 1),
+        });
+
         // Axes (2x3 trimmed pattern, both left and right orientations)
         let register_axe = |cm: &mut CraftingManager,
                             name_left: &'static str,
@@ -1115,6 +1153,20 @@ impl CraftingManager {
             ItemId::DIAMOND,
             ItemId::DIAMOND_AXE,
         );
+        register_axe(
+            self,
+            "Copper Axe (Left)",
+            "Copper Axe (Right)",
+            ItemId::COPPER_INGOT,
+            ItemId::COPPER_AXE,
+        );
+        register_axe(
+            self,
+            "Golden Axe (Left)",
+            "Golden Axe (Right)",
+            ItemId::GOLD_INGOT,
+            ItemId::GOLD_AXE,
+        );
 
         // Shovels (1x3 trimmed pattern)
         let register_shovel =
@@ -1147,6 +1199,8 @@ impl CraftingManager {
             ItemId::DIAMOND,
             ItemId::DIAMOND_SHOVEL,
         );
+        register_shovel(self, "Copper Shovel", ItemId::COPPER_INGOT, ItemId::COPPER_SHOVEL);
+        register_shovel(self, "Golden Shovel", ItemId::GOLD_INGOT, ItemId::GOLD_SHOVEL);
 
         // Furnace Smelting Recipes (1 Raw Ore -> 1 Ingot)
         self.register(Recipe::Smelting {
@@ -1286,6 +1340,48 @@ impl CraftingManager {
             ItemId::DIAMOND,
             ItemId::DIAMOND_HOE,
         );
+        register_hoe(
+            self,
+            "Copper Hoe (Left)",
+            "Copper Hoe (Right)",
+            ItemId::COPPER_INGOT,
+            ItemId::COPPER_HOE,
+        );
+        register_hoe(
+            self,
+            "Golden Hoe (Left)",
+            "Golden Hoe (Right)",
+            ItemId::GOLD_INGOT,
+            ItemId::GOLD_HOE,
+        );
+
+        // Swords (1x3 trimmed pattern: 2 material items in a column above 1 stick)
+        let register_sword =
+            |cm: &mut CraftingManager, name: &'static str, mat: ItemId, out: ItemId| {
+                cm.register(Recipe::Shaped {
+                    name,
+                    width: 1,
+                    height: 3,
+                    pattern: vec![
+                        Some(mat),
+                        Some(mat),
+                        Some(ItemId::STICK),
+                    ],
+                    output: ItemSlot::new(out, 1),
+                });
+            };
+
+        register_sword(self, "Wooden Sword", ItemId::PLANKS, ItemId::WOODEN_SWORD);
+        register_sword(self, "Wooden Sword (Birch)", ItemId::BIRCH_PLANKS, ItemId::WOODEN_SWORD);
+        register_sword(self, "Wooden Sword (Spruce)", ItemId::SPRUCE_PLANKS, ItemId::WOODEN_SWORD);
+        register_sword(self, "Wooden Sword (Acacia)", ItemId::ACACIA_PLANKS, ItemId::WOODEN_SWORD);
+        register_sword(self, "Wooden Sword (Jungle)", ItemId::JUNGLE_PLANKS, ItemId::WOODEN_SWORD);
+        register_sword(self, "Wooden Sword (Dark Oak)", ItemId::DARK_OAK_PLANKS, ItemId::WOODEN_SWORD);
+        register_sword(self, "Stone Sword", ItemId::COBBLESTONE, ItemId::STONE_SWORD);
+        register_sword(self, "Copper Sword", ItemId::COPPER_INGOT, ItemId::COPPER_SWORD);
+        register_sword(self, "Iron Sword", ItemId::IRON_INGOT, ItemId::IRON_SWORD);
+        register_sword(self, "Diamond Sword", ItemId::DIAMOND, ItemId::DIAMOND_SWORD);
+        register_sword(self, "Golden Sword", ItemId::GOLD_INGOT, ItemId::GOLD_SWORD);
 
         // Bread: 3 Wheat in a horizontal row (3x1)
         self.register(Recipe::Shaped {
@@ -1605,7 +1701,8 @@ pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
         ItemId::WOODEN_PICKAXE
         | ItemId::WOODEN_AXE
         | ItemId::WOODEN_SHOVEL
-        | ItemId::WOODEN_HOE => 10.0,
+        | ItemId::WOODEN_HOE
+        | ItemId::WOODEN_SWORD => 10.0,
         _ => 0.0,
     }
 }
@@ -1972,5 +2069,47 @@ mod tests {
         let output = cm.craft(&mut grid);
         assert_eq!(output, Some(ItemSlot::new(ItemId::BUCKET, 1)));
         assert!(grid.is_empty());
+    }
+
+    #[test]
+    fn test_sword_and_copper_gold_tool_crafting() {
+        let cm = CraftingManager::new();
+
+        // 1. Diamond Sword in 3x3 grid (column: Diamond, Diamond, Stick)
+        let mut grid = CraftingGrid::new_3x3();
+        grid.set(1, 0, ItemSlot::new(ItemId::DIAMOND, 1));
+        grid.set(1, 1, ItemSlot::new(ItemId::DIAMOND, 1));
+        grid.set(1, 2, ItemSlot::new(ItemId::STICK, 1));
+        let out = cm.craft(&mut grid);
+        assert_eq!(out, Some(ItemSlot::new(ItemId::DIAMOND_SWORD, 1)));
+
+        // 2. Copper Sword (column: Copper Ingot, Copper Ingot, Stick)
+        let mut grid_copper_sword = CraftingGrid::new_3x3();
+        grid_copper_sword.set(0, 0, ItemSlot::new(ItemId::COPPER_INGOT, 1));
+        grid_copper_sword.set(0, 1, ItemSlot::new(ItemId::COPPER_INGOT, 1));
+        grid_copper_sword.set(0, 2, ItemSlot::new(ItemId::STICK, 1));
+        let out_cs = cm.craft(&mut grid_copper_sword);
+        assert_eq!(out_cs, Some(ItemSlot::new(ItemId::COPPER_SWORD, 1)));
+
+        // 3. Golden Pickaxe
+        let mut grid_gold_pick = CraftingGrid::new_3x3();
+        grid_gold_pick.set(0, 0, ItemSlot::new(ItemId::GOLD_INGOT, 1));
+        grid_gold_pick.set(1, 0, ItemSlot::new(ItemId::GOLD_INGOT, 1));
+        grid_gold_pick.set(2, 0, ItemSlot::new(ItemId::GOLD_INGOT, 1));
+        grid_gold_pick.set(1, 1, ItemSlot::new(ItemId::STICK, 1));
+        grid_gold_pick.set(1, 2, ItemSlot::new(ItemId::STICK, 1));
+        let out_gp = cm.craft(&mut grid_gold_pick);
+        assert_eq!(out_gp, Some(ItemSlot::new(ItemId::GOLD_PICKAXE, 1)));
+
+        // 4. Copper Shovel
+        let mut grid_cop_shovel = CraftingGrid::new_3x3();
+        grid_cop_shovel.set(2, 0, ItemSlot::new(ItemId::COPPER_INGOT, 1));
+        grid_cop_shovel.set(2, 1, ItemSlot::new(ItemId::STICK, 1));
+        grid_cop_shovel.set(2, 2, ItemSlot::new(ItemId::STICK, 1));
+        let out_csh = cm.craft(&mut grid_cop_shovel);
+        assert_eq!(out_csh, Some(ItemSlot::new(ItemId::COPPER_SHOVEL, 1)));
+
+        // 5. Wooden sword fuel
+        assert_eq!(get_fuel_burn_time(ItemId::WOODEN_SWORD), 10.0);
     }
 }

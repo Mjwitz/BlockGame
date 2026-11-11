@@ -101,6 +101,20 @@ impl ItemId {
     pub const SEAGRASS: Self = Self(91);
     pub const BUCKET: Self = Self(92);
     pub const WATER_BUCKET: Self = Self(93);
+    pub const WOODEN_SWORD: Self = Self(94);
+    pub const STONE_SWORD: Self = Self(95);
+    pub const COPPER_SWORD: Self = Self(96);
+    pub const IRON_SWORD: Self = Self(97);
+    pub const DIAMOND_SWORD: Self = Self(98);
+    pub const GOLD_SWORD: Self = Self(99);
+    pub const COPPER_PICKAXE: Self = Self(100);
+    pub const COPPER_AXE: Self = Self(101);
+    pub const COPPER_SHOVEL: Self = Self(102);
+    pub const COPPER_HOE: Self = Self(103);
+    pub const GOLD_PICKAXE: Self = Self(104);
+    pub const GOLD_AXE: Self = Self(105);
+    pub const GOLD_SHOVEL: Self = Self(106);
+    pub const GOLD_HOE: Self = Self(107);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -195,6 +209,50 @@ impl ItemSlot {
         }
         let half = (self.count + 1) / 2;
         self.take(half)
+    }
+
+    /// Returns the remaining durability given the item's max durability.
+    /// If self.durability == 0, the tool is pristine (full durability).
+    /// Otherwise, self.durability stores the remaining durability points.
+    #[inline]
+    pub fn remaining_durability(&self, max_durability: u16) -> u16 {
+        if self.durability == 0 {
+            max_durability
+        } else {
+            self.durability
+        }
+    }
+
+    /// Returns true if this slot contains a tool that has taken damage.
+    #[inline]
+    pub fn is_damaged(&self, max_durability: u16) -> bool {
+        self.durability > 0 && self.durability < max_durability
+    }
+
+    /// Returns the fraction of remaining durability in the range [0.0, 1.0].
+    #[inline]
+    pub fn durability_fraction(&self, max_durability: u16) -> f32 {
+        if max_durability == 0 {
+            return 1.0;
+        }
+        (self.remaining_durability(max_durability) as f32) / (max_durability as f32)
+    }
+
+    /// Damages the tool by `amount` points.
+    /// Returns `true` if the tool broke (durability reached 0), resetting this slot to `EMPTY`.
+    /// Returns `false` if the tool took damage but did not break.
+    pub fn damage_tool(&mut self, amount: u16, max_durability: u16) -> bool {
+        if max_durability == 0 || self.is_empty() {
+            return false;
+        }
+        let current = self.remaining_durability(max_durability);
+        if current <= amount {
+            *self = ItemSlot::EMPTY;
+            true
+        } else {
+            self.durability = current - amount;
+            false
+        }
     }
 }
 
@@ -1421,6 +1479,177 @@ impl ItemRegistry {
             tool_tier: None,
             icon_tile: 243,
         });
+
+        // Swords (Wood: 59, Stone: 131, Copper: 190, Iron: 250, Diamond: 1561, Gold: 32)
+        self.register(ItemDef {
+            id: ItemId::WOODEN_SWORD,
+            name: "blockgame:wooden_sword",
+            display_name: "Wooden Sword",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Wood.max_durability()),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Wood),
+            icon_tile: 21,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::STONE_SWORD,
+            name: "blockgame:stone_sword",
+            display_name: "Stone Sword",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Stone.max_durability()),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Stone),
+            icon_tile: 22,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COPPER_SWORD,
+            name: "blockgame:copper_sword",
+            display_name: "Copper Sword",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Copper.max_durability()),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Copper),
+            icon_tile: 23,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::IRON_SWORD,
+            name: "blockgame:iron_sword",
+            display_name: "Iron Sword",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Iron.max_durability()),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Iron),
+            icon_tile: 24,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::DIAMOND_SWORD,
+            name: "blockgame:diamond_sword",
+            display_name: "Diamond Sword",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Diamond.max_durability()),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Diamond),
+            icon_tile: 25,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GOLD_SWORD,
+            name: "blockgame:gold_sword",
+            display_name: "Golden Sword",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Gold.max_durability()),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Gold),
+            icon_tile: 26,
+        });
+
+        // Copper Tools (Durability: 190)
+        self.register(ItemDef {
+            id: ItemId::COPPER_PICKAXE,
+            name: "blockgame:copper_pickaxe",
+            display_name: "Copper Pickaxe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Copper.max_durability()),
+            tool_type: Some(ToolType::Pickaxe),
+            tool_tier: Some(ToolTier::Copper),
+            icon_tile: 27,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COPPER_AXE,
+            name: "blockgame:copper_axe",
+            display_name: "Copper Axe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Copper.max_durability()),
+            tool_type: Some(ToolType::Axe),
+            tool_tier: Some(ToolTier::Copper),
+            icon_tile: 28,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COPPER_SHOVEL,
+            name: "blockgame:copper_shovel",
+            display_name: "Copper Shovel",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Copper.max_durability()),
+            tool_type: Some(ToolType::Shovel),
+            tool_tier: Some(ToolTier::Copper),
+            icon_tile: 29,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COPPER_HOE,
+            name: "blockgame:copper_hoe",
+            display_name: "Copper Hoe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Copper.max_durability()),
+            tool_type: Some(ToolType::Hoe),
+            tool_tier: Some(ToolTier::Copper),
+            icon_tile: 30,
+        });
+
+        // Gold Tools (Durability: 32)
+        self.register(ItemDef {
+            id: ItemId::GOLD_PICKAXE,
+            name: "blockgame:gold_pickaxe",
+            display_name: "Golden Pickaxe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Gold.max_durability()),
+            tool_type: Some(ToolType::Pickaxe),
+            tool_tier: Some(ToolTier::Gold),
+            icon_tile: 32,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GOLD_AXE,
+            name: "blockgame:gold_axe",
+            display_name: "Golden Axe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Gold.max_durability()),
+            tool_type: Some(ToolType::Axe),
+            tool_tier: Some(ToolTier::Gold),
+            icon_tile: 33,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GOLD_SHOVEL,
+            name: "blockgame:gold_shovel",
+            display_name: "Golden Shovel",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Gold.max_durability()),
+            tool_type: Some(ToolType::Shovel),
+            tool_tier: Some(ToolTier::Gold),
+            icon_tile: 34,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::GOLD_HOE,
+            name: "blockgame:gold_hoe",
+            display_name: "Golden Hoe",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(ToolTier::Gold.max_durability()),
+            tool_type: Some(ToolType::Hoe),
+            tool_tier: Some(ToolTier::Gold),
+            icon_tile: 35,
+        });
     }
 }
 
@@ -1630,5 +1859,69 @@ mod tests {
         assert!(overflow.is_none());
         assert_eq!(inv.get(0).count, 64);
         assert_eq!(inv.get(1).count, 6);
+    }
+
+    #[test]
+    fn test_tool_durability_tiers_and_breakage() {
+        let registry = ItemRegistry::new();
+
+        // 1. Verify strict durability order requested: Gold < Wood < Stone < Copper < Iron < Diamond
+        let gold_dur = registry.get(ItemId::GOLD_PICKAXE).unwrap().durability.unwrap();
+        let wood_dur = registry.get(ItemId::WOODEN_PICKAXE).unwrap().durability.unwrap();
+        let stone_dur = registry.get(ItemId::STONE_PICKAXE).unwrap().durability.unwrap();
+        let copper_dur = registry.get(ItemId::COPPER_PICKAXE).unwrap().durability.unwrap();
+        let iron_dur = registry.get(ItemId::IRON_PICKAXE).unwrap().durability.unwrap();
+        let diamond_dur = registry.get(ItemId::DIAMOND_PICKAXE).unwrap().durability.unwrap();
+
+        assert_eq!(gold_dur, 32);
+        assert_eq!(wood_dur, 59);
+        assert_eq!(stone_dur, 131);
+        assert_eq!(copper_dur, 190);
+        assert_eq!(iron_dur, 250);
+        assert_eq!(diamond_dur, 1561);
+
+        assert!(gold_dur < wood_dur);
+        assert!(wood_dur < stone_dur);
+        assert!(stone_dur < copper_dur);
+        assert!(copper_dur < iron_dur);
+        assert!(iron_dur < diamond_dur);
+
+        // 2. Verify all tool types (Pickaxe, Axe, Shovel, Sword, Hoe) have matching durability per tier
+        for (axe, shovel, sword, hoe, expected) in [
+            (ItemId::GOLD_AXE, ItemId::GOLD_SHOVEL, ItemId::GOLD_SWORD, ItemId::GOLD_HOE, 32),
+            (ItemId::WOODEN_AXE, ItemId::WOODEN_SHOVEL, ItemId::WOODEN_SWORD, ItemId::WOODEN_HOE, 59),
+            (ItemId::STONE_AXE, ItemId::STONE_SHOVEL, ItemId::STONE_SWORD, ItemId::STONE_HOE, 131),
+            (ItemId::COPPER_AXE, ItemId::COPPER_SHOVEL, ItemId::COPPER_SWORD, ItemId::COPPER_HOE, 190),
+            (ItemId::IRON_AXE, ItemId::IRON_SHOVEL, ItemId::IRON_SWORD, ItemId::IRON_HOE, 250),
+            (ItemId::DIAMOND_AXE, ItemId::DIAMOND_SHOVEL, ItemId::DIAMOND_SWORD, ItemId::DIAMOND_HOE, 1561),
+        ] {
+            assert_eq!(registry.get(axe).unwrap().durability, Some(expected));
+            assert_eq!(registry.get(shovel).unwrap().durability, Some(expected));
+            assert_eq!(registry.get(sword).unwrap().durability, Some(expected));
+            assert_eq!(registry.get(hoe).unwrap().durability, Some(expected));
+        }
+
+        // 3. Test tool damage, fraction, and breakage
+        let mut gold_pick = ItemSlot::new(ItemId::GOLD_PICKAXE, 1);
+        assert_eq!(gold_pick.remaining_durability(32), 32);
+        assert!(!gold_pick.is_damaged(32));
+        assert_eq!(gold_pick.durability_fraction(32), 1.0);
+
+        // Apply 1 damage
+        let broke = gold_pick.damage_tool(1, 32);
+        assert!(!broke);
+        assert!(gold_pick.is_damaged(32));
+        assert_eq!(gold_pick.remaining_durability(32), 31);
+        assert_eq!(gold_pick.durability, 31);
+
+        // Apply 30 more damage
+        let broke = gold_pick.damage_tool(30, 32);
+        assert!(!broke);
+        assert_eq!(gold_pick.remaining_durability(32), 1);
+
+        // Final hit breaks the tool
+        let broke = gold_pick.damage_tool(1, 32);
+        assert!(broke);
+        assert!(gold_pick.is_empty());
     }
 }

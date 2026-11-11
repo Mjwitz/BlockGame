@@ -793,16 +793,18 @@ fn read_string<R: Read>(r: &mut R) -> io::Result<String> {
 
 fn write_item_slot<W: Write>(w: &mut W, slot: ItemSlot) -> io::Result<()> {
     write_u16(w, slot.item_id.0)?;
-    write_u16(w, slot.count)
+    write_u16(w, slot.count)?;
+    write_u16(w, slot.durability)
 }
 
 fn read_item_slot<R: Read>(r: &mut R) -> io::Result<ItemSlot> {
     let id = ItemId(read_u16(r)?);
     let count = read_u16(r)?;
+    let durability = read_u16(r)?;
     if id == ItemId::EMPTY || count == 0 {
         Ok(ItemSlot::EMPTY)
     } else {
-        Ok(ItemSlot::new(id, count))
+        Ok(ItemSlot::with_durability(id, count, durability))
     }
 }
 

@@ -380,6 +380,59 @@ impl UiBuilder {
         );
     }
 
+    /// Draws a Minecraft-style durability bar beneath damaged tools in inventory/hotbar slots.
+    pub fn draw_durability_bar(
+        mesh: &mut UiMesh,
+        slot_x: f32,
+        slot_y: f32,
+        slot_size: f32,
+        item_slot: ItemSlot,
+        registry: &ItemRegistry,
+    ) {
+        if item_slot.is_empty() {
+            return;
+        }
+        let Some(def) = registry.get(item_slot.item_id) else {
+            return;
+        };
+        let Some(max_dur) = def.durability else {
+            return;
+        };
+        if max_dur == 0 || !item_slot.is_damaged(max_dur) {
+            return;
+        }
+
+        let fraction = item_slot.durability_fraction(max_dur).clamp(0.0, 1.0);
+        let bar_pad_x = 6.0;
+        let bar_w = (slot_size - bar_pad_x * 2.0).max(4.0);
+        let bar_h = 3.0;
+        let bar_x = slot_x + bar_pad_x;
+        let bar_y = slot_y + slot_size - bar_h - 4.0;
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Black border / background
+        mesh.add_quad(
+            bar_x - 1.0,
+            bar_y - 1.0,
+            bar_w + 2.0,
+            bar_h + 2.0,
+            white_uv,
+            [0.0, 0.0, 0.0, 0.95],
+        );
+
+        // Color interpolation based on fraction (green -> yellow -> red)
+        let (r, g, b) = if fraction > 0.5 {
+            let t = (fraction - 0.5) * 2.0;
+            (1.0 - t, 1.0, 0.0)
+        } else {
+            let t = fraction * 2.0;
+            (1.0, t, 0.0)
+        };
+
+        let fill_w = (bar_w * fraction).max(1.0);
+        mesh.add_quad(bar_x, bar_y, fill_w, bar_h, white_uv, [r, g, b, 1.0]);
+    }
+
     /// Draws a hover tooltip displaying an item's display name.
     pub fn draw_tooltip(
         mesh: &mut UiMesh,
@@ -779,23 +832,38 @@ impl UiBuilder {
             // =====================================================================
             let is_pickaxe = active_slot.item_id == ItemId::WOODEN_PICKAXE
                 || active_slot.item_id == ItemId::STONE_PICKAXE
+                || active_slot.item_id == ItemId::COPPER_PICKAXE
                 || active_slot.item_id == ItemId::IRON_PICKAXE
-                || active_slot.item_id == ItemId::DIAMOND_PICKAXE;
+                || active_slot.item_id == ItemId::DIAMOND_PICKAXE
+                || active_slot.item_id == ItemId::GOLD_PICKAXE;
 
             let is_hoe = active_slot.item_id == ItemId::WOODEN_HOE
                 || active_slot.item_id == ItemId::STONE_HOE
+                || active_slot.item_id == ItemId::COPPER_HOE
                 || active_slot.item_id == ItemId::IRON_HOE
-                || active_slot.item_id == ItemId::DIAMOND_HOE;
+                || active_slot.item_id == ItemId::DIAMOND_HOE
+                || active_slot.item_id == ItemId::GOLD_HOE;
 
             let is_axe = active_slot.item_id == ItemId::WOODEN_AXE
                 || active_slot.item_id == ItemId::STONE_AXE
+                || active_slot.item_id == ItemId::COPPER_AXE
                 || active_slot.item_id == ItemId::IRON_AXE
-                || active_slot.item_id == ItemId::DIAMOND_AXE;
+                || active_slot.item_id == ItemId::DIAMOND_AXE
+                || active_slot.item_id == ItemId::GOLD_AXE;
 
             let is_shovel = active_slot.item_id == ItemId::WOODEN_SHOVEL
                 || active_slot.item_id == ItemId::STONE_SHOVEL
+                || active_slot.item_id == ItemId::COPPER_SHOVEL
                 || active_slot.item_id == ItemId::IRON_SHOVEL
-                || active_slot.item_id == ItemId::DIAMOND_SHOVEL;
+                || active_slot.item_id == ItemId::DIAMOND_SHOVEL
+                || active_slot.item_id == ItemId::GOLD_SHOVEL;
+
+            let is_sword = active_slot.item_id == ItemId::WOODEN_SWORD
+                || active_slot.item_id == ItemId::STONE_SWORD
+                || active_slot.item_id == ItemId::COPPER_SWORD
+                || active_slot.item_id == ItemId::IRON_SWORD
+                || active_slot.item_id == ItemId::DIAMOND_SWORD
+                || active_slot.item_id == ItemId::GOLD_SWORD;
 
             if is_pickaxe {
                 // -----------------------------------------------------------------
@@ -861,6 +929,16 @@ impl UiBuilder {
                         [0.55, 0.55, 0.58, 1.0],
                         [0.75, 0.75, 0.78, 1.0],
                         [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    ItemId::COPPER_PICKAXE => (
+                        [0.85, 0.50, 0.32, 1.0],
+                        [0.96, 0.68, 0.48, 1.0],
+                        [0.65, 0.35, 0.20, 1.0],
+                    ),
+                    ItemId::GOLD_PICKAXE => (
+                        [0.95, 0.80, 0.20, 1.0],
+                        [1.00, 0.95, 0.45, 1.0],
+                        [0.72, 0.58, 0.12, 1.0],
                     ),
                     ItemId::DIAMOND_PICKAXE => (
                         [0.25, 0.88, 0.92, 1.0],
@@ -1035,6 +1113,16 @@ impl UiBuilder {
                         [0.75, 0.75, 0.78, 1.0],
                         [0.35, 0.35, 0.38, 1.0],
                     ),
+                    ItemId::COPPER_HOE => (
+                        [0.85, 0.50, 0.32, 1.0],
+                        [0.96, 0.68, 0.48, 1.0],
+                        [0.65, 0.35, 0.20, 1.0],
+                    ),
+                    ItemId::GOLD_HOE => (
+                        [0.95, 0.80, 0.20, 1.0],
+                        [1.00, 0.95, 0.45, 1.0],
+                        [0.72, 0.58, 0.12, 1.0],
+                    ),
                     ItemId::DIAMOND_HOE => (
                         [0.25, 0.88, 0.92, 1.0],
                         [0.55, 1.00, 1.00, 1.0],
@@ -1161,6 +1249,16 @@ impl UiBuilder {
                         [0.75, 0.75, 0.78, 1.0],
                         [0.35, 0.35, 0.38, 1.0],
                     ),
+                    ItemId::COPPER_AXE => (
+                        [0.85, 0.50, 0.32, 1.0],
+                        [0.96, 0.68, 0.48, 1.0],
+                        [0.65, 0.35, 0.20, 1.0],
+                    ),
+                    ItemId::GOLD_AXE => (
+                        [0.95, 0.80, 0.20, 1.0],
+                        [1.00, 0.95, 0.45, 1.0],
+                        [0.72, 0.58, 0.12, 1.0],
+                    ),
                     ItemId::DIAMOND_AXE => (
                         [0.25, 0.88, 0.92, 1.0],
                         [0.55, 1.00, 1.00, 1.0],
@@ -1275,6 +1373,16 @@ impl UiBuilder {
                         [0.75, 0.75, 0.78, 1.0],
                         [0.35, 0.35, 0.38, 1.0],
                     ),
+                    ItemId::COPPER_SHOVEL => (
+                        [0.85, 0.50, 0.32, 1.0],
+                        [0.96, 0.68, 0.48, 1.0],
+                        [0.65, 0.35, 0.20, 1.0],
+                    ),
+                    ItemId::GOLD_SHOVEL => (
+                        [0.95, 0.80, 0.20, 1.0],
+                        [1.00, 0.95, 0.45, 1.0],
+                        [0.72, 0.58, 0.12, 1.0],
+                    ),
                     ItemId::DIAMOND_SHOVEL => (
                         [0.25, 0.88, 0.92, 1.0],
                         [0.55, 1.00, 1.00, 1.0],
@@ -1318,6 +1426,126 @@ impl UiBuilder {
                     white_uv,
                     [col_head_top; 4],
                 );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_sword {
+                // -----------------------------------------------------------------
+                // 3D HELD SWORD: 3D hilt, crossguard, and double-edged blade
+                // -----------------------------------------------------------------
+                let sword_punch_x = -55.0 * scale * punch_swing;
+                let sword_punch_y = 70.0 * scale * punch_swing;
+
+                let handle_base = [
+                    screen_w - 55.0 * scale + bob_x + sword_punch_x,
+                    screen_h + 15.0 * scale + bob_y + sword_punch_y,
+                ];
+                let handle_tip = [
+                    screen_w - 145.0 * scale + bob_x + sword_punch_x * 1.3,
+                    screen_h - 120.0 * scale + bob_y + sword_punch_y * 1.3,
+                ];
+
+                let dx = handle_tip[0] - handle_base[0];
+                let dy = handle_tip[1] - handle_base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let half_w = 7.0 * scale;
+                let thick = [-8.0 * scale, -6.0 * scale];
+
+                // 1. Grip / Handle
+                let h0 = [handle_base[0] - norm[0] * half_w, handle_base[1] - norm[1] * half_w];
+                let h1 = [handle_base[0] + norm[0] * half_w, handle_base[1] + norm[1] * half_w];
+                let h2 = [handle_tip[0] + norm[0] * half_w, handle_tip[1] + norm[1] * half_w];
+                let h3 = [handle_tip[0] - norm[0] * half_w, handle_tip[1] - norm[1] * half_w];
+                mesh.add_quad_vertices([h0, h1, h2, h3], white_uv, [[0.45, 0.30, 0.16, 1.0]; 4]);
+                let h0_b = [h0[0] + thick[0], h0[1] + thick[1]];
+                let h3_b = [h3[0] + thick[0], h3[1] + thick[1]];
+                mesh.add_quad_vertices([h0_b, h0, h3, h3_b], white_uv, [[0.28, 0.18, 0.10, 1.0]; 4]);
+
+                let (col_blade_main, col_blade_top, col_blade_side) = match active_slot.item_id {
+                    ItemId::WOODEN_SWORD => (
+                        [0.68, 0.48, 0.28, 1.0],
+                        [0.85, 0.65, 0.42, 1.0],
+                        [0.45, 0.30, 0.16, 1.0],
+                    ),
+                    ItemId::STONE_SWORD => (
+                        [0.55, 0.55, 0.58, 1.0],
+                        [0.75, 0.75, 0.78, 1.0],
+                        [0.35, 0.35, 0.38, 1.0],
+                    ),
+                    ItemId::COPPER_SWORD => (
+                        [0.85, 0.50, 0.32, 1.0],
+                        [0.96, 0.68, 0.48, 1.0],
+                        [0.65, 0.35, 0.20, 1.0],
+                    ),
+                    ItemId::GOLD_SWORD => (
+                        [0.95, 0.80, 0.20, 1.0],
+                        [1.00, 0.95, 0.45, 1.0],
+                        [0.72, 0.58, 0.12, 1.0],
+                    ),
+                    ItemId::DIAMOND_SWORD => (
+                        [0.25, 0.88, 0.92, 1.0],
+                        [0.55, 1.00, 1.00, 1.0],
+                        [0.15, 0.60, 0.65, 1.0],
+                    ),
+                    _ => (
+                        // Iron Sword
+                        [0.82, 0.85, 0.90, 1.0],
+                        [0.96, 0.98, 1.00, 1.0],
+                        [0.55, 0.58, 0.65, 1.0],
+                    ),
+                };
+
+                // 2. Crossguard
+                let guard_w = 28.0 * scale;
+                let guard_h = 8.0 * scale;
+                let guard_c = handle_tip;
+                let gl = [guard_c[0] - norm[0] * guard_w, guard_c[1] - norm[1] * guard_w];
+                let gr = [guard_c[0] + norm[0] * guard_w, guard_c[1] + norm[1] * guard_w];
+                let g0 = [gl[0] - dir[0] * guard_h, gl[1] - dir[1] * guard_h];
+                let g1 = [gr[0] - dir[0] * guard_h, gr[1] - dir[1] * guard_h];
+                let g2 = [gr[0] + dir[0] * guard_h, gr[1] + dir[1] * guard_h];
+                let g3 = [gl[0] + dir[0] * guard_h, gl[1] + dir[1] * guard_h];
+                mesh.add_quad_vertices([g0, g1, g2, g3], white_uv, [col_blade_top; 4]);
+                let g2_b = [g2[0] + thick[0], g2[1] + thick[1]];
+                let g3_b = [g3[0] + thick[0], g3[1] + thick[1]];
+                mesh.add_quad_vertices([g3, g2, g2_b, g3_b], white_uv, [col_blade_side; 4]);
+
+                // 3. Blade & Point
+                let b_base = [guard_c[0] + dir[0] * guard_h, guard_c[1] + dir[1] * guard_h];
+                let blade_len = 160.0 * scale;
+                let blade_w = 13.0 * scale;
+                let b_tip = [b_base[0] + dir[0] * blade_len, b_base[1] + dir[1] * blade_len];
+                let b_taper = [
+                    b_base[0] + dir[0] * (blade_len - 30.0 * scale),
+                    b_base[1] + dir[1] * (blade_len - 30.0 * scale),
+                ];
+
+                let bl0 = [b_base[0] - norm[0] * blade_w, b_base[1] - norm[1] * blade_w];
+                let br0 = [b_base[0] + norm[0] * blade_w, b_base[1] + norm[1] * blade_w];
+                let bl1 = [b_taper[0] - norm[0] * blade_w, b_taper[1] - norm[1] * blade_w];
+                let br1 = [b_taper[0] + norm[0] * blade_w, b_taper[1] + norm[1] * blade_w];
+
+                // Main Blade Quad
+                mesh.add_quad_vertices([bl0, br0, br1, bl1], white_uv, [col_blade_main; 4]);
+                // Point Triangle
+                mesh.add_quad_vertices([bl1, br1, b_tip, b_tip], white_uv, [col_blade_top; 4]);
+
+                // 3D Side Thickness
+                let bl0_b = [bl0[0] + thick[0], bl0[1] + thick[1]];
+                let bl1_b = [bl1[0] + thick[0], bl1[1] + thick[1]];
+                let b_tip_b = [b_tip[0] + thick[0], b_tip[1] + thick[1]];
+                mesh.add_quad_vertices([bl0_b, bl0, bl1, bl1_b], white_uv, [col_blade_side; 4]);
+                mesh.add_quad_vertices([bl1_b, bl1, b_tip, b_tip_b], white_uv, [col_blade_side; 4]);
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
@@ -1669,6 +1897,7 @@ impl UiBuilder {
                         [1.0, 1.0, 1.0, 1.0],
                     );
                     Self::draw_stack_number(mesh, x, y, slot_size, item_slot.count);
+                    Self::draw_durability_bar(mesh, x, y, slot_size, item_slot, registry);
                 }
             }
         }
@@ -1965,6 +2194,7 @@ impl UiBuilder {
                             [1.0, 1.0, 1.0, 1.0],
                         );
                         Self::draw_stack_number(mesh, sx, sy, slot_size, slot.count);
+                        Self::draw_durability_bar(mesh, sx, sy, slot_size, slot, registry);
 
                         if cursor_pos[0] >= sx
                             && cursor_pos[0] <= sx + slot_size
@@ -2003,6 +2233,7 @@ impl UiBuilder {
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 Self::draw_stack_number(mesh, result_x, result_y, r_size, res.count);
+                Self::draw_durability_bar(mesh, result_x, result_y, r_size, res, registry);
 
                 if cursor_pos[0] >= result_x
                     && cursor_pos[0] <= result_x + r_size
@@ -2041,6 +2272,7 @@ impl UiBuilder {
                             [1.0, 1.0, 1.0, 1.0],
                         );
                         Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                        Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
 
                         if cursor_pos[0] >= sx
                             && cursor_pos[0] <= sx + slot_size
@@ -2087,6 +2319,7 @@ impl UiBuilder {
                         [1.0, 1.0, 1.0, 1.0],
                     );
                     Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                    Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
 
                     if cursor_pos[0] >= sx
                         && cursor_pos[0] <= sx + slot_size
@@ -2134,6 +2367,7 @@ impl UiBuilder {
                 let hy = cursor_pos[1] - hold_size * 0.5;
                 mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
                 Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
+                Self::draw_durability_bar(mesh, hx, hy, hold_size, *cursor_held, registry);
             }
         }
 
@@ -2217,6 +2451,7 @@ impl UiBuilder {
                                 [1.0, 1.0, 1.0, 1.0],
                             );
                             Self::draw_stack_number(mesh, sx, sy, slot_size, slot.count);
+                            Self::draw_durability_bar(mesh, sx, sy, slot_size, slot, registry);
 
                             if cursor_pos[0] >= sx
                                 && cursor_pos[0] <= sx + slot_size
@@ -2266,6 +2501,7 @@ impl UiBuilder {
                             [1.0, 1.0, 1.0, 1.0],
                         );
                         Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                        Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
 
                         if cursor_pos[0] >= sx
                             && cursor_pos[0] <= sx + slot_size
@@ -2312,6 +2548,7 @@ impl UiBuilder {
                         [1.0, 1.0, 1.0, 1.0],
                     );
                     Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                    Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
 
                     if cursor_pos[0] >= sx
                         && cursor_pos[0] <= sx + slot_size
@@ -2359,6 +2596,7 @@ impl UiBuilder {
                 let hy = cursor_pos[1] - hold_size * 0.5;
                 mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
                 Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
+                Self::draw_durability_bar(mesh, hx, hy, hold_size, *cursor_held, registry);
             }
         }
 
@@ -2455,6 +2693,7 @@ impl UiBuilder {
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 Self::draw_stack_number(mesh, center_x, input_y, slot_size, in_slot.count);
+                Self::draw_durability_bar(mesh, center_x, input_y, slot_size, in_slot, registry);
 
                 if cursor_pos[0] >= center_x
                     && cursor_pos[0] <= center_x + slot_size
@@ -2517,6 +2756,7 @@ impl UiBuilder {
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 Self::draw_stack_number(mesh, center_x, fuel_y, slot_size, fuel_slot.count);
+                Self::draw_durability_bar(mesh, center_x, fuel_y, slot_size, fuel_slot, registry);
 
                 if cursor_pos[0] >= center_x
                     && cursor_pos[0] <= center_x + slot_size
@@ -2586,6 +2826,7 @@ impl UiBuilder {
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 Self::draw_stack_number(mesh, out_x, out_y, out_size, out_slot.count);
+                Self::draw_durability_bar(mesh, out_x, out_y, out_size, out_slot, registry);
 
                 if cursor_pos[0] >= out_x
                     && cursor_pos[0] <= out_x + out_size
@@ -2632,6 +2873,7 @@ impl UiBuilder {
                             [1.0, 1.0, 1.0, 1.0],
                         );
                         Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                        Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
 
                         if cursor_pos[0] >= sx
                             && cursor_pos[0] <= sx + slot_size
@@ -2678,6 +2920,7 @@ impl UiBuilder {
                         [1.0, 1.0, 1.0, 1.0],
                     );
                     Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                    Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
 
                     if cursor_pos[0] >= sx
                         && cursor_pos[0] <= sx + slot_size
@@ -2725,6 +2968,7 @@ impl UiBuilder {
                 let hy = cursor_pos[1] - hold_size * 0.5;
                 mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
                 Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
+                Self::draw_durability_bar(mesh, hx, hy, hold_size, *cursor_held, registry);
             }
         }
 

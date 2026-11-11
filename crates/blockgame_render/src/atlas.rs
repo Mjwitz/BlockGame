@@ -63,6 +63,26 @@ impl TextureAtlas {
         paint_bucket_sprite(&mut atlas, 243, true);
         paint_moist_farmland_tile(&mut atlas, 244, 150);
 
+        // Paint Sword sprites (21 to 26)
+        paint_sword_sprite(&mut atlas, 21, [180, 130, 80], [150, 105, 60], [115, 75, 40], [120, 80, 45]);
+        paint_sword_sprite(&mut atlas, 22, [185, 185, 190], [140, 140, 145], [100, 100, 105], [110, 110, 115]);
+        paint_sword_sprite(&mut atlas, 23, [235, 145, 105], [200, 100, 70], [150, 70, 45], [175, 85, 55]);
+        paint_sword_sprite(&mut atlas, 24, [240, 242, 245], [195, 200, 208], [145, 150, 160], [160, 165, 175]);
+        paint_sword_sprite(&mut atlas, 25, [160, 250, 240], [85, 220, 210], [45, 170, 160], [50, 180, 170]);
+        paint_sword_sprite(&mut atlas, 26, [255, 248, 120], [245, 215, 50], [190, 155, 25], [210, 170, 30]);
+
+        // Copy and tint Copper Tools (27 to 30) from Iron tool icons
+        copy_and_tint_tool(&mut atlas, 20, 27, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Pickaxe
+        copy_and_tint_tool(&mut atlas, 143, 28, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Axe
+        copy_and_tint_tool(&mut atlas, 147, 29, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Shovel
+        copy_and_tint_tool(&mut atlas, 157, 30, [235, 145, 105], [200, 100, 70], [150, 70, 45]); // Copper Hoe
+
+        // Copy and tint Gold Tools (32 to 35) from Iron tool icons
+        copy_and_tint_tool(&mut atlas, 20, 32, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Pickaxe
+        copy_and_tint_tool(&mut atlas, 143, 33, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Axe
+        copy_and_tint_tool(&mut atlas, 147, 34, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Shovel
+        copy_and_tint_tool(&mut atlas, 157, 35, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Hoe
+
         atlas
     }
 
@@ -233,6 +253,154 @@ fn paint_moist_farmland_tile(atlas: &mut TextureAtlas, dst_tile: u16, src_tile: 
         }
     }
     atlas.paint_tile(dst_tile, |px, py| pixels[py as usize][px as usize]);
+}
+
+fn copy_and_tint_tool(
+    atlas: &mut TextureAtlas,
+    src_tile: u16,
+    dst_tile: u16,
+    light_col: [u8; 3],
+    mid_col: [u8; 3],
+    dark_col: [u8; 3],
+) {
+    let src_x = (src_tile as u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+    let src_y = (src_tile as u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+    let mut pixels = [[Rgba([0u8, 0, 0, 0]); TILE_SIZE as usize]; TILE_SIZE as usize];
+
+    for py in 0..TILE_SIZE {
+        for px in 0..TILE_SIZE {
+            let p = *atlas.image.get_pixel(src_x + px, src_y + py);
+            if p[3] > 0 {
+                // Check if pixel belongs to wooden stick handle
+                let r = p[0] as i16;
+                let g = p[1] as i16;
+                let b = p[2] as i16;
+                let is_handle = r > b + 25 && g > b + 5 && r < 190 && g < 140;
+                let is_dark_outline = r < 45 && g < 45 && b < 45;
+                if is_handle || is_dark_outline {
+                    pixels[py as usize][px as usize] = p;
+                } else {
+                    let lum = (p[0] as f32 * 0.30 + p[1] as f32 * 0.59 + p[2] as f32 * 0.11) / 255.0;
+                    let (r, g, b) = if lum > 0.70 {
+                        (light_col[0], light_col[1], light_col[2])
+                    } else if lum > 0.40 {
+                        (mid_col[0], mid_col[1], mid_col[2])
+                    } else {
+                        (dark_col[0], dark_col[1], dark_col[2])
+                    };
+                    pixels[py as usize][px as usize] = Rgba([r, g, b, p[3]]);
+                }
+            }
+        }
+    }
+
+    atlas.paint_tile(dst_tile, |px, py| pixels[py as usize][px as usize]);
+}
+
+fn paint_sword_sprite(
+    atlas: &mut TextureAtlas,
+    tile_id: u16,
+    blade_light: [u8; 3],
+    blade_mid: [u8; 3],
+    blade_dark: [u8; 3],
+    guard_col: [u8; 3],
+) {
+    atlas.paint_tile(tile_id, |px, py| {
+        let ix = px as i32;
+        let iy = py as i32;
+        let outline = Rgba([30, 30, 34, 255]);
+        let handle_wood = Rgba([136, 88, 48, 255]);
+        let handle_shadow = Rgba([92, 56, 30, 255]);
+        let guard = Rgba([guard_col[0], guard_col[1], guard_col[2], 255]);
+        let light = Rgba([blade_light[0], blade_light[1], blade_light[2], 255]);
+        let mid = Rgba([blade_mid[0], blade_mid[1], blade_mid[2], 255]);
+        let dark = Rgba([blade_dark[0], blade_dark[1], blade_dark[2], 255]);
+
+        // Pommel
+        if (ix == 5 && iy == 26) || (ix == 6 && iy == 27) {
+            return guard;
+        }
+        if (ix == 4 && (iy == 26 || iy == 27))
+            || (ix == 5 && (iy == 25 || iy == 27))
+            || (ix == 6 && (iy == 26 || iy == 28))
+            || (ix == 7 && iy == 27)
+        {
+            return outline;
+        }
+
+        // Handle grip (diagonal length 4)
+        for d in 0..4 {
+            let hx = 7 + d;
+            let hy = 24 - d;
+            if ix == hx && iy == hy {
+                return handle_wood;
+            }
+            if ix == hx - 1 && iy == hy {
+                return handle_shadow;
+            }
+        }
+        // Handle outlines
+        if (ix == 6 && iy == 24) || (ix == 7 && iy == 25)
+            || (ix == 7 && iy == 23) || (ix == 8 && iy == 24)
+            || (ix == 8 && iy == 22) || (ix == 9 && iy == 23)
+            || (ix == 9 && iy == 21) || (ix == 10 && iy == 22)
+        {
+            return outline;
+        }
+
+        // Crossguard
+        let guard_coords = [
+            (9, 18), (10, 19), (11, 20), (12, 21), (13, 22),
+            (10, 18), (11, 19), (12, 20), (13, 21),
+            (8, 19), (14, 21),
+        ];
+        if guard_coords.contains(&(ix, iy)) {
+            return guard;
+        }
+        let guard_outline = [
+            (8, 18), (7, 19), (8, 20), (9, 21),
+            (9, 17), (10, 17), (11, 18), (12, 19), (13, 20), (14, 20), (15, 21), (14, 22), (13, 23),
+            (12, 23), (11, 22),
+        ];
+        if guard_outline.contains(&(ix, iy)) {
+            return outline;
+        }
+
+        // Blade: extends from (12, 19) to (25, 6), tip at (26, 5)
+        for step in 0..15 {
+            let bx = 12 + step;
+            let by = 19 - step;
+            if by < 5 || bx > 26 {
+                continue;
+            }
+            if ix == bx && iy == by {
+                return mid; // center ridge
+            }
+            if ix == bx - 1 && iy == by {
+                return dark; // bottom-left blade side
+            }
+            if ix == bx && iy == by - 1 {
+                return light; // top-right blade highlight
+            }
+            // Blade outer edges
+            if ix == bx - 2 && iy == by {
+                return outline;
+            }
+            if ix == bx && iy == by - 2 {
+                return outline;
+            }
+        }
+
+        // Tip at (26, 5)
+        if ix == 26 && iy == 5 {
+            return light;
+        }
+        if (ix == 27 && iy == 5) || (ix == 26 && iy == 4) || (ix == 27 && iy == 4) || (ix == 25 && iy == 4) || (ix == 27 && iy == 6) {
+            return outline;
+        }
+
+        Rgba([0, 0, 0, 0])
+    });
 }
 
 #[cfg(test)]

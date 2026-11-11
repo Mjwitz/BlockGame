@@ -994,11 +994,39 @@ impl ApplicationHandler for BlockGameApp {
                             let held_slot = state.inventory.get(state.active_hotbar_slot);
                             let attack_damage =
                                 if let Some(def) = state.item_registry.get(held_slot.item_id) {
-                                    match def.tool_tier {
-                                        Some(ToolTier::Wood) => 4.0,
-                                        Some(ToolTier::Stone) => 5.0,
-                                        Some(ToolTier::Iron) => 6.0,
-                                        Some(ToolTier::Diamond) => 7.0,
+                                    match (def.tool_type, def.tool_tier) {
+                                        (Some(blockgame_core::tool::ToolType::Sword), Some(tier)) => match tier {
+                                            ToolTier::Wood | ToolTier::Gold => 4.0,
+                                            ToolTier::Stone => 5.0,
+                                            ToolTier::Copper => 5.5,
+                                            ToolTier::Iron => 6.0,
+                                            ToolTier::Diamond => 7.0,
+                                            ToolTier::None => 1.0,
+                                        },
+                                        (Some(blockgame_core::tool::ToolType::Axe), Some(tier)) => match tier {
+                                            ToolTier::Wood | ToolTier::Gold => 3.0,
+                                            ToolTier::Stone => 4.0,
+                                            ToolTier::Copper => 4.5,
+                                            ToolTier::Iron => 5.0,
+                                            ToolTier::Diamond => 6.0,
+                                            ToolTier::None => 1.0,
+                                        },
+                                        (Some(blockgame_core::tool::ToolType::Pickaxe), Some(tier)) => match tier {
+                                            ToolTier::Wood | ToolTier::Gold => 2.0,
+                                            ToolTier::Stone => 3.0,
+                                            ToolTier::Copper => 3.5,
+                                            ToolTier::Iron => 4.0,
+                                            ToolTier::Diamond => 5.0,
+                                            ToolTier::None => 1.0,
+                                        },
+                                        (Some(blockgame_core::tool::ToolType::Shovel), Some(tier)) => match tier {
+                                            ToolTier::Wood | ToolTier::Gold => 1.5,
+                                            ToolTier::Stone => 2.0,
+                                            ToolTier::Copper => 2.5,
+                                            ToolTier::Iron => 3.0,
+                                            ToolTier::Diamond => 4.0,
+                                            ToolTier::None => 1.0,
+                                        },
                                         _ => 1.0,
                                     }
                                 } else {
@@ -1016,6 +1044,21 @@ impl ApplicationHandler for BlockGameApp {
                                 state.breaking_voxel = None;
                                 state.break_progress = 0.0;
                                 state.cracking_buffer = None;
+
+                                let mut held = state.inventory.get(state.active_hotbar_slot);
+                                if let Some(def) = state.item_registry.get(held.item_id) {
+                                    if let Some(max_dur) = def.durability {
+                                        let dmg = if def.tool_type == Some(blockgame_core::tool::ToolType::Sword) {
+                                            1
+                                        } else {
+                                            2
+                                        };
+                                        if held.damage_tool(dmg, max_dur) {
+                                            state.audio.play_tool_break();
+                                        }
+                                        state.inventory.set(state.active_hotbar_slot, held);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1119,6 +1162,15 @@ impl ApplicationHandler for BlockGameApp {
                                             );
                                             if tilled {
                                                 state.punch_timer = 0.2;
+                                                let mut held = state.inventory.get(state.active_hotbar_slot);
+                                                if let Some(def) = state.item_registry.get(held.item_id) {
+                                                    if let Some(max_dur) = def.durability {
+                                                        if held.damage_tool(1, max_dur) {
+                                                            state.audio.play_tool_break();
+                                                        }
+                                                        state.inventory.set(state.active_hotbar_slot, held);
+                                                    }
+                                                }
                                                 return;
                                             }
                                         }
@@ -2051,6 +2103,20 @@ impl ApplicationHandler for BlockGameApp {
                                                 state.camera.yaw,
                                             );
                                             state.player_stats.add_exhaustion(0.025);
+                                            let mut held = state.inventory.get(state.active_hotbar_slot);
+                                            if let Some(def) = state.item_registry.get(held.item_id) {
+                                                if let Some(max_dur) = def.durability {
+                                                    let dmg = if def.tool_type == Some(blockgame_core::tool::ToolType::Sword) {
+                                                        2
+                                                    } else {
+                                                        1
+                                                    };
+                                                    if held.damage_tool(dmg, max_dur) {
+                                                        state.audio.play_tool_break();
+                                                    }
+                                                    state.inventory.set(state.active_hotbar_slot, held);
+                                                }
+                                            }
                                             if let Some((drop_item, drop_count)) = self
                                                 .registry
                                                 .get_drop(broken, held_tool_type, held_tool_tier)

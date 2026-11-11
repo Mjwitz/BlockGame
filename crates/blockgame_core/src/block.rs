@@ -1206,8 +1206,14 @@ impl BlockRegistry {
                 return true;
             }
             if let Some(req_tool) = def.required_tool {
-                if held_tool_type == Some(req_tool) && held_tier >= def.min_tier {
-                    return true;
+                if held_tool_type == Some(req_tool) {
+                    let effective_tier = match held_tier {
+                        ToolTier::Gold => ToolTier::Wood,
+                        other => other,
+                    };
+                    if effective_tier >= def.min_tier {
+                        return true;
+                    }
                 }
             }
             false

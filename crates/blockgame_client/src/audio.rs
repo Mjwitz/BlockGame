@@ -689,6 +689,28 @@ pub mod sound_generator {
 
         samples
     }
+
+    /// Synthesizes a tool breaking sound effect (crisp snap followed by crumbling shatter).
+    pub fn generate_tool_break(variant: usize) -> Vec<f32> {
+        let mut rng = 7711223344 + variant as u64 * 49287;
+        let duration = 0.35;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            let snap = (2.0 * PI * 580.0 * t).sin() * (-progress * 28.0).exp();
+            let metal_ping = (2.0 * PI * 2400.0 * t).sin() * (-progress * 18.0).exp();
+            let shatter = lcg_random(&mut rng) * (-progress * 14.0).exp();
+
+            let sample = 0.55 * snap + 0.30 * metal_ping + 0.35 * shatter;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
 }
 
 /// Global audio manager orchestrating 3D spatial playback, materials, and mixer device.
@@ -703,6 +725,7 @@ pub struct AudioManager {
     water_splashes: Vec<Arc<Vec<f32>>>,
     water_swims: Vec<Arc<Vec<f32>>>,
     underwater_bubbles: Vec<Arc<Vec<f32>>>,
+    tool_breaks: Vec<Arc<Vec<f32>>>,
     music_tracks: Vec<Arc<Vec<f32>>>,
     rng_state: u64,
 }
@@ -754,6 +777,7 @@ impl AudioManager {
             water_splashes: Vec::new(),
             water_swims: Vec::new(),
             underwater_bubbles: Vec::new(),
+            tool_breaks: Vec::new(),
             music_tracks: Vec::new(),
             rng_state: 888888888,
         };
@@ -912,7 +936,22 @@ impl AudioManager {
             self.underwater_bubbles.push(Arc::new(buffer));
         }
 
-        // 9. Ambient Music Tracks (3 calm compositions)
+        // 9. Tool Break (2 variations)
+        for variant in 0..2 {
+            let file_name = format!("tool_break_{}.wav", variant);
+            let file_path = assets_dir.join(&file_name);
+
+            let buffer = if has_assets && file_path.exists() {
+                Self::load_audio_file(&file_path)
+                    .unwrap_or_else(|| sound_generator::generate_tool_break(variant))
+            } else {
+                sound_generator::generate_tool_break(variant)
+            };
+
+            self.tool_breaks.push(Arc::new(buffer));
+        }
+
+        // 10. Ambient Music Tracks (3 calm compositions)
         for track_idx in 0..3 {
             let file_name = format!("ambient_track_{}.wav", track_idx + 1);
             let file_path = assets_dir.join(&file_name);
@@ -928,7 +967,7 @@ impl AudioManager {
         }
 
         println!(
-            "[Audio] Initialized {} footstep, {} hit, {} break, {} place, {} hurt, {} splash, {} swim, {} bubble, and {} music tracks.",
+            "[Audio] Initialized {} footstep, {} hit, {} break, {} place, {} hurt, {} splash, {} swim, {} bubble, {} tool break, and {} music tracks.",
             self.footsteps.len(),
             self.hits.len(),
             self.breaks.len(),
@@ -937,6 +976,7 @@ impl AudioManager {
             self.water_splashes.len(),
             self.water_swims.len(),
             self.underwater_bubbles.len(),
+            self.tool_breaks.len(),
             self.music_tracks.len()
         );
     }
@@ -1126,6 +1166,22 @@ impl AudioManager {
         let samples = self.underwater_bubbles[variant].clone();
         let pitch = 0.95 + 0.10 * self.random_f32();
         let vol = 0.40 * (0.85 + 0.15 * self.random_f32());
+
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+        }
+    }
+
+    /// Triggers a tool break sound effect when a tool's durability reaches zero.
+    pub fn play_tool_break(&mut self) {
+        if self.tool_breaks.is_empty() {
+            return;
+        }
+        let variant = (self.random_f32() * self.tool_breaks.len() as f32).floor() as usize
+            % self.tool_breaks.len();
+        let samples = self.tool_breaks[variant].clone();
+        let pitch = 0.90 + 0.20 * self.random_f32();
+        let vol = 0.90 + 0.15 * self.random_f32();
 
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
