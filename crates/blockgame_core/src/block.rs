@@ -155,6 +155,34 @@ impl BlockId {
                 | Self::LILY_PAD
         )
     }
+
+    /// Whether this block is a leaf block subject to decay when logs are absent.
+    #[inline]
+    pub const fn is_leaves(&self) -> bool {
+        matches!(
+            *self,
+            Self::LEAVES
+                | Self::BIRCH_LEAVES
+                | Self::SPRUCE_LEAVES
+                | Self::ACACIA_LEAVES
+                | Self::JUNGLE_LEAVES
+                | Self::DARK_OAK_LEAVES
+        )
+    }
+
+    /// Whether this block is a tree log block capable of supporting leaves.
+    #[inline]
+    pub const fn is_log(&self) -> bool {
+        matches!(
+            *self,
+            Self::WOOD_LOG
+                | Self::BIRCH_LOG
+                | Self::SPRUCE_LOG
+                | Self::ACACIA_LOG
+                | Self::JUNGLE_LOG
+                | Self::DARK_OAK_LOG
+        )
+    }
 }
 
 impl From<u8> for BlockId {
@@ -1523,6 +1551,170 @@ fn cascade_water_downward(
     (modified_positions, extra_drops)
 }
 
+/// Checks if a Farmland block at `farmland_pos` has a water source within horizontal radius 4
+/// (and vertical offset -1..=1).
+pub fn is_farmland_hydrated<F>(farmland_pos: IVec3, mut get_block: F) -> bool
+where
+    F: FnMut(IVec3) -> BlockId,
+{
+    for dy in -1..=1 {
+        for dz in -4..=4 {
+            for dx in -4..=4 {
+                let check_pos = farmland_pos + IVec3::new(dx, dy, dz);
+                let block = get_block(check_pos);
+                if block.is_water() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Determines whether a cactus column starting at or containing `pos` can grow, and if so,
+/// returns the voxel position where the new cactus block should be placed.
+/// Max height is strictly 3 blocks.
+pub fn try_grow_cactus<F>(
+    pos: IVec3,
+    registry: &BlockRegistry,
+    mut get_block: F,
+) -> Option<IVec3>
+where
+    F: FnMut(IVec3) -> BlockId,
+{
+    if get_block(pos) != BlockId::CACTUS {
+        return None;
+    }
+
+    // 1. Trace down to the bottom of the cactus column
+    let mut base = pos;
+    while get_block(base + IVec3::NEG_Y) == BlockId::CACTUS {
+        base += IVec3::NEG_Y;
+    }
+
+    // 2. Measure total column height and find top
+    let mut height = 1;
+    let mut top = base;
+    while get_block(top + IVec3::Y) == BlockId::CACTUS {
+        top += IVec3::Y;
+        height += 1;
+    }
+
+    // Max height is 3 blocks
+    if height >= 3 {
+        return None;
+    }
+
+    let grow_pos = top + IVec3::Y;
+    if !get_block(grow_pos).is_air() {
+        return None;
+    }
+
+    // Check if the new cactus block can survive at grow_pos
+    // (must have no adjacent solid blocks on north, south, east, west)
+    if can_block_survive(BlockId::CACTUS, grow_pos, registry, &mut get_block) {
+        Some(grow_pos)
+    } else {
+        None
+    }
+}
+
+/// Checks if a leaf block at `leaf_pos` has a path of connected leaves of length <= max_dist (default 4)
+/// reaching any tree log.
+pub fn is_leaf_supported<F>(leaf_pos: IVec3, max_dist: usize, mut get_block: F) -> bool
+where
+    F: FnMut(IVec3) -> BlockId,
+{
+    let target = get_block(leaf_pos);
+    if target.is_log() {
+        return true;
+    }
+    if !target.is_leaves() {
+        return false;
+    }
+
+    let mut queue = std::collections::VecDeque::new();
+    let mut visited = HashSet::new();
+
+    queue.push_back((leaf_pos, 0usize));
+    visited.insert(leaf_pos);
+
+    while let Some((p, dist)) = queue.pop_front() {
+        if dist > 0 && get_block(p).is_log() {
+            return true;
+        }
+
+        if dist < max_dist {
+            for offset in [
+                IVec3::X,
+                IVec3::NEG_X,
+                IVec3::Y,
+                IVec3::NEG_Y,
+                IVec3::Z,
+                IVec3::NEG_Z,
+            ] {
+                let neighbor = p + offset;
+                if visited.insert(neighbor) {
+                    let b = get_block(neighbor);
+                    if b.is_log() {
+                        return true;
+                    }
+                    if b.is_leaves() {
+                        queue.push_back((neighbor, dist + 1));
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Computes item drops when a leaf block decays.
+pub fn get_leaf_decay_drops(leaf: BlockId, pos: IVec3) -> Vec<ItemSlot> {
+    let mut drops = Vec::new();
+    let hash = (pos.x.wrapping_mul(31) ^ pos.y.wrapping_mul(17) ^ pos.z.wrapping_mul(13)).abs();
+
+    if leaf == BlockId::LEAVES {
+        // Oak leaves: ~10% chance to drop an Apple
+        if hash % 10 == 0 {
+            drops.push(ItemSlot::new(ItemId::APPLE, 1));
+        } else if hash % 5 == 0 {
+            // ~20% chance to drop a Stick
+            drops.push(ItemSlot::new(ItemId::STICK, 1));
+        }
+    } else if hash % 6 == 0 {
+        // Other leaves: chance to drop sticks
+        drops.push(ItemSlot::new(ItemId::STICK, 1));
+    }
+
+    drops
+}
+
+/// Finds all leaf blocks within a radius around `broken_pos` that are no longer supported by any logs.
+pub fn find_decaying_leaves_around_pos<F>(
+    broken_pos: IVec3,
+    radius: i32,
+    mut get_block: F,
+) -> Vec<IVec3>
+where
+    F: FnMut(IVec3) -> BlockId + Copy,
+{
+    let mut decaying = Vec::new();
+    for dy in -radius..=radius {
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                let p = broken_pos + IVec3::new(dx, dy, dz);
+                let b = get_block(p);
+                if b.is_leaves() && !is_leaf_supported(p, radius as usize, get_block) {
+                    decaying.push(p);
+                }
+            }
+        }
+    }
+    decaying
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1862,6 +2054,102 @@ mod tests {
         assert_eq!(world.get_block(IVec3::new(2, 3, 2)), BlockId::WATER);
         assert_eq!(world.get_block(IVec3::new(2, 2, 2)), BlockId::STONE);
         assert!(drops.iter().any(|(p, slot)| *p == IVec3::new(2, 3, 2) && slot.item_id == ItemId::TORCH));
+    }
+
+    #[test]
+    fn test_farmland_hydration_water_range() {
+        let mut world = World::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        let farmland_pos = IVec3::new(5, 5, 5);
+        world.set_block(farmland_pos, BlockId::FARMLAND);
+
+        // No water nearby initially
+        assert!(!is_farmland_hydrated(farmland_pos, |p| world.get_block(p)));
+
+        // Place water 5 blocks away (out of range)
+        world.set_block(farmland_pos + IVec3::new(5, 0, 0), BlockId::WATER);
+        assert!(!is_farmland_hydrated(farmland_pos, |p| world.get_block(p)));
+
+        // Place water 4 blocks away (in range!)
+        world.set_block(farmland_pos + IVec3::new(4, 0, 0), BlockId::WATER);
+        assert!(is_farmland_hydrated(farmland_pos, |p| world.get_block(p)));
+
+        // Water diagonally (4, 0, 4) is in range
+        world.set_block(farmland_pos + IVec3::new(4, 0, 0), BlockId::AIR);
+        world.set_block(farmland_pos + IVec3::new(4, 1, 4), BlockId::WATER);
+        assert!(is_farmland_hydrated(farmland_pos, |p| world.get_block(p)));
+    }
+
+    #[test]
+    fn test_cactus_growth_max_height_3() {
+        let mut world = World::new();
+        let reg = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Sand base at (5, 1, 5)
+        world.set_block(IVec3::new(5, 1, 5), BlockId::SAND);
+        // 1st cactus at (5, 2, 5)
+        world.set_block(IVec3::new(5, 2, 5), BlockId::CACTUS);
+
+        // Cactus at height 1 -> grows to (5, 3, 5)
+        let grow1 = try_grow_cactus(IVec3::new(5, 2, 5), &reg, |p| world.get_block(p));
+        assert_eq!(grow1, Some(IVec3::new(5, 3, 5)));
+        world.set_block(IVec3::new(5, 3, 5), BlockId::CACTUS);
+
+        // Cactus at height 2 -> grows to (5, 4, 5)
+        let grow2 = try_grow_cactus(IVec3::new(5, 2, 5), &reg, |p| world.get_block(p));
+        assert_eq!(grow2, Some(IVec3::new(5, 4, 5)));
+        world.set_block(IVec3::new(5, 4, 5), BlockId::CACTUS);
+
+        // Cactus at height 3 -> cannot grow further!
+        let grow3 = try_grow_cactus(IVec3::new(5, 2, 5), &reg, |p| world.get_block(p));
+        assert_eq!(grow3, None);
+
+        // Also if queried from top block (5, 4, 5), still returns None
+        let grow_top = try_grow_cactus(IVec3::new(5, 4, 5), &reg, |p| world.get_block(p));
+        assert_eq!(grow_top, None);
+
+        // Cactus cannot grow if adjacent block at grow position is solid
+        world.set_block(IVec3::new(8, 1, 8), BlockId::SAND);
+        world.set_block(IVec3::new(8, 2, 8), BlockId::CACTUS);
+        // Place solid stone next to (8, 3, 8)
+        world.set_block(IVec3::new(9, 3, 8), BlockId::STONE);
+        let blocked = try_grow_cactus(IVec3::new(8, 2, 8), &reg, |p| world.get_block(p));
+        assert_eq!(blocked, None);
+    }
+
+    #[test]
+    fn test_leaf_decay_when_logs_removed() {
+        let mut world = World::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Tree log at (5, 5, 5)
+        world.set_block(IVec3::new(5, 5, 5), BlockId::WOOD_LOG);
+        // Oak leaves at (5, 6, 5) and (5, 7, 5)
+        world.set_block(IVec3::new(5, 6, 5), BlockId::LEAVES);
+        world.set_block(IVec3::new(5, 7, 5), BlockId::LEAVES);
+
+        // Leaves are supported initially
+        assert!(is_leaf_supported(IVec3::new(5, 6, 5), 4, |p| world.get_block(p)));
+        assert!(is_leaf_supported(IVec3::new(5, 7, 5), 4, |p| world.get_block(p)));
+
+        // Remove the wood log -> leaves are no longer supported!
+        world.set_block(IVec3::new(5, 5, 5), BlockId::AIR);
+        assert!(!is_leaf_supported(IVec3::new(5, 6, 5), 4, |p| world.get_block(p)));
+        assert!(!is_leaf_supported(IVec3::new(5, 7, 5), 4, |p| world.get_block(p)));
+
+        // find_decaying_leaves_around_pos discovers both leaves
+        let decaying = find_decaying_leaves_around_pos(IVec3::new(5, 5, 5), 4, |p| world.get_block(p));
+        assert!(decaying.contains(&IVec3::new(5, 6, 5)));
+        assert!(decaying.contains(&IVec3::new(5, 7, 5)));
+
+        // Test decay drops for oak leaves
+        let drops = get_leaf_decay_drops(BlockId::LEAVES, IVec3::new(5, 6, 5));
+        // Drops should be valid item slots (or empty if RNG didn't roll a drop)
+        for drop in drops {
+            assert!(drop.item_id == ItemId::APPLE || drop.item_id == ItemId::STICK);
+        }
     }
 }
 

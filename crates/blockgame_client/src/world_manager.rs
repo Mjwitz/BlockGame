@@ -7,12 +7,13 @@ use std::sync::{
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{
-        apply_water_fill, break_unsupported_attached, can_block_survive, place_water_source,
-        BlockId, BlockRegistry,
+        apply_water_fill, break_unsupported_attached, can_block_survive,
+        find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
+        is_leaf_supported, place_water_source, try_grow_cactus, BlockId, BlockRegistry,
     },
     chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
     entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus},
-    item::ItemSlot,
+    item::{ItemId, ItemSlot},
     physics::AABB,
     world::{world_to_chunk_coords, World},
 };
@@ -39,6 +40,8 @@ pub struct WorldManager {
     pub animals: Vec<AnimalEntity>,
     pub next_animal_id: u32,
     pub planted_crops: Vec<(IVec3, f32)>,
+    pub growing_cacti: Vec<(IVec3, f32)>,
+    pub decaying_leaves: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
 }
 
@@ -64,6 +67,8 @@ impl WorldManager {
             animals: Vec::new(),
             next_animal_id: 1,
             planted_crops: Vec::new(),
+            growing_cacti: Vec::new(),
+            decaying_leaves: Vec::new(),
             animal_spawned_columns: HashSet::new(),
         }
     }
@@ -687,6 +692,18 @@ impl WorldManager {
             });
         }
 
+        // If broken block was a tree log or leaves, check for leaves that have lost all log support
+        if broken_block.is_log() || broken_block.is_leaves() {
+            let world = self.world.lock().unwrap();
+            let decaying = find_decaying_leaves_around_pos(pos, 4, |p| world.get_block(p));
+            for (i, lp) in decaying.into_iter().enumerate() {
+                if !self.decaying_leaves.iter().any(|(p, _)| *p == lp) {
+                    let delay = 0.1 + (i as f32 * 0.05);
+                    self.decaying_leaves.push((lp, delay));
+                }
+            }
+        }
+
         Some(broken_block)
     }
 
@@ -849,6 +866,10 @@ impl WorldManager {
         }
         for (block_id, fpos) in spawned_falling {
             self.falling_blocks.push(FallingBlock::new(block_id, fpos));
+        }
+
+        if block_id == BlockId::CACTUS {
+            self.register_cactus(pos);
         }
 
         true
@@ -1133,14 +1154,54 @@ impl WorldManager {
         self.planted_crops.push((pos, 0.0));
     }
 
-    /// Periodically grows planted crops to their next stage.
+    /// Periodically grows planted crops to their next stage, requiring nearby water to stay hydrated.
     pub fn update_crops(&mut self, dt: f32, device: &wgpu::Device, pipeline: &VoxelPipeline) {
         let mut changed_chunks = HashSet::new();
+        let mut extra_drops = Vec::new();
         {
             let mut world = self.world.lock().unwrap();
             for (pos, timer) in self.planted_crops.iter_mut() {
+                let below_pos = *pos - IVec3::Y;
+                let below = world.get_block(below_pos);
+                if below != BlockId::FARMLAND {
+                    // Farmland missing -> pop crop as item drop
+                    let current = world.get_block(*pos);
+                    world.set_block(*pos, BlockId::AIR);
+                    let (cp, _, _, _) = world_to_chunk_coords(*pos);
+                    changed_chunks.insert(cp);
+                    let drop_item = if current == BlockId::WHEAT_3 {
+                        ItemSlot::new(ItemId::WHEAT, 1)
+                    } else {
+                        ItemSlot::new(ItemId::WHEAT_SEEDS, 1)
+                    };
+                    extra_drops.push((pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop_item));
+                    continue;
+                }
+
+                // Farmland requires water nearby to stay hydrated and grow crops
+                let is_hydrated = is_farmland_hydrated(below_pos, |p| world.get_block(p));
+                if !is_hydrated {
+                    // Crop does NOT grow without water!
+                    // If left unhydrated for 25.0 seconds, farmland dries out into dirt and pops crop
+                    if *timer >= 25.0 {
+                        world.set_block(below_pos, BlockId::DIRT);
+                        world.set_block(*pos, BlockId::AIR);
+                        let (cp1, _, _, _) = world_to_chunk_coords(below_pos);
+                        let (cp2, _, _, _) = world_to_chunk_coords(*pos);
+                        changed_chunks.insert(cp1);
+                        changed_chunks.insert(cp2);
+                        extra_drops.push((
+                            pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                            ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
+                        ));
+                    } else {
+                        *timer += dt;
+                    }
+                    continue;
+                }
+
+                // Farmland is hydrated: grow crop stage every 8 seconds
                 *timer += dt;
-                // Grow to next stage every 8 seconds
                 if *timer >= 8.0 {
                     *timer = 0.0;
                     let current = world.get_block(*pos);
@@ -1159,13 +1220,159 @@ impl WorldManager {
             }
         }
 
-        // Retain only growing crops
+        // Retain only growing crops with farmland beneath
         {
             let world = self.world.lock().unwrap();
             self.planted_crops.retain(|(pos, _)| {
                 let b = world.get_block(*pos);
-                b == BlockId::WHEAT_0 || b == BlockId::WHEAT_1 || b == BlockId::WHEAT_2
+                let below = world.get_block(*pos - IVec3::Y);
+                (b == BlockId::WHEAT_0 || b == BlockId::WHEAT_1 || b == BlockId::WHEAT_2)
+                    && below == BlockId::FARMLAND
             });
+        }
+
+        for (drop_pos, slot) in extra_drops {
+            self.spawn_item_drop(drop_pos, slot);
+        }
+
+        if !changed_chunks.is_empty() {
+            let registry = Arc::clone(&self.registry);
+            let mesher = ChunkMesher::new(&registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        meshes.push((cpos, mesh));
+                    }
+                }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
+    }
+
+    /// Registers a cactus block for height growth updates.
+    pub fn register_cactus(&mut self, pos: IVec3) {
+        if !self.growing_cacti.iter().any(|(p, _)| *p == pos) {
+            self.growing_cacti.push((pos, 0.0));
+        }
+    }
+
+    /// Periodically grows cacti up to a maximum height of 3 blocks.
+    pub fn update_cacti(&mut self, dt: f32, device: &wgpu::Device, pipeline: &VoxelPipeline) {
+        let mut changed_chunks = HashSet::new();
+        let mut new_cacti = Vec::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            for (pos, timer) in self.growing_cacti.iter_mut() {
+                *timer += dt;
+                // Check growth every 10 seconds
+                if *timer >= 10.0 {
+                    *timer = 0.0;
+                    if let Some(grow_pos) =
+                        try_grow_cactus(*pos, &self.registry, |p| world.get_block(p))
+                    {
+                        world.set_block(grow_pos, BlockId::CACTUS);
+                        let (cp, _, _, _) = world_to_chunk_coords(grow_pos);
+                        changed_chunks.insert(cp);
+                        new_cacti.push(grow_pos);
+                    }
+                }
+            }
+        }
+
+        for nc in new_cacti {
+            self.register_cactus(nc);
+        }
+
+        // Retain only cacti that still exist and can grow (column height < 3)
+        {
+            let world = self.world.lock().unwrap();
+            self.growing_cacti.retain(|(pos, _)| {
+                world.get_block(*pos) == BlockId::CACTUS
+                    && try_grow_cactus(*pos, &self.registry, |p| world.get_block(p)).is_some()
+            });
+        }
+
+        if !changed_chunks.is_empty() {
+            let registry = Arc::clone(&self.registry);
+            let mesher = ChunkMesher::new(&registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        meshes.push((cpos, mesh));
+                    }
+                }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
+    }
+
+    /// Periodically updates and removes decaying leaves that have lost tree log connectivity.
+    pub fn update_decaying_leaves(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        if self.decaying_leaves.is_empty() {
+            return;
+        }
+
+        let mut decayed_positions = Vec::new();
+        for (pos, timer) in self.decaying_leaves.iter_mut() {
+            *timer -= dt;
+            if *timer <= 0.0 {
+                decayed_positions.push(*pos);
+            }
+        }
+
+        if decayed_positions.is_empty() {
+            return;
+        }
+
+        let mut changed_chunks = HashSet::new();
+        let mut extra_drops = Vec::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            for pos in &decayed_positions {
+                let block = world.get_block(*pos);
+                if block.is_leaves() {
+                    // Check one last time if it's still unsupported
+                    if !is_leaf_supported(*pos, 4, |p| world.get_block(p)) {
+                        world.set_block(*pos, BlockId::AIR);
+                        let (cp, _, _, _) = world_to_chunk_coords(*pos);
+                        changed_chunks.insert(cp);
+                        let drops = get_leaf_decay_drops(block, *pos);
+                        for d in drops {
+                            extra_drops.push((pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), d));
+                        }
+                    }
+                }
+            }
+        }
+
+        self.decaying_leaves
+            .retain(|(p, _)| !decayed_positions.contains(p));
+
+        for (p, drop) in extra_drops {
+            self.spawn_item_drop(p, drop);
         }
 
         if !changed_chunks.is_empty() {

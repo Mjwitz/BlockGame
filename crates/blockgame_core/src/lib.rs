@@ -13,7 +13,11 @@ pub mod tool;
 pub mod world;
 
 pub use animal::{AnimalEntity, AnimalKind};
-pub use block::{apply_water_fill, place_water_source, BlockDefinition, BlockId, BlockRegistry};
+pub use block::{
+    apply_water_fill, find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
+    is_leaf_supported, place_water_source, try_grow_cactus, BlockDefinition, BlockId,
+    BlockRegistry,
+};
 pub use chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, CHUNK_VOLUME};
 pub use crafting::{CraftingGrid, CraftingManager, Recipe};
 pub use direction::Direction;

@@ -1138,6 +1138,12 @@ impl ApplicationHandler for BlockGameApp {
                     .update_crops(dt, &state.device, &state.pipeline);
                 state
                     .world_manager
+                    .update_cacti(dt, &state.device, &state.pipeline);
+                state
+                    .world_manager
+                    .update_decaying_leaves(dt, &state.device, &state.pipeline);
+                state
+                    .world_manager
                     .update_furnaces(dt, &state.device, &state.pipeline);
                 state
                     .world_manager
