@@ -40,6 +40,7 @@ pub struct WorldManager {
     pub animals: Vec<AnimalEntity>,
     pub next_animal_id: u32,
     pub planted_crops: Vec<(IVec3, f32)>,
+    pub active_farmland: Vec<(IVec3, f32)>,
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
@@ -67,6 +68,7 @@ impl WorldManager {
             animals: Vec::new(),
             next_animal_id: 1,
             planted_crops: Vec::new(),
+            active_farmland: Vec::new(),
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
             animal_spawned_columns: HashSet::new(),
@@ -871,8 +873,18 @@ impl WorldManager {
         if block_id == BlockId::CACTUS {
             self.register_cactus(pos);
         }
+        if block_id.is_farmland() {
+            self.register_farmland(pos);
+        }
 
         true
+    }
+
+    /// Registers a farmland block for moisture and drying updates.
+    pub fn register_farmland(&mut self, pos: IVec3) {
+        if !self.active_farmland.iter().any(|(p, _)| *p == pos) {
+            self.active_farmland.push((pos, 0.0));
+        }
     }
 
     /// Scoops a water block at `pos` with an empty bucket, replacing it with AIR and updating meshes.
@@ -1099,7 +1111,13 @@ impl WorldManager {
                 return false;
             }
 
-            world.set_block(pos, BlockId::FARMLAND);
+            let is_hydrated = is_farmland_hydrated(pos, |p| world.get_block(p));
+            let target_block = if is_hydrated {
+                BlockId::FARMLAND_MOIST
+            } else {
+                BlockId::FARMLAND
+            };
+            world.set_block(pos, target_block);
 
             let (unsupported_drops, modified_positions, spawned_falling) =
                 break_unsupported_attached(pos, &mut world, &self.registry);
@@ -1146,12 +1164,15 @@ impl WorldManager {
             self.falling_blocks.push(FallingBlock::new(block_id, fpos));
         }
 
+        self.register_farmland(pos);
+
         true
     }
 
     /// Registers a planted crop for growth updates.
     pub fn plant_crop(&mut self, pos: IVec3) {
         self.planted_crops.push((pos, 0.0));
+        self.register_farmland(pos - IVec3::Y);
     }
 
     /// Periodically grows planted crops to their next stage, requiring nearby water to stay hydrated.
@@ -1163,7 +1184,7 @@ impl WorldManager {
             for (pos, timer) in self.planted_crops.iter_mut() {
                 let below_pos = *pos - IVec3::Y;
                 let below = world.get_block(below_pos);
-                if below != BlockId::FARMLAND {
+                if !below.is_farmland() {
                     // Farmland missing -> pop crop as item drop
                     let current = world.get_block(*pos);
                     world.set_block(*pos, BlockId::AIR);
@@ -1181,22 +1202,7 @@ impl WorldManager {
                 // Farmland requires water nearby to stay hydrated and grow crops
                 let is_hydrated = is_farmland_hydrated(below_pos, |p| world.get_block(p));
                 if !is_hydrated {
-                    // Crop does NOT grow without water!
-                    // If left unhydrated for 25.0 seconds, farmland dries out into dirt and pops crop
-                    if *timer >= 25.0 {
-                        world.set_block(below_pos, BlockId::DIRT);
-                        world.set_block(*pos, BlockId::AIR);
-                        let (cp1, _, _, _) = world_to_chunk_coords(below_pos);
-                        let (cp2, _, _, _) = world_to_chunk_coords(*pos);
-                        changed_chunks.insert(cp1);
-                        changed_chunks.insert(cp2);
-                        extra_drops.push((
-                            pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
-                            ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
-                        ));
-                    } else {
-                        *timer += dt;
-                    }
+                    // Crop does NOT grow without water. Drying into dirt is handled in update_farmland.
                     continue;
                 }
 
@@ -1227,7 +1233,117 @@ impl WorldManager {
                 let b = world.get_block(*pos);
                 let below = world.get_block(*pos - IVec3::Y);
                 (b == BlockId::WHEAT_0 || b == BlockId::WHEAT_1 || b == BlockId::WHEAT_2)
-                    && below == BlockId::FARMLAND
+                    && below.is_farmland()
+            });
+        }
+
+        for (drop_pos, slot) in extra_drops {
+            self.spawn_item_drop(drop_pos, slot);
+        }
+
+        if !changed_chunks.is_empty() {
+            let registry = Arc::clone(&self.registry);
+            let mesher = ChunkMesher::new(&registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        meshes.push((cpos, mesh));
+                    }
+                }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
+    }
+
+    /// Updates all active farmland blocks, transitioning between dry (FARMLAND) and moist (FARMLAND_MOIST)
+    /// based on nearby water hydration, and reverting unhydrated farmland back to DIRT after a timer.
+    pub fn update_farmland(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        if self.active_farmland.is_empty() {
+            return;
+        }
+
+        let mut changed_chunks = HashSet::new();
+        let mut extra_drops = Vec::new();
+
+        {
+            let mut world = self.world.lock().unwrap();
+            for (pos, timer) in self.active_farmland.iter_mut() {
+                let current = world.get_block(*pos);
+                if !current.is_farmland() {
+                    continue;
+                }
+
+                let hydrated = is_farmland_hydrated(*pos, |p| world.get_block(p));
+                if hydrated {
+                    *timer = 0.0;
+                    if current == BlockId::FARMLAND {
+                        // Became hydrated: turn into MOIST farmland!
+                        world.set_block(*pos, BlockId::FARMLAND_MOIST);
+                        let (cp, _, _, _) = world_to_chunk_coords(*pos);
+                        changed_chunks.insert(cp);
+                    }
+                } else {
+                    if current == BlockId::FARMLAND_MOIST {
+                        // Lost hydration: turn into dry farmland!
+                        world.set_block(*pos, BlockId::FARMLAND);
+                        let (cp, _, _, _) = world_to_chunk_coords(*pos);
+                        changed_chunks.insert(cp);
+                    }
+
+                    *timer += dt;
+                    let above_pos = *pos + IVec3::Y;
+                    let above = world.get_block(above_pos);
+                    let has_crop = matches!(
+                        above,
+                        BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 | BlockId::WHEAT_3
+                    );
+
+                    // Revert time: 5s if empty farmland, 10s if crop on top
+                    let revert_time = if has_crop { 10.0 } else { 5.0 };
+                    if *timer >= revert_time {
+                        // Farmland reverts back to regular dirt!
+                        world.set_block(*pos, BlockId::DIRT);
+                        let (cp1, _, _, _) = world_to_chunk_coords(*pos);
+                        changed_chunks.insert(cp1);
+
+                        if has_crop {
+                            world.set_block(above_pos, BlockId::AIR);
+                            let (cp2, _, _, _) = world_to_chunk_coords(above_pos);
+                            changed_chunks.insert(cp2);
+                            let drop_item = if above == BlockId::WHEAT_3 {
+                                ItemSlot::new(ItemId::WHEAT, 1)
+                            } else {
+                                ItemSlot::new(ItemId::WHEAT_SEEDS, 1)
+                            };
+                            extra_drops.push((
+                                above_pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                                drop_item,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Retain only blocks that are still farmland
+        {
+            let world = self.world.lock().unwrap();
+            self.active_farmland.retain(|(pos, _)| {
+                world.get_block(*pos).is_farmland()
             });
         }
 

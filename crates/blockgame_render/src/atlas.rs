@@ -58,9 +58,10 @@ impl TextureAtlas {
         let image = dynamic_img.to_rgba8();
         let mut atlas = Self { image };
 
-        // Paint procedural tiles for Bucket (242) and Water Bucket (243)
+        // Paint procedural tiles for Bucket (242), Water Bucket (243), and Moist Farmland (244)
         paint_bucket_sprite(&mut atlas, 242, false);
         paint_bucket_sprite(&mut atlas, 243, true);
+        paint_moist_farmland_tile(&mut atlas, 244, 150);
 
         atlas
     }
@@ -217,6 +218,23 @@ fn paint_bucket_sprite(atlas: &mut TextureAtlas, tile_id: u16, with_water: bool)
     });
 }
 
+fn paint_moist_farmland_tile(atlas: &mut TextureAtlas, dst_tile: u16, src_tile: u16) {
+    let src_base_x = (src_tile as u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+    let src_base_y = (src_tile as u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+    let mut pixels = [[Rgba([0, 0, 0, 255]); TILE_SIZE as usize]; TILE_SIZE as usize];
+    for py in 0..TILE_SIZE {
+        for px in 0..TILE_SIZE {
+            let orig = *atlas.image.get_pixel(src_base_x + px, src_base_y + py);
+            // Darken and enrich color to represent moist, saturated soil
+            let r = ((orig[0] as f32) * 0.48) as u8;
+            let g = ((orig[1] as f32) * 0.42) as u8;
+            let b = ((orig[2] as f32) * 0.36) as u8;
+            pixels[py as usize][px as usize] = Rgba([r, g, b, orig[3]]);
+        }
+    }
+    atlas.paint_tile(dst_tile, |px, py| pixels[py as usize][px as usize]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +276,28 @@ mod tests {
         assert_eq!(water_center[3], 255);
         // Blue channel should be strong for water bucket interior
         assert!(water_center[2] > 180, "Water blue channel should be high");
+    }
+
+    #[test]
+    fn test_moist_farmland_atlas_tile() {
+        let atlas = TextureAtlas::generate_default();
+
+        let dry_x = (150 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let dry_y = (150 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let dry_px = atlas.image.get_pixel(dry_x + 16, dry_y + 16);
+
+        let moist_x = (244 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let moist_y = (244 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let moist_px = atlas.image.get_pixel(moist_x + 16, moist_y + 16);
+
+        assert_eq!(moist_px[3], 255, "Moist farmland must be opaque");
+        assert!(
+            moist_px[0] < dry_px[0],
+            "Moist farmland should be darker than dry farmland (red)"
+        );
+        assert!(
+            moist_px[1] < dry_px[1],
+            "Moist farmland should be darker than dry farmland (green)"
+        );
     }
 }

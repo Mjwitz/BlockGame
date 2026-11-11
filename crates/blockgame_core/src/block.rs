@@ -75,6 +75,7 @@ impl BlockId {
     pub const PRISMARINE: Self = Self(61);
     pub const SEA_LANTERN: Self = Self(62);
     pub const SEAGRASS: Self = Self(63);
+    pub const FARMLAND_MOIST: Self = Self(64);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -84,6 +85,11 @@ impl BlockId {
     #[inline]
     pub const fn is_water(&self) -> bool {
         self.0 == Self::WATER.0 || self.0 == Self::SEAGRASS.0
+    }
+
+    #[inline]
+    pub const fn is_farmland(&self) -> bool {
+        self.0 == Self::FARMLAND.0 || self.0 == Self::FARMLAND_MOIST.0
     }
 
     #[inline]
@@ -130,7 +136,8 @@ impl BlockId {
             | Self::WHEAT_2
             | Self::WHEAT_3
             | Self::LILY_PAD
-            | Self::FARMLAND => false,
+            | Self::FARMLAND
+            | Self::FARMLAND_MOIST => false,
             _ => true,
         }
     }
@@ -512,6 +519,21 @@ impl BlockRegistry {
             luminance: 0,
             // PosY: Farmland Top (150), NegY: Dirt (2), Sides: Dirt (2)
             textures: [150, 2, 2, 2, 2, 2],
+            hardness: 0.6,
+            required_tool: Some(ToolType::Shovel),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DIRT),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::FARMLAND_MOIST,
+            name: "Moist Farmland",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: Moist Farmland Top (244), NegY: Dirt (2), Sides: Dirt (2)
+            textures: [244, 2, 2, 2, 2, 2],
             hardness: 0.6,
             required_tool: Some(ToolType::Shovel),
             min_tier: ToolTier::None,
@@ -1261,14 +1283,14 @@ where
                 return false;
             }
             let below = get_block(pos + IVec3::NEG_Y);
-            matches!(
-                below,
-                BlockId::GRASS
-                    | BlockId::DIRT
-                    | BlockId::PODZOL
-                    | BlockId::FARMLAND
-                    | BlockId::MYCELIUM
-            )
+            below.is_farmland()
+                || matches!(
+                    below,
+                    BlockId::GRASS
+                        | BlockId::DIRT
+                        | BlockId::PODZOL
+                        | BlockId::MYCELIUM
+                )
         }
         BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 | BlockId::WHEAT_3 => {
             let current = get_block(pos);
@@ -1276,7 +1298,7 @@ where
                 return false;
             }
             let below = get_block(pos + IVec3::NEG_Y);
-            below == BlockId::FARMLAND
+            below.is_farmland()
         }
         BlockId::CACTUS => {
             let current = get_block(pos);
@@ -2150,6 +2172,46 @@ mod tests {
         for drop in drops {
             assert!(drop.item_id == ItemId::APPLE || drop.item_id == ItemId::STICK);
         }
+    }
+
+    #[test]
+    fn test_farmland_moisture_and_crop_survival() {
+        let reg = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        assert!(BlockId::FARMLAND.is_farmland());
+        assert!(BlockId::FARMLAND_MOIST.is_farmland());
+        assert!(!BlockId::DIRT.is_farmland());
+
+        // Farmland moist definition
+        let moist_def = reg.get(BlockId::FARMLAND_MOIST).expect("Moist farmland registered");
+        assert_eq!(moist_def.textures[Direction::PosY.index()], 244);
+        assert_eq!(moist_def.textures[Direction::NegY.index()], 2);
+
+        // Dry farmland definition
+        let dry_def = reg.get(BlockId::FARMLAND).expect("Dry farmland registered");
+        assert_eq!(dry_def.textures[Direction::PosY.index()], 150);
+
+        // Plant wheat on dry farmland
+        world.set_block(IVec3::new(10, 1, 10), BlockId::FARMLAND);
+        world.set_block(IVec3::new(10, 2, 10), BlockId::WHEAT_0);
+        assert!(can_block_survive(BlockId::WHEAT_0, IVec3::new(10, 2, 10), &reg, |p| world.get_block(p)));
+
+        // Change to moist farmland -> wheat still survives!
+        world.set_block(IVec3::new(10, 1, 10), BlockId::FARMLAND_MOIST);
+        assert!(can_block_survive(BlockId::WHEAT_0, IVec3::new(10, 2, 10), &reg, |p| world.get_block(p)));
+
+        // Turn to dirt -> wheat can no longer survive!
+        world.set_block(IVec3::new(10, 1, 10), BlockId::DIRT);
+        assert!(!can_block_survive(BlockId::WHEAT_0, IVec3::new(10, 2, 10), &reg, |p| world.get_block(p)));
+
+        // Hydration check: water at (12, 1, 10) hydrates farmland at (10, 1, 10) (distance 2 <= 4)
+        world.set_block(IVec3::new(10, 1, 10), BlockId::FARMLAND);
+        assert!(!is_farmland_hydrated(IVec3::new(10, 1, 10), |p| world.get_block(p)));
+
+        world.set_block(IVec3::new(12, 1, 10), BlockId::WATER);
+        assert!(is_farmland_hydrated(IVec3::new(10, 1, 10), |p| world.get_block(p)));
     }
 }
 

@@ -584,7 +584,7 @@ impl ApplicationHandler for BlockGameApp {
                                     let world_guard = state.world_manager.world().lock().unwrap();
                                     world_guard.get_block(hit.hit_voxel)
                                 };
-                                if block_beneath == BlockId::FARMLAND
+                                if block_beneath.is_farmland()
                                     && hit.hit_face == blockgame_core::direction::Direction::PosY
                                 {
                                     let planted = state.world_manager.place_block(
@@ -1136,6 +1136,9 @@ impl ApplicationHandler for BlockGameApp {
                 state
                     .world_manager
                     .update_crops(dt, &state.device, &state.pipeline);
+                state
+                    .world_manager
+                    .update_farmland(dt, &state.device, &state.pipeline);
                 state
                     .world_manager
                     .update_cacti(dt, &state.device, &state.pipeline);
