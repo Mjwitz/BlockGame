@@ -17,7 +17,7 @@ use crate::{
 };
 
 const SAVE_MAGIC: &[u8; 4] = b"BGSV";
-const SAVE_VERSION: u32 = 1;
+const SAVE_VERSION: u32 = 2;
 
 /// Summary metadata for a saved world displayed in the Singleplayer World Selection list.
 #[derive(Debug, Clone, PartialEq)]
@@ -290,7 +290,7 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
     }
 
     let version = read_u32(&mut r)?;
-    if version != SAVE_VERSION {
+    if version != 1 && version != SAVE_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported save version: {}", version),
@@ -479,7 +479,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             ));
         }
         let version = read_u32(&mut r)?;
-        if version != SAVE_VERSION {
+        if version != 1 && version != SAVE_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Unsupported save version: {}", version),
@@ -513,7 +513,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         let slot_count = read_u32(&mut r)? as usize;
         let mut inventory = Inventory::default();
         for i in 0..slot_count {
-            let slot = read_item_slot(&mut r)?;
+            let slot = read_item_slot(&mut r, version)?;
             if i < Inventory::TOTAL_COUNT {
                 inventory.slots[i] = slot;
             }
@@ -561,7 +561,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             ));
         }
         let version = read_u32(&mut r)?;
-        if version != SAVE_VERSION {
+        if version != 1 && version != SAVE_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Unsupported world.bin version: {}", version),
@@ -589,7 +589,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             let len = read_u32(&mut r)? as usize;
             let mut slots = Vec::with_capacity(len);
             for _ in 0..len {
-                slots.push(read_item_slot(&mut r)?);
+                slots.push(read_item_slot(&mut r, version)?);
             }
             data.chest_containers.insert(pos, slots);
         }
@@ -598,9 +598,9 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         let furnace_count = read_u32(&mut r)? as usize;
         for _ in 0..furnace_count {
             let pos = read_ivec3(&mut r)?;
-            let input = read_item_slot(&mut r)?;
-            let fuel = read_item_slot(&mut r)?;
-            let output = read_item_slot(&mut r)?;
+            let input = read_item_slot(&mut r, version)?;
+            let fuel = read_item_slot(&mut r, version)?;
+            let output = read_item_slot(&mut r, version)?;
             let burn_time_remaining = read_f32(&mut r)?;
             let max_burn_time = read_f32(&mut r)?;
             let cook_progress = read_f32(&mut r)?;
@@ -622,7 +622,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         for _ in 0..drop_count {
             let position = read_vec3(&mut r)?;
             let velocity = read_vec3(&mut r)?;
-            let item = read_item_slot(&mut r)?;
+            let item = read_item_slot(&mut r, version)?;
             let age = read_f32(&mut r)?;
             let despawn_time = read_f32(&mut r)?;
             let pickup_delay = read_f32(&mut r)?;
@@ -797,10 +797,14 @@ fn write_item_slot<W: Write>(w: &mut W, slot: ItemSlot) -> io::Result<()> {
     write_u16(w, slot.durability)
 }
 
-fn read_item_slot<R: Read>(r: &mut R) -> io::Result<ItemSlot> {
+fn read_item_slot<R: Read>(r: &mut R, version: u32) -> io::Result<ItemSlot> {
     let id = ItemId(read_u16(r)?);
     let count = read_u16(r)?;
-    let durability = read_u16(r)?;
+    let durability = if version >= 2 {
+        read_u16(r)?
+    } else {
+        0
+    };
     if id == ItemId::EMPTY || count == 0 {
         Ok(ItemSlot::EMPTY)
     } else {
@@ -961,4 +965,154 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_root);
     }
+
+    #[test]
+    fn test_save_version_1_backward_compatibility() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "blockgame_v1_compat_test_{}",
+            current_unix_timestamp()
+        ));
+        let world_dir = temp_root.join("test_v1_world");
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&world_dir).unwrap();
+
+        // Write a valid Version 1 level.dat (4 bytes per item slot)
+        {
+            let file = File::create(world_dir.join("level.dat")).unwrap();
+            let mut w = BufWriter::new(file);
+            w.write_all(SAVE_MAGIC).unwrap();
+            write_u32(&mut w, 1).unwrap(); // Version 1
+
+            write_string(&mut w, "Test V1 World").unwrap();
+            write_string(&mut w, "test_v1_world").unwrap();
+            write_u32(&mut w, 55555).unwrap();
+            write_u64(&mut w, 12345678).unwrap();
+            write_f32(&mut w, 100.0).unwrap();
+            write_f32(&mut w, 0.4).unwrap();
+
+            write_vec3(&mut w, Vec3::new(1.0, 64.0, 1.0)).unwrap();
+            write_vec3(&mut w, Vec3::ZERO).unwrap();
+            write_f32(&mut w, 0.0).unwrap();
+            write_f32(&mut w, 0.0).unwrap();
+            write_u32(&mut w, 0).unwrap();
+
+            // Stats
+            write_f32(&mut w, 20.0).unwrap();
+            write_f32(&mut w, 20.0).unwrap();
+            write_f32(&mut w, 20.0).unwrap();
+            write_f32(&mut w, 20.0).unwrap();
+            write_f32(&mut w, 5.0).unwrap();
+            write_f32(&mut w, 0.0).unwrap();
+            write_f32(&mut w, 10.0).unwrap();
+            write_f32(&mut w, 10.0).unwrap();
+            write_bool(&mut w, false).unwrap();
+
+            // 36 Inventory slots with v1 format (only 4 bytes: id + count, NO durability)
+            write_u32(&mut w, 36).unwrap();
+            // Slot 0: Diamond Pickaxe
+            write_u16(&mut w, ItemId::DIAMOND_PICKAXE.0).unwrap();
+            write_u16(&mut w, 1).unwrap();
+            // Remaining 35 empty slots
+            for _ in 1..36 {
+                write_u16(&mut w, 0).unwrap();
+                write_u16(&mut w, 0).unwrap();
+            }
+            w.flush().unwrap();
+        }
+
+        // Write a valid Version 1 world.bin (4 bytes per item slot for chest, furnace, drop)
+        {
+            let file = File::create(world_dir.join("world.bin")).unwrap();
+            let mut w = BufWriter::new(file);
+            w.write_all(SAVE_MAGIC).unwrap();
+            write_u32(&mut w, 1).unwrap(); // Version 1
+
+            // 0 modified chunks
+            write_u32(&mut w, 0).unwrap();
+
+            // 1 chest container with 27 v1 slots
+            write_u32(&mut w, 1).unwrap();
+            write_ivec3(&mut w, IVec3::new(0, 60, 0)).unwrap();
+            write_u32(&mut w, 27).unwrap();
+            // slot 0: Iron Pickaxe
+            write_u16(&mut w, ItemId::IRON_PICKAXE.0).unwrap();
+            write_u16(&mut w, 1).unwrap();
+            for _ in 1..27 {
+                write_u16(&mut w, 0).unwrap();
+                write_u16(&mut w, 0).unwrap();
+            }
+
+            // 1 furnace
+            write_u32(&mut w, 1).unwrap();
+            write_ivec3(&mut w, IVec3::new(1, 60, 0)).unwrap();
+            // input: raw iron (id, count)
+            write_u16(&mut w, ItemId::RAW_IRON.0).unwrap();
+            write_u16(&mut w, 5).unwrap();
+            // fuel: coal (id, count)
+            write_u16(&mut w, ItemId::COAL.0).unwrap();
+            write_u16(&mut w, 3).unwrap();
+            // output: empty
+            write_u16(&mut w, 0).unwrap();
+            write_u16(&mut w, 0).unwrap();
+            write_f32(&mut w, 10.0).unwrap();
+            write_f32(&mut w, 80.0).unwrap();
+            write_f32(&mut w, 2.0).unwrap();
+
+            // 1 item drop
+            write_u32(&mut w, 1).unwrap();
+            write_vec3(&mut w, Vec3::new(0.0, 60.5, 0.0)).unwrap();
+            write_vec3(&mut w, Vec3::ZERO).unwrap();
+            // item: stick (id, count)
+            write_u16(&mut w, ItemId::STICK.0).unwrap();
+            write_u16(&mut w, 2).unwrap();
+            write_f32(&mut w, 5.0).unwrap();
+            write_f32(&mut w, 300.0).unwrap();
+            write_f32(&mut w, 0.0).unwrap();
+
+            // 0 falling blocks
+            write_u32(&mut w, 0).unwrap();
+            // Animals: next_id = 1, count = 0
+            write_u32(&mut w, 1).unwrap();
+            write_u32(&mut w, 0).unwrap();
+
+            // Simulation lists
+            write_pos_timer_list(&mut w, &[]).unwrap();
+            write_pos_timer_list(&mut w, &[]).unwrap();
+            write_pos_timer_list(&mut w, &[]).unwrap();
+            write_pos_timer_list(&mut w, &[]).unwrap();
+
+            // Animal spawned columns
+            write_u32(&mut w, 0).unwrap();
+
+            w.flush().unwrap();
+        }
+
+        // Test metadata load
+        let meta = load_world_metadata(&world_dir).expect("load_world_metadata should succeed for v1");
+        assert_eq!(meta.name, "Test V1 World");
+        assert_eq!(meta.seed, 55555);
+
+        // Test full load from dir without UnexpectedEof
+        let loaded = load_world_from_dir(&temp_root, "test_v1_world")
+            .expect("load_world_from_dir must succeed for v1 save files without UnexpectedEof");
+
+        assert_eq!(loaded.player.inventory.slots[0].item_id, ItemId::DIAMOND_PICKAXE);
+        assert_eq!(loaded.player.inventory.slots[0].count, 1);
+        assert_eq!(loaded.player.inventory.slots[0].durability, 0);
+
+        let chest_slots = loaded.chest_containers.get(&IVec3::new(0, 60, 0)).unwrap();
+        assert_eq!(chest_slots[0].item_id, ItemId::IRON_PICKAXE);
+        assert_eq!(chest_slots[0].durability, 0);
+
+        let furnace = loaded.furnaces.get(&IVec3::new(1, 60, 0)).unwrap();
+        assert_eq!(furnace.input.item_id, ItemId::RAW_IRON);
+        assert_eq!(furnace.input.durability, 0);
+
+        assert_eq!(loaded.item_drops.len(), 1);
+        assert_eq!(loaded.item_drops[0].item.item_id, ItemId::STICK);
+        assert_eq!(loaded.item_drops[0].item.durability, 0);
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
 }
+
