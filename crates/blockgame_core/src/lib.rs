@@ -2,12 +2,14 @@ pub mod animal;
 pub mod auth;
 pub mod block;
 pub mod chunk;
+pub mod command;
 pub mod crafting;
 pub mod direction;
 pub mod entity;
 pub mod item;
 pub mod lighting;
 pub mod net;
+pub mod permissions;
 pub mod physics;
 pub mod player;
 pub mod raycast;
@@ -26,6 +28,9 @@ pub use block::{
     BlockRegistry,
 };
 pub use chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, CHUNK_VOLUME};
+pub use command::{
+    execute_command, resolve_item, CommandOutput, CommandSource, OnlinePlayerInfo,
+};
 pub use crafting::{CraftingGrid, CraftingManager, Recipe};
 pub use direction::Direction;
 pub use entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus};
@@ -34,6 +39,10 @@ pub use lighting::{calculate_chunk_lighting, ChunkLightMap, LightValue};
 pub use net::{
     player_skin_name, ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer,
     PlayerModelState, ServerPacket, DEFAULT_SERVER_PORT,
+};
+pub use permissions::{
+    permission_matches, BanEntry, BanManager, PermissionGroup, PermissionsManager,
+    PlayerPermissions,
 };
 pub use physics::{PlayerPhysics, AABB};
 pub use player::PlayerStats;
@@ -45,3 +54,4 @@ pub use save::{
 };
 pub use tool::{ToolTier, ToolType};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};
+

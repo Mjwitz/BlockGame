@@ -4,6 +4,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, Sender},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
@@ -15,8 +16,10 @@ use crate::{
     auth::{derive_client_password_token, validate_username, AuthDatabase},
     block::BlockId,
     chunk::ChunkPos,
+    command::{execute_command, CommandOutput, CommandSource, OnlinePlayerInfo},
     entity::{next_local_drop_id, ItemDrop},
-    item::{Inventory, ItemId, ItemSlot},
+    item::{Inventory, ItemId, ItemRegistry, ItemSlot},
+    permissions::{BanManager, PermissionsManager},
     player::PlayerStats,
     save::{
         encode_chunk_rle, load_world_from_dir, save_world_to_dir, SavedPlayerState, WorldMetadata,
@@ -207,7 +210,16 @@ pub enum ServerPacket {
         collector_player_id: u32,
         item: ItemSlot,
     },
+    TeleportPlayer {
+        position: Vec3,
+        yaw: f32,
+        pitch: f32,
+    },
+    ReceiveItem {
+        item: ItemSlot,
+    },
 }
+
 
 impl ClientPacket {
     pub fn encode(&self) -> io::Result<Vec<u8>> {
@@ -615,7 +627,22 @@ impl ServerPacket {
                 write_u32(&mut payload, *collector_player_id)?;
                 write_slot(&mut payload, *item)?;
             }
+            Self::TeleportPlayer {
+                position,
+                yaw,
+                pitch,
+            } => {
+                write_u8(&mut payload, 14)?;
+                write_vec3(&mut payload, *position)?;
+                write_f32(&mut payload, *yaw)?;
+                write_f32(&mut payload, *pitch)?;
+            }
+            Self::ReceiveItem { item } => {
+                write_u8(&mut payload, 15)?;
+                write_slot(&mut payload, *item)?;
+            }
         }
+
         wrap_frame(&payload)
     }
 
@@ -812,10 +839,25 @@ impl ServerPacket {
                     item,
                 })
             }
+            14 => {
+                let position = read_vec3(&mut r)?;
+                let yaw = read_f32(&mut r)?;
+                let pitch = read_f32(&mut r)?;
+                Ok(Self::TeleportPlayer {
+                    position,
+                    yaw,
+                    pitch,
+                })
+            }
+            15 => {
+                let item = read_slot(&mut r)?;
+                Ok(Self::ReceiveItem { item })
+            }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ServerPacket tag {}", other),
             )),
+
         }
     }
 }
@@ -899,6 +941,7 @@ pub struct MultiplayerServer {
     stop_flag: Arc<AtomicBool>,
     join_handle: Option<JoinHandle<()>>,
     online_count: Arc<Mutex<usize>>,
+    command_tx: Sender<String>,
 }
 
 impl MultiplayerServer {
@@ -924,6 +967,7 @@ impl MultiplayerServer {
         let stop_clone = stop_flag.clone();
         let online_count = Arc::new(Mutex::new(0usize));
         let online_clone = online_count.clone();
+        let (command_tx, command_rx) = mpsc::channel();
         let gen_arc: Arc<dyn Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync> =
             Arc::new(chunk_generator);
 
@@ -940,6 +984,7 @@ impl MultiplayerServer {
                     gen_arc,
                     stop_clone,
                     online_clone,
+                    command_rx,
                 );
             })?;
 
@@ -950,6 +995,7 @@ impl MultiplayerServer {
             stop_flag,
             join_handle: Some(handle),
             online_count,
+            command_tx,
         })
     }
 
@@ -959,6 +1005,11 @@ impl MultiplayerServer {
 
     pub fn online_player_count(&self) -> usize {
         *self.online_count.lock().unwrap()
+    }
+
+    /// Dispatches a command from the server console for immediate execution on the server thread.
+    pub fn execute_command(&self, cmd: &str) {
+        let _ = self.command_tx.send(cmd.to_string());
     }
 
     pub fn shutdown(&mut self) {
@@ -975,6 +1026,87 @@ impl Drop for MultiplayerServer {
     }
 }
 
+fn apply_command_output(
+    output: CommandOutput,
+    source_pid: Option<u32>,
+    direct_sends: &mut Vec<(u32, ServerPacket)>,
+    outgoing_broadcasts: &mut Vec<(Option<u32>, ServerPacket)>,
+    clients: &mut [ConnectedClient],
+    disconnected_indices: &mut Vec<usize>,
+    perms_manager: &mut PermissionsManager,
+    ban_manager: &mut BanManager,
+    world_dir: &std::path::Path,
+    stop_flag: &Arc<AtomicBool>,
+) {
+    if output.save_permissions {
+        let _ = perms_manager.save_to_dir(world_dir);
+    }
+    if output.save_bans {
+        let _ = ban_manager.save_to_dir(world_dir);
+    }
+
+    for fb in output.feedback {
+        if let Some(pid) = source_pid {
+            direct_sends.push((
+                pid,
+                ServerPacket::ChatBroadcast {
+                    sender: "Server".to_string(),
+                    message: fb,
+                    is_system: true,
+                },
+            ));
+        } else {
+            println!("{}", fb);
+            log::info!("[Console] {}", fb);
+        }
+    }
+
+    for msg in output.broadcasts {
+        outgoing_broadcasts.push((
+            None,
+            ServerPacket::ChatBroadcast {
+                sender: "Server".to_string(),
+                message: msg,
+                is_system: true,
+            },
+        ));
+    }
+
+    for (target_pid, reason) in output.kick_targets {
+        direct_sends.push((target_pid, ServerPacket::Kick { reason }));
+        if let Some(pos) = clients.iter().position(|c| c.player_id == target_pid) {
+            disconnected_indices.push(pos);
+        }
+    }
+
+    for (target_pid, pos, yaw, pitch) in output.teleports {
+        if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+            c.model.position = pos;
+            c.saved_state.position = pos;
+            c.model.yaw = yaw;
+            c.saved_state.yaw = yaw;
+            c.model.pitch = pitch;
+            c.saved_state.pitch = pitch;
+        }
+        direct_sends.push((
+            target_pid,
+            ServerPacket::TeleportPlayer {
+                position: pos,
+                yaw,
+                pitch,
+            },
+        ));
+    }
+
+    for (target_pid, slot) in output.gives {
+        direct_sends.push((target_pid, ServerPacket::ReceiveItem { item: slot }));
+    }
+
+    if output.stop_server {
+        stop_flag.store(true, Ordering::SeqCst);
+    }
+}
+
 fn run_server_loop(
     listener: TcpListener,
     saves_root: PathBuf,
@@ -985,6 +1117,7 @@ fn run_server_loop(
     chunk_generator: Arc<dyn Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync>,
     stop_flag: Arc<AtomicBool>,
     online_count: Arc<Mutex<usize>>,
+    command_rx: Receiver<String>,
 ) {
     let world_dir = saves_root.join(&folder_name);
     let mut save_data = if let Some(data) = initial_world_data {
@@ -998,6 +1131,11 @@ fn run_server_loop(
     };
 
     let mut auth_db = AuthDatabase::load_from_dir(&world_dir).unwrap_or_default();
+    let mut perms_manager =
+        PermissionsManager::load_from_dir(&world_dir).unwrap_or_else(|_| PermissionsManager::new());
+    let mut ban_manager = BanManager::load_from_dir(&world_dir).unwrap_or_default();
+
+    let item_registry = ItemRegistry::new();
     let mut world = World::new();
     save_data.apply_to_world(&mut world);
 
@@ -1006,6 +1144,7 @@ fn run_server_loop(
     } else {
         Vec3::new(0.5, 76.0, 0.5)
     };
+
 
     let mut clients: Vec<ConnectedClient> = Vec::new();
     let mut next_player_id: u32 = 1;
@@ -1033,11 +1172,46 @@ fn run_server_loop(
             });
         }
 
-        // 2. Read & process incoming packets from all connected clients
+        // 2. Read incoming console commands
         let mut outgoing_broadcasts: Vec<(Option<u32>, ServerPacket)> = Vec::new();
         let mut direct_sends: Vec<(u32, ServerPacket)> = Vec::new();
         let mut disconnected_indices: Vec<usize> = Vec::new();
 
+        while let Ok(cmd_line) = command_rx.try_recv() {
+            let online_infos: Vec<OnlinePlayerInfo> = clients
+                .iter()
+                .filter(|c| c.authenticated)
+                .map(|c| OnlinePlayerInfo {
+                    player_id: c.player_id,
+                    username: c.username.clone(),
+                    position: c.model.position,
+                    yaw: c.model.yaw,
+                    pitch: c.model.pitch,
+                })
+                .collect();
+            let out = execute_command(
+                &CommandSource::Console,
+                &cmd_line,
+                &online_infos,
+                &mut perms_manager,
+                &mut ban_manager,
+                &item_registry,
+            );
+            apply_command_output(
+                out,
+                None,
+                &mut direct_sends,
+                &mut outgoing_broadcasts,
+                &mut clients,
+                &mut disconnected_indices,
+                &mut perms_manager,
+                &mut ban_manager,
+                &world_dir,
+                &stop_flag,
+            );
+        }
+
+        // 3. Read & process incoming packets from all connected clients
         // Snapshot currently authenticated usernames (lowercase) to prevent duplicate simultaneous logins
         let active_usernames: Vec<(u32, String)> = clients
             .iter()
@@ -1104,6 +1278,25 @@ fn run_server_loop(
                             continue;
                         }
 
+                        if let Some(ban) = ban_manager.is_banned(&username) {
+                            let reason = ban.reason.clone();
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::AuthResponse {
+                                    success: false,
+                                    player_id: 0,
+                                    session_token: [0u8; 16],
+                                    message: format!("Banned: {}", reason),
+                                    seed: 0,
+                                    day_night_time: 0.25,
+                                    player_state: SavedPlayerState::default(),
+                                    skin_id: 0,
+                                },
+                            ));
+                            continue;
+                        }
+
+
                         match auth_db.authenticate_or_register(
                             &username,
                             &password_token,
@@ -1111,11 +1304,16 @@ fn run_server_loop(
                             default_spawn,
                         ) {
                             Ok((account, token, is_new)) => {
+                                if perms_manager.players.is_empty() {
+                                    let _ = perms_manager.add_player_group(&account.username, "admin");
+                                    let _ = perms_manager.save_to_dir(&world_dir);
+                                }
                                 clients[idx].authenticated = true;
                                 clients[idx].username = account.username.clone();
                                 clients[idx].session_token = token;
                                 clients[idx].saved_state = account.player_state.clone();
                                 clients[idx].model = PlayerModelState {
+
                                     player_id: pid,
                                     username: account.username.clone(),
                                     position: account.player_state.position,
@@ -1406,14 +1604,51 @@ fn run_server_loop(
                     ClientPacket::Chat { message } if clients[idx].authenticated => {
                         let trimmed = message.trim();
                         if !trimmed.is_empty() {
-                            outgoing_broadcasts.push((
-                                None,
-                                ServerPacket::ChatBroadcast {
-                                    sender: clients[idx].username.clone(),
-                                    message: trimmed.chars().take(120).collect(),
-                                    is_system: false,
-                                },
-                            ));
+                            if trimmed.starts_with('/') {
+                                let online_infos: Vec<OnlinePlayerInfo> = clients
+                                    .iter()
+                                    .filter(|c| c.authenticated)
+                                    .map(|c| OnlinePlayerInfo {
+                                        player_id: c.player_id,
+                                        username: c.username.clone(),
+                                        position: c.model.position,
+                                        yaw: c.model.yaw,
+                                        pitch: c.model.pitch,
+                                    })
+                                    .collect();
+                                let out = execute_command(
+                                    &CommandSource::Player {
+                                        player_id: pid,
+                                        username: clients[idx].username.clone(),
+                                    },
+                                    trimmed,
+                                    &online_infos,
+                                    &mut perms_manager,
+                                    &mut ban_manager,
+                                    &item_registry,
+                                );
+                                apply_command_output(
+                                    out,
+                                    Some(pid),
+                                    &mut direct_sends,
+                                    &mut outgoing_broadcasts,
+                                    &mut clients,
+                                    &mut disconnected_indices,
+                                    &mut perms_manager,
+                                    &mut ban_manager,
+                                    &world_dir,
+                                    &stop_flag,
+                                );
+                            } else {
+                                outgoing_broadcasts.push((
+                                    None,
+                                    ServerPacket::ChatBroadcast {
+                                        sender: clients[idx].username.clone(),
+                                        message: trimmed.chars().take(120).collect(),
+                                        is_system: false,
+                                    },
+                                ));
+                            }
                         }
                     }
                     ClientPacket::Ping { timestamp_ms } => {
@@ -1424,6 +1659,16 @@ fn run_server_loop(
                         break;
                     }
                     _ => {}
+                }
+            }
+        }
+
+        // Send direct packets first so kicked clients receive their Kick packet
+        for (target_pid, pkt) in direct_sends {
+            if let Ok(bytes) = pkt.encode() {
+                if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+                    let _ = c.stream.write_all(&bytes);
+                    let _ = c.stream.flush();
                 }
             }
         }
@@ -1459,15 +1704,6 @@ fn run_server_loop(
             }
         }
 
-        // Send direct packets
-        for (target_pid, pkt) in direct_sends {
-            if let Ok(bytes) = pkt.encode() {
-                if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
-                    let _ = c.stream.write_all(&bytes);
-                }
-            }
-        }
-
         // Send broadcast packets
         for (exclude_pid, pkt) in outgoing_broadcasts {
             if let Ok(bytes) = pkt.encode() {
@@ -1478,6 +1714,7 @@ fn run_server_loop(
                 }
             }
         }
+
 
         // 3. Server 20 TPS tick: advance day/night cycle, hurt timers, and broadcast WorldSnapshot
         let now = Instant::now();
@@ -1546,8 +1783,11 @@ fn run_server_loop(
         }
     }
     let _ = auth_db.save_to_dir(&world_dir);
+    let _ = perms_manager.save_to_dir(&world_dir);
+    let _ = ban_manager.save_to_dir(&world_dir);
     save_data.capture_from_world(&world);
     let _ = save_world_to_dir(&saves_root, &mut save_data);
+
 }
 
 // --- Non-Blocking Multiplayer Client ---
@@ -1684,15 +1924,12 @@ impl MultiplayerClient {
     /// Polls all newly arrived `ServerPacket`s without blocking.
     pub fn poll_packets(&mut self) -> Vec<ServerPacket> {
         let mut received = Vec::new();
-        if !self.connected {
-            return received;
-        }
-
-        match self.framer.read_available(&mut self.stream) {
-            Ok(true) => {}
-            Ok(false) | Err(_) => {
-                self.connected = false;
-                return received;
+        if self.connected {
+            match self.framer.read_available(&mut self.stream) {
+                Ok(true) => {}
+                Ok(false) | Err(_) => {
+                    self.connected = false;
+                }
             }
         }
 
@@ -1703,6 +1940,7 @@ impl MultiplayerClient {
         }
         received
     }
+
 
     /// Disconnects cleanly from the server.
     pub fn disconnect(&mut self) {
@@ -2215,4 +2453,118 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }
+
+    #[test]
+    fn test_server_commands_and_permissions() {
+        let temp_root = std::env::temp_dir().join(format!("bg_cmd_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_root);
+
+        let mut server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "test_cmd_world".to_string(),
+            "Test Cmd World".to_string(),
+            777,
+            None,
+            |_| crate::chunk::Chunk::new(ChunkPos(glam::IVec3::ZERO)),
+        )
+        .expect("Server should start");
+
+        let addr_str = server.local_addr().to_string();
+
+        // 1. Connect admin player (first to join -> auto-assigned admin group)
+        let (mut client_admin, _auth_admin) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "AdminUser", "secret1", 0)
+                .expect("Admin should authenticate");
+
+        // 2. Connect regular player Bob
+        let (mut client_bob, _auth_bob) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1)
+                .expect("Bob should authenticate");
+
+        thread::sleep(Duration::from_millis(150));
+
+        // 3. Admin gives Bob 5 diamonds using in-game command
+        client_admin.send(&ClientPacket::Chat {
+            message: "/give BobUser diamond 5".to_string(),
+        });
+
+        thread::sleep(Duration::from_millis(150));
+        let bob_pkts = client_bob.poll_packets();
+        let gave_diamonds = bob_pkts.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::ReceiveItem { item }
+                    if item.item_id == ItemId::DIAMOND && item.count == 5
+            )
+        });
+        assert!(gave_diamonds, "Bob must receive diamond item from /give command");
+
+        // 4. Admin teleports Bob to (120, 80, 240)
+        client_admin.send(&ClientPacket::Chat {
+            message: "/tp BobUser 120 80 240".to_string(),
+        });
+
+        thread::sleep(Duration::from_millis(150));
+        let bob_pkts = client_bob.poll_packets();
+        let teleported = bob_pkts.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::TeleportPlayer { position, .. }
+                    if (*position - Vec3::new(120.0, 80.0, 240.0)).length() < 0.01
+            )
+        });
+        assert!(teleported, "Bob must receive TeleportPlayer packet to target coordinates");
+
+        // 5. Console issues ban command on Bob
+        server.execute_command("ban BobUser Griefing spawn area");
+
+        thread::sleep(Duration::from_millis(200));
+        let bob_pkts = client_bob.poll_packets();
+        let kicked_for_ban = bob_pkts.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::Kick { reason }
+                    if reason.contains("Banned") && reason.contains("Griefing")
+            )
+        });
+        assert!(kicked_for_ban, "Bob must receive Kick packet containing ban reason");
+
+        // 6. Bob tries to reconnect while banned; should be rejected
+        let reconnect_res =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1);
+        match reconnect_res {
+            Err(err_msg) => {
+                assert!(
+                    err_msg.contains("Banned") || err_msg.contains("banned"),
+                    "Error message must specify ban: {}",
+                    err_msg
+                );
+            }
+            Ok(_) => panic!("Banned user must fail login!"),
+        }
+
+
+        // 7. Console unbans Bob
+        server.execute_command("unban BobUser");
+        thread::sleep(Duration::from_millis(150));
+
+        // 8. Bob can now successfully log back in
+        let (mut client_bob2, _auth_bob2) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1)
+                .expect("Bob should be able to reconnect after unban");
+
+        // Clean shutdown
+        client_admin.disconnect();
+        client_bob2.disconnect();
+        server.shutdown();
+
+        // 9. Verify persistence files exist
+        let world_dir = temp_root.join("test_cmd_world");
+        assert!(world_dir.join("permissions.txt").exists(), "permissions.txt must be saved");
+        assert!(world_dir.join("bans.txt").exists(), "bans.txt must be saved");
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
 }
+

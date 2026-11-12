@@ -2616,8 +2616,61 @@ impl ApplicationHandler for BlockGameApp {
                                 blockgame_core::net::ServerPacket::Kick { reason } => {
                                     kick_reason = Some(reason);
                                 }
+                                blockgame_core::net::ServerPacket::TeleportPlayer {
+                                    position,
+                                    yaw,
+                                    pitch,
+                                } => {
+                                    state.player.position = position;
+                                    state.player.velocity = Vec3::ZERO;
+                                    state.camera.yaw = yaw;
+                                    state.camera.pitch = pitch;
+                                }
+
+                                blockgame_core::net::ServerPacket::ReceiveItem { item } => {
+                                    if !item.is_empty() {
+                                        let overflow = state
+                                            .inventory
+                                            .add_item(item, &state.item_registry);
+                                        if let Some(remaining) = overflow {
+                                            let drop_id = ((client.player_id as u64) << 40)
+                                                | (state.next_mp_drop_nonce as u64
+                                                    & 0x000000FFFFFFFFFF);
+                                            state.next_mp_drop_nonce =
+                                                state.next_mp_drop_nonce.wrapping_add(1);
+                                            let ppos = state.player.position;
+                                            state
+                                                .world_manager
+                                                .spawn_item_drop_with_id_and_velocity(
+                                                    drop_id,
+                                                    ppos,
+                                                    Vec3::new(0.0, 2.0, 0.0),
+                                                    remaining,
+                                                );
+                                            client.send(
+                                                &blockgame_core::net::ClientPacket::SpawnItemDrop {
+                                                    drop_id,
+                                                    position: ppos,
+                                                    velocity: Vec3::new(0.0, 2.0, 0.0),
+                                                    item: remaining,
+                                                },
+                                            );
+                                        }
+                                        let inv = state.inventory.clone();
+                                        let hotbar = state.active_hotbar_slot;
+                                        let stats = state.player_stats.clone();
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::PlayerInventorySync {
+                                                inventory: inv,
+                                                active_hotbar_slot: hotbar,
+                                                stats,
+                                            },
+                                        );
+                                    }
+                                }
                                 _ => {}
                             }
+
                         }
 
                         if !client.connected && kick_reason.is_none() {
