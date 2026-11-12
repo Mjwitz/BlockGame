@@ -788,6 +788,36 @@ impl WorldManager {
         }
     }
 
+    /// Spawns a floating item drop with an initial velocity vector
+    pub fn spawn_item_drop_with_velocity(&mut self, pos: Vec3, vel: Vec3, item: ItemSlot) {
+        if !item.is_empty() {
+            self.item_drops.push(ItemDrop::with_velocity(pos, vel, item));
+        }
+    }
+
+    /// Spawns a floating item drop with an explicit network drop ID and velocity
+    pub fn spawn_item_drop_with_id_and_velocity(
+        &mut self,
+        drop_id: u64,
+        pos: Vec3,
+        vel: Vec3,
+        item: ItemSlot,
+    ) {
+        if !item.is_empty() && !self.item_drops.iter().any(|d| d.drop_id == drop_id) {
+            self.item_drops
+                .push(ItemDrop::with_id_and_velocity(drop_id, pos, vel, item));
+        }
+    }
+
+    /// Removes an item drop by drop ID (e.g. when collected on server)
+    pub fn remove_item_drop(&mut self, drop_id: u64) -> Option<ItemSlot> {
+        if let Some(idx) = self.item_drops.iter().position(|d| d.drop_id == drop_id) {
+            Some(self.item_drops.remove(idx).item)
+        } else {
+            None
+        }
+    }
+
     /// Updates item drops with gravity, collision, player magnetism, and returns any collected item slots
     pub fn update_item_drops(&mut self, dt: f32, player_pos: Vec3) -> Vec<ItemSlot> {
         let mut collected = Vec::new();
@@ -805,6 +835,27 @@ impl WorldManager {
         });
 
         collected
+    }
+
+    /// Updates item drops in multiplayer: runs physics, collision, and magnetism toward the player,
+    /// returning drop IDs of items within pickup range whose collection has been initiated.
+    pub fn update_item_drops_multiplayer(&mut self, dt: f32, player_pos: Vec3) -> Vec<u64> {
+        let mut pickable = Vec::new();
+        let world_guard = self.world.lock().unwrap();
+
+        self.item_drops.retain_mut(|drop| {
+            let alive = drop.update_physics_only(dt, &world_guard, &self.registry, player_pos);
+            if !alive {
+                return false;
+            }
+            if drop.can_be_collected_by(player_pos) {
+                drop.pickup_pending = true;
+                pickable.push(drop.drop_id);
+            }
+            true
+        });
+
+        pickable
     }
 
     pub fn place_block(
@@ -1819,7 +1870,7 @@ impl WorldManager {
         modified_chunks: &[(ChunkPos, Vec<(u16, BlockId)>)],
         chests: &[(IVec3, Vec<ItemSlot>)],
         furnaces: &[(IVec3, blockgame_core::world::FurnaceState)],
-        item_drops: &[(Vec3, Vec3, ItemSlot)],
+        item_drops: &[(u64, Vec3, Vec3, ItemSlot)],
         device: &wgpu::Device,
         pipeline: &VoxelPipeline,
     ) {
@@ -1854,8 +1905,8 @@ impl WorldManager {
         }
 
         self.item_drops.clear();
-        for (pos, vel, item) in item_drops {
-            self.item_drops.push(ItemDrop::with_velocity(*pos, *vel, *item));
+        for (drop_id, pos, vel, item) in item_drops {
+            self.item_drops.push(ItemDrop::with_id_and_velocity(*drop_id, *pos, *vel, *item));
         }
 
         chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));

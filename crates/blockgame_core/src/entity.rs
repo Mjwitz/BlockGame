@@ -83,6 +83,13 @@ impl FallingBlock {
     }
 }
 
+static NEXT_LOCAL_DROP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Returns a unique monotonic drop ID for local/singleplayer drops.
+pub fn next_local_drop_id() -> u64 {
+    NEXT_LOCAL_DROP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemDropStatus {
     Alive,
@@ -90,36 +97,60 @@ pub enum ItemDropStatus {
     Despawned,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ItemDrop {
+    pub drop_id: u64,
     pub position: Vec3,
     pub velocity: Vec3,
     pub item: ItemSlot,
     pub age: f32,
     pub despawn_time: f32,
     pub pickup_delay: f32,
+    pub pickup_pending: bool,
 }
 
 impl ItemDrop {
     pub fn new(position: Vec3, item: ItemSlot) -> Self {
         Self {
+            drop_id: next_local_drop_id(),
             position,
             velocity: Vec3::new(0.0, 2.0, 0.0), // small upward hop when spawned
             item,
             age: 0.0,
             despawn_time: 300.0, // 5 minutes
             pickup_delay: 0.5,   // 0.5s delay before magnetic pickup
+            pickup_pending: false,
         }
     }
 
     pub fn with_velocity(position: Vec3, velocity: Vec3, item: ItemSlot) -> Self {
         Self {
+            drop_id: next_local_drop_id(),
             position,
             velocity,
             item,
             age: 0.0,
             despawn_time: 300.0,
             pickup_delay: 0.5,
+            pickup_pending: false,
+        }
+    }
+
+    pub fn with_id_and_velocity(
+        drop_id: u64,
+        position: Vec3,
+        velocity: Vec3,
+        item: ItemSlot,
+    ) -> Self {
+        Self {
+            drop_id,
+            position,
+            velocity,
+            item,
+            age: 0.0,
+            despawn_time: 300.0,
+            pickup_delay: 0.5,
+            pickup_pending: false,
         }
     }
 
@@ -211,6 +242,101 @@ impl ItemDrop {
         }
 
         ItemDropStatus::Alive
+    }
+
+    /// Checks if this item drop is in range and eligible to be collected by a player at `player_pos`.
+    pub fn can_be_collected_by(&self, player_pos: Vec3) -> bool {
+        if self.pickup_delay > 0.0 || self.pickup_pending {
+            return false;
+        }
+        let player_center = player_pos + Vec3::new(0.0, 0.8, 0.0);
+        let to_center = player_center - self.position;
+        let dist = to_center.length();
+
+        let dx = self.position.x - player_pos.x;
+        let dz = self.position.z - player_pos.z;
+        let dy = self.position.y - player_pos.y;
+        let horiz_dist = (dx * dx + dz * dz).sqrt();
+
+        (horiz_dist < 1.5 && dy >= -0.5 && dy <= 2.0) || dist < 1.3
+    }
+
+    /// Updates item drop physics, collision, and player magnetism without locally collecting it.
+    /// Returns false if the drop despawned due to age.
+    pub fn update_physics_only(
+        &mut self,
+        dt: f32,
+        world: &World,
+        registry: &BlockRegistry,
+        player_pos: Vec3,
+    ) -> bool {
+        self.age += dt;
+        if self.age >= self.despawn_time {
+            return false;
+        }
+
+        if self.pickup_delay > 0.0 {
+            self.pickup_delay -= dt;
+        }
+
+        // 1. Gravity, Buoyancy and Ground Collision
+        let current_voxel = IVec3::new(
+            self.position.x.floor() as i32,
+            self.position.y.floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let (cp, lx, ly, lz) = world_to_chunk_coords(current_voxel);
+        let current_block = if let Some(chunk) = world.get_chunk(cp) {
+            chunk.get(lx, ly, lz).unwrap_or(BlockId::AIR)
+        } else {
+            BlockId::AIR
+        };
+
+        if current_block == BlockId::WATER || current_block == BlockId::SEAGRASS {
+            self.velocity.y += 12.0 * dt;
+            self.velocity.y = self.velocity.y.min(2.5);
+            self.velocity.x *= 0.85;
+            self.velocity.z *= 0.85;
+        } else {
+            self.velocity.y -= 18.0 * dt;
+            self.velocity.x *= 0.92;
+            self.velocity.z *= 0.92;
+        }
+
+        let next_pos = self.position + self.velocity * dt;
+
+        let check_y = next_pos.y.floor() as i32;
+        let check_x = next_pos.x.floor() as i32;
+        let check_z = next_pos.z.floor() as i32;
+
+        let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
+        let is_solid = if let Some(chunk) = world.get_chunk(cp_next) {
+            chunk
+                .get(nlx, nly, nlz)
+                .map_or(false, |b| registry.is_solid(b))
+        } else {
+            false
+        };
+
+        if is_solid {
+            self.position.y = (check_y + 1) as f32;
+            self.velocity = Vec3::ZERO;
+        } else {
+            self.position = next_pos;
+        }
+
+        // 2. Player Magnetism
+        if self.pickup_delay <= 0.0 {
+            let player_center = player_pos + Vec3::new(0.0, 0.8, 0.0);
+            let to_center = player_center - self.position;
+            let dist = to_center.length();
+            if dist > 0.001 && dist < 3.2 {
+                let magnet_speed = 7.0;
+                self.position += to_center.normalize() * magnet_speed * dt;
+            }
+        }
+
+        true
     }
 
     /// Renders visual bobbing height offset

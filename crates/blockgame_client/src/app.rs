@@ -127,6 +127,7 @@ pub struct AppState {
     pub chat_input: String,
     pub tab_held: bool,
     pub net_sync_timer: f32,
+    pub next_mp_drop_nonce: u32,
     pub local_chat_messages: Vec<blockgame_core::net::ChatEntry>,
     pub total_time: f32,
     pub walk_distance: f32,
@@ -156,6 +157,30 @@ pub struct AppState {
 impl AppState {
     pub fn refresh_saved_worlds(&mut self) {
         self.saved_worlds = list_saved_worlds(&self.saves_root);
+    }
+
+    /// Spawns an item drop into the world. In multiplayer, automatically assigns a unique drop ID,
+    /// spawns it locally with 0ms visual latency, and broadcasts `ClientPacket::SpawnItemDrop` to the server.
+    pub fn spawn_drop_synced(&mut self, pos: Vec3, vel: Vec3, item: ItemSlot) {
+        if item.is_empty() {
+            return;
+        }
+        if let Some(client) = &mut self.mp_client {
+            let drop_id = ((client.player_id as u64) << 40)
+                | (self.next_mp_drop_nonce as u64 & 0x000000FFFFFFFFFF);
+            self.next_mp_drop_nonce = self.next_mp_drop_nonce.wrapping_add(1);
+            self.world_manager
+                .spawn_item_drop_with_id_and_velocity(drop_id, pos, vel, item);
+            client.send(&blockgame_core::net::ClientPacket::SpawnItemDrop {
+                drop_id,
+                position: pos,
+                velocity: vel,
+                item,
+            });
+        } else {
+            self.world_manager
+                .spawn_item_drop_with_velocity(pos, vel, item);
+        }
     }
 
     pub fn current_local_player_model(&self) -> blockgame_core::net::PlayerModelState {
@@ -804,6 +829,7 @@ impl ApplicationHandler for BlockGameApp {
             chat_input: String::new(),
             tab_held: false,
             net_sync_timer: 0.0,
+            next_mp_drop_nonce: 1,
             local_chat_messages: Vec::new(),
             total_time: 0.0,
             walk_distance: 0.0,
@@ -1591,14 +1617,18 @@ impl ApplicationHandler for BlockGameApp {
                                 state.cracking_buffer = None;
 
                                 // Return any items left in current grid
-                                for slot in state.crafting_grid.slots.drain(..) {
+                                let grid_items: Vec<_> =
+                                    state.crafting_grid.slots.drain(..).collect();
+                                for slot in grid_items {
                                     if !slot.is_empty() {
                                         if let Some(rem) =
                                             state.inventory.add_item(slot, &state.item_registry)
                                         {
-                                            state
-                                                .world_manager
-                                                .spawn_item_drop(state.player.position, rem);
+                                            state.spawn_drop_synced(
+                                                state.player.position,
+                                                Vec3::new(0.0, 2.0, 0.0),
+                                                rem,
+                                            );
                                         }
                                     }
                                 }
@@ -1757,8 +1787,9 @@ impl ApplicationHandler for BlockGameApp {
                                                 &state.item_registry,
                                             );
                                             if let Some(left) = overflow {
-                                                state.world_manager.spawn_item_drop(
+                                                state.spawn_drop_synced(
                                                     state.player.position,
+                                                    Vec3::new(0.0, 2.0, 0.0),
                                                     left,
                                                 );
                                             }
@@ -2244,14 +2275,18 @@ impl ApplicationHandler for BlockGameApp {
                         state.jei_search_focused = false;
                         if state.inventory_open {
                             // Safely return crafting grid items and cursor held item to inventory
-                            for slot in state.crafting_grid.slots.drain(..) {
+                            let grid_items: Vec<_> =
+                                state.crafting_grid.slots.drain(..).collect();
+                            for slot in grid_items {
                                 if !slot.is_empty() {
                                     if let Some(rem) =
                                         state.inventory.add_item(slot, &state.item_registry)
                                     {
-                                        state
-                                            .world_manager
-                                            .spawn_item_drop(state.player.position, rem);
+                                        state.spawn_drop_synced(
+                                            state.player.position,
+                                            Vec3::new(0.0, 2.0, 0.0),
+                                            rem,
+                                        );
                                     }
                                 }
                             }
@@ -2261,9 +2296,11 @@ impl ApplicationHandler for BlockGameApp {
                                 if let Some(rem) =
                                     state.inventory.add_item(held, &state.item_registry)
                                 {
-                                    state
-                                        .world_manager
-                                        .spawn_item_drop(state.player.position, rem);
+                                    state.spawn_drop_synced(
+                                        state.player.position,
+                                        Vec3::new(0.0, 2.0, 0.0),
+                                        rem,
+                                    );
                                 }
                             }
                             state.inventory_open = false;
@@ -2291,14 +2328,18 @@ impl ApplicationHandler for BlockGameApp {
                         state.active_chest_pos = None;
                         state.active_furnace_pos = None;
                         if state.inventory_open {
-                            for slot in state.crafting_grid.slots.drain(..) {
+                            let grid_items: Vec<_> =
+                                state.crafting_grid.slots.drain(..).collect();
+                            for slot in grid_items {
                                 if !slot.is_empty() {
                                     if let Some(rem) =
                                         state.inventory.add_item(slot, &state.item_registry)
                                     {
-                                        state
-                                            .world_manager
-                                            .spawn_item_drop(state.player.position, rem);
+                                        state.spawn_drop_synced(
+                                            state.player.position,
+                                            Vec3::new(0.0, 2.0, 0.0),
+                                            rem,
+                                        );
                                     }
                                 }
                             }
@@ -2308,9 +2349,11 @@ impl ApplicationHandler for BlockGameApp {
                                 if let Some(rem) =
                                     state.inventory.add_item(held, &state.item_registry)
                                 {
-                                    state
-                                        .world_manager
-                                        .spawn_item_drop(state.player.position, rem);
+                                    state.spawn_drop_synced(
+                                        state.player.position,
+                                        Vec3::new(0.0, 2.0, 0.0),
+                                        rem,
+                                    );
                                 }
                             }
                             state.inventory_open = false;
@@ -2451,15 +2494,60 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                 }
                                 blockgame_core::net::ServerPacket::ItemDropSpawned {
+                                    drop_id,
                                     position,
                                     velocity,
                                     item,
                                 } => {
-                                    state.world_manager.item_drops.push(
-                                        blockgame_core::entity::ItemDrop::with_velocity(
-                                            position, velocity, item,
-                                        ),
+                                    state.world_manager.spawn_item_drop_with_id_and_velocity(
+                                        drop_id, position, velocity, item,
                                     );
+                                }
+                                blockgame_core::net::ServerPacket::ItemDropCollected {
+                                    drop_id,
+                                    collector_player_id,
+                                    item,
+                                } => {
+                                    state.world_manager.remove_item_drop(drop_id);
+                                    if collector_player_id == client.player_id && !item.is_empty() {
+                                        let overflow = state
+                                            .inventory
+                                            .add_item(item, &state.item_registry);
+                                        if let Some(remaining) = overflow {
+                                            let drop_id = ((client.player_id as u64) << 40)
+                                                | (state.next_mp_drop_nonce as u64
+                                                    & 0x000000FFFFFFFFFF);
+                                            state.next_mp_drop_nonce =
+                                                state.next_mp_drop_nonce.wrapping_add(1);
+                                            let ppos = state.player.position;
+                                            state
+                                                .world_manager
+                                                .spawn_item_drop_with_id_and_velocity(
+                                                    drop_id,
+                                                    ppos,
+                                                    Vec3::new(0.0, 2.0, 0.0),
+                                                    remaining,
+                                                );
+                                            client.send(
+                                                &blockgame_core::net::ClientPacket::SpawnItemDrop {
+                                                    drop_id,
+                                                    position: ppos,
+                                                    velocity: Vec3::new(0.0, 2.0, 0.0),
+                                                    item: remaining,
+                                                },
+                                            );
+                                        }
+                                        let inv = state.inventory.clone();
+                                        let hotbar = state.active_hotbar_slot;
+                                        let stats = state.player_stats.clone();
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::PlayerInventorySync {
+                                                inventory: inv,
+                                                active_hotbar_slot: hotbar,
+                                                stats,
+                                            },
+                                        );
+                                    }
                                 }
                                 blockgame_core::net::ServerPacket::PlayerJoined { player } => {
                                     if player.player_id != client.player_id {
@@ -2710,29 +2798,31 @@ impl ApplicationHandler for BlockGameApp {
                             state.cracking_buffer = None;
 
                             // Scatter all 36 inventory slots as item drops in world
-                            for slot in state.inventory.slots.iter_mut() {
+                            let mut drops_to_scatter = Vec::new();
+                            for (i, slot) in state.inventory.slots.iter_mut().enumerate() {
                                 if !slot.is_empty() {
                                     let drop_slot = std::mem::replace(slot, ItemSlot::EMPTY);
-                                    state
-                                        .world_manager
-                                        .spawn_item_drop(state.player.position, drop_slot);
+                                    let angle = (i as f32) * 0.35;
+                                    let vel = Vec3::new(angle.cos() * 2.0, 3.0, angle.sin() * 2.0);
+                                    drops_to_scatter.push((vel, drop_slot));
                                 }
                             }
                             // Scatter crafting grid items
-                            for slot in state.crafting_grid.slots.drain(..) {
+                            for (i, slot) in state.crafting_grid.slots.drain(..).enumerate() {
                                 if !slot.is_empty() {
-                                    state
-                                        .world_manager
-                                        .spawn_item_drop(state.player.position, slot);
+                                    let angle = (i as f32) * 0.7;
+                                    let vel = Vec3::new(angle.cos() * 2.0, 3.0, angle.sin() * 2.0);
+                                    drops_to_scatter.push((vel, slot));
                                 }
                             }
                             // Scatter cursor held item
                             if !state.cursor_held.is_empty() {
                                 let drop_slot =
                                     std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
-                                state
-                                    .world_manager
-                                    .spawn_item_drop(state.player.position, drop_slot);
+                                drops_to_scatter.push((Vec3::new(0.0, 3.0, 0.0), drop_slot));
+                            }
+                            for (vel, slot) in drops_to_scatter {
+                                state.spawn_drop_synced(state.player.position, vel, slot);
                             }
 
                             // Unlock mouse so user can click the Respawn button
@@ -2790,7 +2880,26 @@ impl ApplicationHandler for BlockGameApp {
                     }
 
                     // 3. Update Item Drops & Magnetism Pickup (only when alive)
-                    if !state.player_stats.is_dead {
+                    if state.mp_client.is_some() {
+                        if !state.player_stats.is_dead {
+                            let pickable_ids = state
+                                .world_manager
+                                .update_item_drops_multiplayer(dt, state.player.position);
+                            if let Some(client) = &mut state.mp_client {
+                                for drop_id in pickable_ids {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::PickupItemDrop {
+                                            drop_id,
+                                        },
+                                    );
+                                }
+                            }
+                        } else {
+                            let _ = state
+                                .world_manager
+                                .update_item_drops_multiplayer(dt, state.player.position);
+                        }
+                    } else if !state.player_stats.is_dead {
                         let collected = state
                             .world_manager
                             .update_item_drops(dt, state.player.position);
@@ -2812,7 +2921,7 @@ impl ApplicationHandler for BlockGameApp {
                     let animal_drops = state.world_manager.update_animals(dt);
                     for (pos, drops) in animal_drops {
                         for drop_slot in drops {
-                            state.world_manager.spawn_item_drop(pos, drop_slot);
+                            state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
                         }
                     }
                     state
@@ -3047,18 +3156,11 @@ impl ApplicationHandler for BlockGameApp {
                                                     + Vec3::new(0.5, 0.5, 0.5);
                                                 let drop_slot =
                                                     ItemSlot::new(drop_item, drop_count);
-                                                state
-                                                    .world_manager
-                                                    .spawn_item_drop(drop_pos, drop_slot);
-                                                if let Some(client) = &mut state.mp_client {
-                                                    client.send(
-                                                        &blockgame_core::net::ClientPacket::SpawnItemDrop {
-                                                            position: drop_pos,
-                                                            velocity: Vec3::new(0.0, 2.5, 0.0),
-                                                            item: drop_slot,
-                                                        },
-                                                    );
-                                                }
+                                                state.spawn_drop_synced(
+                                                    drop_pos,
+                                                    Vec3::new(0.0, 2.5, 0.0),
+                                                    drop_slot,
+                                                );
                                             }
                                             // 15% chance to drop Apple from Leaves
                                             if broken == BlockId::LEAVES {
@@ -3067,9 +3169,10 @@ impl ApplicationHandler for BlockGameApp {
                                                     ^ target_voxel.z.wrapping_mul(83492791))
                                                     % 100;
                                                 if hash.abs() < 15 {
-                                                    state.world_manager.spawn_item_drop(
+                                                    state.spawn_drop_synced(
                                                         target_voxel.as_vec3()
                                                             + Vec3::new(0.5, 0.5, 0.5),
+                                                        Vec3::new(0.0, 2.0, 0.0),
                                                         ItemSlot::new(ItemId::APPLE, 1),
                                                     );
                                                 }
@@ -3081,9 +3184,10 @@ impl ApplicationHandler for BlockGameApp {
                                                     ^ target_voxel.z.wrapping_mul(98765432))
                                                     % 100;
                                                 if hash.abs() < 12 {
-                                                    state.world_manager.spawn_item_drop(
+                                                    state.spawn_drop_synced(
                                                         target_voxel.as_vec3()
                                                             + Vec3::new(0.5, 0.5, 0.5),
+                                                        Vec3::new(0.0, 2.0, 0.0),
                                                         ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
                                                     );
                                                 }
@@ -3094,9 +3198,10 @@ impl ApplicationHandler for BlockGameApp {
                                                     ^ target_voxel.z.wrapping_mul(7654321))
                                                     % 2;
                                                 let seed_count = (hash.abs() + 1) as u16;
-                                                state.world_manager.spawn_item_drop(
+                                                state.spawn_drop_synced(
                                                     target_voxel.as_vec3()
                                                         + Vec3::new(0.5, 0.5, 0.5),
+                                                    Vec3::new(0.0, 2.0, 0.0),
                                                     ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
                                                 );
                                             }
@@ -3867,9 +3972,11 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
             if state.shift_down {
                 while let Some(crafted) = state.crafting_manager.craft(&mut state.crafting_grid) {
                     if let Some(rem) = state.inventory.add_item(crafted, &state.item_registry) {
-                        state
-                            .world_manager
-                            .spawn_item_drop(state.player.position, rem);
+                        state.spawn_drop_synced(
+                            state.player.position,
+                            Vec3::new(0.0, 2.0, 0.0),
+                            rem,
+                        );
                         break;
                     }
                     if state

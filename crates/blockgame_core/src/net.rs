@@ -15,7 +15,7 @@ use crate::{
     auth::{derive_client_password_token, validate_username, AuthDatabase},
     block::BlockId,
     chunk::ChunkPos,
-    entity::ItemDrop,
+    entity::{next_local_drop_id, ItemDrop},
     item::{Inventory, ItemId, ItemSlot},
     player::PlayerStats,
     save::{
@@ -111,6 +111,7 @@ pub enum ClientPacket {
         cook_progress: f32,
     },
     SpawnItemDrop {
+        drop_id: u64,
         position: Vec3,
         velocity: Vec3,
         item: ItemSlot,
@@ -131,6 +132,9 @@ pub enum ClientPacket {
         timestamp_ms: u64,
     },
     Disconnect,
+    PickupItemDrop {
+        drop_id: u64,
+    },
 }
 
 /// Packets sent from the `MultiplayerServer` to connected `MultiplayerClient`s.
@@ -150,7 +154,7 @@ pub enum ServerPacket {
         modified_chunks: Vec<(ChunkPos, Vec<(u16, BlockId)>)>,
         chests: Vec<(IVec3, Vec<ItemSlot>)>,
         furnaces: Vec<(IVec3, FurnaceState)>,
-        item_drops: Vec<(Vec3, Vec3, ItemSlot)>,
+        item_drops: Vec<(u64, Vec3, Vec3, ItemSlot)>,
     },
     PlayerJoined {
         player: PlayerModelState,
@@ -176,6 +180,7 @@ pub enum ServerPacket {
         cook_progress: f32,
     },
     ItemDropSpawned {
+        drop_id: u64,
         position: Vec3,
         velocity: Vec3,
         item: ItemSlot,
@@ -196,6 +201,11 @@ pub enum ServerPacket {
     },
     Kick {
         reason: String,
+    },
+    ItemDropCollected {
+        drop_id: u64,
+        collector_player_id: u32,
+        item: ItemSlot,
     },
 }
 
@@ -260,11 +270,13 @@ impl ClientPacket {
                 write_f32(&mut payload, *cook_progress)?;
             }
             Self::SpawnItemDrop {
+                drop_id,
                 position,
                 velocity,
                 item,
             } => {
                 write_u8(&mut payload, 5)?;
+                write_u64(&mut payload, *drop_id)?;
                 write_vec3(&mut payload, *position)?;
                 write_vec3(&mut payload, *velocity)?;
                 write_slot(&mut payload, *item)?;
@@ -304,6 +316,10 @@ impl ClientPacket {
             }
             Self::Disconnect => {
                 write_u8(&mut payload, 10)?;
+            }
+            Self::PickupItemDrop { drop_id } => {
+                write_u8(&mut payload, 11)?;
+                write_u64(&mut payload, *drop_id)?;
             }
         }
         wrap_frame(&payload)
@@ -372,10 +388,12 @@ impl ClientPacket {
                 })
             }
             5 => {
+                let drop_id = read_u64(&mut r)?;
                 let position = read_vec3(&mut r)?;
                 let velocity = read_vec3(&mut r)?;
                 let item = read_slot(&mut r)?;
                 Ok(Self::SpawnItemDrop {
+                    drop_id,
                     position,
                     velocity,
                     item,
@@ -420,6 +438,10 @@ impl ClientPacket {
                 Ok(Self::Ping { timestamp_ms })
             }
             10 => Ok(Self::Disconnect),
+            11 => {
+                let drop_id = read_u64(&mut r)?;
+                Ok(Self::PickupItemDrop { drop_id })
+            }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ClientPacket tag {}", other),
@@ -487,7 +509,8 @@ impl ServerPacket {
                     write_f32(&mut payload, f.cook_progress)?;
                 }
                 write_u32(&mut payload, item_drops.len() as u32)?;
-                for (pos, vel, item) in item_drops {
+                for (drop_id, pos, vel, item) in item_drops {
+                    write_u64(&mut payload, *drop_id)?;
                     write_vec3(&mut payload, *pos)?;
                     write_vec3(&mut payload, *vel)?;
                     write_slot(&mut payload, *item)?;
@@ -541,11 +564,13 @@ impl ServerPacket {
                 write_f32(&mut payload, *cook_progress)?;
             }
             Self::ItemDropSpawned {
+                drop_id,
                 position,
                 velocity,
                 item,
             } => {
                 write_u8(&mut payload, 8)?;
+                write_u64(&mut payload, *drop_id)?;
                 write_vec3(&mut payload, *position)?;
                 write_vec3(&mut payload, *velocity)?;
                 write_slot(&mut payload, *item)?;
@@ -579,6 +604,16 @@ impl ServerPacket {
             Self::Kick { reason } => {
                 write_u8(&mut payload, 12)?;
                 write_string(&mut payload, reason)?;
+            }
+            Self::ItemDropCollected {
+                drop_id,
+                collector_player_id,
+                item,
+            } => {
+                write_u8(&mut payload, 13)?;
+                write_u64(&mut payload, *drop_id)?;
+                write_u32(&mut payload, *collector_player_id)?;
+                write_slot(&mut payload, *item)?;
             }
         }
         wrap_frame(&payload)
@@ -662,10 +697,11 @@ impl ServerPacket {
                 let drop_count = read_u32(&mut r)? as usize;
                 let mut item_drops = Vec::with_capacity(drop_count);
                 for _ in 0..drop_count {
+                    let drop_id = read_u64(&mut r)?;
                     let pos = read_vec3(&mut r)?;
                     let vel = read_vec3(&mut r)?;
                     let item = read_slot(&mut r)?;
-                    item_drops.push((pos, vel, item));
+                    item_drops.push((drop_id, pos, vel, item));
                 }
 
                 Ok(Self::WorldDeltaSync {
@@ -725,10 +761,12 @@ impl ServerPacket {
                 })
             }
             8 => {
+                let drop_id = read_u64(&mut r)?;
                 let position = read_vec3(&mut r)?;
                 let velocity = read_vec3(&mut r)?;
                 let item = read_slot(&mut r)?;
                 Ok(Self::ItemDropSpawned {
+                    drop_id,
                     position,
                     velocity,
                     item,
@@ -763,6 +801,16 @@ impl ServerPacket {
             12 => {
                 let reason = read_string(&mut r)?;
                 Ok(Self::Kick { reason })
+            }
+            13 => {
+                let drop_id = read_u64(&mut r)?;
+                let collector_player_id = read_u32(&mut r)?;
+                let item = read_slot(&mut r)?;
+                Ok(Self::ItemDropCollected {
+                    drop_id,
+                    collector_player_id,
+                    item,
+                })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1132,7 +1180,7 @@ fn run_server_loop(
                                 let drops: Vec<_> = save_data
                                     .item_drops
                                     .iter()
-                                    .map(|d| (d.position, d.velocity, d.item))
+                                    .map(|d| (d.drop_id, d.position, d.velocity, d.item))
                                     .collect();
 
                                 direct_sends.push((
@@ -1263,21 +1311,58 @@ fn run_server_loop(
                         ));
                     }
                     ClientPacket::SpawnItemDrop {
+                        drop_id,
                         position,
                         velocity,
                         item,
                     } if clients[idx].authenticated => {
-                        let mut drop = ItemDrop::new(position, item);
-                        drop.velocity = velocity;
+                        let effective_drop_id = if drop_id == 0
+                            || save_data.item_drops.iter().any(|d| d.drop_id == drop_id)
+                        {
+                            next_local_drop_id()
+                        } else {
+                            drop_id
+                        };
+                        let drop = ItemDrop::with_id_and_velocity(
+                            effective_drop_id,
+                            position,
+                            velocity,
+                            item,
+                        );
                         save_data.item_drops.push(drop);
                         outgoing_broadcasts.push((
                             Some(pid),
                             ServerPacket::ItemDropSpawned {
+                                drop_id: effective_drop_id,
                                 position,
                                 velocity,
                                 item,
                             },
                         ));
+                    }
+                    ClientPacket::PickupItemDrop { drop_id } if clients[idx].authenticated => {
+                        if let Some(pos) =
+                            save_data.item_drops.iter().position(|d| d.drop_id == drop_id)
+                        {
+                            let collected = save_data.item_drops.remove(pos);
+                            outgoing_broadcasts.push((
+                                None,
+                                ServerPacket::ItemDropCollected {
+                                    drop_id,
+                                    collector_player_id: pid,
+                                    item: collected.item,
+                                },
+                            ));
+                        } else {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ItemDropCollected {
+                                    drop_id,
+                                    collector_player_id: 0,
+                                    item: ItemSlot::EMPTY,
+                                },
+                            ));
+                        }
                     }
                     ClientPacket::PlayerInventorySync {
                         inventory,
@@ -1986,6 +2071,146 @@ mod tests {
 
         client_alice.disconnect();
         client_bob.disconnect();
+        server.shutdown();
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_item_pickup_authoritative_no_duplication() {
+        let temp_root = std::env::temp_dir().join("blockgame_mp_item_pickup_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+
+        let mut server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "mp_item_test_world".to_string(),
+            "MP Item Test World".to_string(),
+            999999,
+            None,
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Server should start on ephemeral port");
+
+        let addr_str = server.local_addr().to_string();
+
+        // 1. Client 1 (Alice) connects
+        let (mut client_alice, _auth_alice) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "AliceDrop", "pass", 1)
+                .expect("Alice should authenticate");
+        let alice_id = client_alice.player_id;
+        assert_ne!(alice_id, 0);
+
+        // 2. Client 2 (Bob) connects
+        let (mut client_bob, _auth_bob) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobDrop", "pass", 2)
+                .expect("Bob should authenticate");
+        let bob_id = client_bob.player_id;
+        assert_ne!(bob_id, 0);
+
+        // 3. Alice spawns an item drop (Diamond) with drop_id
+        let diamond_slot = ItemSlot::new(ItemId::DIAMOND, 5);
+        let drop_id = ((alice_id as u64) << 40) | 4242;
+        let drop_pos = Vec3::new(10.0, 65.0, 10.0);
+        let drop_vel = Vec3::new(0.0, 2.5, 0.0);
+
+        client_alice.send(&ClientPacket::SpawnItemDrop {
+            drop_id,
+            position: drop_pos,
+            velocity: drop_vel,
+            item: diamond_slot,
+        });
+
+        // Wait briefly for server processing & broadcast
+        thread::sleep(Duration::from_millis(120));
+
+        // 4. Verify Bob receives ServerPacket::ItemDropSpawned with drop_id
+        let bob_packets = client_bob.poll_packets();
+        let saw_spawn = bob_packets.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::ItemDropSpawned {
+                    drop_id: id,
+                    position,
+                    item,
+                    ..
+                } if *id == drop_id && *position == drop_pos && *item == diamond_slot
+            )
+        });
+        assert!(saw_spawn, "Bob must receive ItemDropSpawned with matching drop_id");
+
+        // 5. Alice picks up the drop
+        client_alice.send(&ClientPacket::PickupItemDrop { drop_id });
+        thread::sleep(Duration::from_millis(120));
+
+        // 6. Alice receives ItemDropCollected giving her the diamonds
+        let alice_packets = client_alice.poll_packets();
+        let alice_collected = alice_packets.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::ItemDropCollected {
+                    drop_id: id,
+                    collector_player_id,
+                    item,
+                } if *id == drop_id && *collector_player_id == alice_id && *item == diamond_slot
+            )
+        });
+        assert!(alice_collected, "Alice must receive authoritative ItemDropCollected with items");
+
+        // 7. Bob receives ItemDropCollected informing him that Alice collected it
+        let bob_packets = client_bob.poll_packets();
+        let bob_saw_collected = bob_packets.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::ItemDropCollected {
+                    drop_id: id,
+                    collector_player_id,
+                    item,
+                } if *id == drop_id && *collector_player_id == alice_id && *item == diamond_slot
+            )
+        });
+        assert!(bob_saw_collected, "Bob must receive ItemDropCollected removing the drop from world");
+
+        // 8. Bob now attempts to pick up the same drop_id (race condition / duplication attempt)
+        client_bob.send(&ClientPacket::PickupItemDrop { drop_id });
+        thread::sleep(Duration::from_millis(120));
+
+        let bob_packets = client_bob.poll_packets();
+        let bob_rejected = bob_packets.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::ItemDropCollected {
+                    drop_id: id,
+                    collector_player_id: 0,
+                    item,
+                } if *id == drop_id && item.is_empty()
+            )
+        });
+        assert!(
+            bob_rejected,
+            "Bob's pickup attempt for already collected item must be rejected with 0 items (no duplication)"
+        );
+
+        // 9. Client 3 (Charlie) connects; WorldDeltaSync must contain 0 item drops
+        let (mut client_charlie, _auth_charlie) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "CharlieDrop", "pass", 3)
+                .expect("Charlie should authenticate");
+        thread::sleep(Duration::from_millis(120));
+        let charlie_packets = client_charlie.poll_packets();
+        let saw_empty_sync = charlie_packets.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::WorldDeltaSync { item_drops, .. } if item_drops.iter().all(|(id, ..)| *id != drop_id)
+            )
+        });
+        assert!(
+            saw_empty_sync,
+            "Future players must not receive collected drops in WorldDeltaSync"
+        );
+
+        client_alice.disconnect();
+        client_bob.disconnect();
+        client_charlie.disconnect();
         server.shutdown();
 
         let _ = std::fs::remove_dir_all(&temp_root);
