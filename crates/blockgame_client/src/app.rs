@@ -427,6 +427,7 @@ impl AppState {
             stats: self.player_stats.clone(),
             inventory: self.inventory.clone(),
             active_hotbar_slot: self.active_hotbar_slot,
+            rank: "default".to_string(),
         };
 
         let mut save_data = self.world_manager.capture_save_data(meta, player_state);

@@ -17,7 +17,13 @@ use crate::{
 };
 
 const SAVE_MAGIC: &[u8; 4] = b"BGSV";
-const SAVE_VERSION: u32 = 2;
+pub const SAVE_VERSION: u32 = 3;
+
+pub const CHUNK_MAGIC: &[u8; 4] = b"BGCH";
+pub const CONTAINER_MAGIC: &[u8; 4] = b"BGCT";
+pub const ENTITY_MAGIC: &[u8; 4] = b"BGEN";
+pub const ENV_MAGIC: &[u8; 4] = b"BGEV";
+pub const PLAYER_MAGIC: &[u8; 4] = b"BGPL";
 
 /// Summary metadata for a saved world displayed in the Singleplayer World Selection list.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +62,7 @@ pub struct SavedPlayerState {
     pub stats: PlayerStats,
     pub inventory: Inventory,
     pub active_hotbar_slot: usize,
+    pub rank: String,
 }
 
 impl Default for SavedPlayerState {
@@ -68,6 +75,7 @@ impl Default for SavedPlayerState {
             stats: PlayerStats::new(),
             inventory: Inventory::starter_inventory(),
             active_hotbar_slot: 0,
+            rank: "default".to_string(),
         }
     }
 }
@@ -290,7 +298,7 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
     }
 
     let version = read_u32(&mut r)?;
-    if version != 1 && version != SAVE_VERSION {
+    if version != 1 && version != 2 && version != SAVE_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported save version: {}", version),
@@ -314,13 +322,539 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
     })
 }
 
-/// Saves the complete `WorldSaveData` to `saves_root/<folder_name>/`.
+/// Saves an individual player's state to `<world_dir>/players/<username>.dat`.
+pub fn save_player_data(
+    world_dir: &Path,
+    username: &str,
+    player: &SavedPlayerState,
+) -> io::Result<PathBuf> {
+    let players_dir = world_dir.join("players");
+    fs::create_dir_all(&players_dir)?;
+    let slug = sanitize_folder_name(username).to_ascii_lowercase();
+    let file_path = players_dir.join(format!("{}.dat", slug));
+
+    let file = File::create(&file_path)?;
+    let mut w = BufWriter::new(file);
+
+    w.write_all(PLAYER_MAGIC)?;
+    write_u32(&mut w, 1)?; // version 1
+    write_u64(&mut w, current_unix_timestamp())?;
+    write_string(&mut w, &player.rank)?;
+
+    // Position & orientation
+    write_vec3(&mut w, player.position)?;
+    write_vec3(&mut w, player.velocity)?;
+    write_f32(&mut w, player.yaw)?;
+    write_f32(&mut w, player.pitch)?;
+    write_u32(&mut w, player.active_hotbar_slot as u32)?;
+
+    // Player stats
+    write_f32(&mut w, player.stats.health)?;
+    write_f32(&mut w, player.stats.max_health)?;
+    write_f32(&mut w, player.stats.hunger)?;
+    write_f32(&mut w, player.stats.max_hunger)?;
+    write_f32(&mut w, player.stats.saturation)?;
+    write_f32(&mut w, player.stats.exhaustion)?;
+    write_f32(&mut w, player.stats.breath)?;
+    write_f32(&mut w, player.stats.max_breath)?;
+    write_bool(&mut w, player.stats.is_dead)?;
+
+    // Player inventory (36 slots)
+    write_u32(&mut w, player.inventory.slots.len() as u32)?;
+    for slot in &player.inventory.slots {
+        write_item_slot(&mut w, *slot)?;
+    }
+
+    w.flush()?;
+    Ok(file_path)
+}
+
+/// Loads an individual player's state from `<world_dir>/players/<username>.dat`.
+/// Returns `Ok(None)` if the player's file does not exist (e.g. player was reset).
+pub fn load_player_data(
+    world_dir: &Path,
+    username: &str,
+) -> io::Result<Option<SavedPlayerState>> {
+    let slug = sanitize_folder_name(username).to_ascii_lowercase();
+    let file_path = world_dir.join("players").join(format!("{}.dat", slug));
+    if !file_path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(&file_path)?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != PLAYER_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid player data magic header",
+        ));
+    }
+
+    let version = read_u32(&mut r)?;
+    if version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported player data version: {}", version),
+        ));
+    }
+
+    let _saved_timestamp = read_u64(&mut r)?;
+    let rank = read_string(&mut r)?;
+
+    let position = read_vec3(&mut r)?;
+    let velocity = read_vec3(&mut r)?;
+    let yaw = read_f32(&mut r)?;
+    let pitch = read_f32(&mut r)?;
+    let active_hotbar_slot = (read_u32(&mut r)? as usize).min(8);
+
+    let mut stats = PlayerStats::new();
+    stats.health = read_f32(&mut r)?;
+    stats.max_health = read_f32(&mut r)?;
+    stats.hunger = read_f32(&mut r)?;
+    stats.max_hunger = read_f32(&mut r)?;
+    stats.saturation = read_f32(&mut r)?;
+    stats.exhaustion = read_f32(&mut r)?;
+    stats.breath = read_f32(&mut r)?;
+    stats.max_breath = read_f32(&mut r)?;
+    stats.is_dead = read_bool(&mut r)?;
+
+    let slot_count = read_u32(&mut r)? as usize;
+    let mut inventory = Inventory::default();
+    for i in 0..slot_count {
+        let slot = read_item_slot(&mut r, 2)?;
+        if i < Inventory::TOTAL_COUNT {
+            inventory.slots[i] = slot;
+        }
+    }
+
+    Ok(Some(SavedPlayerState {
+        position,
+        velocity,
+        yaw,
+        pitch,
+        stats,
+        inventory,
+        active_hotbar_slot,
+        rank: if rank.is_empty() { "default".to_string() } else { rank },
+    }))
+}
+
+/// Deletes an individual player's state file `<world_dir>/players/<username>.dat`.
+/// Returns `Ok(true)` if deleted, or `Ok(false)` if the file didn't exist.
+pub fn delete_player_data(world_dir: &Path, username: &str) -> io::Result<bool> {
+    let slug = sanitize_folder_name(username).to_ascii_lowercase();
+    let file_path = world_dir.join("players").join(format!("{}.dat", slug));
+    if file_path.exists() {
+        fs::remove_file(file_path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Lists all saved players who have a `.dat` file in `<world_dir>/players/`.
+pub fn list_saved_players(world_dir: &Path) -> io::Result<Vec<String>> {
+    let players_dir = world_dir.join("players");
+    let mut list = Vec::new();
+    if !players_dir.exists() {
+        return Ok(list);
+    }
+    for entry in fs::read_dir(players_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("dat") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                list.push(stem.to_string());
+            }
+        }
+    }
+    list.sort();
+    Ok(list)
+}
+
+/// Saves a single modified chunk to `<chunk_dir>/<x>_<y>_<z>.bin`.
+pub fn save_chunk_file(
+    chunk_dir: &Path,
+    cpos: ChunkPos,
+    runs: &[(u16, BlockId)],
+) -> io::Result<PathBuf> {
+    let filename = format!("{}_{}_{}.bin", cpos.0.x, cpos.0.y, cpos.0.z);
+    let path = chunk_dir.join(filename);
+    let file = File::create(&path)?;
+    let mut w = BufWriter::new(file);
+
+    w.write_all(CHUNK_MAGIC)?;
+    write_u32(&mut w, 1)?; // version 1
+    write_ivec3(&mut w, cpos.0)?;
+    write_u32(&mut w, runs.len() as u32)?;
+    for &(count, block_id) in runs {
+        write_u16(&mut w, count)?;
+        write_u8(&mut w, block_id.0)?;
+    }
+    w.flush()?;
+    Ok(path)
+}
+
+/// Loads a single modified chunk from `<x>_<y>_<z>.bin`.
+pub fn load_chunk_file(path: &Path) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>)> {
+    let file = File::open(path)?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != CHUNK_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid chunk file magic header",
+        ));
+    }
+    let version = read_u32(&mut r)?;
+    if version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported chunk version: {}", version),
+        ));
+    }
+    let cpos = ChunkPos(read_ivec3(&mut r)?);
+    let run_count = read_u32(&mut r)? as usize;
+    let mut runs = Vec::with_capacity(run_count);
+    for _ in 0..run_count {
+        let count = read_u16(&mut r)?;
+        let block_id = BlockId(read_u8(&mut r)?);
+        runs.push((count, block_id));
+    }
+    Ok((cpos, runs))
+}
+
+/// Saves chest and furnace containers to `<world_dir>/containers.bin`.
+pub fn save_containers_file(
+    world_dir: &Path,
+    chests: &HashMap<IVec3, Vec<ItemSlot>>,
+    furnaces: &HashMap<IVec3, FurnaceState>,
+) -> io::Result<PathBuf> {
+    let path = world_dir.join("containers.bin");
+    let file = File::create(&path)?;
+    let mut w = BufWriter::new(file);
+
+    w.write_all(CONTAINER_MAGIC)?;
+    write_u32(&mut w, 1)?; // version 1
+
+    // Chests
+    write_u32(&mut w, chests.len() as u32)?;
+    for (&pos, slots) in chests {
+        write_ivec3(&mut w, pos)?;
+        write_u32(&mut w, slots.len() as u32)?;
+        for slot in slots {
+            write_item_slot(&mut w, *slot)?;
+        }
+    }
+
+    // Furnaces
+    write_u32(&mut w, furnaces.len() as u32)?;
+    for (&pos, furnace) in furnaces {
+        write_ivec3(&mut w, pos)?;
+        write_item_slot(&mut w, furnace.input)?;
+        write_item_slot(&mut w, furnace.fuel)?;
+        write_item_slot(&mut w, furnace.output)?;
+        write_f32(&mut w, furnace.burn_time_remaining)?;
+        write_f32(&mut w, furnace.max_burn_time)?;
+        write_f32(&mut w, furnace.cook_progress)?;
+    }
+
+    w.flush()?;
+    Ok(path)
+}
+
+/// Loads containers from `<world_dir>/containers.bin`.
+pub fn load_containers_file(
+    world_dir: &Path,
+) -> io::Result<Option<(HashMap<IVec3, Vec<ItemSlot>>, HashMap<IVec3, FurnaceState>)>> {
+    let path = world_dir.join("containers.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file = File::open(&path)?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != CONTAINER_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid containers.bin magic header",
+        ));
+    }
+    let version = read_u32(&mut r)?;
+    if version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported containers.bin version: {}", version),
+        ));
+    }
+
+    let chest_count = read_u32(&mut r)? as usize;
+    let mut chests = HashMap::with_capacity(chest_count);
+    for _ in 0..chest_count {
+        let pos = read_ivec3(&mut r)?;
+        let len = read_u32(&mut r)? as usize;
+        let mut slots = Vec::with_capacity(len);
+        for _ in 0..len {
+            slots.push(read_item_slot(&mut r, 2)?);
+        }
+        chests.insert(pos, slots);
+    }
+
+    let furnace_count = read_u32(&mut r)? as usize;
+    let mut furnaces = HashMap::with_capacity(furnace_count);
+    for _ in 0..furnace_count {
+        let pos = read_ivec3(&mut r)?;
+        let input = read_item_slot(&mut r, 2)?;
+        let fuel = read_item_slot(&mut r, 2)?;
+        let output = read_item_slot(&mut r, 2)?;
+        let burn_time_remaining = read_f32(&mut r)?;
+        let max_burn_time = read_f32(&mut r)?;
+        let cook_progress = read_f32(&mut r)?;
+        furnaces.insert(
+            pos,
+            FurnaceState {
+                input,
+                fuel,
+                output,
+                burn_time_remaining,
+                max_burn_time,
+                cook_progress,
+            },
+        );
+    }
+
+    Ok(Some((chests, furnaces)))
+}
+
+/// Saves entities to `<world_dir>/entities.bin`.
+pub fn save_entities_file(
+    world_dir: &Path,
+    drops: &[ItemDrop],
+    falling_blocks: &[FallingBlock],
+    next_animal_id: u32,
+    animals: &[AnimalEntity],
+    animal_spawned_columns: &HashSet<IVec2>,
+) -> io::Result<PathBuf> {
+    let path = world_dir.join("entities.bin");
+    let file = File::create(&path)?;
+    let mut w = BufWriter::new(file);
+
+    w.write_all(ENTITY_MAGIC)?;
+    write_u32(&mut w, 1)?; // version 1
+
+    // Drops
+    write_u32(&mut w, drops.len() as u32)?;
+    for drop in drops {
+        write_vec3(&mut w, drop.position)?;
+        write_vec3(&mut w, drop.velocity)?;
+        write_item_slot(&mut w, drop.item)?;
+        write_f32(&mut w, drop.age)?;
+        write_f32(&mut w, drop.despawn_time)?;
+        write_f32(&mut w, drop.pickup_delay)?;
+    }
+
+    // Falling blocks
+    write_u32(&mut w, falling_blocks.len() as u32)?;
+    for fb in falling_blocks {
+        write_u8(&mut w, fb.block_id.0)?;
+        write_vec3(&mut w, fb.position)?;
+        write_f32(&mut w, fb.velocity_y)?;
+        write_f32(&mut w, fb.time_falling)?;
+    }
+
+    // Animals
+    write_u32(&mut w, next_animal_id)?;
+    write_u32(&mut w, animals.len() as u32)?;
+    for animal in animals {
+        let kind_u8 = match animal.kind {
+            AnimalKind::Cow => 0,
+            AnimalKind::Pig => 1,
+            AnimalKind::Chicken => 2,
+        };
+        write_u32(&mut w, animal.id)?;
+        write_u8(&mut w, kind_u8)?;
+        write_vec3(&mut w, animal.position)?;
+        write_vec3(&mut w, animal.velocity)?;
+        write_f32(&mut w, animal.yaw)?;
+        write_f32(&mut w, animal.health)?;
+        write_f32(&mut w, animal.breath)?;
+    }
+
+    // Animal spawned columns
+    write_u32(&mut w, animal_spawned_columns.len() as u32)?;
+    for col in animal_spawned_columns {
+        write_i32(&mut w, col.x)?;
+        write_i32(&mut w, col.y)?;
+    }
+
+    w.flush()?;
+    Ok(path)
+}
+
+/// Loads entities from `<world_dir>/entities.bin`.
+pub fn load_entities_file(
+    world_dir: &Path,
+) -> io::Result<Option<(Vec<ItemDrop>, Vec<FallingBlock>, u32, Vec<AnimalEntity>, HashSet<IVec2>)>> {
+    let path = world_dir.join("entities.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file = File::open(&path)?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != ENTITY_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid entities.bin magic header",
+        ));
+    }
+    let version = read_u32(&mut r)?;
+    if version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported entities.bin version: {}", version),
+        ));
+    }
+
+    let drop_count = read_u32(&mut r)? as usize;
+    let mut drops = Vec::with_capacity(drop_count);
+    for _ in 0..drop_count {
+        let position = read_vec3(&mut r)?;
+        let velocity = read_vec3(&mut r)?;
+        let item = read_item_slot(&mut r, 2)?;
+        let age = read_f32(&mut r)?;
+        let despawn_time = read_f32(&mut r)?;
+        let pickup_delay = read_f32(&mut r)?;
+        let mut drop = ItemDrop::new(position, item);
+        drop.velocity = velocity;
+        drop.age = age;
+        drop.despawn_time = despawn_time;
+        drop.pickup_delay = pickup_delay;
+        drops.push(drop);
+    }
+
+    let fb_count = read_u32(&mut r)? as usize;
+    let mut falling_blocks = Vec::with_capacity(fb_count);
+    for _ in 0..fb_count {
+        let block_id = BlockId(read_u8(&mut r)?);
+        let position = read_vec3(&mut r)?;
+        let velocity_y = read_f32(&mut r)?;
+        let time_falling = read_f32(&mut r)?;
+        let mut fb = FallingBlock::with_velocity(block_id, position, velocity_y);
+        fb.time_falling = time_falling;
+        falling_blocks.push(fb);
+    }
+
+    let next_animal_id = read_u32(&mut r)?;
+    let animal_count = read_u32(&mut r)? as usize;
+    let mut animals = Vec::with_capacity(animal_count);
+    for _ in 0..animal_count {
+        let id = read_u32(&mut r)?;
+        let kind_u8 = read_u8(&mut r)?;
+        let kind = match kind_u8 {
+            0 => AnimalKind::Cow,
+            1 => AnimalKind::Pig,
+            _ => AnimalKind::Chicken,
+        };
+        let position = read_vec3(&mut r)?;
+        let velocity = read_vec3(&mut r)?;
+        let yaw = read_f32(&mut r)?;
+        let health = read_f32(&mut r)?;
+        let breath = read_f32(&mut r)?;
+        let mut animal = AnimalEntity::new(id, kind, position);
+        animal.velocity = velocity;
+        animal.yaw = yaw;
+        animal.health = health;
+        animal.breath = breath;
+        animals.push(animal);
+    }
+
+    let col_count = read_u32(&mut r)? as usize;
+    let mut spawned_cols = HashSet::with_capacity(col_count);
+    for _ in 0..col_count {
+        let x = read_i32(&mut r)?;
+        let y = read_i32(&mut r)?;
+        spawned_cols.insert(IVec2::new(x, y));
+    }
+
+    Ok(Some((drops, falling_blocks, next_animal_id, animals, spawned_cols)))
+}
+
+/// Saves environmental simulation timers to `<world_dir>/environment.bin`.
+pub fn save_environment_file(
+    world_dir: &Path,
+    planted_crops: &[(IVec3, f32)],
+    active_farmland: &[(IVec3, f32)],
+    growing_cacti: &[(IVec3, f32)],
+    decaying_leaves: &[(IVec3, f32)],
+) -> io::Result<PathBuf> {
+    let path = world_dir.join("environment.bin");
+    let file = File::create(&path)?;
+    let mut w = BufWriter::new(file);
+
+    w.write_all(ENV_MAGIC)?;
+    write_u32(&mut w, 1)?; // version 1
+
+    write_pos_timer_list(&mut w, planted_crops)?;
+    write_pos_timer_list(&mut w, active_farmland)?;
+    write_pos_timer_list(&mut w, growing_cacti)?;
+    write_pos_timer_list(&mut w, decaying_leaves)?;
+
+    w.flush()?;
+    Ok(path)
+}
+
+/// Loads environmental simulation timers from `<world_dir>/environment.bin`.
+pub fn load_environment_file(
+    world_dir: &Path,
+) -> io::Result<Option<(Vec<(IVec3, f32)>, Vec<(IVec3, f32)>, Vec<(IVec3, f32)>, Vec<(IVec3, f32)>)>> {
+    let path = world_dir.join("environment.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file = File::open(&path)?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != ENV_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid environment.bin magic header",
+        ));
+    }
+    let version = read_u32(&mut r)?;
+    if version != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported environment.bin version: {}", version),
+        ));
+    }
+
+    let planted_crops = read_pos_timer_list(&mut r)?;
+    let active_farmland = read_pos_timer_list(&mut r)?;
+    let growing_cacti = read_pos_timer_list(&mut r)?;
+    let decaying_leaves = read_pos_timer_list(&mut r)?;
+
+    Ok(Some((planted_crops, active_farmland, growing_cacti, decaying_leaves)))
+}
+
+/// Saves the complete `WorldSaveData` to `saves_root/<folder_name>/` using the multi-file architecture.
 pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Result<PathBuf> {
     data.metadata.last_played = current_unix_timestamp();
     let world_dir = saves_root.join(&data.metadata.folder_name);
     fs::create_dir_all(&world_dir)?;
 
-    // 1. Write level.dat (metadata + player state)
+    // 1. Write level.dat (metadata only, lightweight)
     {
         let file = File::create(world_dir.join("level.dat"))?;
         let mut w = BufWriter::new(file);
@@ -336,137 +870,51 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
         write_f32(&mut w, data.metadata.total_time)?;
         write_f32(&mut w, data.metadata.day_night_time)?;
 
-        // Player state
-        write_vec3(&mut w, data.player.position)?;
-        write_vec3(&mut w, data.player.velocity)?;
-        write_f32(&mut w, data.player.yaw)?;
-        write_f32(&mut w, data.player.pitch)?;
-        write_u32(&mut w, data.player.active_hotbar_slot as u32)?;
-
-        // Player stats
-        write_f32(&mut w, data.player.stats.health)?;
-        write_f32(&mut w, data.player.stats.max_health)?;
-        write_f32(&mut w, data.player.stats.hunger)?;
-        write_f32(&mut w, data.player.stats.max_hunger)?;
-        write_f32(&mut w, data.player.stats.saturation)?;
-        write_f32(&mut w, data.player.stats.exhaustion)?;
-        write_f32(&mut w, data.player.stats.breath)?;
-        write_f32(&mut w, data.player.stats.max_breath)?;
-        write_bool(&mut w, data.player.stats.is_dead)?;
-
-        // Player inventory (36 slots)
-        write_u32(&mut w, data.player.inventory.slots.len() as u32)?;
-        for slot in &data.player.inventory.slots {
-            write_item_slot(&mut w, *slot)?;
-        }
-
         w.flush()?;
     }
 
-    // 2. Write world.bin (modified chunks, containers, entities, simulation timers)
-    {
-        let file = File::create(world_dir.join("world.bin"))?;
-        let mut w = BufWriter::new(file);
+    // 2. Write player state into dedicated players/singleplayer.dat file
+    save_player_data(&world_dir, "singleplayer", &data.player)?;
 
-        w.write_all(SAVE_MAGIC)?;
-        write_u32(&mut w, SAVE_VERSION)?;
-
-        // Modified chunks
-        write_u32(&mut w, data.modified_chunks.len() as u32)?;
-        for (&cpos, runs) in &data.modified_chunks {
-            write_ivec3(&mut w, cpos.0)?;
-            write_u32(&mut w, runs.len() as u32)?;
-            for &(count, block_id) in runs {
-                write_u16(&mut w, count)?;
-                write_u8(&mut w, block_id.0)?;
-            }
-        }
-
-        // Chest containers
-        write_u32(&mut w, data.chest_containers.len() as u32)?;
-        for (&pos, slots) in &data.chest_containers {
-            write_ivec3(&mut w, pos)?;
-            write_u32(&mut w, slots.len() as u32)?;
-            for slot in slots {
-                write_item_slot(&mut w, *slot)?;
-            }
-        }
-
-        // Furnaces
-        write_u32(&mut w, data.furnaces.len() as u32)?;
-        for (&pos, furnace) in &data.furnaces {
-            write_ivec3(&mut w, pos)?;
-            write_item_slot(&mut w, furnace.input)?;
-            write_item_slot(&mut w, furnace.fuel)?;
-            write_item_slot(&mut w, furnace.output)?;
-            write_f32(&mut w, furnace.burn_time_remaining)?;
-            write_f32(&mut w, furnace.max_burn_time)?;
-            write_f32(&mut w, furnace.cook_progress)?;
-        }
-
-        // Item drops
-        write_u32(&mut w, data.item_drops.len() as u32)?;
-        for drop in &data.item_drops {
-            write_vec3(&mut w, drop.position)?;
-            write_vec3(&mut w, drop.velocity)?;
-            write_item_slot(&mut w, drop.item)?;
-            write_f32(&mut w, drop.age)?;
-            write_f32(&mut w, drop.despawn_time)?;
-            write_f32(&mut w, drop.pickup_delay)?;
-        }
-
-        // Falling blocks
-        write_u32(&mut w, data.falling_blocks.len() as u32)?;
-        for fb in &data.falling_blocks {
-            write_u8(&mut w, fb.block_id.0)?;
-            write_vec3(&mut w, fb.position)?;
-            write_f32(&mut w, fb.velocity_y)?;
-            write_f32(&mut w, fb.time_falling)?;
-        }
-
-        // Animals
-        write_u32(&mut w, data.next_animal_id)?;
-        write_u32(&mut w, data.animals.len() as u32)?;
-        for animal in &data.animals {
-            let kind_u8 = match animal.kind {
-                AnimalKind::Cow => 0,
-                AnimalKind::Pig => 1,
-                AnimalKind::Chicken => 2,
-            };
-            write_u32(&mut w, animal.id)?;
-            write_u8(&mut w, kind_u8)?;
-            write_vec3(&mut w, animal.position)?;
-            write_vec3(&mut w, animal.velocity)?;
-            write_f32(&mut w, animal.yaw)?;
-            write_f32(&mut w, animal.health)?;
-            write_f32(&mut w, animal.breath)?;
-        }
-
-        // Planted crops, active farmland, growing cacti, decaying leaves
-        write_pos_timer_list(&mut w, &data.planted_crops)?;
-        write_pos_timer_list(&mut w, &data.active_farmland)?;
-        write_pos_timer_list(&mut w, &data.growing_cacti)?;
-        write_pos_timer_list(&mut w, &data.decaying_leaves)?;
-
-        // Animal spawned columns
-        write_u32(&mut w, data.animal_spawned_columns.len() as u32)?;
-        for col in &data.animal_spawned_columns {
-            write_i32(&mut w, col.x)?;
-            write_i32(&mut w, col.y)?;
-        }
-
-        w.flush()?;
+    // 3. Write individual chunk files into chunks/<x>_<y>_<z>.bin
+    let chunk_dir = world_dir.join("chunks");
+    fs::create_dir_all(&chunk_dir)?;
+    for (&cpos, runs) in &data.modified_chunks {
+        save_chunk_file(&chunk_dir, cpos, runs)?;
     }
+
+    // 4. Write containers.bin (chests & furnaces)
+    save_containers_file(&world_dir, &data.chest_containers, &data.furnaces)?;
+
+    // 5. Write entities.bin (drops, falling blocks, animals, spawned columns)
+    save_entities_file(
+        &world_dir,
+        &data.item_drops,
+        &data.falling_blocks,
+        data.next_animal_id,
+        &data.animals,
+        &data.animal_spawned_columns,
+    )?;
+
+    // 6. Write environment.bin (crops, farmland, cacti, leaf decay)
+    save_environment_file(
+        &world_dir,
+        &data.planted_crops,
+        &data.active_farmland,
+        &data.growing_cacti,
+        &data.decaying_leaves,
+    )?;
 
     Ok(world_dir)
 }
 
 /// Loads the complete `WorldSaveData` from `saves_root/<folder_name>/`.
+/// Reads the modular files with full backward compatibility for legacy single-file `world.bin` saves.
 pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<WorldSaveData> {
     let world_dir = saves_root.join(folder_name);
 
     // 1. Read level.dat
-    let (metadata, player) = {
+    let (metadata, legacy_player) = {
         let file = File::open(world_dir.join("level.dat"))?;
         let mut r = BufReader::new(file);
 
@@ -479,7 +927,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             ));
         }
         let version = read_u32(&mut r)?;
-        if version != 1 && version != SAVE_VERSION {
+        if version != 1 && version != 2 && version != SAVE_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Unsupported save version: {}", version),
@@ -493,31 +941,46 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         let total_time = read_f32(&mut r)?;
         let day_night_time = read_f32(&mut r)?;
 
-        let position = read_vec3(&mut r)?;
-        let velocity = read_vec3(&mut r)?;
-        let yaw = read_f32(&mut r)?;
-        let pitch = read_f32(&mut r)?;
-        let active_hotbar_slot = (read_u32(&mut r)? as usize).min(8);
+        let legacy_player = if version < 3 {
+            // Version 1 and 2 had inline player state in level.dat
+            let position = read_vec3(&mut r)?;
+            let velocity = read_vec3(&mut r)?;
+            let yaw = read_f32(&mut r)?;
+            let pitch = read_f32(&mut r)?;
+            let active_hotbar_slot = (read_u32(&mut r)? as usize).min(8);
 
-        let mut stats = PlayerStats::new();
-        stats.health = read_f32(&mut r)?;
-        stats.max_health = read_f32(&mut r)?;
-        stats.hunger = read_f32(&mut r)?;
-        stats.max_hunger = read_f32(&mut r)?;
-        stats.saturation = read_f32(&mut r)?;
-        stats.exhaustion = read_f32(&mut r)?;
-        stats.breath = read_f32(&mut r)?;
-        stats.max_breath = read_f32(&mut r)?;
-        stats.is_dead = read_bool(&mut r)?;
+            let mut stats = PlayerStats::new();
+            stats.health = read_f32(&mut r)?;
+            stats.max_health = read_f32(&mut r)?;
+            stats.hunger = read_f32(&mut r)?;
+            stats.max_hunger = read_f32(&mut r)?;
+            stats.saturation = read_f32(&mut r)?;
+            stats.exhaustion = read_f32(&mut r)?;
+            stats.breath = read_f32(&mut r)?;
+            stats.max_breath = read_f32(&mut r)?;
+            stats.is_dead = read_bool(&mut r)?;
 
-        let slot_count = read_u32(&mut r)? as usize;
-        let mut inventory = Inventory::default();
-        for i in 0..slot_count {
-            let slot = read_item_slot(&mut r, version)?;
-            if i < Inventory::TOTAL_COUNT {
-                inventory.slots[i] = slot;
+            let slot_count = read_u32(&mut r)? as usize;
+            let mut inventory = Inventory::default();
+            for i in 0..slot_count {
+                let slot = read_item_slot(&mut r, version)?;
+                if i < Inventory::TOTAL_COUNT {
+                    inventory.slots[i] = slot;
+                }
             }
-        }
+            Some(SavedPlayerState {
+                position,
+                velocity,
+                yaw,
+                pitch,
+                stats,
+                inventory,
+                active_hotbar_slot,
+                rank: "default".to_string(),
+            })
+        } else {
+            None
+        };
 
         (
             WorldMetadata {
@@ -532,78 +995,158 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 total_time,
                 day_night_time,
             },
-            SavedPlayerState {
-                position,
-                velocity,
-                yaw,
-                pitch,
-                stats,
-                inventory,
-                active_hotbar_slot,
-            },
+            legacy_player,
         )
+    };
+
+    // 2. Load player state: dedicated singleplayer.dat has precedence over legacy level.dat
+    let player = if let Ok(Some(saved_player)) = load_player_data(&world_dir, "singleplayer") {
+        saved_player
+    } else if let Some(legacy) = legacy_player {
+        legacy
+    } else {
+        SavedPlayerState::default()
     };
 
     let mut data = WorldSaveData::new(metadata, player);
 
-    // 2. Read world.bin if present
-    let world_bin_path = world_dir.join("world.bin");
-    if world_bin_path.exists() {
-        let file = File::open(world_bin_path)?;
-        let mut r = BufReader::new(file);
-
-        let mut magic = [0u8; 4];
-        r.read_exact(&mut magic)?;
-        if &magic != SAVE_MAGIC {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid world.bin magic header",
-            ));
-        }
-        let version = read_u32(&mut r)?;
-        if version != 1 && version != SAVE_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Unsupported world.bin version: {}", version),
-            ));
-        }
-
-        // Modified chunks
-        let chunk_count = read_u32(&mut r)? as usize;
-        for _ in 0..chunk_count {
-            let cpos = ChunkPos(read_ivec3(&mut r)?);
-            let run_count = read_u32(&mut r)? as usize;
-            let mut runs = Vec::with_capacity(run_count);
-            for _ in 0..run_count {
-                let count = read_u16(&mut r)?;
-                let block_id = BlockId(read_u8(&mut r)?);
-                runs.push((count, block_id));
+    // 3. Load chunks: first from modular chunks/ directory
+    let chunk_dir = world_dir.join("chunks");
+    let mut loaded_modular_chunks = false;
+    if chunk_dir.exists() && chunk_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&chunk_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("bin") {
+                    match load_chunk_file(&path) {
+                        Ok((cpos, runs)) => {
+                            data.modified_chunks.insert(cpos, runs);
+                            loaded_modular_chunks = true;
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Skipping corrupted chunk file {:?}: {}", path, e);
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    // 4. Load containers
+    let mut loaded_containers = false;
+    if let Ok(Some((chests, furnaces))) = load_containers_file(&world_dir) {
+        data.chest_containers = chests;
+        data.furnaces = furnaces;
+        loaded_containers = true;
+    }
+
+    // 5. Load entities
+    let mut loaded_entities = false;
+    if let Ok(Some((drops, falling_blocks, next_id, animals, spawned_cols))) = load_entities_file(&world_dir) {
+        data.item_drops = drops;
+        data.falling_blocks = falling_blocks;
+        data.next_animal_id = next_id;
+        data.animals = animals;
+        data.animal_spawned_columns = spawned_cols;
+        loaded_entities = true;
+    }
+
+    // 6. Load environment
+    let mut loaded_env = false;
+    if let Ok(Some((crops, farmland, cacti, leaves))) = load_environment_file(&world_dir) {
+        data.planted_crops = crops;
+        data.active_farmland = farmland;
+        data.growing_cacti = cacti;
+        data.decaying_leaves = leaves;
+        loaded_env = true;
+    }
+
+    // 7. Fallback to legacy world.bin if any modular files were missing
+    if (!loaded_modular_chunks || !loaded_containers || !loaded_entities || !loaded_env)
+        && world_dir.join("world.bin").exists()
+    {
+        let _ = load_legacy_world_bin(
+            &world_dir,
+            &mut data,
+            !loaded_modular_chunks,
+            !loaded_containers,
+            !loaded_entities,
+            !loaded_env,
+        );
+    }
+
+    Ok(data)
+}
+
+/// Fallback reader for legacy single-file `world.bin` worlds.
+fn load_legacy_world_bin(
+    world_dir: &Path,
+    data: &mut WorldSaveData,
+    load_chunks: bool,
+    load_containers: bool,
+    load_entities: bool,
+    load_env: bool,
+) -> io::Result<()> {
+    let file = File::open(world_dir.join("world.bin"))?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != SAVE_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid world.bin magic header",
+        ));
+    }
+    let version = read_u32(&mut r)?;
+    if version != 1 && version != 2 && version != 3 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Unsupported world.bin version: {}", version),
+        ));
+    }
+
+    // Modified chunks
+    let chunk_count = read_u32(&mut r)? as usize;
+    for _ in 0..chunk_count {
+        let cpos = ChunkPos(read_ivec3(&mut r)?);
+        let run_count = read_u32(&mut r)? as usize;
+        let mut runs = Vec::with_capacity(run_count);
+        for _ in 0..run_count {
+            let count = read_u16(&mut r)?;
+            let block_id = BlockId(read_u8(&mut r)?);
+            runs.push((count, block_id));
+        }
+        if load_chunks {
             data.modified_chunks.insert(cpos, runs);
         }
+    }
 
-        // Chest containers
-        let chest_count = read_u32(&mut r)? as usize;
-        for _ in 0..chest_count {
-            let pos = read_ivec3(&mut r)?;
-            let len = read_u32(&mut r)? as usize;
-            let mut slots = Vec::with_capacity(len);
-            for _ in 0..len {
-                slots.push(read_item_slot(&mut r, version)?);
-            }
+    // Chest containers
+    let chest_count = read_u32(&mut r)? as usize;
+    for _ in 0..chest_count {
+        let pos = read_ivec3(&mut r)?;
+        let len = read_u32(&mut r)? as usize;
+        let mut slots = Vec::with_capacity(len);
+        for _ in 0..len {
+            slots.push(read_item_slot(&mut r, version)?);
+        }
+        if load_containers {
             data.chest_containers.insert(pos, slots);
         }
+    }
 
-        // Furnaces
-        let furnace_count = read_u32(&mut r)? as usize;
-        for _ in 0..furnace_count {
-            let pos = read_ivec3(&mut r)?;
-            let input = read_item_slot(&mut r, version)?;
-            let fuel = read_item_slot(&mut r, version)?;
-            let output = read_item_slot(&mut r, version)?;
-            let burn_time_remaining = read_f32(&mut r)?;
-            let max_burn_time = read_f32(&mut r)?;
-            let cook_progress = read_f32(&mut r)?;
+    // Furnaces
+    let furnace_count = read_u32(&mut r)? as usize;
+    for _ in 0..furnace_count {
+        let pos = read_ivec3(&mut r)?;
+        let input = read_item_slot(&mut r, version)?;
+        let fuel = read_item_slot(&mut r, version)?;
+        let output = read_item_slot(&mut r, version)?;
+        let burn_time_remaining = read_f32(&mut r)?;
+        let max_burn_time = read_f32(&mut r)?;
+        let cook_progress = read_f32(&mut r)?;
+        if load_containers {
             data.furnaces.insert(
                 pos,
                 FurnaceState {
@@ -616,16 +1159,18 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 },
             );
         }
+    }
 
-        // Item drops
-        let drop_count = read_u32(&mut r)? as usize;
-        for _ in 0..drop_count {
-            let position = read_vec3(&mut r)?;
-            let velocity = read_vec3(&mut r)?;
-            let item = read_item_slot(&mut r, version)?;
-            let age = read_f32(&mut r)?;
-            let despawn_time = read_f32(&mut r)?;
-            let pickup_delay = read_f32(&mut r)?;
+    // Item drops
+    let drop_count = read_u32(&mut r)? as usize;
+    for _ in 0..drop_count {
+        let position = read_vec3(&mut r)?;
+        let velocity = read_vec3(&mut r)?;
+        let item = read_item_slot(&mut r, version)?;
+        let age = read_f32(&mut r)?;
+        let despawn_time = read_f32(&mut r)?;
+        let pickup_delay = read_f32(&mut r)?;
+        if load_entities {
             let mut drop = ItemDrop::new(position, item);
             drop.velocity = velocity;
             drop.age = age;
@@ -633,35 +1178,42 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             drop.pickup_delay = pickup_delay;
             data.item_drops.push(drop);
         }
+    }
 
-        // Falling blocks
-        let fb_count = read_u32(&mut r)? as usize;
-        for _ in 0..fb_count {
-            let block_id = BlockId(read_u8(&mut r)?);
-            let position = read_vec3(&mut r)?;
-            let velocity_y = read_f32(&mut r)?;
-            let time_falling = read_f32(&mut r)?;
+    // Falling blocks
+    let fb_count = read_u32(&mut r)? as usize;
+    for _ in 0..fb_count {
+        let block_id = BlockId(read_u8(&mut r)?);
+        let position = read_vec3(&mut r)?;
+        let velocity_y = read_f32(&mut r)?;
+        let time_falling = read_f32(&mut r)?;
+        if load_entities {
             let mut fb = FallingBlock::with_velocity(block_id, position, velocity_y);
             fb.time_falling = time_falling;
             data.falling_blocks.push(fb);
         }
+    }
 
-        // Animals
-        data.next_animal_id = read_u32(&mut r)?;
-        let animal_count = read_u32(&mut r)? as usize;
-        for _ in 0..animal_count {
-            let id = read_u32(&mut r)?;
-            let kind_u8 = read_u8(&mut r)?;
-            let kind = match kind_u8 {
-                0 => AnimalKind::Cow,
-                1 => AnimalKind::Pig,
-                _ => AnimalKind::Chicken,
-            };
-            let position = read_vec3(&mut r)?;
-            let velocity = read_vec3(&mut r)?;
-            let yaw = read_f32(&mut r)?;
-            let health = read_f32(&mut r)?;
-            let breath = read_f32(&mut r)?;
+    // Animals
+    let next_animal_id = read_u32(&mut r)?;
+    if load_entities {
+        data.next_animal_id = next_animal_id;
+    }
+    let animal_count = read_u32(&mut r)? as usize;
+    for _ in 0..animal_count {
+        let id = read_u32(&mut r)?;
+        let kind_u8 = read_u8(&mut r)?;
+        let kind = match kind_u8 {
+            0 => AnimalKind::Cow,
+            1 => AnimalKind::Pig,
+            _ => AnimalKind::Chicken,
+        };
+        let position = read_vec3(&mut r)?;
+        let velocity = read_vec3(&mut r)?;
+        let yaw = read_f32(&mut r)?;
+        let health = read_f32(&mut r)?;
+        let breath = read_f32(&mut r)?;
+        if load_entities {
             let mut animal = AnimalEntity::new(id, kind, position);
             animal.velocity = velocity;
             animal.yaw = yaw;
@@ -669,23 +1221,31 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             animal.breath = breath;
             data.animals.push(animal);
         }
+    }
 
-        // Planted crops, active farmland, growing cacti, decaying leaves
-        data.planted_crops = read_pos_timer_list(&mut r)?;
-        data.active_farmland = read_pos_timer_list(&mut r)?;
-        data.growing_cacti = read_pos_timer_list(&mut r)?;
-        data.decaying_leaves = read_pos_timer_list(&mut r)?;
+    // Simulation timers
+    let planted_crops = read_pos_timer_list(&mut r)?;
+    let active_farmland = read_pos_timer_list(&mut r)?;
+    let growing_cacti = read_pos_timer_list(&mut r)?;
+    let decaying_leaves = read_pos_timer_list(&mut r)?;
+    if load_env {
+        data.planted_crops = planted_crops;
+        data.active_farmland = active_farmland;
+        data.growing_cacti = growing_cacti;
+        data.decaying_leaves = decaying_leaves;
+    }
 
-        // Animal spawned columns
-        let col_count = read_u32(&mut r)? as usize;
-        for _ in 0..col_count {
-            let x = read_i32(&mut r)?;
-            let y = read_i32(&mut r)?;
+    // Animal spawned columns
+    let col_count = read_u32(&mut r)? as usize;
+    for _ in 0..col_count {
+        let x = read_i32(&mut r)?;
+        let y = read_i32(&mut r)?;
+        if load_entities {
             data.animal_spawned_columns.insert(IVec2::new(x, y));
         }
     }
 
-    Ok(data)
+    Ok(())
 }
 
 // --- Binary Serialization Helpers ---
@@ -916,7 +1476,11 @@ mod tests {
         // 3. Save to disk
         let saved_dir = save_world_to_dir(&temp_root, &mut save_data).expect("Failed to save world");
         assert!(saved_dir.join("level.dat").exists());
-        assert!(saved_dir.join("world.bin").exists());
+        assert!(saved_dir.join("players").join("singleplayer.dat").exists());
+        assert!(saved_dir.join("chunks").join("0_0_0.bin").exists());
+        assert!(saved_dir.join("containers.bin").exists());
+        assert!(saved_dir.join("entities.bin").exists());
+        assert!(saved_dir.join("environment.bin").exists());
 
         // Verify list_saved_worlds discovers it
         let listed = list_saved_worlds(&temp_root);
@@ -962,6 +1526,96 @@ mod tests {
         // 5. Delete saved world
         delete_saved_world(&temp_root, &loaded.metadata.folder_name).unwrap();
         assert!(list_saved_worlds(&temp_root).is_empty());
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_player_data_save_load_and_reset() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "blockgame_player_crud_test_{}",
+            current_unix_timestamp()
+        ));
+        let world_dir = temp_root.join("world_player_test");
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&world_dir).unwrap();
+
+        // 1. Initially no player file exists
+        let loaded = load_player_data(&world_dir, "alice").unwrap();
+        assert!(loaded.is_none());
+
+        // 2. Save player state with custom rank
+        let mut player = SavedPlayerState::default();
+        player.position = Vec3::new(10.0, 65.0, -20.0);
+        player.rank = "admin".to_string();
+        player.inventory.slots[0] = ItemSlot::new(ItemId::DIAMOND_SWORD, 1);
+
+        let path = save_player_data(&world_dir, "Alice", &player).expect("Save player");
+        assert!(path.exists());
+        assert!(path.ends_with("alice.dat"));
+
+        // 3. List players
+        let players = list_saved_players(&world_dir).unwrap();
+        assert_eq!(players, vec!["alice".to_string()]);
+
+        // 4. Load player back
+        let loaded_state = load_player_data(&world_dir, "alice").unwrap().expect("Loaded player");
+        assert_eq!(loaded_state.position, Vec3::new(10.0, 65.0, -20.0));
+        assert_eq!(loaded_state.rank, "admin");
+        assert_eq!(loaded_state.inventory.slots[0].item_id, ItemId::DIAMOND_SWORD);
+
+        // 5. Delete player file to reset player
+        let deleted = delete_player_data(&world_dir, "alice").unwrap();
+        assert!(deleted);
+        assert!(!path.exists());
+
+        // After deletion, load_player_data returns None (triggering default respawn & reset)
+        let after_reset = load_player_data(&world_dir, "alice").unwrap();
+        assert!(after_reset.is_none());
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_corrupted_chunk_tolerance() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "blockgame_chunk_corrupt_test_{}",
+            current_unix_timestamp()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let mut world = World::new();
+        // Create 2 chunks
+        let cpos1 = ChunkPos::new(0, 0, 0);
+        let mut chunk1 = Chunk::new(cpos1);
+        chunk1.fill(BlockId::STONE);
+        world.insert_chunk(chunk1);
+        world.set_block(IVec3::new(1, 2, 3), BlockId::GOLD_ORE);
+
+        let cpos2 = ChunkPos::new(1, 0, 0);
+        let mut chunk2 = Chunk::new(cpos2);
+        chunk2.fill(BlockId::DIRT);
+        world.insert_chunk(chunk2);
+        world.set_block(IVec3::new(18, 2, 3), BlockId::IRON_ORE);
+
+        let meta = WorldMetadata::new("Corrupt Test World", 12345);
+        let mut save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+        save_data.capture_from_world(&world);
+        assert_eq!(save_data.modified_chunks.len(), 2);
+
+        let saved_dir = save_world_to_dir(&temp_root, &mut save_data).unwrap();
+
+        // Deliberately corrupt cpos1 chunk file (0_0_0.bin) by overwriting with invalid bytes
+        let corrupt_path = saved_dir.join("chunks").join("0_0_0.bin");
+        assert!(corrupt_path.exists());
+        fs::write(&corrupt_path, b"CORRUPTED_GARBAGE_BYTES_TEST").unwrap();
+
+        // Load world back: should NOT crash with error, and chunk 1_0_0 should load cleanly!
+        let loaded = load_world_from_dir(&temp_root, "Corrupt_Test_World").expect("World must load despite one bad chunk");
+        assert_eq!(loaded.metadata.name, "Corrupt Test World");
+        assert!(loaded.modified_chunks.contains_key(&cpos2), "Good chunk 1_0_0 must be loaded");
+        assert!(!loaded.modified_chunks.contains_key(&cpos1), "Bad chunk 0_0_0 was skipped cleanly");
 
         let _ = fs::remove_dir_all(&temp_root);
     }

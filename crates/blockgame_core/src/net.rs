@@ -1035,6 +1035,8 @@ fn apply_command_output(
     disconnected_indices: &mut Vec<usize>,
     perms_manager: &mut PermissionsManager,
     ban_manager: &mut BanManager,
+    auth_db: &mut AuthDatabase,
+    default_spawn: Vec3,
     world_dir: &std::path::Path,
     stop_flag: &Arc<AtomicBool>,
 ) {
@@ -1100,6 +1102,54 @@ fn apply_command_output(
 
     for (target_pid, slot) in output.gives {
         direct_sends.push((target_pid, ServerPacket::ReceiveItem { item: slot }));
+    }
+
+    for (target_name, new_rank) in output.rank_updates {
+        // Update permissions manager
+        let _ = perms_manager.add_player_group(&target_name, &new_rank);
+        let _ = perms_manager.save_to_dir(world_dir);
+
+        // Update online client if connected
+        if let Some(c) = clients.iter_mut().find(|c| c.username.eq_ignore_ascii_case(&target_name)) {
+            c.saved_state.rank = new_rank.clone();
+            let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+        }
+
+        // Update auth_db
+        let key = target_name.trim().to_ascii_lowercase();
+        if let Some(acc) = auth_db.accounts.get_mut(&key) {
+            acc.player_state.rank = new_rank;
+            let _ = crate::save::save_player_data(world_dir, &acc.username, &acc.player_state);
+        }
+        let _ = auth_db.save_to_dir(world_dir);
+    }
+
+    for target_name in output.reset_players {
+        // Delete dedicated player file
+        let _ = crate::save::delete_player_data(world_dir, &target_name);
+
+        let mut fresh = SavedPlayerState::default();
+        fresh.position = default_spawn;
+
+        // Reset auth_db account
+        auth_db.update_player_state(&target_name, 0, fresh.clone());
+        let _ = auth_db.save_to_dir(world_dir);
+
+        // Reset online client if connected
+        if let Some(c) = clients.iter_mut().find(|c| c.username.eq_ignore_ascii_case(&target_name)) {
+            c.model.position = default_spawn;
+            c.model.velocity = Vec3::ZERO;
+            c.model.health = 20.0;
+            c.saved_state = fresh;
+            direct_sends.push((
+                c.player_id,
+                ServerPacket::TeleportPlayer {
+                    position: default_spawn,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                },
+            ));
+        }
     }
 
     if output.stop_server {
@@ -1206,6 +1256,8 @@ fn run_server_loop(
                 &mut disconnected_indices,
                 &mut perms_manager,
                 &mut ban_manager,
+                &mut auth_db,
+                default_spawn,
                 &world_dir,
                 &stop_flag,
             );
@@ -1304,14 +1356,26 @@ fn run_server_loop(
                             default_spawn,
                         ) {
                             Ok((account, token, is_new)) => {
+                                let mut player_state = account.player_state.clone();
                                 if perms_manager.players.is_empty() {
                                     let _ = perms_manager.add_player_group(&account.username, "admin");
                                     let _ = perms_manager.save_to_dir(&world_dir);
+                                    player_state.rank = "admin".to_string();
+                                    auth_db.update_player_state(&account.username, account.skin_id, player_state.clone());
+                                } else {
+                                    if player_state.rank.is_empty() {
+                                        player_state.rank = "default".to_string();
+                                    }
+                                    let groups = perms_manager.get_player_groups(&account.username);
+                                    if groups.is_empty() || (groups.len() == 1 && groups[0] == "default" && player_state.rank != "default") {
+                                        let _ = perms_manager.add_player_group(&account.username, &player_state.rank);
+                                        let _ = perms_manager.save_to_dir(&world_dir);
+                                    }
                                 }
                                 clients[idx].authenticated = true;
                                 clients[idx].username = account.username.clone();
                                 clients[idx].session_token = token;
-                                clients[idx].saved_state = account.player_state.clone();
+                                clients[idx].saved_state = player_state.clone();
                                 clients[idx].model = PlayerModelState {
 
                                     player_id: pid,
@@ -1636,6 +1700,8 @@ fn run_server_loop(
                                     &mut disconnected_indices,
                                     &mut perms_manager,
                                     &mut ban_manager,
+                                    &mut auth_db,
+                                    default_spawn,
                                     &world_dir,
                                     &stop_flag,
                                 );
@@ -2139,6 +2205,7 @@ fn write_saved_player_state<W: Write>(w: &mut W, p: &SavedPlayerState) -> io::Re
     write_f32(w, p.stats.breath)?;
     write_f32(w, p.stats.max_breath)?;
     write_bool(w, p.stats.is_dead)?;
+    write_string(w, &p.rank)?;
     write_u32(w, p.inventory.slots.len() as u32)?;
     for s in &p.inventory.slots {
         write_slot(w, *s)?;
@@ -2163,6 +2230,7 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
     stats.breath = read_f32(r)?;
     stats.max_breath = read_f32(r)?;
     stats.is_dead = read_bool(r)?;
+    let rank = read_string(r).unwrap_or_else(|_| "default".to_string());
 
     let count = read_u32(r)? as usize;
     let mut inventory = Inventory::default();
@@ -2181,6 +2249,7 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
         stats,
         inventory,
         active_hotbar_slot,
+        rank: if rank.is_empty() { "default".to_string() } else { rank },
     })
 }
 

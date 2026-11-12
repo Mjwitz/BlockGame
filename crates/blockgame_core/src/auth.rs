@@ -279,9 +279,16 @@ impl AuthDatabase {
         }
     }
 
-    /// Saves the authentication database to `<world_dir>/users.dat`.
+    /// Saves the authentication database to `<world_dir>/users.dat` and individual player files to `<world_dir>/players/<username>.dat`.
     pub fn save_to_dir(&self, world_dir: &Path) -> io::Result<()> {
         fs::create_dir_all(world_dir)?;
+
+        // 1. Save each player's state into their dedicated individual file in players/
+        for account in self.accounts.values() {
+            let _ = crate::save::save_player_data(world_dir, &account.username, &account.player_state);
+        }
+
+        // 2. Persist account credentials to users.dat
         let file = File::create(world_dir.join("users.dat"))?;
         let mut w = BufWriter::new(file);
 
@@ -332,7 +339,7 @@ impl AuthDatabase {
         w.flush()
     }
 
-    /// Loads the authentication database from `<world_dir>/users.dat` if it exists.
+    /// Loads the authentication database from `<world_dir>/users.dat` and individual player files.
     pub fn load_from_dir(world_dir: &Path) -> io::Result<Self> {
         let path = world_dir.join("users.dat");
         if !path.exists() {
@@ -408,6 +415,35 @@ impl AuthDatabase {
                 }
             }
 
+            // Check dedicated player file in players/<username>.dat
+            let player_state = if let Ok(Some(loaded_state)) = crate::save::load_player_data(world_dir, &username) {
+                loaded_state
+            } else if world_dir.join("players").exists() {
+                // players/ directory exists but this player file was deleted (reset player)
+                SavedPlayerState {
+                    position,
+                    velocity: Vec3::ZERO,
+                    yaw,
+                    pitch,
+                    stats: PlayerStats::new(),
+                    inventory: Inventory::starter_inventory(),
+                    active_hotbar_slot: 0,
+                    rank: "default".to_string(),
+                }
+            } else {
+                // Legacy world: fallback to player state saved in users.dat
+                SavedPlayerState {
+                    position,
+                    velocity,
+                    yaw,
+                    pitch,
+                    stats,
+                    inventory,
+                    active_hotbar_slot,
+                    rank: "default".to_string(),
+                }
+            };
+
             let key = username.to_ascii_lowercase();
             db.accounts.insert(
                 key,
@@ -416,15 +452,7 @@ impl AuthDatabase {
                     salt,
                     password_hash,
                     skin_id,
-                    player_state: SavedPlayerState {
-                        position,
-                        velocity,
-                        yaw,
-                        pitch,
-                        stats,
-                        inventory,
-                        active_hotbar_slot,
-                    },
+                    player_state,
                 },
             );
         }

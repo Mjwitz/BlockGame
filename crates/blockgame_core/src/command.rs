@@ -64,6 +64,10 @@ pub struct CommandOutput {
     pub save_bans: bool,
     /// Flag indicating whether the server should cleanly shut down.
     pub stop_server: bool,
+    /// Rank updates to apply to player data: `(username, new_rank)`.
+    pub rank_updates: Vec<(String, String)>,
+    /// Player accounts/data to reset: `username`.
+    pub reset_players: Vec<String>,
 }
 
 impl CommandOutput {
@@ -693,7 +697,64 @@ pub fn execute_command(
             out.feedback.push("Shutting down server...".to_string());
         }
 
-        // --- 11. HELP COMMAND ---
+        // --- 11. RANK COMMAND ---
+        "rank" => {
+            if !check_perm("blockgame.command.rank") {
+                return CommandOutput::error("You do not have permission: blockgame.command.rank");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /rank <player> [new_rank]");
+            }
+            let target_name = args[0];
+            if args.len() == 1 {
+                let groups = perms.get_player_groups(target_name);
+                let display_rank = groups.first().map(|s| s.as_str()).unwrap_or("default");
+                out.feedback.push(format!(
+                    "Player '{}' rank: '{}' (Groups: {})",
+                    target_name,
+                    display_rank,
+                    groups.join(", ")
+                ));
+            } else {
+                let new_rank = args[1].to_ascii_lowercase();
+                if !perms.groups.contains_key(&new_rank) {
+                    let _ = perms.create_group(&new_rank);
+                }
+                let _ = perms.add_player_group(target_name, &new_rank);
+                out.save_permissions = true;
+                out.rank_updates.push((target_name.to_string(), new_rank.clone()));
+                out.feedback.push(format!(
+                    "Set rank of player '{}' to '{}'.",
+                    target_name, new_rank
+                ));
+                out.broadcasts.push(format!(
+                    "[Server] Player '{}' is now rank '{}'.",
+                    target_name, new_rank
+                ));
+            }
+        }
+
+        // --- 12. RESETPLAYER COMMAND ---
+        "resetplayer" => {
+            if !check_perm("blockgame.command.resetplayer") {
+                return CommandOutput::error("You do not have permission: blockgame.command.resetplayer");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /resetplayer <player>");
+            }
+            let target_name = args[0];
+            out.reset_players.push(target_name.to_string());
+            out.feedback.push(format!(
+                "Reset player data for '{}'. Position, inventory, and stats restored to defaults.",
+                target_name
+            ));
+            out.broadcasts.push(format!(
+                "[Server] Player data for '{}' was reset by an administrator.",
+                target_name
+            ));
+        }
+
+        // --- 13. HELP COMMAND ---
         "help" | "?" => {
             out.feedback.push("Available Commands:".to_string());
             if check_perm("blockgame.command.kick") {
@@ -714,6 +775,12 @@ pub fn execute_command(
             }
             if check_perm("blockgame.command.perm") {
                 out.feedback.push("  /perm <user|group|list> - Manage permissions and groups".to_string());
+            }
+            if check_perm("blockgame.command.rank") {
+                out.feedback.push("  /rank <player> [rank] - View or set player rank".to_string());
+            }
+            if check_perm("blockgame.command.resetplayer") {
+                out.feedback.push("  /resetplayer <player> - Reset player data to defaults".to_string());
             }
             out.feedback.push("  /list - List all online players".to_string());
             if check_perm("blockgame.command.say") {
@@ -918,5 +985,54 @@ mod tests {
         assert!(res.save_permissions);
         assert!(perms.has_permission("Charlie", "blockgame.command.give"));
         assert!(!perms.has_permission("Charlie", "blockgame.command.kick"));
+    }
+
+    #[test]
+    fn test_rank_and_resetplayer_commands() {
+        let registry = ItemRegistry::new();
+        let mut perms = PermissionsManager::new();
+        let mut bans = BanManager::new();
+        let online = vec![OnlinePlayerInfo {
+            player_id: 1,
+            username: "Steve".to_string(),
+            position: Vec3::new(0.0, 50.0, 0.0),
+            yaw: 0.0,
+            pitch: 0.0,
+        }];
+
+        // Query default rank
+        let res = execute_command(
+            &CommandSource::Console,
+            "rank Steve",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+        );
+        assert!(res.feedback[0].contains("default"));
+
+        // Set rank to moderator
+        let res = execute_command(
+            &CommandSource::Console,
+            "rank Steve moderator",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+        );
+        assert!(res.save_permissions);
+        assert_eq!(res.rank_updates, vec![("Steve".to_string(), "moderator".to_string())]);
+        assert!(perms.has_permission("Steve", "blockgame.command.kick"));
+
+        // Reset player
+        let res = execute_command(
+            &CommandSource::Console,
+            "resetplayer Steve",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+        );
+        assert_eq!(res.reset_players, vec!["Steve".to_string()]);
     }
 }
