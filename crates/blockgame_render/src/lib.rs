@@ -11,8 +11,8 @@ pub use atlas::TextureAtlas;
 pub use camera::{Camera, CameraUniform, Frustum, FrustumPlane};
 pub use day_night::DayNightCycle;
 pub use mesh::{
-    build_animals_mesh, build_falling_blocks_mesh, build_item_drops_mesh, ChunkMesh, ChunkMesher,
-    VoxelVertex,
+    build_animals_mesh, build_falling_blocks_mesh, build_item_drops_mesh, build_players_mesh,
+    ChunkMesh, ChunkMesher, VoxelVertex,
 };
 pub use pipeline::{
     create_depth_texture, DynamicMeshBuffers, GpuMeshBuffers, VoxelPipeline, DEPTH_FORMAT,

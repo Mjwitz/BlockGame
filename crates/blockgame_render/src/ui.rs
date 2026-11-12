@@ -4428,6 +4428,518 @@ impl UiBuilder {
             true,
         );
     }
+
+    /// Returns layout rectangles for the Multiplayer Lobby screen:
+    /// `(username_box, password_box, address_box, [skin_btn, join_btn, host_btn, back_btn])`.
+    pub fn multiplayer_lobby_layout(
+        screen_w: f32,
+        screen_h: f32,
+    ) -> ([f32; 4], [f32; 4], [f32; 4], [[f32; 4]; 4]) {
+        let field_w = 380.0;
+        let field_h = 36.0;
+        let fx = (screen_w - field_w) * 0.5;
+
+        let user_rect = [fx, screen_h * 0.23, field_w, field_h];
+        let pass_rect = [fx, screen_h * 0.35, field_w, field_h];
+        let addr_rect = [fx, screen_h * 0.47, field_w, field_h];
+
+        let skin_btn = [fx, screen_h * 0.56, field_w, 36.0];
+        let half_w = (field_w - 12.0) * 0.5;
+        let join_btn = [fx, screen_h * 0.65, half_w, 40.0];
+        let host_btn = [fx + half_w + 12.0, screen_h * 0.65, half_w, 40.0];
+        let back_btn = [fx, screen_h * 0.74, field_w, 38.0];
+
+        (
+            user_rect,
+            pass_rect,
+            addr_rect,
+            [skin_btn, join_btn, host_btn, back_btn],
+        )
+    }
+
+    /// Builds the interactive Multiplayer Lobby Screen (Username, Password, Server Address, Skin Preview, Join & Host buttons).
+    pub fn build_multiplayer_lobby_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        username_input: &str,
+        password_input: &str,
+        address_input: &str,
+        skin_id: u8,
+        focused_field: usize,
+        status_message: Option<(&str, bool)>,
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Dark translucent backdrop
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.05, 0.06, 0.09, 0.82],
+        );
+
+        let header = "Multiplayer Server & Authentication";
+        let header_w = Self::string_width(header, 13.0, 1.5);
+        Self::draw_string(
+            mesh,
+            (screen_w - header_w) * 0.5,
+            screen_h * 0.11,
+            header,
+            13.0,
+            18.0,
+            1.5,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let sub = "New usernames register automatically; returning usernames verify password";
+        let sub_w = Self::string_width(sub, 8.0, 1.0);
+        Self::draw_string(
+            mesh,
+            (screen_w - sub_w) * 0.5,
+            screen_h * 0.155,
+            sub,
+            8.0,
+            11.0,
+            1.0,
+            [0.72, 0.78, 0.88, 0.90],
+        );
+
+        let (user_r, pass_r, addr_r, btns) = Self::multiplayer_lobby_layout(screen_w, screen_h);
+
+        Self::draw_text_input_box(
+            mesh,
+            user_r[0],
+            user_r[1],
+            user_r[2],
+            user_r[3],
+            "Username (3-16 chars, alphanumeric/_):",
+            username_input,
+            "Player1",
+            focused_field == 0,
+            cursor_pos,
+        );
+
+        let masked_pass: String = std::iter::repeat('*').take(password_input.len()).collect();
+        Self::draw_text_input_box(
+            mesh,
+            pass_r[0],
+            pass_r[1],
+            pass_r[2],
+            pass_r[3],
+            "Account Password (salted SHA-256):",
+            &masked_pass,
+            "Leave blank or enter secret password",
+            focused_field == 1,
+            cursor_pos,
+        );
+
+        Self::draw_text_input_box(
+            mesh,
+            addr_r[0],
+            addr_r[1],
+            addr_r[2],
+            addr_r[3],
+            "Server Address (IP:Port):",
+            address_input,
+            "127.0.0.1:25565",
+            focused_field == 2,
+            cursor_pos,
+        );
+
+        let skin_label = format!(
+            "Character Skin: {}",
+            blockgame_core::net::player_skin_name(skin_id)
+        );
+        Self::draw_menu_button(
+            mesh,
+            btns[0][0],
+            btns[0][1],
+            btns[0][2],
+            btns[0][3],
+            &skin_label,
+            cursor_pos,
+            true,
+        );
+
+        // Draw 32x32 Character Face Avatar preview on the left side of the Skin button
+        let face_tile = 272 + ((skin_id as u16) % 4) * 4;
+        let face_uv = TextureAtlas::get_uv_bounds(face_tile);
+        mesh.add_quad(
+            btns[0][0] + 8.0,
+            btns[0][1] + 4.0,
+            28.0,
+            28.0,
+            face_uv,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let can_connect =
+            username_input.trim().len() >= 3 && !address_input.trim().is_empty();
+
+        Self::draw_menu_button(
+            mesh,
+            btns[1][0],
+            btns[1][1],
+            btns[1][2],
+            btns[1][3],
+            "Join Server",
+            cursor_pos,
+            can_connect,
+        );
+        Self::draw_menu_button(
+            mesh,
+            btns[2][0],
+            btns[2][1],
+            btns[2][2],
+            btns[2][3],
+            "Host & Play",
+            cursor_pos,
+            username_input.trim().len() >= 3,
+        );
+        Self::draw_menu_button(
+            mesh,
+            btns[3][0],
+            btns[3][1],
+            btns[3][2],
+            btns[3][3],
+            "Back to Title",
+            cursor_pos,
+            true,
+        );
+
+        if let Some((msg, is_err)) = status_message {
+            let mw = Self::string_width(msg, 9.0, 1.0);
+            let color = if is_err {
+                [1.0, 0.42, 0.42, 1.0]
+            } else {
+                [0.45, 0.95, 0.58, 1.0]
+            };
+            Self::draw_string(
+                mesh,
+                (screen_w - mw) * 0.5,
+                screen_h * 0.84,
+                msg,
+                9.0,
+                13.0,
+                1.0,
+                color,
+            );
+        }
+    }
+
+    /// Projects remote (and 3rd-person local) 3D player head positions to 2D screen coordinates
+    /// and draws floating username nameplates + health bars above their heads.
+    pub fn draw_player_nametags(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        view_proj: glam::Mat4,
+        camera_pos: glam::Vec3,
+        players: &[blockgame_core::net::PlayerModelState],
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        for player in players {
+            if player.health <= 0.0 || player.username.is_empty() {
+                continue;
+            }
+            let dist = player.position.distance(camera_pos);
+            if dist > 64.0 {
+                continue;
+            }
+
+            let tag_offset_y = if player.is_sneaking { 1.92 } else { 2.08 };
+            let world_pt = player.position + glam::Vec3::new(0.0, tag_offset_y, 0.0);
+            let clip = view_proj * glam::Vec4::new(world_pt.x, world_pt.y, world_pt.z, 1.0);
+            if clip.w <= 0.1 {
+                continue;
+            }
+
+            let ndc_x = clip.x / clip.w;
+            let ndc_y = clip.y / clip.w;
+            if ndc_x < -1.1 || ndc_x > 1.1 || ndc_y < -1.1 || ndc_y > 1.1 {
+                continue;
+            }
+
+            let sx = (ndc_x * 0.5 + 0.5) * screen_w;
+            let sy = (1.0 - (ndc_y * 0.5 + 0.5)) * screen_h;
+
+            let char_w = 8.5;
+            let char_h = 12.0;
+            let text_w = Self::string_width(&player.username, char_w, 1.0);
+            let pad_x = 6.0;
+            let pad_y = 4.0;
+            let box_w = text_w + pad_x * 2.0;
+            let box_h = char_h + pad_y * 2.0;
+            let bx = sx - box_w * 0.5;
+            let by = sy - box_h;
+
+            let alpha = if player.is_sneaking { 0.42 } else { 0.68 };
+            mesh.add_quad(
+                bx,
+                by,
+                box_w,
+                box_h,
+                white_uv,
+                [0.04, 0.05, 0.08, alpha],
+            );
+
+            Self::draw_string(
+                mesh,
+                bx + pad_x,
+                by + pad_y,
+                &player.username,
+                char_w,
+                char_h,
+                1.0,
+                [1.0, 1.0, 1.0, if player.is_sneaking { 0.65 } else { 0.98 }],
+            );
+
+            // Health bar underneath nameplate if damaged
+            if player.health < player.max_health {
+                let bar_w = box_w.max(44.0);
+                let bar_h = 4.0;
+                let bar_x = sx - bar_w * 0.5;
+                let bar_y = by + box_h + 2.0;
+                let ratio = (player.health / player.max_health.max(1.0)).clamp(0.0, 1.0);
+                mesh.add_quad(
+                    bar_x,
+                    bar_y,
+                    bar_w,
+                    bar_h,
+                    white_uv,
+                    [0.15, 0.04, 0.04, 0.80],
+                );
+                mesh.add_quad(
+                    bar_x,
+                    bar_y,
+                    bar_w * ratio,
+                    bar_h,
+                    white_uv,
+                    [0.25, 0.92, 0.38, 0.92],
+                );
+            }
+        }
+    }
+
+    /// Draws the in-game Multiplayer Chat Box (bottom-left) and the Tab Online Player List overlay.
+    pub fn draw_multiplayer_hud_overlays(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        chat_history: &[blockgame_core::net::ChatEntry],
+        chat_open: bool,
+        chat_input: &str,
+        tab_held: bool,
+        online_players: &[blockgame_core::net::PlayerModelState],
+        local_username: &str,
+        is_hosting: bool,
+        server_addr: &str,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // 1. Top-left small multiplayer status badge
+        let badge = if is_hosting {
+            format!("Hosting MP ({}) - {} Online [Tab: List | T: Chat | F5: Camera]", server_addr, online_players.len().max(1))
+        } else if !server_addr.is_empty() {
+            format!("Connected ({}) - {} Online [Tab: List | T: Chat | F5: Camera]", server_addr, online_players.len().max(1))
+        } else {
+            String::new()
+        };
+        if !badge.is_empty() {
+            let bw = Self::string_width(&badge, 7.5, 1.0) + 12.0;
+            mesh.add_quad(8.0, 8.0, bw, 20.0, white_uv, [0.04, 0.05, 0.08, 0.55]);
+            Self::draw_string(
+                mesh,
+                14.0,
+                12.0,
+                &badge,
+                7.5,
+                11.0,
+                1.0,
+                [0.82, 0.90, 1.0, 0.92],
+            );
+        }
+
+        // 2. Bottom-left Chat Log & Input Box
+        let visible_messages: Vec<&blockgame_core::net::ChatEntry> = chat_history
+            .iter()
+            .rev()
+            .filter(|m| chat_open || m.age < 9.0)
+            .take(8)
+            .collect();
+
+        let chat_x = 14.0;
+        let chat_w = 420.0_f32.min(screen_w * 0.45);
+        let mut msg_y = screen_h - 140.0;
+
+        for entry in visible_messages {
+            let alpha = if chat_open {
+                0.88
+            } else {
+                ((9.0 - entry.age) / 2.0).clamp(0.0, 0.82)
+            };
+            if alpha <= 0.02 {
+                continue;
+            }
+            mesh.add_quad(
+                chat_x,
+                msg_y,
+                chat_w,
+                20.0,
+                white_uv,
+                [0.03, 0.04, 0.06, alpha * 0.72],
+            );
+            let line = if entry.is_system {
+                format!("* {}", entry.message)
+            } else {
+                format!("<{}> {}", entry.sender, entry.message)
+            };
+            let text_col = if entry.is_system {
+                [0.98, 0.86, 0.35, alpha]
+            } else {
+                [0.95, 0.97, 1.0, alpha]
+            };
+            Self::draw_string(
+                mesh,
+                chat_x + 6.0,
+                msg_y + 4.0,
+                &line,
+                8.0,
+                11.5,
+                1.0,
+                text_col,
+            );
+            msg_y -= 22.0;
+        }
+
+        if chat_open {
+            let input_y = screen_h - 112.0;
+            mesh.add_quad(
+                chat_x - 2.0,
+                input_y - 2.0,
+                chat_w + 4.0,
+                28.0,
+                white_uv,
+                [0.45, 0.75, 1.0, 0.90],
+            );
+            mesh.add_quad(
+                chat_x,
+                input_y,
+                chat_w,
+                24.0,
+                white_uv,
+                [0.05, 0.06, 0.09, 0.94],
+            );
+            let prompt = format!("> {}_", chat_input);
+            Self::draw_string(
+                mesh,
+                chat_x + 6.0,
+                input_y + 6.0,
+                &prompt,
+                8.5,
+                12.0,
+                1.0,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+        }
+
+        // 3. Tab Online Player List Overlay
+        if tab_held {
+            let panel_w = 340.0;
+            let row_h = 26.0;
+            let count = online_players.len().max(1);
+            let panel_h = 38.0 + (count as f32) * row_h + 10.0;
+            let px = (screen_w - panel_w) * 0.5;
+            let py = 46.0;
+
+            mesh.add_quad(
+                px - 2.0,
+                py - 2.0,
+                panel_w + 4.0,
+                panel_h + 4.0,
+                white_uv,
+                [0.25, 0.32, 0.45, 0.85],
+            );
+            mesh.add_quad(
+                px,
+                py,
+                panel_w,
+                panel_h,
+                white_uv,
+                [0.05, 0.07, 0.11, 0.88],
+            );
+
+            let title = format!("Online Players ({})", count);
+            let tw = Self::string_width(&title, 9.5, 1.2);
+            Self::draw_string(
+                mesh,
+                px + (panel_w - tw) * 0.5,
+                py + 10.0,
+                &title,
+                9.5,
+                13.5,
+                1.2,
+                [0.95, 0.85, 0.38, 1.0],
+            );
+
+            for (i, p) in online_players.iter().enumerate() {
+                let ry = py + 34.0 + (i as f32) * row_h;
+                mesh.add_quad(
+                    px + 8.0,
+                    ry,
+                    panel_w - 16.0,
+                    row_h - 3.0,
+                    white_uv,
+                    [0.12, 0.15, 0.22, 0.78],
+                );
+                let face_tile = 272 + ((p.skin_id as u16) % 4) * 4;
+                let face_uv = TextureAtlas::get_uv_bounds(face_tile);
+                mesh.add_quad(
+                    px + 14.0,
+                    ry + 3.0,
+                    17.0,
+                    17.0,
+                    face_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+
+                let tag = if p.username.eq_ignore_ascii_case(local_username) {
+                    format!("{} (You)", p.username)
+                } else {
+                    p.username.clone()
+                };
+                Self::draw_string(
+                    mesh,
+                    px + 38.0,
+                    ry + 6.0,
+                    &tag,
+                    8.5,
+                    12.0,
+                    1.0,
+                    [1.0, 1.0, 1.0, 0.98],
+                );
+
+                let hp_str = format!("{:.0}/20 HP", p.health.ceil());
+                let hw = Self::string_width(&hp_str, 8.0, 1.0);
+                Self::draw_string(
+                    mesh,
+                    px + panel_w - 16.0 - hw,
+                    ry + 6.0,
+                    &hp_str,
+                    8.0,
+                    11.0,
+                    1.0,
+                    [0.45, 0.95, 0.55, 0.95],
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4855,5 +5367,57 @@ mod tests {
             [640.0, 360.0],
         );
         assert!(mesh.indices.len() > 0);
+    }
+
+    #[test]
+    fn test_build_multiplayer_lobby_and_nametags() {
+        let mut mesh = UiMesh::new();
+        UiBuilder::build_multiplayer_lobby_screen(
+            &mut mesh,
+            1280.0,
+            720.0,
+            "Alice_99",
+            "secret123",
+            "127.0.0.1:25565",
+            1,
+            0,
+            Some(("Ready to connect", false)),
+            [640.0, 360.0],
+        );
+        assert!(mesh.indices.len() > 0);
+
+        let mut tag_mesh = UiMesh::new();
+        let cam = crate::camera::Camera::new(glam::Vec3::new(0.0, 66.0, 0.0), 0.0, 0.0);
+        let vp = cam.build_view_projection_matrix(1280.0 / 720.0);
+        let mut p = blockgame_core::net::PlayerModelState::new(
+            2,
+            "BuilderBob",
+            glam::Vec3::new(4.0, 64.5, 0.0),
+            2,
+        );
+        p.health = 14.0;
+        UiBuilder::draw_player_nametags(&mut tag_mesh, 1280.0, 720.0, vp, cam.position, &[p.clone()]);
+        assert!(tag_mesh.indices.len() > 0);
+
+        let chat = vec![blockgame_core::net::ChatEntry {
+            sender: "BuilderBob".to_string(),
+            message: "Hello world!".to_string(),
+            is_system: false,
+            age: 1.0,
+        }];
+        UiBuilder::draw_multiplayer_hud_overlays(
+            &mut tag_mesh,
+            1280.0,
+            720.0,
+            &chat,
+            true,
+            "Hi Bob",
+            true,
+            &[p],
+            "Alice_99",
+            true,
+            "127.0.0.1:25565",
+        );
+        assert!(tag_mesh.indices.len() > 50);
     }
 }

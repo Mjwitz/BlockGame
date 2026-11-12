@@ -1,0 +1,12 @@
+[package]
+name = "blockgame_server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blockgame_core = { path = "../blockgame_core" }
+blockgame_gen = { path = "../blockgame_gen" }
+glam.workspace = true
+log.workspace = true
+env_logger.workspace = true

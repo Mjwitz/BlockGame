@@ -85,6 +85,9 @@ impl TextureAtlas {
         copy_and_tint_tool(&mut atlas, 146, 268, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Shovel
         copy_and_tint_tool(&mut atlas, 156, 269, [255, 248, 120], [245, 215, 50], [190, 155, 25]); // Gold Hoe
 
+        // Paint 4 distinct 3D Player Character Skins at tiles 272..287 (4 tiles per skin: HeadFront, HeadSide, Torso, Legs)
+        paint_player_skin_tiles(&mut atlas);
+
         atlas
     }
 
@@ -405,6 +408,184 @@ fn paint_sword_sprite(
     });
 }
 
+fn paint_player_skin_tiles(atlas: &mut TextureAtlas) {
+    struct SkinPalette {
+        hair: [u8; 3],
+        hair_dark: [u8; 3],
+        skin: [u8; 3],
+        skin_shadow: [u8; 3],
+        eye_iris: [u8; 3],
+        shirt: [u8; 3],
+        shirt_dark: [u8; 3],
+        belt: [u8; 3],
+        pants: [u8; 3],
+        pants_dark: [u8; 3],
+        boots: [u8; 3],
+    }
+
+    let palettes = [
+        // 0: Explorer Cyan
+        SkinPalette {
+            hair: [82, 52, 32],
+            hair_dark: [58, 36, 22],
+            skin: [228, 178, 142],
+            skin_shadow: [198, 146, 112],
+            eye_iris: [45, 115, 210],
+            shirt: [38, 172, 185],
+            shirt_dark: [26, 132, 146],
+            belt: [75, 52, 34],
+            pants: [46, 58, 132],
+            pants_dark: [32, 42, 102],
+            boots: [54, 52, 58],
+        },
+        // 1: Crimson Knight
+        SkinPalette {
+            hair: [44, 34, 30],
+            hair_dark: [28, 22, 20],
+            skin: [216, 166, 130],
+            skin_shadow: [186, 136, 102],
+            eye_iris: [215, 145, 35],
+            shirt: [188, 42, 48],
+            shirt_dark: [142, 28, 34],
+            belt: [218, 178, 52],
+            pants: [62, 66, 78],
+            pants_dark: [44, 48, 58],
+            boots: [86, 92, 104],
+        },
+        // 2: Forest Ranger
+        SkinPalette {
+            hair: [138, 62, 34],
+            hair_dark: [102, 44, 22],
+            skin: [236, 188, 156],
+            skin_shadow: [204, 156, 124],
+            eye_iris: [42, 160, 75],
+            shirt: [46, 134, 68],
+            shirt_dark: [32, 98, 48],
+            belt: [108, 72, 38],
+            pants: [92, 64, 42],
+            pants_dark: [68, 46, 30],
+            boots: [48, 42, 34],
+        },
+        // 3: Gold Miner
+        SkinPalette {
+            hair: [210, 168, 62],
+            hair_dark: [168, 128, 40],
+            skin: [220, 168, 135],
+            skin_shadow: [190, 138, 106],
+            eye_iris: [40, 90, 175],
+            shirt: [218, 165, 38],
+            shirt_dark: [176, 128, 24],
+            belt: [88, 58, 32],
+            pants: [64, 88, 124],
+            pants_dark: [46, 66, 96],
+            boots: [72, 48, 30],
+        },
+    ];
+
+    for (idx, p) in palettes.iter().enumerate() {
+        let base = 272 + (idx as u16) * 4;
+
+        // Tile base + 0: Head Front (Face with hair bangs, eyes, nose, mouth)
+        atlas.paint_tile(base, |px, py| {
+            let noise = (((px * 7 + py * 13) % 5) as i16) - 2;
+            let clamp = |v: u8, d: i16| (v as i16 + d).clamp(0, 255) as u8;
+
+            // Hair top and bangs
+            if py < 8 || (py < 11 && (px < 5 || px > 26 || (px >= 12 && px <= 19 && py < 9))) {
+                let col = if (px + py) % 3 == 0 { p.hair_dark } else { p.hair };
+                return Rgba([clamp(col[0], noise), clamp(col[1], noise), clamp(col[2], noise), 255]);
+            }
+            // Eyebrows
+            if (py == 12 || py == 13) && ((px >= 6 && px <= 12) || (px >= 19 && px <= 25)) {
+                return Rgba([p.hair_dark[0], p.hair_dark[1], p.hair_dark[2], 255]);
+            }
+            // Eyes (y = 14..=17)
+            if py >= 14 && py <= 17 {
+                // Left eye: x = 6..=11, Right eye: x = 20..=25
+                if (px >= 6 && px <= 7) || (px >= 24 && px <= 25) {
+                    return Rgba([248, 248, 252, 255]); // Sclera
+                }
+                if (px >= 8 && px <= 11) || (px >= 20 && px <= 23) {
+                    return Rgba([p.eye_iris[0], p.eye_iris[1], p.eye_iris[2], 255]); // Iris
+                }
+            }
+            // Nose shadow (y = 18..=20, x = 14..=17)
+            if py >= 18 && py <= 20 && px >= 14 && px <= 17 {
+                return Rgba([p.skin_shadow[0], p.skin_shadow[1], p.skin_shadow[2], 255]);
+            }
+            // Mouth / smile (y = 23..=24, x = 11..=20)
+            if (py == 23 || py == 24) && px >= 11 && px <= 20 {
+                return Rgba([138, 82, 68, 255]);
+            }
+            // Chin / jaw shadow
+            let col = if py >= 28 || px <= 2 || px >= 29 {
+                p.skin_shadow
+            } else {
+                p.skin
+            };
+            Rgba([clamp(col[0], noise), clamp(col[1], noise), clamp(col[2], noise), 255])
+        });
+
+        // Tile base + 1: Head Side / Hair / Back
+        atlas.paint_tile(base + 1, |px, py| {
+            let noise = (((px * 11 + py * 5) % 7) as i16) - 3;
+            let clamp = |v: u8, d: i16| (v as i16 + d).clamp(0, 255) as u8;
+            if py < 18 || px < 8 || px > 23 {
+                let col = if (px / 2 + py / 2) % 2 == 0 { p.hair } else { p.hair_dark };
+                Rgba([clamp(col[0], noise), clamp(col[1], noise), clamp(col[2], noise), 255])
+            } else {
+                Rgba([
+                    clamp(p.skin_shadow[0], noise),
+                    clamp(p.skin_shadow[1], noise),
+                    clamp(p.skin_shadow[2], noise),
+                    255,
+                ])
+            }
+        });
+
+        // Tile base + 2: Torso & Arms (Tunic/Jacket with collar and belt)
+        atlas.paint_tile(base + 2, |px, py| {
+            let noise = (((px * 5 + py * 9) % 5) as i16) - 2;
+            let clamp = |v: u8, d: i16| (v as i16 + d).clamp(0, 255) as u8;
+            // Neckline V-collar at top center
+            if py < 4 && px >= 12 && px <= 19 {
+                return Rgba([p.skin_shadow[0], p.skin_shadow[1], p.skin_shadow[2], 255]);
+            }
+            // Belt at bottom of torso (y = 26..=29)
+            if py >= 26 && py <= 29 {
+                if px >= 13 && px <= 18 {
+                    return Rgba([230, 195, 65, 255]); // Belt buckle
+                }
+                return Rgba([p.belt[0], p.belt[1], p.belt[2], 255]);
+            }
+            let is_seam = px <= 2 || px >= 29 || (px == 15 || px == 16);
+            let col = if is_seam { p.shirt_dark } else { p.shirt };
+            Rgba([clamp(col[0], noise), clamp(col[1], noise), clamp(col[2], noise), 255])
+        });
+
+        // Tile base + 3: Legs & Boots
+        atlas.paint_tile(base + 3, |px, py| {
+            let noise = (((px * 9 + py * 7) % 5) as i16) - 2;
+            let clamp = |v: u8, d: i16| (v as i16 + d).clamp(0, 255) as u8;
+            if py >= 22 {
+                // Boots
+                return Rgba([
+                    clamp(p.boots[0], noise),
+                    clamp(p.boots[1], noise),
+                    clamp(p.boots[2], noise),
+                    255,
+                ]);
+            }
+            let col = if px <= 2 || px >= 29 || (py >= 12 && py <= 14) {
+                p.pants_dark
+            } else {
+                p.pants
+            };
+            Rgba([clamp(col[0], noise), clamp(col[1], noise), clamp(col[2], noise), 255])
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +609,14 @@ mod tests {
         let wy = (24 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
         let white_px = atlas.image.get_pixel(wx + 16, wy + 16);
         assert_eq!(*white_px, image::Rgba([255, 255, 255, 255]));
+
+        // Verify player skin tiles (272..287) are opaque
+        for tile_id in 272..288 {
+            let tx = (tile_id % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (tile_id / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let px = atlas.image.get_pixel(tx + 16, ty + 16);
+            assert_eq!(px[3], 255, "Player skin tile {} must be opaque", tile_id);
+        }
 
         // Verify UV bounds are well-formed within 0.0..=1.0
         let uv = TextureAtlas::get_uv_bounds(1);
@@ -477,3 +666,4 @@ mod tests {
         );
     }
 }
+

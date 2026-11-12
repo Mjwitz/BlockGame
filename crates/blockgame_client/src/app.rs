@@ -54,7 +54,14 @@ pub enum AppScreen {
     Settings {
         return_to_pause: bool,
     },
-    MultiplayerNotice,
+    MultiplayerLobby {
+        username_input: String,
+        password_input: String,
+        address_input: String,
+        skin_id: u8,
+        focused_field: usize,
+        status_message: Option<(String, bool)>,
+    },
     InGame,
     Paused {
         status_message: Option<String>,
@@ -109,6 +116,18 @@ pub struct AppState {
     pub item_drop_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub player_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    // Multiplayer & 3D Player Model State
+    pub mp_client: Option<blockgame_core::net::MultiplayerClient>,
+    pub mp_hosted_server: Option<blockgame_core::net::MultiplayerServer>,
+    pub local_username: String,
+    pub local_skin_id: u8,
+    pub third_person: bool,
+    pub chat_open: bool,
+    pub chat_input: String,
+    pub tab_held: bool,
+    pub net_sync_timer: f32,
+    pub local_chat_messages: Vec<blockgame_core::net::ChatEntry>,
     pub total_time: f32,
     pub walk_distance: f32,
     pub punch_timer: f32,
@@ -139,7 +158,236 @@ impl AppState {
         self.saved_worlds = list_saved_worlds(&self.saves_root);
     }
 
+    pub fn current_local_player_model(&self) -> blockgame_core::net::PlayerModelState {
+        let swing_anim = if self.punch_timer > 0.0 {
+            1.0 - (self.punch_timer / 0.25)
+        } else {
+            0.0
+        };
+        blockgame_core::net::PlayerModelState {
+            player_id: self
+                .mp_client
+                .as_ref()
+                .map(|c| c.player_id)
+                .unwrap_or(0),
+            username: if self.local_username.is_empty() {
+                "Explorer".to_string()
+            } else {
+                self.local_username.clone()
+            },
+            position: self.player.position,
+            velocity: self.player.velocity,
+            yaw: self.camera.yaw,
+            pitch: self.camera.pitch,
+            held_item: self.inventory.get(self.active_hotbar_slot).item_id,
+            walk_anim: self.walk_distance,
+            swing_anim,
+            hurt_timer: 0.0,
+            is_sneaking: self.shift_down && !self.inventory_open && !self.player.flying,
+            skin_id: self.local_skin_id,
+            health: self.player_stats.health,
+            max_health: self.player_stats.max_health,
+        }
+    }
+
+    pub fn disconnect_multiplayer(&mut self) {
+        let model = self.current_local_player_model();
+        let inv = self.inventory.clone();
+        let hotbar = self.active_hotbar_slot;
+        let stats = self.player_stats.clone();
+        if let Some(mut client) = self.mp_client.take() {
+            client.send(&blockgame_core::net::ClientPacket::PlayerStateUpdate {
+                position: model.position,
+                velocity: model.velocity,
+                yaw: model.yaw,
+                pitch: model.pitch,
+                held_item: model.held_item,
+                walk_anim: model.walk_anim,
+                swing_anim: model.swing_anim,
+                is_sneaking: model.is_sneaking,
+                health: model.health,
+            });
+            client.send(&blockgame_core::net::ClientPacket::PlayerInventorySync {
+                inventory: inv,
+                active_hotbar_slot: hotbar,
+                stats,
+            });
+            client.disconnect();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        if let Some(mut hosted) = self.mp_hosted_server.take() {
+            hosted.shutdown();
+        }
+        self.chat_open = false;
+        self.chat_input.clear();
+        self.tab_held = false;
+    }
+
+    pub fn join_multiplayer_server(
+        &mut self,
+        username: &str,
+        password: &str,
+        addr: &str,
+        skin_id: u8,
+    ) -> Result<String, String> {
+        self.disconnect_multiplayer();
+
+        let (client, auth_pkt) =
+            blockgame_core::net::MultiplayerClient::connect_and_authenticate(
+                addr, username, password, skin_id,
+            )?;
+
+        let (seed, day_night_time, initial_state, assigned_skin, welcome_msg) =
+            if let blockgame_core::net::ServerPacket::AuthResponse {
+                seed,
+                day_night_time,
+                player_state,
+                skin_id: assigned_skin,
+                message,
+                ..
+            } = auth_pkt
+            {
+                (seed, day_night_time, player_state, assigned_skin, message)
+            } else {
+                return Err("Invalid authentication response packet".to_string());
+            };
+
+        let mut world_manager =
+            WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.init_area_around(initial_state.position, &self.device, &self.pipeline);
+
+        self.world_manager = world_manager;
+        self.player = PlayerPhysics::new(initial_state.position);
+        self.player.velocity = initial_state.velocity;
+        self.player_stats = initial_state.stats;
+        self.death_handled = self.player_stats.is_dead;
+        self.inventory = initial_state.inventory;
+        self.active_hotbar_slot = initial_state.active_hotbar_slot.min(8);
+        self.camera.position = self.player.eye_position();
+        self.camera.yaw = initial_state.yaw;
+        self.camera.pitch = initial_state.pitch;
+        self.day_night = DayNightCycle::new();
+        self.day_night.time = day_night_time;
+        self.total_time = 0.0;
+        self.walk_distance = 0.0;
+        self.last_footstep_dist = 0.0;
+        self.break_hit_timer = 0.0;
+        self.was_in_water = false;
+        self.underwater_sound_timer = 0.0;
+        self.punch_timer = 0.0;
+        self.inventory_open = false;
+        self.active_chest_pos = None;
+        self.active_furnace_pos = None;
+        self.jei_recipe_modal = None;
+        self.jei_search_focused = false;
+        self.cursor_held = ItemSlot::EMPTY;
+        self.mouse_left_down = false;
+        self.breaking_voxel = None;
+        self.break_progress = 0.0;
+        self.cracking_buffer = None;
+        self.active_world_metadata = None;
+        self.local_username = username.trim().to_string();
+        self.local_skin_id = assigned_skin % 4;
+        self.chat_open = false;
+        self.chat_input.clear();
+        self.tab_held = false;
+        self.net_sync_timer = 0.0;
+        self.mp_client = Some(client);
+
+        self.screen = AppScreen::InGame;
+        self.mouse_captured = !self.player_stats.is_dead;
+        if self.mouse_captured {
+            let _ = self
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+            self.window.set_cursor_visible(false);
+        } else {
+            let _ = self
+                .window
+                .set_cursor_grab(winit::window::CursorGrabMode::None);
+            self.window.set_cursor_visible(true);
+        }
+
+        Ok(welcome_msg)
+    }
+
+    pub fn host_and_play_multiplayer(
+        &mut self,
+        username: &str,
+        password: &str,
+        addr: &str,
+        skin_id: u8,
+    ) -> Result<String, String> {
+        self.disconnect_multiplayer();
+
+        let bind_addr = if addr.trim().is_empty() {
+            format!("0.0.0.0:{}", blockgame_core::net::DEFAULT_SERVER_PORT)
+        } else if !addr.contains(':') {
+            format!("{}:{}", addr.trim(), blockgame_core::net::DEFAULT_SERVER_PORT)
+        } else {
+            addr.trim().to_string()
+        };
+
+        let saves_root = self.saves_root.clone();
+        let seed = self.world_manager.generator.seed;
+        let generator = Arc::new(blockgame_gen::TerrainGenerator::new(seed));
+
+        let mut server = blockgame_core::net::MultiplayerServer::start(
+            &bind_addr,
+            saves_root,
+            "Hosted_Multiplayer".to_string(),
+            "Hosted Multiplayer World".to_string(),
+            seed,
+            None,
+            move |pos: blockgame_core::chunk::ChunkPos| {
+                let mut chunk = generator.generate_chunk(pos);
+                generator.populate_chunk_features(&mut chunk);
+                chunk
+            },
+        )
+        .map_err(|e| format!("Failed to bind server on {}: {}", bind_addr, e))?;
+
+        let port = server.local_addr().port();
+        let connect_addr = format!("127.0.0.1:{}", port);
+
+        match self.join_multiplayer_server(username, password, &connect_addr, skin_id) {
+            Ok(msg) => {
+                self.mp_hosted_server = Some(server);
+                Ok(msg)
+            }
+            Err(e) => {
+                server.shutdown();
+                Err(e)
+            }
+        }
+    }
+
     pub fn save_active_world(&mut self) -> bool {
+        if self.mp_client.is_some() {
+            let model = self.current_local_player_model();
+            let inv = self.inventory.clone();
+            let hotbar = self.active_hotbar_slot;
+            let stats = self.player_stats.clone();
+            if let Some(client) = &mut self.mp_client {
+                client.send(&blockgame_core::net::ClientPacket::PlayerStateUpdate {
+                    position: model.position,
+                    velocity: model.velocity,
+                    yaw: model.yaw,
+                    pitch: model.pitch,
+                    held_item: model.held_item,
+                    walk_anim: model.walk_anim,
+                    swing_anim: model.swing_anim,
+                    is_sneaking: model.is_sneaking,
+                    health: model.health,
+                });
+                client.send(&blockgame_core::net::ClientPacket::PlayerInventorySync {
+                    inventory: inv,
+                    active_hotbar_slot: hotbar,
+                    stats,
+                });
+            }
+            return true;
+        }
         let Some(mut meta) = self.active_world_metadata.clone() else {
             return false;
         };
@@ -544,6 +792,19 @@ impl ApplicationHandler for BlockGameApp {
             falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
                 "Dynamic Falling Block Mesh",
             ),
+            player_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Player Model Mesh",
+            ),
+            mp_client: None,
+            mp_hosted_server: None,
+            local_username: "Player1".to_string(),
+            local_skin_id: 0,
+            third_person: false,
+            chat_open: false,
+            chat_input: String::new(),
+            tab_held: false,
+            net_sync_timer: 0.0,
+            local_chat_messages: Vec::new(),
             total_time: 0.0,
             walk_distance: 0.0,
             punch_timer: 0.0,
@@ -586,6 +847,7 @@ impl ApplicationHandler for BlockGameApp {
                 ) {
                     state.save_active_world();
                 }
+                state.disconnect_multiplayer();
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
@@ -624,7 +886,7 @@ impl ApplicationHandler for BlockGameApp {
             } => {
                 let pressed = mouse_btn_state == ElementState::Pressed;
 
-                // Handle Title Screen, World Select, Create World, Settings, and Pause Menu clicks
+                // Handle Title Screen, World Select, Create World, Settings, Multiplayer Lobby, and Pause Menu clicks
                 if state.screen != AppScreen::InGame {
                     if pressed && button == MouseButton::Left {
                         let screen_w = state.surface_config.width as f32;
@@ -658,8 +920,15 @@ impl ApplicationHandler for BlockGameApp {
                                     rects[1][2],
                                     rects[1][3],
                                 ) {
-                                    // Multiplayer
-                                    state.screen = AppScreen::MultiplayerNotice;
+                                    // Multiplayer Lobby
+                                    state.screen = AppScreen::MultiplayerLobby {
+                                        username_input: state.local_username.clone(),
+                                        password_input: String::new(),
+                                        address_input: "127.0.0.1:25565".to_string(),
+                                        skin_id: state.local_skin_id,
+                                        focused_field: 0,
+                                        status_message: None,
+                                    };
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
                                     rects[2][0],
@@ -856,7 +1125,11 @@ impl ApplicationHandler for BlockGameApp {
                                     state.screen = AppScreen::Paused {
                                         status_message: Some(
                                             if ok {
-                                                "World saved successfully!".to_string()
+                                                if state.mp_client.is_some() {
+                                                    "Synced player state with server!".to_string()
+                                                } else {
+                                                    "World saved successfully!".to_string()
+                                                }
                                             } else {
                                                 "Failed to save world.".to_string()
                                             },
@@ -882,6 +1155,7 @@ impl ApplicationHandler for BlockGameApp {
                                 ) {
                                     // Save & Quit to Title
                                     state.save_active_world();
+                                    state.disconnect_multiplayer();
                                     state.active_world_metadata = None;
                                     // Ensure all chunks around the panorama center are loaded on GPU
                                     state.world_manager.init_area_around(
@@ -915,14 +1189,100 @@ impl ApplicationHandler for BlockGameApp {
                                     };
                                 }
                             }
-                            AppScreen::MultiplayerNotice => {
-                                let back_r = UiBuilder::notice_back_button_rect(screen_w, screen_h);
+                            AppScreen::MultiplayerLobby {
+                                username_input,
+                                password_input,
+                                address_input,
+                                skin_id,
+                                focused_field,
+                                status_message,
+                            } => {
+                                let (user_r, pass_r, addr_r, [skin_r, join_r, host_r, back_r]) =
+                                    UiBuilder::multiplayer_lobby_layout(screen_w, screen_h);
                                 if UiBuilder::is_rect_hovered(
-                                    cpos,
-                                    back_r[0],
-                                    back_r[1],
-                                    back_r[2],
-                                    back_r[3],
+                                    cpos, user_r[0], user_r[1], user_r[2], user_r[3],
+                                ) {
+                                    state.screen = AppScreen::MultiplayerLobby {
+                                        username_input,
+                                        password_input,
+                                        address_input,
+                                        skin_id,
+                                        focused_field: 0,
+                                        status_message,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos, pass_r[0], pass_r[1], pass_r[2], pass_r[3],
+                                ) {
+                                    state.screen = AppScreen::MultiplayerLobby {
+                                        username_input,
+                                        password_input,
+                                        address_input,
+                                        skin_id,
+                                        focused_field: 1,
+                                        status_message,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos, addr_r[0], addr_r[1], addr_r[2], addr_r[3],
+                                ) {
+                                    state.screen = AppScreen::MultiplayerLobby {
+                                        username_input,
+                                        password_input,
+                                        address_input,
+                                        skin_id,
+                                        focused_field: 2,
+                                        status_message,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos, skin_r[0], skin_r[1], skin_r[2], skin_r[3],
+                                ) {
+                                    let next_skin = (skin_id + 1) % 4;
+                                    state.local_skin_id = next_skin;
+                                    state.screen = AppScreen::MultiplayerLobby {
+                                        username_input,
+                                        password_input,
+                                        address_input,
+                                        skin_id: next_skin,
+                                        focused_field,
+                                        status_message,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos, join_r[0], join_r[1], join_r[2], join_r[3],
+                                ) {
+                                    if let Err(err) = state.join_multiplayer_server(
+                                        &username_input,
+                                        &password_input,
+                                        &address_input,
+                                        skin_id,
+                                    ) {
+                                        state.screen = AppScreen::MultiplayerLobby {
+                                            username_input,
+                                            password_input,
+                                            address_input,
+                                            skin_id,
+                                            focused_field,
+                                            status_message: Some((err, true)),
+                                        };
+                                    }
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos, host_r[0], host_r[1], host_r[2], host_r[3],
+                                ) {
+                                    if let Err(err) = state.host_and_play_multiplayer(
+                                        &username_input,
+                                        &password_input,
+                                        &address_input,
+                                        skin_id,
+                                    ) {
+                                        state.screen = AppScreen::MultiplayerLobby {
+                                            username_input,
+                                            password_input,
+                                            address_input,
+                                            skin_id,
+                                            focused_field,
+                                            status_message: Some((err, true)),
+                                        };
+                                    }
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos, back_r[0], back_r[1], back_r[2], back_r[3],
                                 ) {
                                     state.screen = AppScreen::Title;
                                 }
@@ -974,8 +1334,54 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         if state.active_furnace_pos.is_some() {
                             handle_furnace_click(state, is_right);
+                            if let (Some(pos), Some(client)) =
+                                (state.active_furnace_pos, &mut state.mp_client)
+                            {
+                                if let Some(f) = state
+                                    .world_manager
+                                    .world()
+                                    .lock()
+                                    .unwrap()
+                                    .get_furnace(pos)
+                                    .cloned()
+                                {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::ContainerUpdate {
+                                            pos,
+                                            is_furnace: true,
+                                            slots: vec![f.input, f.fuel, f.output],
+                                            burn_time: f.burn_time_remaining,
+                                            max_burn_time: f.max_burn_time,
+                                            cook_progress: f.cook_progress,
+                                        },
+                                    );
+                                }
+                            }
                         } else if state.active_chest_pos.is_some() {
                             handle_chest_click(state, is_right);
+                            if let (Some(pos), Some(client)) =
+                                (state.active_chest_pos, &mut state.mp_client)
+                            {
+                                if let Some(slots) = state
+                                    .world_manager
+                                    .world()
+                                    .lock()
+                                    .unwrap()
+                                    .get_chest(pos)
+                                    .cloned()
+                                {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::ContainerUpdate {
+                                            pos,
+                                            is_furnace: false,
+                                            slots,
+                                            burn_time: 0.0,
+                                            max_burn_time: 0.0,
+                                            cook_progress: 0.0,
+                                        },
+                                    );
+                                }
+                            }
                         } else {
                             handle_inventory_click(state, is_right);
                         }
@@ -1040,13 +1446,39 @@ impl ApplicationHandler for BlockGameApp {
                                     1.0
                                 };
 
-                            let hit_animal = state.world_manager.attack_animal(
-                                state.camera.position,
-                                state.camera.forward(),
-                                3.5,
-                                attack_damage,
-                            );
-                            if hit_animal {
+                            // Check PvP hit against remote multiplayer players within 3.5 blocks
+                            let mut hit_remote_player = None;
+                            if let Some(client) = &state.mp_client {
+                                let ray_origin = state.player.eye_position();
+                                let ray_dir = state.camera.forward();
+                                let mut best_dist = 3.6_f32;
+                                for (&pid, rp) in &client.remote_players {
+                                    if rp.health <= 0.0 {
+                                        continue;
+                                    }
+                                    let p_center = rp.position + Vec3::new(0.0, 0.9, 0.0);
+                                    let to_p = p_center - ray_origin;
+                                    let dist = to_p.length();
+                                    if dist <= best_dist && dist > 0.1 {
+                                        let dir_to_p = to_p / dist;
+                                        if ray_dir.dot(dir_to_p) > 0.85 {
+                                            best_dist = dist;
+                                            hit_remote_player = Some(pid);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(target_pid) = hit_remote_player {
+                                if let Some(client) = &mut state.mp_client {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::AttackPlayer {
+                                            target_player_id: target_pid,
+                                            damage: attack_damage,
+                                        },
+                                    );
+                                }
+                                state.audio.play_hurt();
                                 state.mouse_left_down = false;
                                 state.breaking_voxel = None;
                                 state.break_progress = 0.0;
@@ -1055,7 +1487,9 @@ impl ApplicationHandler for BlockGameApp {
                                 let mut held = state.inventory.get(state.active_hotbar_slot);
                                 if let Some(def) = state.item_registry.get(held.item_id) {
                                     if let Some(max_dur) = def.durability {
-                                        let dmg = if def.tool_type == Some(blockgame_core::tool::ToolType::Sword) {
+                                        let dmg = if def.tool_type
+                                            == Some(blockgame_core::tool::ToolType::Sword)
+                                        {
                                             1
                                         } else {
                                             2
@@ -1064,6 +1498,36 @@ impl ApplicationHandler for BlockGameApp {
                                             state.audio.play_tool_break();
                                         }
                                         state.inventory.set(state.active_hotbar_slot, held);
+                                    }
+                                }
+                            } else {
+                                let hit_animal = state.world_manager.attack_animal(
+                                    state.player.eye_position(),
+                                    state.camera.forward(),
+                                    3.5,
+                                    attack_damage,
+                                );
+                                if hit_animal {
+                                    state.mouse_left_down = false;
+                                    state.breaking_voxel = None;
+                                    state.break_progress = 0.0;
+                                    state.cracking_buffer = None;
+
+                                    let mut held = state.inventory.get(state.active_hotbar_slot);
+                                    if let Some(def) = state.item_registry.get(held.item_id) {
+                                        if let Some(max_dur) = def.durability {
+                                            let dmg = if def.tool_type
+                                                == Some(blockgame_core::tool::ToolType::Sword)
+                                            {
+                                                1
+                                            } else {
+                                                2
+                                            };
+                                            if held.damage_tool(dmg, max_dur) {
+                                                state.audio.play_tool_break();
+                                            }
+                                            state.inventory.set(state.active_hotbar_slot, held);
+                                        }
                                     }
                                 }
                             }
@@ -1168,14 +1632,34 @@ impl ApplicationHandler for BlockGameApp {
                                                 &state.pipeline,
                                             );
                                             if tilled {
+                                                if let Some(client) = &mut state.mp_client {
+                                                    let new_b = state
+                                                        .world_manager
+                                                        .world()
+                                                        .lock()
+                                                        .unwrap()
+                                                        .get_block(hit.hit_voxel);
+                                                    client.send(
+                                                        &blockgame_core::net::ClientPacket::BlockChange {
+                                                            pos: hit.hit_voxel,
+                                                            block_id: new_b,
+                                                        },
+                                                    );
+                                                }
                                                 state.punch_timer = 0.2;
-                                                let mut held = state.inventory.get(state.active_hotbar_slot);
-                                                if let Some(def) = state.item_registry.get(held.item_id) {
+                                                let mut held =
+                                                    state.inventory.get(state.active_hotbar_slot);
+                                                if let Some(def) =
+                                                    state.item_registry.get(held.item_id)
+                                                {
                                                     if let Some(max_dur) = def.durability {
                                                         if held.damage_tool(1, max_dur) {
                                                             state.audio.play_tool_break();
                                                         }
-                                                        state.inventory.set(state.active_hotbar_slot, held);
+                                                        state.inventory.set(
+                                                            state.active_hotbar_slot,
+                                                            held,
+                                                        );
                                                     }
                                                 }
                                                 return;
@@ -1204,6 +1688,14 @@ impl ApplicationHandler for BlockGameApp {
                                         &state.pipeline,
                                     );
                                     if planted {
+                                        if let Some(client) = &mut state.mp_client {
+                                            client.send(
+                                                &blockgame_core::net::ClientPacket::BlockChange {
+                                                    pos: hit.place_voxel,
+                                                    block_id: BlockId::WHEAT_0,
+                                                },
+                                            );
+                                        }
                                         state.audio.play_block_place(
                                             BlockId::WHEAT_0,
                                             hit.place_voxel.as_vec3() + Vec3::splat(0.5),
@@ -1244,6 +1736,14 @@ impl ApplicationHandler for BlockGameApp {
                                         &state.pipeline,
                                     );
                                     if scooped {
+                                        if let Some(client) = &mut state.mp_client {
+                                            client.send(
+                                                &blockgame_core::net::ClientPacket::BlockChange {
+                                                    pos: hit.hit_voxel,
+                                                    block_id: BlockId::AIR,
+                                                },
+                                            );
+                                        }
                                         state.punch_timer = 0.2;
                                         if held_slot.count <= 1 {
                                             state.inventory.set(
@@ -1287,6 +1787,14 @@ impl ApplicationHandler for BlockGameApp {
                                     &state.pipeline,
                                 );
                                 if placed {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::BlockChange {
+                                                pos: target_pos,
+                                                block_id: BlockId::WATER,
+                                            },
+                                        );
+                                    }
                                     state.audio.play_block_place(
                                         BlockId::WATER,
                                         target_pos.as_vec3() + Vec3::splat(0.5),
@@ -1310,14 +1818,16 @@ impl ApplicationHandler for BlockGameApp {
                                 if let Some(block_id) = def.placeable_block {
                                     if let Some(hit) = state.targeted_block {
                                         let target_is_water = {
-                                            let world_guard = state.world_manager.world().lock().unwrap();
+                                            let world_guard =
+                                                state.world_manager.world().lock().unwrap();
                                             world_guard.get_block(hit.hit_voxel).is_water()
                                         };
-                                        let target_pos = if target_is_water && block_id != BlockId::LILY_PAD {
-                                            hit.hit_voxel
-                                        } else {
-                                            hit.place_voxel
-                                        };
+                                        let target_pos =
+                                            if target_is_water && block_id != BlockId::LILY_PAD {
+                                                hit.hit_voxel
+                                            } else {
+                                                hit.place_voxel
+                                            };
                                         let placed = state.world_manager.place_block(
                                             target_pos,
                                             block_id,
@@ -1326,6 +1836,20 @@ impl ApplicationHandler for BlockGameApp {
                                             &state.pipeline,
                                         );
                                         if placed {
+                                            if let Some(client) = &mut state.mp_client {
+                                                let actual_block = state
+                                                    .world_manager
+                                                    .world()
+                                                    .lock()
+                                                    .unwrap()
+                                                    .get_block(target_pos);
+                                                client.send(
+                                                    &blockgame_core::net::ClientPacket::BlockChange {
+                                                        pos: target_pos,
+                                                        block_id: actual_block,
+                                                    },
+                                                );
+                                            }
                                             state.audio.play_block_place(
                                                 block_id,
                                                 target_pos.as_vec3() + Vec3::splat(0.5),
@@ -1354,7 +1878,7 @@ impl ApplicationHandler for BlockGameApp {
             } => {
                 let pressed = key_state == ElementState::Pressed;
 
-                // Handle keyboard input on non-gameplay screens (CreateWorld text entry, Esc navigation)
+                // Handle keyboard input on non-gameplay screens (CreateWorld, MultiplayerLobby, etc.)
                 if state.screen != AppScreen::InGame {
                     if !pressed {
                         return;
@@ -1447,9 +1971,96 @@ impl ApplicationHandler for BlockGameApp {
                                 };
                             }
                         }
-                        AppScreen::MultiplayerNotice => {
-                            if key == KeyCode::Escape {
+                        AppScreen::MultiplayerLobby {
+                            mut username_input,
+                            mut password_input,
+                            mut address_input,
+                            skin_id,
+                            mut focused_field,
+                            status_message,
+                        } => {
+                            if key == KeyCode::Tab {
+                                focused_field = (focused_field + 1) % 3;
+                                state.screen = AppScreen::MultiplayerLobby {
+                                    username_input,
+                                    password_input,
+                                    address_input,
+                                    skin_id,
+                                    focused_field,
+                                    status_message,
+                                };
+                            } else if key == KeyCode::Escape {
                                 state.screen = AppScreen::Title;
+                            } else if key == KeyCode::Enter {
+                                if let Err(err) = state.join_multiplayer_server(
+                                    &username_input,
+                                    &password_input,
+                                    &address_input,
+                                    skin_id,
+                                ) {
+                                    state.screen = AppScreen::MultiplayerLobby {
+                                        username_input,
+                                        password_input,
+                                        address_input,
+                                        skin_id,
+                                        focused_field,
+                                        status_message: Some((err, true)),
+                                    };
+                                }
+                            } else if key == KeyCode::Backspace {
+                                match focused_field {
+                                    0 => {
+                                        username_input.pop();
+                                        state.local_username = username_input.clone();
+                                    }
+                                    1 => {
+                                        password_input.pop();
+                                    }
+                                    _ => {
+                                        address_input.pop();
+                                    }
+                                }
+                                state.screen = AppScreen::MultiplayerLobby {
+                                    username_input,
+                                    password_input,
+                                    address_input,
+                                    skin_id,
+                                    focused_field,
+                                    status_message: None,
+                                };
+                            } else if let Some(t) = text {
+                                for ch in t.chars() {
+                                    if !ch.is_control() {
+                                        match focused_field {
+                                            0 => {
+                                                if (ch.is_ascii_alphanumeric() || ch == '_')
+                                                    && username_input.len() < 16
+                                                {
+                                                    username_input.push(ch);
+                                                    state.local_username = username_input.clone();
+                                                }
+                                            }
+                                            1 => {
+                                                if password_input.len() < 32 {
+                                                    password_input.push(ch);
+                                                }
+                                            }
+                                            _ => {
+                                                if address_input.len() < 48 {
+                                                    address_input.push(ch);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                state.screen = AppScreen::MultiplayerLobby {
+                                    username_input,
+                                    password_input,
+                                    address_input,
+                                    skin_id,
+                                    focused_field,
+                                    status_message: None,
+                                };
                             }
                         }
                         AppScreen::Title | AppScreen::InGame => {}
@@ -1461,6 +2072,53 @@ impl ApplicationHandler for BlockGameApp {
                 if state.player_stats.is_dead {
                     if pressed && (key == KeyCode::Space || key == KeyCode::Enter) {
                         state.respawn_player();
+                    }
+                    return;
+                }
+
+                // In-game Chat Input when chat is open
+                if state.chat_open {
+                    if pressed {
+                        if key == KeyCode::Escape {
+                            state.chat_open = false;
+                            state.chat_input.clear();
+                        } else if key == KeyCode::Enter {
+                            let msg = state.chat_input.trim().to_string();
+                            if !msg.is_empty() {
+                                if let Some(client) = &mut state.mp_client {
+                                    client.send(&blockgame_core::net::ClientPacket::Chat {
+                                        message: msg,
+                                    });
+                                } else {
+                                    let sender = if state.local_username.is_empty() {
+                                        "Player".to_string()
+                                    } else {
+                                        state.local_username.clone()
+                                    };
+                                    state.local_chat_messages.push(
+                                        blockgame_core::net::ChatEntry {
+                                            sender,
+                                            message: msg,
+                                            is_system: false,
+                                            age: 0.0,
+                                        },
+                                    );
+                                    if state.local_chat_messages.len() > 25 {
+                                        state.local_chat_messages.remove(0);
+                                    }
+                                }
+                            }
+                            state.chat_open = false;
+                            state.chat_input.clear();
+                        } else if key == KeyCode::Backspace {
+                            state.chat_input.pop();
+                        } else if let Some(t) = text {
+                            for ch in t.chars() {
+                                if !ch.is_control() && state.chat_input.len() < 120 {
+                                    state.chat_input.push(ch);
+                                }
+                            }
+                        }
                     }
                     return;
                 }
@@ -1535,6 +2193,12 @@ impl ApplicationHandler for BlockGameApp {
 
                 match key {
                     KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
+                    KeyCode::Tab if !state.inventory_open => {
+                        state.tab_held = pressed;
+                    }
+                    KeyCode::F5 if pressed && !state.inventory_open => {
+                        state.third_person = !state.third_person;
+                    }
                     KeyCode::KeyR
                         if pressed && state.inventory_open && !state.jei_search_focused =>
                     {
@@ -1673,7 +2337,17 @@ impl ApplicationHandler for BlockGameApp {
                             state.window.set_cursor_visible(true);
                         }
                     }
-                    KeyCode::KeyT if pressed => {
+                    KeyCode::KeyT if pressed && !state.inventory_open => {
+                        state.moving_forward = false;
+                        state.moving_backward = false;
+                        state.moving_left = false;
+                        state.moving_right = false;
+                        state.jumping = false;
+                        state.sprinting = false;
+                        state.chat_open = true;
+                        state.chat_input.clear();
+                    }
+                    KeyCode::KeyY if pressed && !state.inventory_open => {
                         // Advance time of day by 3 hours (3000 ticks)
                         state.day_night.time = (state.day_night.time + 3000.0).rem_euclid(24000.0);
                         log::info!("Time of day advanced to: {:.1} ticks", state.day_night.time);
@@ -1708,6 +2382,179 @@ impl ApplicationHandler for BlockGameApp {
                     .update_screen_size(&state.queue, screen_w, screen_h);
 
                 if state.screen == AppScreen::InGame {
+                    // Age local chat messages
+                    for entry in &mut state.local_chat_messages {
+                        entry.age += dt;
+                    }
+
+                    // 0. Poll Multiplayer Network Packets & Sync Player State
+                    let mut kick_reason: Option<String> = None;
+                    if let Some(client) = &mut state.mp_client {
+                        for entry in &mut client.chat_history {
+                            entry.age += dt;
+                        }
+                        for rp in client.remote_players.values_mut() {
+                            if rp.hurt_timer > 0.0 {
+                                rp.hurt_timer = (rp.hurt_timer - dt).max(0.0);
+                            }
+                        }
+                        let packets = client.poll_packets();
+                        for pkt in packets {
+                            match pkt {
+                                blockgame_core::net::ServerPacket::WorldDeltaSync {
+                                    modified_chunks,
+                                    chests,
+                                    furnaces,
+                                    item_drops,
+                                } => {
+                                    state.world_manager.apply_world_delta_sync(
+                                        &modified_chunks,
+                                        &chests,
+                                        &furnaces,
+                                        &item_drops,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                }
+                                blockgame_core::net::ServerPacket::BlockUpdate {
+                                    pos,
+                                    block_id,
+                                } => {
+                                    state.world_manager.apply_remote_block_update(
+                                        pos,
+                                        block_id,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                }
+                                blockgame_core::net::ServerPacket::ContainerSync {
+                                    pos,
+                                    is_furnace,
+                                    slots,
+                                    burn_time,
+                                    max_burn_time,
+                                    cook_progress,
+                                } => {
+                                    let mut world = state.world_manager.world().lock().unwrap();
+                                    if is_furnace {
+                                        let f = blockgame_core::world::FurnaceState {
+                                            input: slots.first().copied().unwrap_or(ItemSlot::EMPTY),
+                                            fuel: slots.get(1).copied().unwrap_or(ItemSlot::EMPTY),
+                                            output: slots.get(2).copied().unwrap_or(ItemSlot::EMPTY),
+                                            burn_time_remaining: burn_time,
+                                            max_burn_time,
+                                            cook_progress,
+                                        };
+                                        world.furnaces.insert(pos, f);
+                                    } else {
+                                        world.chest_containers.insert(pos, slots);
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::ItemDropSpawned {
+                                    position,
+                                    velocity,
+                                    item,
+                                } => {
+                                    state.world_manager.item_drops.push(
+                                        blockgame_core::entity::ItemDrop::with_velocity(
+                                            position, velocity, item,
+                                        ),
+                                    );
+                                }
+                                blockgame_core::net::ServerPacket::PlayerJoined { player } => {
+                                    if player.player_id != client.player_id {
+                                        client.remote_players.insert(player.player_id, player);
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::PlayerLeft { player_id, .. } => {
+                                    client.remote_players.remove(&player_id);
+                                }
+                                blockgame_core::net::ServerPacket::PlayerDamaged {
+                                    target_player_id,
+                                    attacker_id,
+                                    new_health,
+                                    ..
+                                } => {
+                                    if target_player_id == client.player_id {
+                                        state.player_stats.health = new_health;
+                                        if new_health <= 0.0 {
+                                            state.player_stats.is_dead = true;
+                                        }
+                                        if let Some(attacker) =
+                                            client.remote_players.get(&attacker_id)
+                                        {
+                                            let kb_dir = (state.player.position - attacker.position)
+                                                .with_y(0.0)
+                                                .normalize_or_zero();
+                                            state.player.velocity +=
+                                                kb_dir * 4.5 + Vec3::new(0.0, 3.2, 0.0);
+                                        }
+                                        state.audio.play_hurt();
+                                    } else if let Some(rp) =
+                                        client.remote_players.get_mut(&target_player_id)
+                                    {
+                                        rp.health = new_health;
+                                        rp.hurt_timer = 0.35;
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::WorldSnapshot {
+                                    day_night_time,
+                                    players,
+                                } => {
+                                    state.day_night.time = day_night_time;
+                                    let local_id = client.player_id;
+                                    client.remote_players.clear();
+                                    for p in players {
+                                        if p.player_id != local_id {
+                                            client.remote_players.insert(p.player_id, p);
+                                        }
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::ChatBroadcast {
+                                    sender,
+                                    message,
+                                    is_system,
+                                } => {
+                                    client.chat_history.push(blockgame_core::net::ChatEntry {
+                                        sender,
+                                        message,
+                                        is_system,
+                                        age: 0.0,
+                                    });
+                                    if client.chat_history.len() > 30 {
+                                        client.chat_history.remove(0);
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::Kick { reason } => {
+                                    kick_reason = Some(reason);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if !client.connected && kick_reason.is_none() {
+                            kick_reason = Some("Connection to server lost.".to_string());
+                        }
+                    }
+
+                    if let Some(reason) = kick_reason {
+                        state.disconnect_multiplayer();
+                        state.mouse_captured = false;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                        state.window.set_cursor_visible(true);
+                        state.screen = AppScreen::MultiplayerLobby {
+                            username_input: state.local_username.clone(),
+                            password_input: String::new(),
+                            address_input: "127.0.0.1:25565".to_string(),
+                            skin_id: state.local_skin_id,
+                            focused_field: 0,
+                            status_message: Some((reason, true)),
+                        };
+                        return;
+                    }
+
                     // Update dynamic Day/Night celestial cycle
                     state.day_night.update(dt);
                     state.total_time += dt;
@@ -1908,6 +2755,40 @@ impl ApplicationHandler for BlockGameApp {
                         0.0
                     };
 
+                    // Send periodic PlayerStateUpdate to multiplayer server (20 Hz)
+                    if state.mp_client.is_some() {
+                        state.net_sync_timer += dt;
+                        if state.net_sync_timer >= 0.05 {
+                            state.net_sync_timer = 0.0;
+                            let model = state.current_local_player_model();
+                            let inv = state.inventory.clone();
+                            let hotbar = state.active_hotbar_slot;
+                            let stats = state.player_stats.clone();
+                            if let Some(client) = &mut state.mp_client {
+                                client.send(
+                                    &blockgame_core::net::ClientPacket::PlayerStateUpdate {
+                                        position: model.position,
+                                        velocity: model.velocity,
+                                        yaw: model.yaw,
+                                        pitch: model.pitch,
+                                        held_item: model.held_item,
+                                        walk_anim: model.walk_anim,
+                                        swing_anim: model.swing_anim,
+                                        is_sneaking: model.is_sneaking,
+                                        health: model.health,
+                                    },
+                                );
+                                client.send(
+                                    &blockgame_core::net::ClientPacket::PlayerInventorySync {
+                                        inventory: inv,
+                                        active_hotbar_slot: hotbar,
+                                        stats,
+                                    },
+                                );
+                            }
+                        }
+                    }
+
                     // 3. Update Item Drops & Magnetism Pickup (only when alive)
                     if !state.player_stats.is_dead {
                         let collected = state
@@ -1953,8 +2834,19 @@ impl ApplicationHandler for BlockGameApp {
                         .world_manager
                         .update_falling_blocks(dt, &state.device, &state.pipeline);
 
-                    // 4. Update Camera position and atmosphere uniform
-                    state.camera.position = state.player.eye_position();
+                    // 4. Update Camera position (First-Person or F5 Third-Person) and atmosphere uniform
+                    let eye_pos = state.player.eye_position()
+                        - if state.shift_down && !state.inventory_open && !state.player.flying {
+                            Vec3::new(0.0, 0.18, 0.0)
+                        } else {
+                            Vec3::ZERO
+                        };
+                    state.camera.position = if state.third_person {
+                        let back_dir = -state.camera.forward();
+                        eye_pos + back_dir * 3.8 + Vec3::new(0.0, 0.35, 0.0)
+                    } else {
+                        eye_pos
+                    };
                     let camera_block_pos = IVec3::new(
                         state.camera.position.x.floor() as i32,
                         state.camera.position.y.floor() as i32,
@@ -1984,7 +2876,7 @@ impl ApplicationHandler for BlockGameApp {
                         .pipeline
                         .update_camera(&state.queue, &state.camera_uniform);
 
-                    // 5. Perform Fast Voxel Traversal (DDA) raycast from crosshair
+                    // 5. Perform Fast Voxel Traversal (DDA) raycast from player eye_pos
                     {
                         let world_guard = state.world_manager.world().lock().unwrap();
                         let held_item = state.inventory.get(state.active_hotbar_slot).item_id;
@@ -1996,7 +2888,7 @@ impl ApplicationHandler for BlockGameApp {
                         let is_bucket =
                             held_item == ItemId::BUCKET || held_item == ItemId::WATER_BUCKET;
                         let mut hit = raycast_voxel_with_water(
-                            state.camera.position,
+                            eye_pos,
                             state.camera.forward(),
                             5.0, // 5 blocks reach
                             &world_guard,
@@ -2005,7 +2897,7 @@ impl ApplicationHandler for BlockGameApp {
                         );
                         if hit.is_none() && (is_placeable || is_bucket) {
                             hit = raycast_voxel_with_water(
-                                state.camera.position,
+                                eye_pos,
                                 state.camera.forward(),
                                 5.0,
                                 &world_guard,
@@ -2103,6 +2995,20 @@ impl ApplicationHandler for BlockGameApp {
                                             &state.device,
                                             &state.pipeline,
                                         ) {
+                                            if let Some(client) = &mut state.mp_client {
+                                                let post_break_block = state
+                                                    .world_manager
+                                                    .world()
+                                                    .lock()
+                                                    .unwrap()
+                                                    .get_block(target_voxel);
+                                                client.send(
+                                                    &blockgame_core::net::ClientPacket::BlockChange {
+                                                        pos: target_voxel,
+                                                        block_id: post_break_block,
+                                                    },
+                                                );
+                                            }
                                             state.audio.play_block_break(
                                                 broken,
                                                 target_voxel.as_vec3() + Vec3::splat(0.5),
@@ -2110,10 +3016,16 @@ impl ApplicationHandler for BlockGameApp {
                                                 state.camera.yaw,
                                             );
                                             state.player_stats.add_exhaustion(0.025);
-                                            let mut held = state.inventory.get(state.active_hotbar_slot);
-                                            if let Some(def) = state.item_registry.get(held.item_id) {
+                                            let mut held =
+                                                state.inventory.get(state.active_hotbar_slot);
+                                            if let Some(def) =
+                                                state.item_registry.get(held.item_id)
+                                            {
                                                 if let Some(max_dur) = def.durability {
-                                                    let dmg = if def.tool_type == Some(blockgame_core::tool::ToolType::Sword) {
+                                                    let dmg = if def.tool_type
+                                                        == Some(
+                                                            blockgame_core::tool::ToolType::Sword,
+                                                        ) {
                                                         2
                                                     } else {
                                                         1
@@ -2121,18 +3033,32 @@ impl ApplicationHandler for BlockGameApp {
                                                     if held.damage_tool(dmg, max_dur) {
                                                         state.audio.play_tool_break();
                                                     }
-                                                    state.inventory.set(state.active_hotbar_slot, held);
+                                                    state.inventory.set(
+                                                        state.active_hotbar_slot,
+                                                        held,
+                                                    );
                                                 }
                                             }
                                             if let Some((drop_item, drop_count)) = self
                                                 .registry
                                                 .get_drop(broken, held_tool_type, held_tool_tier)
                                             {
-                                                state.world_manager.spawn_item_drop(
-                                                    target_voxel.as_vec3()
-                                                        + Vec3::new(0.5, 0.5, 0.5),
-                                                    ItemSlot::new(drop_item, drop_count),
-                                                );
+                                                let drop_pos = target_voxel.as_vec3()
+                                                    + Vec3::new(0.5, 0.5, 0.5);
+                                                let drop_slot =
+                                                    ItemSlot::new(drop_item, drop_count);
+                                                state
+                                                    .world_manager
+                                                    .spawn_item_drop(drop_pos, drop_slot);
+                                                if let Some(client) = &mut state.mp_client {
+                                                    client.send(
+                                                        &blockgame_core::net::ClientPacket::SpawnItemDrop {
+                                                            position: drop_pos,
+                                                            velocity: Vec3::new(0.0, 2.5, 0.0),
+                                                            item: drop_slot,
+                                                        },
+                                                    );
+                                                }
                                             }
                                             // 15% chance to drop Apple from Leaves
                                             if broken == BlockId::LEAVES {
@@ -2388,6 +3314,65 @@ impl ApplicationHandler for BlockGameApp {
                             punch_time,
                             &state.player_stats,
                         );
+
+                        // Draw floating 3D-to-2D username nametags for remote players (and local player in F5 third-person)
+                        let mut nametag_models = Vec::new();
+                        if let Some(client) = &state.mp_client {
+                            for rp in client.remote_players.values() {
+                                if rp.health > 0.0 {
+                                    nametag_models.push(rp.clone());
+                                }
+                            }
+                        }
+                        if state.third_person && !state.player_stats.is_dead {
+                            nametag_models.push(state.current_local_player_model());
+                        }
+                        if !nametag_models.is_empty() {
+                            UiBuilder::draw_player_nametags(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                state.camera.build_view_projection_matrix(aspect),
+                                state.camera.position,
+                                &nametag_models,
+                            );
+                        }
+
+                        // Draw Multiplayer Chat, Tab Player List, and Server Status Overlays
+                        let mut online_models = vec![state.current_local_player_model()];
+                        if let Some(client) = &state.mp_client {
+                            for rp in client.remote_players.values() {
+                                online_models.push(rp.clone());
+                            }
+                        }
+                        let local_name = if state.local_username.is_empty() {
+                            "Explorer".to_string()
+                        } else {
+                            state.local_username.clone()
+                        };
+                        let server_addr = state
+                            .mp_client
+                            .as_ref()
+                            .map(|c| c.server_addr.clone())
+                            .unwrap_or_default();
+                        let chat_slice = if let Some(client) = &state.mp_client {
+                            client.chat_history.as_slice()
+                        } else {
+                            state.local_chat_messages.as_slice()
+                        };
+                        UiBuilder::draw_multiplayer_hud_overlays(
+                            &mut state.ui_mesh,
+                            screen_w,
+                            screen_h,
+                            chat_slice,
+                            state.chat_open,
+                            &state.chat_input,
+                            state.tab_held,
+                            &online_models,
+                            &local_name,
+                            state.mp_hosted_server.is_some(),
+                            &server_addr,
+                        );
                     }
                 } else if let AppScreen::Paused { ref status_message } = state.screen {
                     // Game is paused: keep camera at player eye position without stepping simulation
@@ -2429,7 +3414,7 @@ impl ApplicationHandler for BlockGameApp {
                         status_message.as_deref(),
                     );
                 } else {
-                    // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerNotice):
+                    // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerLobby):
                     // Slowly orbit camera over the currently loaded 3D terrain around player.position
                     state.total_time += dt;
                     state.world_manager.update(
@@ -2529,9 +3514,9 @@ impl ApplicationHandler for BlockGameApp {
                                 format!("Render Distance: {} chunks", state.render_distance);
                             let lines = [
                                 render_dist_line.as_str(),
-                                "Controls: WASD Move | Space Jump | Ctrl Sprint | F Fly",
-                                "E Inventory | R Recipe | U Uses | Esc Pause & Save",
-                                "Textures: Faithful 32x Procedural Atlas",
+                                "Controls: WASD Move | Space Jump | Ctrl Sprint | F Fly | F5 3rd Person",
+                                "T Chat | Tab Player List | E Inventory | R Recipe | U Uses | Esc Pause",
+                                "Textures: Faithful 32x Procedural Atlas + 3D Player Skins",
                             ];
                             UiBuilder::build_notice_or_settings_screen(
                                 &mut state.ui_mesh,
@@ -2542,18 +3527,25 @@ impl ApplicationHandler for BlockGameApp {
                                 state.cursor_pos,
                             );
                         }
-                        AppScreen::MultiplayerNotice => {
-                            let lines = [
-                                "Multiplayer server browser and LAN worlds",
-                                "are planned for an upcoming expansion phase.",
-                                "Use Singleplayer to create and save worlds!",
-                            ];
-                            UiBuilder::build_notice_or_settings_screen(
+                        AppScreen::MultiplayerLobby {
+                            username_input,
+                            password_input,
+                            address_input,
+                            skin_id,
+                            focused_field,
+                            status_message,
+                        } => {
+                            let status_ref = status_message.as_ref().map(|(m, err)| (m.as_str(), *err));
+                            UiBuilder::build_multiplayer_lobby_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
-                                "Multiplayer",
-                                &lines,
+                                username_input,
+                                password_input,
+                                address_input,
+                                *skin_id,
+                                *focused_field,
+                                status_ref,
                                 state.cursor_pos,
                             );
                         }
@@ -2612,6 +3604,31 @@ impl ApplicationHandler for BlockGameApp {
                     );
                 } else {
                     state.falling_block_dynamic_mesh.clear();
+                }
+
+                // Upload dynamic 3D Articulated Players mesh (remote multiplayer players + local player in 3rd-person or menu)
+                let mut players_to_render = Vec::new();
+                if let Some(client) = &state.mp_client {
+                    for rp in client.remote_players.values() {
+                        players_to_render.push(rp.clone());
+                    }
+                }
+                if state.third_person || state.screen != AppScreen::InGame {
+                    players_to_render.push(state.current_local_player_model());
+                }
+                if !players_to_render.is_empty() {
+                    let players_mesh = blockgame_render::build_players_mesh(
+                        &players_to_render,
+                        &state.item_registry,
+                    );
+                    state.player_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &players_mesh.vertices,
+                        &players_mesh.indices,
+                    );
+                } else {
+                    state.player_dynamic_mesh.clear();
                 }
 
                 // 8. Render frame
@@ -2713,6 +3730,9 @@ impl ApplicationHandler for BlockGameApp {
 
                     // Render falling gravity blocks (Sand, Gravel, Red Sand)
                     state.falling_block_dynamic_mesh.draw(&mut render_pass);
+
+                    // Render 3D articulated player models (remote players & 3rd-person local player)
+                    state.player_dynamic_mesh.draw(&mut render_pass);
 
                     // Render targeted block selection wireframe or progressive cracking overlay
                     if let Some((crack_buf, vertex_count)) = &state.cracking_buffer {

@@ -1754,6 +1754,136 @@ impl WorldManager {
         }
     }
 
+    /// Applies a single block update received from a multiplayer server and remeshes affected chunks.
+    pub fn apply_remote_block_update(
+        &mut self,
+        pos: IVec3,
+        block_id: BlockId,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let new_meshes = {
+            let mut world = self.world.lock().unwrap();
+            let old_block = world.get_block(pos);
+            if old_block == block_id {
+                return;
+            }
+            let is_light_change = old_block.is_emissive() || block_id.is_emissive();
+            world.set_block(pos, block_id);
+
+            if is_light_change {
+                let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            chunks_to_rebuild.push(ChunkPos::new(
+                                chunk_pos.0.x + dx,
+                                chunk_pos.0.y + dy,
+                                chunk_pos.0.z + dz,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            let mesher = ChunkMesher::new(&self.registry);
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
+    /// Applies an initial `WorldDeltaSync` packet from the multiplayer server and remeshes modified chunks.
+    pub fn apply_world_delta_sync(
+        &mut self,
+        modified_chunks: &[(ChunkPos, Vec<(u16, BlockId)>)],
+        chests: &[(IVec3, Vec<ItemSlot>)],
+        furnaces: &[(IVec3, blockgame_core::world::FurnaceState)],
+        item_drops: &[(Vec3, Vec3, ItemSlot)],
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut chunks_to_rebuild = Vec::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            for (cpos, blocks) in modified_chunks {
+                if !world.has_chunk(*cpos) {
+                    let mut chunk = self.generator.generate_chunk(*cpos);
+                    self.generator.populate_chunk_features(&mut chunk);
+                    world.insert_chunk(chunk);
+                }
+                let origin = cpos.to_world_origin();
+                for &(idx, block_id) in blocks {
+                    let lx = (idx as usize % 16) as i32;
+                    let lz = ((idx as usize / 16) % 16) as i32;
+                    let ly = (idx as usize / 256) as i32;
+                    world.set_block(origin + IVec3::new(lx, ly, lz), block_id);
+                }
+                chunks_to_rebuild.push(*cpos);
+            }
+
+            world.chest_containers.clear();
+            for (pos, slots) in chests {
+                world.chest_containers.insert(*pos, slots.clone());
+            }
+
+            world.furnaces.clear();
+            for (pos, state) in furnaces {
+                world.furnaces.insert(*pos, state.clone());
+            }
+        }
+
+        self.item_drops.clear();
+        for (pos, vel, item) in item_drops {
+            self.item_drops.push(ItemDrop::with_velocity(*pos, *vel, *item));
+        }
+
+        chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+        chunks_to_rebuild.dedup();
+
+        let new_meshes = {
+            let world = self.world.lock().unwrap();
+            let mesher = ChunkMesher::new(&self.registry);
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
     #[allow(dead_code)]
     pub fn total_visible_faces(&self) -> usize {
         self.gpu_chunks

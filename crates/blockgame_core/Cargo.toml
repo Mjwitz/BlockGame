@@ -7,4 +7,5 @@ license.workspace = true
 [dependencies]
 glam.workspace = true
 bytemuck.workspace = true
+log.workspace = true
 thiserror.workspace = true

@@ -1884,6 +1884,302 @@ pub fn build_falling_blocks_mesh(
     mesh
 }
 
+fn add_pivoted_box_with_front(
+    mesh: &mut ChunkMesh,
+    min: [f32; 3],
+    max: [f32; 3],
+    pivot_y: f32,
+    pivot_z: f32,
+    angle: f32,
+    uvs: &[[f32; 2]; 4],
+    uvs_front: Option<&[[f32; 2]; 4]>,
+    ao: f32,
+    light: [f32; 2],
+    pos: glam::Vec3,
+    cos_y: f32,
+    sin_y: f32,
+) {
+    let [x0, y0, z0] = min;
+    let [x1, y1, z1] = max;
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+
+    let pt = |lx: f32, ly: f32, lz: f32| -> [f32; 3] {
+        let rel_y = ly - pivot_y;
+        let rel_z = lz - pivot_z;
+        let rot_z = rel_z * cos_a - rel_y * sin_a;
+        let rot_y = rel_z * sin_a + rel_y * cos_a;
+        [
+            pos.x + lx * cos_y + (pivot_z + rot_z) * sin_y,
+            pos.y + (pivot_y + rot_y),
+            pos.z - lx * sin_y + (pivot_z + rot_z) * cos_y,
+        ]
+    };
+
+    let nrm = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
+        let rot_z = nz * cos_a - ny * sin_a;
+        let rot_y = nz * sin_a + ny * cos_a;
+        [
+            nx * cos_y + rot_z * sin_y,
+            rot_y,
+            -nx * sin_y + rot_z * cos_y,
+        ]
+    };
+
+    // PosZ (Front)
+    add_animal_face(
+        mesh,
+        [
+            pt(x0, y0, z1),
+            pt(x1, y0, z1),
+            pt(x1, y1, z1),
+            pt(x0, y1, z1),
+        ],
+        nrm(0.0, 0.0, 1.0),
+        uvs_front.unwrap_or(uvs),
+        ao,
+        light,
+    );
+    // NegZ (Back)
+    add_animal_face(
+        mesh,
+        [
+            pt(x1, y0, z0),
+            pt(x0, y0, z0),
+            pt(x0, y1, z0),
+            pt(x1, y1, z0),
+        ],
+        nrm(0.0, 0.0, -1.0),
+        uvs,
+        ao,
+        light,
+    );
+    // PosX (Left)
+    add_animal_face(
+        mesh,
+        [
+            pt(x1, y0, z1),
+            pt(x1, y0, z0),
+            pt(x1, y1, z0),
+            pt(x1, y1, z1),
+        ],
+        nrm(1.0, 0.0, 0.0),
+        uvs,
+        ao,
+        light,
+    );
+    // NegX (Right)
+    add_animal_face(
+        mesh,
+        [
+            pt(x0, y0, z0),
+            pt(x0, y0, z1),
+            pt(x0, y1, z1),
+            pt(x0, y1, z0),
+        ],
+        nrm(-1.0, 0.0, 0.0),
+        uvs,
+        ao,
+        light,
+    );
+    // PosY (Top)
+    add_animal_face(
+        mesh,
+        [
+            pt(x0, y1, z1),
+            pt(x1, y1, z1),
+            pt(x1, y1, z0),
+            pt(x0, y1, z0),
+        ],
+        nrm(0.0, 1.0, 0.0),
+        uvs,
+        ao,
+        light,
+    );
+    // NegY (Bottom)
+    add_animal_face(
+        mesh,
+        [
+            pt(x0, y0, z0),
+            pt(x1, y0, z0),
+            pt(x1, y0, z1),
+            pt(x0, y0, z1),
+        ],
+        nrm(0.0, -1.0, 0.0),
+        uvs,
+        ao,
+        light,
+    );
+}
+
+/// Builds 3D articulated humanoid player models with head pitch/yaw, walking limb swing,
+/// mining/attack right-arm swing, held 3D item, and skin textures.
+pub fn build_players_mesh(
+    players: &[blockgame_core::net::PlayerModelState],
+    item_registry: &blockgame_core::item::ItemRegistry,
+) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+
+    for player in players {
+        if player.health <= 0.0 {
+            continue;
+        }
+
+        let (light, ao) = if player.hurt_timer > 0.0 {
+            ([1.0, 1.0], 0.25)
+        } else {
+            ([1.0, 0.0], 1.0)
+        };
+
+        // Align local +Z with Camera::forward (cos(yaw), 0, sin(yaw))
+        let sin_y = player.yaw.cos();
+        let cos_y = player.yaw.sin();
+        let pos = player.position;
+
+        let skin_base = 272 + ((player.skin_id as u16) % 4) * 4;
+        let uvs_head_front = get_animal_uvs(skin_base);
+        let uvs_head_side = get_animal_uvs(skin_base + 1);
+        let uvs_torso = get_animal_uvs(skin_base + 2);
+        let uvs_legs = get_animal_uvs(skin_base + 3);
+
+        let crouch_y = if player.is_sneaking { -0.14 } else { 0.0 };
+        let leg_swing = (player.walk_anim).sin() * 0.55;
+        let swing_boost = if player.swing_anim > 0.0 {
+            (player.swing_anim * std::f32::consts::PI).sin() * 1.15
+        } else {
+            0.0
+        };
+        let hold_pose = if player.held_item != blockgame_core::item::ItemId::EMPTY {
+            0.25
+        } else {
+            0.0
+        };
+
+        // 1. Left & Right Legs (pivoted at hip y = 0.70)
+        add_animal_leg_box(
+            &mut mesh,
+            [0.01, 0.0, -0.12],
+            [0.24, 0.70, 0.12],
+            0.70,
+            0.0,
+            leg_swing,
+            &uvs_legs,
+            ao,
+            light,
+            pos,
+            cos_y,
+            sin_y,
+        );
+        add_animal_leg_box(
+            &mut mesh,
+            [-0.24, 0.0, -0.12],
+            [-0.01, 0.70, 0.12],
+            0.70,
+            0.0,
+            -leg_swing,
+            &uvs_legs,
+            ao,
+            light,
+            pos,
+            cos_y,
+            sin_y,
+        );
+
+        // 2. Torso
+        add_animal_box(
+            &mut mesh,
+            [-0.24, 0.70 + crouch_y, -0.13],
+            [0.24, 1.40 + crouch_y, 0.13],
+            &uvs_torso,
+            None,
+            ao,
+            light,
+            pos,
+            cos_y,
+            sin_y,
+        );
+
+        // 3. Head (pivoted at neck y = 1.40 + crouch_y, rotating with pitch)
+        let pitch_clamped = player.pitch.clamp(-1.1, 1.1);
+        add_pivoted_box_with_front(
+            &mut mesh,
+            [-0.24, 1.40 + crouch_y, -0.24],
+            [0.24, 1.88 + crouch_y, 0.24],
+            1.40 + crouch_y,
+            0.0,
+            pitch_clamped,
+            &uvs_head_side,
+            Some(&uvs_head_front),
+            ao,
+            light,
+            pos,
+            cos_y,
+            sin_y,
+        );
+
+        // 4. Left Arm (pivoted at shoulder y = 1.35 + crouch_y)
+        add_animal_leg_box(
+            &mut mesh,
+            [0.24, 0.70 + crouch_y, -0.12],
+            [0.46, 1.38 + crouch_y, 0.12],
+            1.35 + crouch_y,
+            0.0,
+            -leg_swing * 0.85,
+            &uvs_torso,
+            ao,
+            light,
+            pos,
+            cos_y,
+            sin_y,
+        );
+
+        // 5. Right Arm (pivoted at shoulder y = 1.35 + crouch_y, with mining/attack swing & held item pose)
+        let right_arm_angle = leg_swing * 0.85 + hold_pose + swing_boost;
+        add_animal_leg_box(
+            &mut mesh,
+            [-0.46, 0.70 + crouch_y, -0.12],
+            [-0.24, 1.38 + crouch_y, 0.12],
+            1.35 + crouch_y,
+            0.0,
+            right_arm_angle,
+            &uvs_torso,
+            ao,
+            light,
+            pos,
+            cos_y,
+            sin_y,
+        );
+
+        // 6. Held 3D Item in Right Hand
+        if player.held_item != blockgame_core::item::ItemId::EMPTY {
+            if let Some(def) = item_registry.get(player.held_item) {
+                let item_uvs = get_animal_uvs(def.icon_tile as u16);
+                let item_light = if player.held_item == blockgame_core::item::ItemId::TORCH {
+                    [1.0, 1.0]
+                } else {
+                    light
+                };
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.43, 0.62 + crouch_y, 0.06],
+                    [-0.25, 0.80 + crouch_y, 0.28],
+                    1.35 + crouch_y,
+                    0.0,
+                    right_arm_angle,
+                    &item_uvs,
+                    ao,
+                    item_light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+            }
+        }
+    }
+
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2118,5 +2414,25 @@ mod tests {
         assert_eq!(mesh.face_count(), 12);
         assert_eq!(mesh.vertices.len(), 48);
         assert_eq!(mesh.indices.len(), 72);
+    }
+
+    #[test]
+    fn test_build_players_mesh() {
+        let item_reg = blockgame_core::item::ItemRegistry::new();
+        let mut p1 = blockgame_core::net::PlayerModelState::new(
+            1,
+            "ExplorerAlice",
+            glam::Vec3::new(0.0, 64.0, 0.0),
+            0,
+        );
+        p1.held_item = blockgame_core::item::ItemId::DIAMOND_SWORD;
+        p1.walk_anim = 1.0;
+        p1.swing_anim = 0.5;
+
+        let mesh = build_players_mesh(&[p1], &item_reg);
+        // 6 body boxes (2 legs + 1 torso + 1 head + 2 arms) + 1 held item box = 7 boxes * 6 faces = 42 faces
+        assert_eq!(mesh.face_count(), 42);
+        assert_eq!(mesh.vertices.len(), 42 * 4);
+        assert_eq!(mesh.indices.len(), 42 * 6);
     }
 }

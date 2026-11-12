@@ -75,6 +75,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if args.iter().any(|a| a == "--server") {
+        let port = args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(blockgame_core::net::DEFAULT_SERVER_PORT);
+        let world_name = args
+            .iter()
+            .position(|a| a == "--world")
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| "Multiplayer_World".to_string());
+        let bind_addr = format!("0.0.0.0:{}", port);
+        let generator = Arc::new(blockgame_gen::TerrainGenerator::new(seed));
+        let _server = blockgame_core::net::MultiplayerServer::start(
+            &bind_addr,
+            std::path::PathBuf::from("saves"),
+            world_name.clone(),
+            world_name,
+            seed,
+            None,
+            move |pos: blockgame_core::chunk::ChunkPos| {
+                let mut chunk = generator.generate_chunk(pos);
+                generator.populate_chunk_features(&mut chunk);
+                chunk
+            },
+        )?;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
     log::info!(
         "Launching BlockGame client (Seed: {}, Render Distance: {})...",
         seed,
