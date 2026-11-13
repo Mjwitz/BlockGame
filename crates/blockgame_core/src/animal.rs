@@ -86,9 +86,15 @@ pub struct AnimalEntity {
     pub breath: f32,
     pub max_breath: f32,
     pub drown_timer: f32,
+    pub love_timer: f32,
+    pub breed_cooldown: f32,
+    pub baby_timer: f32,
 }
 
 impl AnimalEntity {
+    pub const BREED_COOLDOWN_SECONDS: f32 = 300.0; // 5-minute breeding cooldown
+    pub const LOVE_DURATION_SECONDS: f32 = 30.0;
+
     pub fn new(id: u32, kind: AnimalKind, position: Vec3) -> Self {
         let max_hp = kind.max_health();
         let mut seed = ((id as u64) + 1).wrapping_mul(0x517cc1b727220a95);
@@ -119,7 +125,30 @@ impl AnimalEntity {
             breath: 15.0,
             max_breath: 15.0,
             drown_timer: 0.0,
+            love_timer: 0.0,
+            breed_cooldown: 0.0,
+            baby_timer: 0.0,
         }
+    }
+
+    #[inline]
+    pub fn is_baby(&self) -> bool {
+        self.baby_timer > 0.0
+    }
+
+    #[inline]
+    pub fn can_breed(&self) -> bool {
+        !self.dead && self.baby_timer <= 0.0 && self.breed_cooldown <= 0.0
+    }
+
+    /// Feeds this animal Wheat to enter love mode for breeding.
+    /// Returns `false` if the animal is a baby, already in love mode, or on breeding cooldown.
+    pub fn try_feed_wheat(&mut self) -> bool {
+        if !self.can_breed() || self.love_timer > 0.0 {
+            return false;
+        }
+        self.love_timer = Self::LOVE_DURATION_SECONDS;
+        true
     }
 
     /// Advances the animal's internal PRNG state and returns a uniform pseudo-random f32 in 0.0..1.0.
@@ -206,6 +235,15 @@ impl AnimalEntity {
 
         if self.hurt_timer > 0.0 {
             self.hurt_timer = (self.hurt_timer - dt).max(0.0);
+        }
+        if self.love_timer > 0.0 {
+            self.love_timer = (self.love_timer - dt).max(0.0);
+        }
+        if self.breed_cooldown > 0.0 {
+            self.breed_cooldown = (self.breed_cooldown - dt).max(0.0);
+        }
+        if self.baby_timer > 0.0 {
+            self.baby_timer = (self.baby_timer - dt).max(0.0);
         }
 
         // 0. Water & Drowning Check
@@ -525,5 +563,27 @@ mod tests {
         assert!(!drops.is_empty(), "Sheep must drop wool");
         assert_eq!(drops[0].item_id, ItemId::WHITE_WOOL);
         assert!(drops[0].count >= 1 && drops[0].count <= 2);
+    }
+
+    #[test]
+    fn test_animal_breeding_wheat_and_five_minute_cooldown() {
+        let mut cow = AnimalEntity::new(1, AnimalKind::Cow, Vec3::ZERO);
+        assert!(cow.can_breed());
+        assert!(cow.try_feed_wheat(), "Adult cow should accept wheat");
+        assert!(!cow.try_feed_wheat(), "Cannot feed again while already in love mode");
+        assert!(cow.love_timer > 0.0);
+
+        // Simulate 5-minute breeding cooldown after mating
+        cow.love_timer = 0.0;
+        cow.breed_cooldown = AnimalEntity::BREED_COOLDOWN_SECONDS;
+        assert_eq!(cow.breed_cooldown, 300.0);
+        assert!(!cow.can_breed());
+        assert!(!cow.try_feed_wheat(), "Cannot breed while on 5-minute cooldown");
+
+        // Baby animals cannot breed
+        let mut baby = AnimalEntity::new(2, AnimalKind::Cow, Vec3::ZERO);
+        baby.baby_timer = AnimalEntity::BREED_COOLDOWN_SECONDS;
+        assert!(baby.is_baby());
+        assert!(!baby.try_feed_wheat(), "Baby animals cannot breed");
     }
 }

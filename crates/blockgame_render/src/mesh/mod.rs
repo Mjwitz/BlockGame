@@ -1834,6 +1834,7 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
         if animal.dead {
             continue;
         }
+        let start_v = mesh.vertices.len();
 
         // Red/white damage flash when hurt
         let (light, ao) = if animal.hurt_timer > 0.0 {
@@ -2279,6 +2280,60 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     cos_y,
                     sin_y,
                 );
+            }
+        }
+
+        if animal.is_baby() {
+            for v in &mut mesh.vertices[start_v..] {
+                v.position[0] = pos.x + (v.position[0] - pos.x) * 0.55;
+                v.position[1] = pos.y + (v.position[1] - pos.y) * 0.55;
+                v.position[2] = pos.z + (v.position[2] - pos.z) * 0.55;
+            }
+        }
+
+        if animal.love_timer > 0.0 {
+            let (_, h) = animal.kind.dimensions();
+            let heart_y = pos.y + (if animal.is_baby() { h * 0.55 } else { h }) + 0.35;
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(26);
+            let s = 0.22_f32;
+            let planes = [
+                ([-s, -s, 0.0], [s, -s, 0.0], [0.0, 0.0, 1.0]),
+                ([0.0, -s, -s], [0.0, -s, s], [1.0, 0.0, 0.0]),
+            ];
+            for (a, b, n) in planes {
+                let base_idx = mesh.vertices.len() as u32;
+                let p0 = [pos.x + a[0], heart_y - s, pos.z + a[2]];
+                let p1 = [pos.x + b[0], heart_y - s, pos.z + b[2]];
+                let p2 = [pos.x + b[0], heart_y + s, pos.z + b[2]];
+                let p3 = [pos.x + a[0], heart_y + s, pos.z + a[2]];
+                for (p, uv) in [
+                    (p0, [u_min, v_max]),
+                    (p1, [u_max, v_max]),
+                    (p2, [u_max, v_min]),
+                    (p3, [u_min, v_min]),
+                ] {
+                    mesh.vertices.push(VoxelVertex {
+                        position: p,
+                        uv,
+                        normal: n,
+                        ao: 1.4,
+                        light: [1.0, 1.0],
+                    });
+                }
+                mesh.indices.extend_from_slice(&[
+                    base_idx,
+                    base_idx + 1,
+                    base_idx + 2,
+                    base_idx,
+                    base_idx + 2,
+                    base_idx + 3,
+                    base_idx,
+                    base_idx + 2,
+                    base_idx + 1,
+                    base_idx,
+                    base_idx + 3,
+                    base_idx + 2,
+                ]);
             }
         }
     }

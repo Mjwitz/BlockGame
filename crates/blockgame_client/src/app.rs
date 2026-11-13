@@ -1829,6 +1829,21 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
+                        // 1d. Animal Breeding: Right-click an animal while holding Wheat
+                        if held_slot.item_id == ItemId::WHEAT {
+                            if state.world_manager.feed_animal(
+                                state.player.eye_position(),
+                                state.camera.forward(),
+                                4.0,
+                            ) {
+                                let mut slot = state.inventory.get(state.active_hotbar_slot);
+                                slot.take(1);
+                                state.inventory.set(state.active_hotbar_slot, slot);
+                                state.punch_timer = 0.15;
+                                return;
+                            }
+                        }
+
                         // 2. Hoe Tilling (Grass or Dirt with Hoe -> Farmland)
                         if !held_slot.is_empty() {
                             if let Some(def) = state.item_registry.get(held_slot.item_id) {

@@ -1241,13 +1241,82 @@ impl WorldManager {
         true
     }
 
-    /// Updates all active animals, applies physics and AI, and generates drops for any that died.
+    /// Updates all active animals, applies physics, AI, breeding, and generates drops for any that died.
     pub fn update_animals(&mut self, dt: f32) -> Vec<(Vec3, Vec<ItemSlot>)> {
         let mut drops = Vec::new();
-        let world_guard = self.world.lock().unwrap();
 
-        for animal in self.animals.iter_mut() {
-            animal.update(dt, &world_guard, &self.registry);
+        // Steer animals in love mode toward a nearby mate of the same kind
+        let len = self.animals.len();
+        for i in 0..len {
+            if self.animals[i].dead || self.animals[i].love_timer <= 0.0 {
+                continue;
+            }
+            let pos_i = self.animals[i].position;
+            let kind_i = self.animals[i].kind;
+            let mut best_dist_sq = 12.0 * 12.0;
+            let mut target_pos = None;
+            for j in 0..len {
+                if i == j || self.animals[j].dead || self.animals[j].kind != kind_i || self.animals[j].love_timer <= 0.0 {
+                    continue;
+                }
+                let d_sq = (self.animals[j].position - pos_i).length_squared();
+                if d_sq < best_dist_sq {
+                    best_dist_sq = d_sq;
+                    target_pos = Some(self.animals[j].position);
+                }
+            }
+            if let Some(mate_pos) = target_pos {
+                let delta = mate_pos - pos_i;
+                if delta.x * delta.x + delta.z * delta.z > 0.25 {
+                    self.animals[i].yaw = delta.x.atan2(delta.z);
+                    self.animals[i].is_moving = true;
+                }
+            }
+        }
+
+        {
+            let world_guard = self.world.lock().unwrap();
+            for animal in self.animals.iter_mut() {
+                animal.update(dt, &world_guard, &self.registry);
+            }
+        }
+
+        // Pair up nearby animals in love mode of the same kind to breed
+        let mut babies_to_spawn: Vec<(AnimalKind, Vec3)> = Vec::new();
+        for i in 0..self.animals.len() {
+            if self.animals[i].dead
+                || self.animals[i].love_timer <= 0.0
+                || self.animals[i].is_baby()
+            {
+                continue;
+            }
+            for j in (i + 1)..self.animals.len() {
+                if self.animals[j].dead
+                    || self.animals[j].love_timer <= 0.0
+                    || self.animals[j].is_baby()
+                    || self.animals[j].kind != self.animals[i].kind
+                {
+                    continue;
+                }
+                let dist_sq = (self.animals[i].position - self.animals[j].position).length_squared();
+                if dist_sq <= 3.5 * 3.5 {
+                    self.animals[i].love_timer = 0.0;
+                    self.animals[j].love_timer = 0.0;
+                    self.animals[i].breed_cooldown = AnimalEntity::BREED_COOLDOWN_SECONDS;
+                    self.animals[j].breed_cooldown = AnimalEntity::BREED_COOLDOWN_SECONDS;
+                    let mid = (self.animals[i].position + self.animals[j].position) * 0.5;
+                    babies_to_spawn.push((self.animals[i].kind, mid));
+                    break;
+                }
+            }
+        }
+
+        for (kind, pos) in babies_to_spawn {
+            let id = self.next_animal_id;
+            self.next_animal_id = self.next_animal_id.wrapping_add(1).max(1);
+            let mut baby = AnimalEntity::new(id, kind, pos);
+            baby.baby_timer = AnimalEntity::BREED_COOLDOWN_SECONDS;
+            self.animals.push(baby);
         }
 
         self.animals.retain(|animal| {
@@ -1261,6 +1330,31 @@ impl WorldManager {
         });
 
         drops
+    }
+
+    /// Feeds Wheat to the closest animal within reach, putting it in love mode if eligible.
+    pub fn feed_animal(&mut self, ray_origin: Vec3, ray_dir: Vec3, reach: f32) -> bool {
+        let mut closest_dist = reach;
+        let mut hit_idx = None;
+
+        for (idx, animal) in self.animals.iter().enumerate() {
+            if animal.dead {
+                continue;
+            }
+            let bbox = animal.aabb();
+            if let Some(dist) = bbox.intersect_ray(ray_origin, ray_dir, reach) {
+                if dist < closest_dist {
+                    closest_dist = dist;
+                    hit_idx = Some(idx);
+                }
+            }
+        }
+
+        if let Some(idx) = hit_idx {
+            self.animals[idx].try_feed_wheat()
+        } else {
+            false
+        }
     }
 
     /// Performs raycast attack against closest animal within reach.
