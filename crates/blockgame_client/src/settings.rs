@@ -40,7 +40,7 @@ impl Default for KeyBinds {
 impl KeyBinds {
     pub const COUNT: usize = 12;
 
-    pub fn labels_and_keys(&self) -> [(&'static str, &'static str); Self::COUNT] {
+    pub fn labels_and_keys(&self) -> [(&'static str, String); Self::COUNT] {
         [
             ("Move Forward", key_display_name(self.forward)),
             ("Move Backward", key_display_name(self.backward)),
@@ -76,212 +76,79 @@ impl KeyBinds {
     }
 }
 
-pub fn key_code_to_str(key: KeyCode) -> Option<&'static str> {
-    Some(match key {
-        KeyCode::KeyA => "KeyA",
-        KeyCode::KeyB => "KeyB",
-        KeyCode::KeyC => "KeyC",
-        KeyCode::KeyD => "KeyD",
-        KeyCode::KeyE => "KeyE",
-        KeyCode::KeyF => "KeyF",
-        KeyCode::KeyG => "KeyG",
-        KeyCode::KeyH => "KeyH",
-        KeyCode::KeyI => "KeyI",
-        KeyCode::KeyJ => "KeyJ",
-        KeyCode::KeyK => "KeyK",
-        KeyCode::KeyL => "KeyL",
-        KeyCode::KeyM => "KeyM",
-        KeyCode::KeyN => "KeyN",
-        KeyCode::KeyO => "KeyO",
-        KeyCode::KeyP => "KeyP",
-        KeyCode::KeyQ => "KeyQ",
-        KeyCode::KeyR => "KeyR",
-        KeyCode::KeyS => "KeyS",
-        KeyCode::KeyT => "KeyT",
-        KeyCode::KeyU => "KeyU",
-        KeyCode::KeyV => "KeyV",
-        KeyCode::KeyW => "KeyW",
-        KeyCode::KeyX => "KeyX",
-        KeyCode::KeyY => "KeyY",
-        KeyCode::KeyZ => "KeyZ",
-        KeyCode::Digit0 => "Digit0",
-        KeyCode::Digit1 => "Digit1",
-        KeyCode::Digit2 => "Digit2",
-        KeyCode::Digit3 => "Digit3",
-        KeyCode::Digit4 => "Digit4",
-        KeyCode::Digit5 => "Digit5",
-        KeyCode::Digit6 => "Digit6",
-        KeyCode::Digit7 => "Digit7",
-        KeyCode::Digit8 => "Digit8",
-        KeyCode::Digit9 => "Digit9",
-        KeyCode::Space => "Space",
-        KeyCode::ShiftLeft => "ShiftLeft",
-        KeyCode::ShiftRight => "ShiftRight",
-        KeyCode::ControlLeft => "ControlLeft",
-        KeyCode::ControlRight => "ControlRight",
-        KeyCode::AltLeft => "AltLeft",
-        KeyCode::AltRight => "AltRight",
-        KeyCode::Tab => "Tab",
-        KeyCode::Enter => "Enter",
-        KeyCode::Backquote => "Backquote",
-        KeyCode::Slash => "Slash",
-        KeyCode::ArrowUp => "ArrowUp",
-        KeyCode::ArrowDown => "ArrowDown",
-        KeyCode::ArrowLeft => "ArrowLeft",
-        KeyCode::ArrowRight => "ArrowRight",
-        KeyCode::F1 => "F1",
-        KeyCode::F2 => "F2",
-        KeyCode::F3 => "F3",
-        KeyCode::F4 => "F4",
-        KeyCode::F5 => "F5",
-        KeyCode::F6 => "F6",
-        KeyCode::F7 => "F7",
-        KeyCode::F8 => "F8",
-        KeyCode::F9 => "F9",
-        KeyCode::F10 => "F10",
-        KeyCode::F11 => "F11",
-        KeyCode::F12 => "F12",
-        _ => return None,
-    })
+macro_rules! define_key_table {
+    ($(($variant:ident, $display:expr)),* $(,)?) => {
+        pub fn key_code_to_string(key: KeyCode) -> String {
+            match key {
+                $(KeyCode::$variant => stringify!($variant).to_string(),)*
+                other => format!("{:?}", other),
+            }
+        }
+
+        pub fn str_to_key_code(s: &str) -> Option<KeyCode> {
+            match s.trim() {
+                $(stringify!($variant) => Some(KeyCode::$variant),)*
+                _ => None,
+            }
+        }
+
+        pub fn key_display_name(key: KeyCode) -> String {
+            match key {
+                $(KeyCode::$variant => $display.to_string(),)*
+                other => format!("{:?}", other),
+            }
+        }
+    };
 }
 
-pub fn str_to_key_code(s: &str) -> Option<KeyCode> {
-    Some(match s.trim() {
-        "KeyA" => KeyCode::KeyA,
-        "KeyB" => KeyCode::KeyB,
-        "KeyC" => KeyCode::KeyC,
-        "KeyD" => KeyCode::KeyD,
-        "KeyE" => KeyCode::KeyE,
-        "KeyF" => KeyCode::KeyF,
-        "KeyG" => KeyCode::KeyG,
-        "KeyH" => KeyCode::KeyH,
-        "KeyI" => KeyCode::KeyI,
-        "KeyJ" => KeyCode::KeyJ,
-        "KeyK" => KeyCode::KeyK,
-        "KeyL" => KeyCode::KeyL,
-        "KeyM" => KeyCode::KeyM,
-        "KeyN" => KeyCode::KeyN,
-        "KeyO" => KeyCode::KeyO,
-        "KeyP" => KeyCode::KeyP,
-        "KeyQ" => KeyCode::KeyQ,
-        "KeyR" => KeyCode::KeyR,
-        "KeyS" => KeyCode::KeyS,
-        "KeyT" => KeyCode::KeyT,
-        "KeyU" => KeyCode::KeyU,
-        "KeyV" => KeyCode::KeyV,
-        "KeyW" => KeyCode::KeyW,
-        "KeyX" => KeyCode::KeyX,
-        "KeyY" => KeyCode::KeyY,
-        "KeyZ" => KeyCode::KeyZ,
-        "Digit0" => KeyCode::Digit0,
-        "Digit1" => KeyCode::Digit1,
-        "Digit2" => KeyCode::Digit2,
-        "Digit3" => KeyCode::Digit3,
-        "Digit4" => KeyCode::Digit4,
-        "Digit5" => KeyCode::Digit5,
-        "Digit6" => KeyCode::Digit6,
-        "Digit7" => KeyCode::Digit7,
-        "Digit8" => KeyCode::Digit8,
-        "Digit9" => KeyCode::Digit9,
-        "Space" => KeyCode::Space,
-        "ShiftLeft" => KeyCode::ShiftLeft,
-        "ShiftRight" => KeyCode::ShiftRight,
-        "ControlLeft" => KeyCode::ControlLeft,
-        "ControlRight" => KeyCode::ControlRight,
-        "AltLeft" => KeyCode::AltLeft,
-        "AltRight" => KeyCode::AltRight,
-        "Tab" => KeyCode::Tab,
-        "Enter" => KeyCode::Enter,
-        "Backquote" => KeyCode::Backquote,
-        "Slash" => KeyCode::Slash,
-        "ArrowUp" => KeyCode::ArrowUp,
-        "ArrowDown" => KeyCode::ArrowDown,
-        "ArrowLeft" => KeyCode::ArrowLeft,
-        "ArrowRight" => KeyCode::ArrowRight,
-        "F1" => KeyCode::F1,
-        "F2" => KeyCode::F2,
-        "F3" => KeyCode::F3,
-        "F4" => KeyCode::F4,
-        "F5" => KeyCode::F5,
-        "F6" => KeyCode::F6,
-        "F7" => KeyCode::F7,
-        "F8" => KeyCode::F8,
-        "F9" => KeyCode::F9,
-        "F10" => KeyCode::F10,
-        "F11" => KeyCode::F11,
-        "F12" => KeyCode::F12,
-        _ => return None,
-    })
-}
-
-pub fn key_display_name(key: KeyCode) -> &'static str {
-    match key {
-        KeyCode::KeyA => "A",
-        KeyCode::KeyB => "B",
-        KeyCode::KeyC => "C",
-        KeyCode::KeyD => "D",
-        KeyCode::KeyE => "E",
-        KeyCode::KeyF => "F",
-        KeyCode::KeyG => "G",
-        KeyCode::KeyH => "H",
-        KeyCode::KeyI => "I",
-        KeyCode::KeyJ => "J",
-        KeyCode::KeyK => "K",
-        KeyCode::KeyL => "L",
-        KeyCode::KeyM => "M",
-        KeyCode::KeyN => "N",
-        KeyCode::KeyO => "O",
-        KeyCode::KeyP => "P",
-        KeyCode::KeyQ => "Q",
-        KeyCode::KeyR => "R",
-        KeyCode::KeyS => "S",
-        KeyCode::KeyT => "T",
-        KeyCode::KeyU => "U",
-        KeyCode::KeyV => "V",
-        KeyCode::KeyW => "W",
-        KeyCode::KeyX => "X",
-        KeyCode::KeyY => "Y",
-        KeyCode::KeyZ => "Z",
-        KeyCode::Digit0 => "0",
-        KeyCode::Digit1 => "1",
-        KeyCode::Digit2 => "2",
-        KeyCode::Digit3 => "3",
-        KeyCode::Digit4 => "4",
-        KeyCode::Digit5 => "5",
-        KeyCode::Digit6 => "6",
-        KeyCode::Digit7 => "7",
-        KeyCode::Digit8 => "8",
-        KeyCode::Digit9 => "9",
-        KeyCode::Space => "Space",
-        KeyCode::ShiftLeft => "L-Shift",
-        KeyCode::ShiftRight => "R-Shift",
-        KeyCode::ControlLeft => "L-Ctrl",
-        KeyCode::ControlRight => "R-Ctrl",
-        KeyCode::AltLeft => "L-Alt",
-        KeyCode::AltRight => "R-Alt",
-        KeyCode::Tab => "Tab",
-        KeyCode::Enter => "Enter",
-        KeyCode::Backquote => "`",
-        KeyCode::Slash => "/",
-        KeyCode::ArrowUp => "Up",
-        KeyCode::ArrowDown => "Down",
-        KeyCode::ArrowLeft => "Left",
-        KeyCode::ArrowRight => "Right",
-        KeyCode::F1 => "F1",
-        KeyCode::F2 => "F2",
-        KeyCode::F3 => "F3",
-        KeyCode::F4 => "F4",
-        KeyCode::F5 => "F5",
-        KeyCode::F6 => "F6",
-        KeyCode::F7 => "F7",
-        KeyCode::F8 => "F8",
-        KeyCode::F9 => "F9",
-        KeyCode::F10 => "F10",
-        KeyCode::F11 => "F11",
-        KeyCode::F12 => "F12",
-        _ => "Unknown",
-    }
-}
+define_key_table!(
+    // Letters
+    (KeyA, "A"), (KeyB, "B"), (KeyC, "C"), (KeyD, "D"), (KeyE, "E"),
+    (KeyF, "F"), (KeyG, "G"), (KeyH, "H"), (KeyI, "I"), (KeyJ, "J"),
+    (KeyK, "K"), (KeyL, "L"), (KeyM, "M"), (KeyN, "N"), (KeyO, "O"),
+    (KeyP, "P"), (KeyQ, "Q"), (KeyR, "R"), (KeyS, "S"), (KeyT, "T"),
+    (KeyU, "U"), (KeyV, "V"), (KeyW, "W"), (KeyX, "X"), (KeyY, "Y"),
+    (KeyZ, "Z"),
+    // Top-row digits
+    (Digit0, "0"), (Digit1, "1"), (Digit2, "2"), (Digit3, "3"), (Digit4, "4"),
+    (Digit5, "5"), (Digit6, "6"), (Digit7, "7"), (Digit8, "8"), (Digit9, "9"),
+    // Numpad
+    (Numpad0, "Num 0"), (Numpad1, "Num 1"), (Numpad2, "Num 2"), (Numpad3, "Num 3"),
+    (Numpad4, "Num 4"), (Numpad5, "Num 5"), (Numpad6, "Num 6"), (Numpad7, "Num 7"),
+    (Numpad8, "Num 8"), (Numpad9, "Num 9"),
+    (NumpadAdd, "Num +"), (NumpadSubtract, "Num -"),
+    (NumpadMultiply, "Num *"), (NumpadDivide, "Num /"),
+    (NumpadDecimal, "Num ."), (NumpadEnter, "Num Enter"),
+    (NumpadEqual, "Num ="), (NumpadComma, "Num ,"),
+    (NumLock, "NumLock"),
+    // Punctuation & Symbols
+    (Period, "."), (Comma, ","), (Slash, "/"), (Backslash, "\\"),
+    (IntlBackslash, "\\"), (Semicolon, ";"), (Quote, "'"),
+    (BracketLeft, "["), (BracketRight, "]"),
+    (Minus, "-"), (Equal, "="), (Backquote, "`"),
+    // Whitespace, Modifiers & System
+    (Space, "Space"), (Tab, "Tab"), (Enter, "Enter"), (Backspace, "Backspace"),
+    (CapsLock, "CapsLock"),
+    (ShiftLeft, "L-Shift"), (ShiftRight, "R-Shift"),
+    (ControlLeft, "L-Ctrl"), (ControlRight, "R-Ctrl"),
+    (AltLeft, "L-Alt"), (AltRight, "R-Alt"),
+    (SuperLeft, "L-Super"), (SuperRight, "R-Super"),
+    (ContextMenu, "Menu"),
+    // Navigation & Editing
+    (Insert, "Insert"), (Delete, "Delete"),
+    (Home, "Home"), (End, "End"),
+    (PageUp, "PgUp"), (PageDown, "PgDn"),
+    (ArrowUp, "Up"), (ArrowDown, "Down"),
+    (ArrowLeft, "Left"), (ArrowRight, "Right"),
+    (PrintScreen, "PrtSc"), (ScrollLock, "ScrLk"), (Pause, "Pause"),
+    // Function keys
+    (F1, "F1"), (F2, "F2"), (F3, "F3"), (F4, "F4"),
+    (F5, "F5"), (F6, "F6"), (F7, "F7"), (F8, "F8"),
+    (F9, "F9"), (F10, "F10"), (F11, "F11"), (F12, "F12"),
+    (F13, "F13"), (F14, "F14"), (F15, "F15"), (F16, "F16"),
+    (F17, "F17"), (F18, "F18"), (F19, "F19"), (F20, "F20"),
+    (F21, "F21"), (F22, "F22"), (F23, "F23"), (F24, "F24"),
+);
 
 /// Persistent client-side configuration settings.
 #[derive(Debug, Clone, PartialEq)]
@@ -542,18 +409,18 @@ impl GameSettings {
             self.vsync,
             self.view_bobbing,
             self.show_debug_hud,
-            key_code_to_str(self.keybinds.forward).unwrap_or("KeyW"),
-            key_code_to_str(self.keybinds.backward).unwrap_or("KeyS"),
-            key_code_to_str(self.keybinds.left).unwrap_or("KeyA"),
-            key_code_to_str(self.keybinds.right).unwrap_or("KeyD"),
-            key_code_to_str(self.keybinds.jump).unwrap_or("Space"),
-            key_code_to_str(self.keybinds.sprint).unwrap_or("ControlLeft"),
-            key_code_to_str(self.keybinds.inventory).unwrap_or("KeyE"),
-            key_code_to_str(self.keybinds.flight).unwrap_or("KeyF"),
-            key_code_to_str(self.keybinds.chat).unwrap_or("KeyT"),
-            key_code_to_str(self.keybinds.player_list).unwrap_or("Tab"),
-            key_code_to_str(self.keybinds.third_person).unwrap_or("F5"),
-            key_code_to_str(self.keybinds.debug_hud).unwrap_or("F3"),
+            key_code_to_string(self.keybinds.forward),
+            key_code_to_string(self.keybinds.backward),
+            key_code_to_string(self.keybinds.left),
+            key_code_to_string(self.keybinds.right),
+            key_code_to_string(self.keybinds.jump),
+            key_code_to_string(self.keybinds.sprint),
+            key_code_to_string(self.keybinds.inventory),
+            key_code_to_string(self.keybinds.flight),
+            key_code_to_string(self.keybinds.chat),
+            key_code_to_string(self.keybinds.player_list),
+            key_code_to_string(self.keybinds.third_person),
+            key_code_to_string(self.keybinds.debug_hud),
         );
         if let Err(e) = std::fs::write(path, content) {
             log::warn!("Failed to save settings to {:?}: {}", path, e);
@@ -568,8 +435,9 @@ mod tests {
     #[test]
     fn roundtrip_and_clamp() {
         let mut keybinds = KeyBinds::default();
-        keybinds.forward = KeyCode::ArrowUp;
-        keybinds.jump = KeyCode::ShiftLeft;
+        keybinds.forward = KeyCode::Numpad8;
+        keybinds.jump = KeyCode::Period;
+        keybinds.inventory = KeyCode::NumpadDecimal;
 
         let mut s = GameSettings {
             render_distance: 99,
@@ -608,7 +476,8 @@ mod tests {
         assert_eq!(loaded.vsync, s.vsync);
         assert_eq!(loaded.view_bobbing, s.view_bobbing);
         assert_eq!(loaded.show_debug_hud, s.show_debug_hud);
-        assert_eq!(loaded.keybinds.forward, KeyCode::ArrowUp);
-        assert_eq!(loaded.keybinds.jump, KeyCode::ShiftLeft);
+        assert_eq!(loaded.keybinds.forward, KeyCode::Numpad8);
+        assert_eq!(loaded.keybinds.jump, KeyCode::Period);
+        assert_eq!(loaded.keybinds.inventory, KeyCode::NumpadDecimal);
     }
 }

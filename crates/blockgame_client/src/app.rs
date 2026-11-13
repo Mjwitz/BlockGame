@@ -2465,7 +2465,7 @@ impl ApplicationHandler for BlockGameApp {
                             if let Some(bind_idx) = state.listening_keybind {
                                 if key == KeyCode::Escape {
                                     state.listening_keybind = None;
-                                } else if crate::settings::key_code_to_str(key).is_some() {
+                                } else {
                                     state.settings.keybinds.set_by_index(bind_idx, key);
                                     state.listening_keybind = None;
                                     state.settings.save(std::path::Path::new("settings.cfg"));
@@ -4277,6 +4277,10 @@ impl ApplicationHandler for BlockGameApp {
                         AppScreen::Settings { .. } => {
                             let ui_settings = state.settings_ui_state();
                             let keybinds = state.settings.keybinds.labels_and_keys();
+                            let keybind_refs: Vec<(&str, &str)> = keybinds
+                                .iter()
+                                .map(|(a, k)| (*a, k.as_str()))
+                                .collect();
                             UiBuilder::build_settings_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
@@ -4285,7 +4289,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.settings_tab,
                                 state.active_settings_slider,
                                 state.listening_keybind,
-                                &keybinds,
+                                &keybind_refs,
                                 state.cursor_pos,
                             );
                         }
