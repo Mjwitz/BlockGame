@@ -1380,6 +1380,51 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
             Rgba([0, 0, 0, 0])
         }
     });
+
+    // 373: Sun (bright warm golden square with soft solar corona)
+    atlas.paint_tile(373, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if x >= 6 && x <= 25 && y >= 6 && y <= 25 {
+            // Core sun disc
+            if x >= 9 && x <= 22 && y >= 9 && y <= 22 {
+                Rgba([255, 250, 210, 255])
+            } else {
+                Rgba([255, 224, 110, 255])
+            }
+        } else if x >= 3 && x <= 28 && y >= 3 && y <= 28 {
+            // Soft outer solar glow
+            let dx = (x - 15).abs().max((y - 15).abs());
+            let alpha = ((14 - dx) * 28).clamp(0, 140) as u8;
+            Rgba([255, 200, 75, alpha])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 374: Moon (pale silver-white square with subtle craters and soft cool glow)
+    atlas.paint_tile(374, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if x >= 7 && x <= 24 && y >= 7 && y <= 24 {
+            let is_crater = (x >= 10 && x <= 13 && y >= 10 && y <= 13)
+                || (x >= 18 && x <= 21 && y >= 15 && y <= 18)
+                || (x >= 12 && x <= 14 && y >= 19 && y <= 21);
+            if is_crater {
+                Rgba([190, 198, 215, 255])
+            } else if x == 7 || x == 24 || y == 7 || y == 24 {
+                Rgba([210, 220, 238, 255])
+            } else {
+                Rgba([242, 245, 255, 255])
+            }
+        } else if x >= 4 && x <= 27 && y >= 4 && y <= 27 {
+            let dx = (x - 15).abs().max((y - 15).abs());
+            let alpha = ((13 - dx) * 22).clamp(0, 100) as u8;
+            Rgba([190, 210, 245, alpha])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

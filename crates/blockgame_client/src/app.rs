@@ -120,6 +120,7 @@ pub struct AppState {
     pub animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub monster_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub arrow_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub celestial_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub player_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     // Multiplayer & 3D Player Model State
@@ -825,6 +826,9 @@ impl ApplicationHandler for BlockGameApp {
             animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Animal Mesh"),
             monster_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Monster Mesh"),
             arrow_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Arrow Mesh"),
+            celestial_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Celestial Mesh",
+            ),
             falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
                 "Dynamic Falling Block Mesh",
             ),
@@ -4047,6 +4051,20 @@ impl ApplicationHandler for BlockGameApp {
                     state.arrow_dynamic_mesh.clear();
                 }
 
+                // Upload Sun & Moon celestial sky mesh
+                {
+                    let celestial_mesh = blockgame_render::build_celestial_mesh(
+                        state.camera.position,
+                        state.day_night.sun_direction(),
+                    );
+                    state.celestial_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &celestial_mesh.vertices,
+                        &celestial_mesh.indices,
+                    );
+                }
+
                 // Upload dynamic 3D Falling Blocks mesh
                 if !state.world_manager.falling_blocks.is_empty() {
                     let falling_mesh = blockgame_render::build_falling_blocks_mesh(
@@ -4167,6 +4185,12 @@ impl ApplicationHandler for BlockGameApp {
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
+
+                    // Render Sun and Moon in the sky behind all terrain
+                    render_pass.set_pipeline(&state.pipeline.celestial_pipeline);
+                    render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                    render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
+                    state.celestial_dynamic_mesh.draw(&mut render_pass);
 
                     // Render voxel terrain meshes with frustum culling
                     render_pass.set_pipeline(&state.pipeline.render_pipeline);

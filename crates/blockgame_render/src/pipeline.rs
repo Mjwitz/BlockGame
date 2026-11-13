@@ -122,6 +122,7 @@ impl DynamicMeshBuffers {
 pub struct VoxelPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
+    pub celestial_pipeline: wgpu::RenderPipeline,
     pub camera_buffer: wgpu::Buffer,
     pub camera_bind_group: wgpu::BindGroup,
     pub camera_bind_group_layout: wgpu::BindGroupLayout,
@@ -355,9 +356,59 @@ impl VoxelPipeline {
             cache: None,
         });
 
+        let celestial_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Celestial Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/celestial.wgsl").into()),
+        });
+
+        let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Celestial Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &celestial_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[VoxelVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &celestial_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             render_pipeline,
             water_pipeline,
+            celestial_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout,

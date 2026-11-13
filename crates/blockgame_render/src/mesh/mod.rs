@@ -2975,6 +2975,66 @@ pub fn build_players_mesh(
     mesh
 }
 
+/// Builds billboarded Sun (tile 373) and Moon (tile 374) quads at distance 250 around `camera_pos`
+/// along `sun_dir` and `-sun_dir` so the player can track the time of day across the sky.
+pub fn build_celestial_mesh(camera_pos: glam::Vec3, sun_dir: glam::Vec3) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+    let dir = sun_dir.normalize_or_zero();
+    if dir.length_squared() < 0.01 {
+        return mesh;
+    }
+
+    let distance = 250.0;
+    let bodies = [
+        (dir, 22.0_f32, 373_u16),   // Sun
+        (-dir, 18.0_f32, 374_u16), // Moon (directly opposite the Sun)
+    ];
+
+    for (body_dir, half_size, tile_id) in bodies {
+        let center = camera_pos + body_dir * distance;
+        let forward = -body_dir;
+        // Pick a stable tangent basis (sun_dir moves in the X-Y plane with a small Z tilt)
+        let ref_axis = if forward.z.abs() < 0.9 {
+            glam::Vec3::Z
+        } else {
+            glam::Vec3::X
+        };
+        let right = ref_axis.cross(forward).normalize_or_zero() * half_size;
+        let up = forward.cross(right).normalize_or_zero() * half_size;
+
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+        let base_idx = mesh.vertices.len() as u32;
+        let normal = [forward.x, forward.y, forward.z];
+
+        let corners = [
+            (center - right - up, [u_min, v_max]),
+            (center + right - up, [u_max, v_max]),
+            (center + right + up, [u_max, v_min]),
+            (center - right + up, [u_min, v_min]),
+        ];
+
+        for (pos, uv) in corners {
+            mesh.vertices.push(VoxelVertex {
+                position: [pos.x, pos.y, pos.z],
+                uv,
+                normal,
+                ao: 1.0,
+                light: [1.0, 1.0],
+            });
+        }
+        mesh.indices.extend_from_slice(&[
+            base_idx,
+            base_idx + 1,
+            base_idx + 2,
+            base_idx,
+            base_idx + 2,
+            base_idx + 3,
+        ]);
+    }
+
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
