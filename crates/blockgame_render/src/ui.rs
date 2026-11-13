@@ -278,6 +278,7 @@ pub struct SettingsUiState {
     pub vsync: bool,
     pub view_bobbing: bool,
     pub show_debug_hud: bool,
+    pub ui_scale: f32,
 }
 
 pub struct UiBuilder;
@@ -4832,6 +4833,15 @@ impl UiBuilder {
                 );
             }
 
+            let ui_scale_str = if (settings.ui_scale - 0.75).abs() < 0.01 {
+                "0.75x"
+            } else if (settings.ui_scale - 1.25).abs() < 0.01 {
+                "1.25x"
+            } else if (settings.ui_scale - 1.5).abs() < 0.01 {
+                "1.5x"
+            } else {
+                "1.0x"
+            };
             let toggles = [
                 format!(
                     "Invert Y-Axis: {}",
@@ -4850,6 +4860,7 @@ impl UiBuilder {
                     "Debug HUD (F3): {}",
                     if settings.show_debug_hud { "ON" } else { "OFF" }
                 ),
+                format!("UI Scale: {}", ui_scale_str),
             ];
 
             for (idx, label) in toggles.iter().enumerate() {

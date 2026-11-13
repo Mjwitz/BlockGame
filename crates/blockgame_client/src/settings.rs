@@ -175,6 +175,8 @@ pub struct GameSettings {
     pub view_bobbing: bool,
     /// Show top-left FPS and coordinate debug HUD overlay (also toggled via F3).
     pub show_debug_hud: bool,
+    /// UI scale factor (`0.75`, `1.0`, `1.25`, `1.5`).
+    pub ui_scale: f32,
     /// Customizable gameplay keybindings.
     pub keybinds: KeyBinds,
 }
@@ -193,6 +195,7 @@ impl Default for GameSettings {
             vsync: true,
             view_bobbing: true,
             show_debug_hud: false,
+            ui_scale: 1.0,
             keybinds: KeyBinds::default(),
         }
     }
@@ -205,6 +208,23 @@ impl GameSettings {
     pub const MAX_FOV: f32 = 110.0;
     pub const MIN_SENSITIVITY: f32 = 0.2;
     pub const MAX_SENSITIVITY: f32 = 2.5;
+    pub const UI_SCALE_PRESETS: [f32; 4] = [0.75, 1.0, 1.25, 1.5];
+
+    /// Cycles `ui_scale` through `0.75x -> 1.0x -> 1.25x -> 1.5x -> 0.75x`.
+    pub fn cycle_ui_scale(&mut self) {
+        let current_idx = Self::UI_SCALE_PRESETS
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (*a - self.ui_scale)
+                    .abs()
+                    .partial_cmp(&(*b - self.ui_scale).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(1);
+        self.ui_scale = Self::UI_SCALE_PRESETS[(current_idx + 1) % Self::UI_SCALE_PRESETS.len()];
+    }
 
     /// Clamps all numeric settings to valid ranges.
     pub fn clamp_all(&mut self) {
@@ -218,6 +238,20 @@ impl GameSettings {
         self.master_volume = self.master_volume.clamp(0.0, 1.0);
         self.sfx_volume = self.sfx_volume.clamp(0.0, 1.0);
         self.music_volume = self.music_volume.clamp(0.0, 1.0);
+        if !self.ui_scale.is_finite() {
+            self.ui_scale = 1.0;
+        } else {
+            self.ui_scale = Self::UI_SCALE_PRESETS
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    (*a - self.ui_scale)
+                        .abs()
+                        .partial_cmp(&(*b - self.ui_scale).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(1.0);
+        }
     }
 
     /// Loads settings from a `key=value` config file, falling back to defaults for missing keys.
@@ -303,6 +337,13 @@ impl GameSettings {
                         settings.show_debug_hud = v;
                     }
                 }
+                "ui_scale" => {
+                    if let Ok(v) = val.parse::<f32>() {
+                        if v.is_finite() {
+                            settings.ui_scale = v;
+                        }
+                    }
+                }
                 "key_forward" => {
                     if let Some(k) = str_to_key_code(val) {
                         settings.keybinds.forward = k;
@@ -386,6 +427,7 @@ impl GameSettings {
              vsync={}\n\
              view_bobbing={}\n\
              show_debug_hud={}\n\
+             ui_scale={:.2}\n\
              key_forward={}\n\
              key_backward={}\n\
              key_left={}\n\
@@ -409,6 +451,7 @@ impl GameSettings {
             self.vsync,
             self.view_bobbing,
             self.show_debug_hud,
+            self.ui_scale,
             key_code_to_string(self.keybinds.forward),
             key_code_to_string(self.keybinds.backward),
             key_code_to_string(self.keybinds.left),
@@ -451,6 +494,7 @@ mod tests {
             vsync: false,
             view_bobbing: false,
             show_debug_hud: true,
+            ui_scale: 1.25,
             keybinds,
         };
         s.clamp_all();
@@ -476,6 +520,7 @@ mod tests {
         assert_eq!(loaded.vsync, s.vsync);
         assert_eq!(loaded.view_bobbing, s.view_bobbing);
         assert_eq!(loaded.show_debug_hud, s.show_debug_hud);
+        assert!((loaded.ui_scale - 1.25).abs() < 0.01);
         assert_eq!(loaded.keybinds.forward, KeyCode::Numpad8);
         assert_eq!(loaded.keybinds.jump, KeyCode::Period);
         assert_eq!(loaded.keybinds.inventory, KeyCode::NumpadDecimal);

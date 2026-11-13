@@ -233,6 +233,17 @@ impl AppState {
         }
     }
 
+    /// Returns `(virtual_screen_w, virtual_screen_h, virtual_cursor_pos)` scaled by `settings.ui_scale`.
+    #[inline]
+    pub fn ui_metrics(&self) -> (f32, f32, [f32; 2]) {
+        let scale = self.settings.ui_scale.max(0.5);
+        (
+            self.surface_config.width as f32 / scale,
+            self.surface_config.height as f32 / scale,
+            [self.cursor_pos[0] / scale, self.cursor_pos[1] / scale],
+        )
+    }
+
     /// Builds a `SettingsUiState` snapshot for `UiBuilder::build_settings_screen`.
     pub fn settings_ui_state(&self) -> blockgame_render::ui::SettingsUiState {
         blockgame_render::ui::SettingsUiState {
@@ -247,6 +258,7 @@ impl AppState {
             vsync: self.settings.vsync,
             view_bobbing: self.settings.view_bobbing,
             show_debug_hud: self.settings.show_debug_hud,
+            ui_scale: self.settings.ui_scale,
         }
     }
 
@@ -1049,11 +1061,10 @@ impl ApplicationHandler for BlockGameApp {
                 state.cursor_pos = [position.x as f32, position.y as f32];
                 if matches!(state.screen, AppScreen::Settings { .. }) {
                     if let Some(slider_idx) = state.active_settings_slider {
-                        let screen_w = state.surface_config.width as f32;
-                        let screen_h = state.surface_config.height as f32;
+                        let (screen_w, screen_h, ui_cpos) = state.ui_metrics();
                         state.update_settings_slider(
                             slider_idx,
-                            state.cursor_pos[0],
+                            ui_cpos[0],
                             screen_w,
                             screen_h,
                         );
@@ -1089,9 +1100,7 @@ impl ApplicationHandler for BlockGameApp {
                 // Handle Title Screen, World Select, Create World, Settings, Multiplayer Lobby, and Pause Menu clicks
                 if state.screen != AppScreen::InGame {
                     if pressed && button == MouseButton::Left {
-                        let screen_w = state.surface_config.width as f32;
-                        let screen_h = state.surface_config.height as f32;
-                        let cpos = state.cursor_pos;
+                        let (screen_w, screen_h, cpos) = state.ui_metrics();
 
                         match state.screen.clone() {
                             AppScreen::Title => {
@@ -1401,7 +1410,7 @@ impl ApplicationHandler for BlockGameApp {
                                     }
 
                                     if !handled {
-                                        for idx in 0..5 {
+                                        for idx in 0..6 {
                                             let r = UiBuilder::settings_toggle_rect(
                                                 screen_w, screen_h, idx,
                                             );
@@ -1428,6 +1437,9 @@ impl ApplicationHandler for BlockGameApp {
                                                     4 => {
                                                         state.settings.show_debug_hud =
                                                             !state.settings.show_debug_hud
+                                                    }
+                                                    5 => {
+                                                        state.settings.cycle_ui_scale();
                                                     }
                                                     _ => {}
                                                 }
@@ -1593,16 +1605,15 @@ impl ApplicationHandler for BlockGameApp {
                 // If player is dead, left click on Respawn button respawns
                 if state.player_stats.is_dead {
                     if pressed && button == MouseButton::Left {
-                        let screen_w = state.surface_config.width as f32;
-                        let screen_h = state.surface_config.height as f32;
+                        let (screen_w, screen_h, cpos) = state.ui_metrics();
                         let btn_w = 200.0;
                         let btn_h = 44.0;
                         let btn_x = (screen_w - btn_w) * 0.5;
                         let btn_y = screen_h * 0.50;
-                        if state.cursor_pos[0] >= btn_x
-                            && state.cursor_pos[0] <= btn_x + btn_w
-                            && state.cursor_pos[1] >= btn_y
-                            && state.cursor_pos[1] <= btn_y + btn_h
+                        if cpos[0] >= btn_x
+                            && cpos[0] <= btn_x + btn_w
+                            && cpos[1] >= btn_y
+                            && cpos[1] <= btn_y + btn_h
                         {
                             state.respawn_player();
                         }
@@ -2900,8 +2911,7 @@ impl ApplicationHandler for BlockGameApp {
                 state.last_frame_time = now;
                 state.music_scheduler.update(dt, &mut state.audio);
 
-                let screen_w = state.surface_config.width as f32;
-                let screen_h = state.surface_config.height as f32;
+                let (screen_w, screen_h, ui_cursor) = state.ui_metrics();
                 let aspect = screen_w / screen_h;
                 state
                     .ui_pipeline
@@ -3971,7 +3981,7 @@ impl ApplicationHandler for BlockGameApp {
                                 &state.inventory,
                                 state.active_hotbar_slot,
                                 &state.cursor_held,
-                                state.cursor_pos,
+                                ui_cursor,
                                 &state.item_registry,
                                 Some(&jei_params),
                                 modal_params.as_ref(),
@@ -3992,7 +4002,7 @@ impl ApplicationHandler for BlockGameApp {
                                 &state.inventory,
                                 state.active_hotbar_slot,
                                 &state.cursor_held,
-                                state.cursor_pos,
+                                ui_cursor,
                                 &state.item_registry,
                                 Some(&jei_params),
                                 modal_params.as_ref(),
@@ -4011,7 +4021,7 @@ impl ApplicationHandler for BlockGameApp {
                                 &state.crafting_grid,
                                 state.crafting_result,
                                 &state.cursor_held,
-                                state.cursor_pos,
+                                ui_cursor,
                                 &state.item_registry,
                                 Some(&jei_params),
                                 modal_params.as_ref(),
@@ -4175,7 +4185,7 @@ impl ApplicationHandler for BlockGameApp {
                         &mut state.ui_mesh,
                         screen_w,
                         screen_h,
-                        state.cursor_pos,
+                        ui_cursor,
                         status_message.as_deref(),
                     );
                 } else {
@@ -4246,7 +4256,7 @@ impl ApplicationHandler for BlockGameApp {
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
-                                state.cursor_pos,
+                                ui_cursor,
                             );
                         }
                         AppScreen::WorldSelect { selected_index } => {
@@ -4256,7 +4266,7 @@ impl ApplicationHandler for BlockGameApp {
                                 screen_h,
                                 &state.saved_worlds,
                                 *selected_index,
-                                state.cursor_pos,
+                                ui_cursor,
                             );
                         }
                         AppScreen::CreateWorld {
@@ -4271,7 +4281,7 @@ impl ApplicationHandler for BlockGameApp {
                                 name_input,
                                 seed_input,
                                 *focused_field,
-                                state.cursor_pos,
+                                ui_cursor,
                             );
                         }
                         AppScreen::Settings { .. } => {
@@ -4290,7 +4300,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.active_settings_slider,
                                 state.listening_keybind,
                                 &keybind_refs,
-                                state.cursor_pos,
+                                ui_cursor,
                             );
                         }
                         AppScreen::MultiplayerLobby {
@@ -4312,7 +4322,7 @@ impl ApplicationHandler for BlockGameApp {
                                 *skin_id,
                                 *focused_field,
                                 status_ref,
-                                state.cursor_pos,
+                                ui_cursor,
                             );
                         }
                         AppScreen::InGame | AppScreen::Paused { .. } => {}
@@ -4641,10 +4651,7 @@ impl ApplicationHandler for BlockGameApp {
 }
 
 fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
-    let screen_w = state.surface_config.width as f32;
-    let screen_h = state.surface_config.height as f32;
-    let cx = state.cursor_pos[0];
-    let cy = state.cursor_pos[1];
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
     let slot_size = UiBuilder::SLOT_SIZE;
     let slot_gap = UiBuilder::SLOT_GAP;
@@ -4821,10 +4828,7 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
     let Some(chest_pos) = state.active_chest_pos else {
         return;
     };
-    let screen_w = state.surface_config.width as f32;
-    let screen_h = state.surface_config.height as f32;
-    let cx = state.cursor_pos[0];
-    let cy = state.cursor_pos[1];
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
     let slot_size = UiBuilder::SLOT_SIZE;
     let slot_gap = UiBuilder::SLOT_GAP;
@@ -4929,10 +4933,7 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
     let Some(furnace_pos) = state.active_furnace_pos else {
         return;
     };
-    let screen_w = state.surface_config.width as f32;
-    let screen_h = state.surface_config.height as f32;
-    let cx = state.cursor_pos[0];
-    let cy = state.cursor_pos[1];
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
     let slot_size = UiBuilder::SLOT_SIZE;
     let slot_gap = UiBuilder::SLOT_GAP;
@@ -5265,10 +5266,7 @@ fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool
     let Some(modal) = state.jei_recipe_modal.clone() else {
         return false;
     };
-    let screen_w = state.surface_config.width as f32;
-    let screen_h = state.surface_config.height as f32;
-    let cx = state.cursor_pos[0];
-    let cy = state.cursor_pos[1];
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
     let modal_w = 460.0;
     let modal_h = 340.0;
@@ -5375,10 +5373,7 @@ fn handle_recipe_modal_click(state: &mut AppState, is_right_click: bool) -> bool
 }
 
 fn handle_jei_panel_click(state: &mut AppState, is_right_click: bool) -> bool {
-    let screen_w = state.surface_config.width as f32;
-    let screen_h = state.surface_config.height as f32;
-    let cx = state.cursor_pos[0];
-    let cy = state.cursor_pos[1];
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
     let slot_size = UiBuilder::JEI_SLOT_SIZE;
     let slot_gap = UiBuilder::JEI_SLOT_GAP;
@@ -5478,10 +5473,7 @@ fn handle_jei_panel_click(state: &mut AppState, is_right_click: bool) -> bool {
 }
 
 fn find_hovered_item(state: &AppState) -> Option<ItemId> {
-    let screen_w = state.surface_config.width as f32;
-    let screen_h = state.surface_config.height as f32;
-    let cx = state.cursor_pos[0];
-    let cy = state.cursor_pos[1];
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
     // 1. Check JEI Grid
     let slot_size_jei = UiBuilder::JEI_SLOT_SIZE;
