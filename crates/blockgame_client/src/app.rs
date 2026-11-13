@@ -4025,8 +4025,10 @@ impl ApplicationHandler for BlockGameApp {
 
                 // Upload dynamic 3D Monsters mesh
                 if !state.world_manager.monsters.is_empty() {
-                    let monsters_mesh =
-                        blockgame_render::build_monsters_mesh(&state.world_manager.monsters);
+                    let monsters_mesh = blockgame_render::build_monsters_mesh_animated(
+                        &state.world_manager.monsters,
+                        state.total_time,
+                    );
                     state.monster_dynamic_mesh.update(
                         &state.device,
                         &state.queue,

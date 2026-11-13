@@ -2288,6 +2288,13 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
 
 /// Builds dynamic 3D meshes for active monsters (Zombies, Skeletons, Spiders).
 pub fn build_monsters_mesh(monsters: &[blockgame_core::monster::MonsterEntity]) -> ChunkMesh {
+    build_monsters_mesh_animated(monsters, 0.0)
+}
+
+pub fn build_monsters_mesh_animated(
+    monsters: &[blockgame_core::monster::MonsterEntity],
+    time: f32,
+) -> ChunkMesh {
     use blockgame_core::monster::MonsterKind;
     let mut mesh = ChunkMesh::new();
 
@@ -2554,6 +2561,66 @@ pub fn build_monsters_mesh(monsters: &[blockgame_core::monster::MonsterEntity]) 
                         sin_y,
                     );
                 }
+            }
+        }
+
+        // Animated burning flames wrapping around the mob when on fire
+        if m.burning_timer > 0.0 {
+            let frame = ((time * 12.0 + m.id as f32 * 0.7).floor() as usize) % 3;
+            let flame_tile = 375 + frame as u16;
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(flame_tile);
+
+            let (hw, h) = m.kind.dimensions();
+            let radius = hw + 0.14;
+            let flicker = 1.0 + (time * 16.0 + m.id as f32 * 1.3).sin() * 0.08;
+            let flame_h = (h * 0.95) * flicker;
+            let y0 = pos.y + 0.05;
+            let y1 = pos.y + flame_h;
+            let flame_ao = 1.55;
+            let flame_light = [1.0_f32, 1.0_f32];
+
+            let sides: [([f32; 3], [f32; 3], [f32; 3]); 4] = [
+                ([-radius, 0.0, radius], [radius, 0.0, radius], [0.0, 0.0, 1.0]),
+                ([radius, 0.0, -radius], [-radius, 0.0, -radius], [0.0, 0.0, -1.0]),
+                ([radius, 0.0, radius], [radius, 0.0, -radius], [1.0, 0.0, 0.0]),
+                ([-radius, 0.0, -radius], [-radius, 0.0, radius], [-1.0, 0.0, 0.0]),
+            ];
+
+            for (a, b, n) in sides {
+                let base_idx = mesh.vertices.len() as u32;
+                let p0 = [pos.x + a[0], y0, pos.z + a[2]];
+                let p1 = [pos.x + b[0], y0, pos.z + b[2]];
+                let p2 = [pos.x + b[0], y1, pos.z + b[2]];
+                let p3 = [pos.x + a[0], y1, pos.z + a[2]];
+                for (p, uv) in [
+                    (p0, [u_min, v_max]),
+                    (p1, [u_max, v_max]),
+                    (p2, [u_max, v_min]),
+                    (p3, [u_min, v_min]),
+                ] {
+                    mesh.vertices.push(VoxelVertex {
+                        position: p,
+                        uv,
+                        normal: n,
+                        ao: flame_ao,
+                        light: flame_light,
+                    });
+                }
+                // Double-sided so flames are visible from inside and outside
+                mesh.indices.extend_from_slice(&[
+                    base_idx,
+                    base_idx + 1,
+                    base_idx + 2,
+                    base_idx,
+                    base_idx + 2,
+                    base_idx + 3,
+                    base_idx,
+                    base_idx + 2,
+                    base_idx + 1,
+                    base_idx,
+                    base_idx + 3,
+                    base_idx + 2,
+                ]);
             }
         }
     }

@@ -1425,6 +1425,48 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
             Rgba([0, 0, 0, 0])
         }
     });
+
+    // 375..=377: 3-Frame Animated Flame Sprites for burning mobs
+    for frame in 0..3_u16 {
+        atlas.paint_tile(375 + frame, |px, py| {
+            let x = px as i32;
+            let y = py as i32; // 0 = top, 31 = bottom
+            let h = 31 - y;    // height from base (0..=31)
+            let phase = (frame as f32) * 2.1;
+
+            // Multiple overlapping flickering flame tongues
+            let tongue1 = (16.0 + ((h as f32) * 0.45 + phase).sin() * 6.0) as i32;
+            let tongue2 = (10.0 + ((h as f32) * 0.65 - phase).sin() * 5.0) as i32;
+            let tongue3 = (22.0 + ((h as f32) * 0.55 + phase * 1.3).cos() * 5.0) as i32;
+
+            let max_h1 = 26 + ((frame as i32 * 3) % 5);
+            let max_h2 = 20 + (((frame as i32 + 1) * 4) % 6);
+            let max_h3 = 21 + (((frame as i32 + 2) * 3) % 6);
+
+            let w1 = ((max_h1 - h).max(0) as f32 * 0.28).ceil() as i32;
+            let w2 = ((max_h2 - h).max(0) as f32 * 0.24).ceil() as i32;
+            let w3 = ((max_h3 - h).max(0) as f32 * 0.24).ceil() as i32;
+
+            let in_t1 = h <= max_h1 && (x - tongue1).abs() <= w1;
+            let in_t2 = h <= max_h2 && (x - tongue2).abs() <= w2;
+            let in_t3 = h <= max_h3 && (x - tongue3).abs() <= w3;
+
+            if in_t1 || in_t2 || in_t3 {
+                if h <= 8 && (x - 16).abs() <= 7 {
+                    // Hot white-yellow core at base
+                    Rgba([255, 250, 170, 245])
+                } else if h <= 15 {
+                    // Bright golden-orange middle
+                    Rgba([255, 180, 40, 235])
+                } else {
+                    // Red-orange flame tips
+                    Rgba([245, 75, 20, 210])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+    }
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

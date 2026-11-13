@@ -12,8 +12,8 @@ pub use camera::{Camera, CameraUniform, Frustum, FrustumPlane};
 pub use day_night::DayNightCycle;
 pub use mesh::{
     build_animals_mesh, build_arrows_mesh, build_celestial_mesh, build_falling_blocks_mesh,
-    build_item_drops_mesh, build_monsters_mesh, build_players_mesh, ChunkMesh, ChunkMesher,
-    VoxelVertex,
+    build_item_drops_mesh, build_monsters_mesh, build_monsters_mesh_animated, build_players_mesh,
+    ChunkMesh, ChunkMesher, VoxelVertex,
 };
 pub use pipeline::{
     create_depth_texture, DynamicMeshBuffers, GpuMeshBuffers, VoxelPipeline, DEPTH_FORMAT,
