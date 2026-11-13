@@ -1791,7 +1791,7 @@ impl ItemRegistry {
             durability: None,
             tool_type: None,
             tool_tier: None,
-            icon_tile: 4,
+            icon_tile: 335,
         });
 
         self.register(ItemDef {
@@ -1803,7 +1803,7 @@ impl ItemRegistry {
             durability: None,
             tool_type: None,
             tool_tier: None,
-            icon_tile: 16,
+            icon_tile: 336,
         });
 
         self.register(ItemDef {
@@ -1815,7 +1815,7 @@ impl ItemRegistry {
             durability: None,
             tool_type: None,
             tool_tier: None,
-            icon_tile: 288,
+            icon_tile: 337,
         });
 
         self.register(ItemDef {
@@ -1827,7 +1827,7 @@ impl ItemRegistry {
             durability: None,
             tool_type: None,
             tool_tier: None,
-            icon_tile: 4,
+            icon_tile: 338,
         });
 
         self.register(ItemDef {

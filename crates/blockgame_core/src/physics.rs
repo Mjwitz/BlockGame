@@ -296,6 +296,92 @@ impl PlayerPhysics {
 
 const COLLISION_SKIN: f32 = 1e-4;
 const FACE_TOLERANCE: f32 = 1e-3;
+const STAIR_STEP_HEIGHT: f32 = 0.52;
+
+/// Returns the collision AABBs for a block at `bpos` and the active box count (`0..=2`).
+pub fn block_collision_boxes(
+    world: &World,
+    registry: &BlockRegistry,
+    bpos: IVec3,
+) -> ([AABB; 2], usize) {
+    let block = world.get_block(bpos);
+    let fallback = AABB::from_block(bpos);
+    if !registry.is_solid(block) {
+        return ([fallback; 2], 0);
+    }
+
+    let fx = bpos.x as f32;
+    let fy = bpos.y as f32;
+    let fz = bpos.z as f32;
+
+    if block == crate::block::BlockId::OAK_FENCE {
+        return (
+            [
+                AABB::new(
+                    Vec3::new(fx, fy, fz),
+                    Vec3::new(fx + 1.0, fy + 1.5, fz + 1.0),
+                ),
+                fallback,
+            ],
+            1,
+        );
+    }
+
+    if block.is_stairs() {
+        let bottom = AABB::new(
+            Vec3::new(fx, fy, fz),
+            Vec3::new(fx + 1.0, fy + 0.5, fz + 1.0),
+        );
+        let facing = world.get_block_facing(bpos);
+        let top = match facing {
+            // NegZ: upper step on +Z back half
+            1 => AABB::new(
+                Vec3::new(fx, fy + 0.5, fz + 0.5),
+                Vec3::new(fx + 1.0, fy + 1.0, fz + 1.0),
+            ),
+            // PosX: upper step on -X back half
+            2 => AABB::new(
+                Vec3::new(fx, fy + 0.5, fz),
+                Vec3::new(fx + 0.5, fy + 1.0, fz + 1.0),
+            ),
+            // NegX: upper step on +X back half
+            3 => AABB::new(
+                Vec3::new(fx + 0.5, fy + 0.5, fz),
+                Vec3::new(fx + 1.0, fy + 1.0, fz + 1.0),
+            ),
+            // PosZ (0, default): upper step on -Z back half
+            _ => AABB::new(
+                Vec3::new(fx, fy + 0.5, fz),
+                Vec3::new(fx + 1.0, fy + 1.0, fz + 0.5),
+            ),
+        };
+        return ([bottom, top], 2);
+    }
+
+    if block == crate::block::BlockId::OAK_DOOR_CLOSED
+        || block == crate::block::BlockId::OAK_DOOR_TOP_CLOSED
+    {
+        let facing = world.get_block_facing(bpos);
+        let (x0, z0, x1, z1) = match facing {
+            1 => (0.0, 0.0, 1.0, 0.1875),
+            2 => (0.8125, 0.0, 1.0, 1.0),
+            3 => (0.0, 0.0, 0.1875, 1.0),
+            _ => (0.0, 0.8125, 1.0, 1.0),
+        };
+        return (
+            [
+                AABB::new(
+                    Vec3::new(fx + x0, fy, fz + z0),
+                    Vec3::new(fx + x1, fy + 1.0, fz + z1),
+                ),
+                fallback,
+            ],
+            1,
+        );
+    }
+
+    ([fallback; 2], 1)
+}
 
 /// Returns `true` if the entity AABB (shrunk by `margin` on each face) intersects any solid block.
 pub fn aabb_intersects_solid(
@@ -317,7 +403,7 @@ pub fn aabb_intersects_solid(
 
     let min_x = min.x.floor() as i32;
     let max_x = max.x.floor() as i32;
-    let min_y = min.y.floor() as i32;
+    let min_y = min.y.floor() as i32 - 1;
     let max_y = max.y.floor() as i32;
     let min_z = min.z.floor() as i32;
     let max_z = max.z.floor() as i32;
@@ -325,10 +411,9 @@ pub fn aabb_intersects_solid(
     for y in min_y..=max_y {
         for z in min_z..=max_z {
             for x in min_x..=max_x {
-                let block = world.get_block(IVec3::new(x, y, z));
-                if registry.is_solid(block) {
-                    let block_box = AABB::from_block(IVec3::new(x, y, z));
-                    if check_box.intersects(&block_box) {
+                let (boxes, count) = block_collision_boxes(world, registry, IVec3::new(x, y, z));
+                for i in 0..count {
+                    if check_box.intersects(&boxes[i]) {
                         return true;
                     }
                 }
@@ -362,7 +447,7 @@ pub fn depenetrate_entity(
         let box_now = AABB::from_player(*position, half_width, height);
         let min_x = box_now.min.x.floor() as i32;
         let max_x = box_now.max.x.floor() as i32;
-        let min_y = box_now.min.y.floor() as i32;
+        let min_y = box_now.min.y.floor() as i32 - 1;
         let max_y = box_now.max.y.floor() as i32;
         let min_z = box_now.min.z.floor() as i32;
         let max_z = box_now.max.z.floor() as i32;
@@ -373,38 +458,38 @@ pub fn depenetrate_entity(
             for z in min_z..=max_z {
                 for x in min_x..=max_x {
                     let bpos = IVec3::new(x, y, z);
-                    if !registry.is_solid(world.get_block(bpos)) {
-                        continue;
-                    }
-                    let bbox = AABB::from_block(bpos);
-                    if !box_now.intersects(&bbox) {
-                        continue;
-                    }
+                    let (boxes, count) = block_collision_boxes(world, registry, bpos);
+                    for i in 0..count {
+                        let bbox = boxes[i];
+                        if !box_now.intersects(&bbox) {
+                            continue;
+                        }
 
-                    // Candidate push positions along each face of `bbox`
-                    let candidates = [
-                        Vec3::new(bbox.min.x - half_width - COLLISION_SKIN, position.y, position.z),
-                        Vec3::new(bbox.max.x + half_width + COLLISION_SKIN, position.y, position.z),
-                        Vec3::new(position.x, position.y, bbox.min.z - half_width - COLLISION_SKIN),
-                        Vec3::new(position.x, position.y, bbox.max.z + half_width + COLLISION_SKIN),
-                        Vec3::new(position.x, bbox.max.y, position.z),
-                        Vec3::new(position.x, bbox.min.y - height - COLLISION_SKIN, position.z),
-                    ];
+                        // Candidate push positions along each face of `bbox`
+                        let candidates = [
+                            Vec3::new(bbox.min.x - half_width - COLLISION_SKIN, position.y, position.z),
+                            Vec3::new(bbox.max.x + half_width + COLLISION_SKIN, position.y, position.z),
+                            Vec3::new(position.x, position.y, bbox.min.z - half_width - COLLISION_SKIN),
+                            Vec3::new(position.x, position.y, bbox.max.z + half_width + COLLISION_SKIN),
+                            Vec3::new(position.x, bbox.max.y, position.z),
+                            Vec3::new(position.x, bbox.min.y - height - COLLISION_SKIN, position.z),
+                        ];
 
-                    for cand in candidates {
-                        let dist = (cand - *position).length();
-                        if dist <= half_width + 0.25
-                            && !aabb_intersects_solid(
-                                cand,
-                                half_width,
-                                height,
-                                COLLISION_SKIN,
-                                world,
-                                registry,
-                            )
-                        {
-                            if best_candidate.map_or(true, |(best_d, _)| dist < best_d) {
-                                best_candidate = Some((dist, cand));
+                        for cand in candidates {
+                            let dist = (cand - *position).length();
+                            if dist <= half_width + 0.25
+                                && !aabb_intersects_solid(
+                                    cand,
+                                    half_width,
+                                    height,
+                                    COLLISION_SKIN,
+                                    world,
+                                    registry,
+                                )
+                            {
+                                if best_candidate.map_or(true, |(best_d, _)| dist < best_d) {
+                                    best_candidate = Some((dist, cand));
+                                }
                             }
                         }
                     }
@@ -479,6 +564,55 @@ pub fn depenetrate_entity(
     }
 }
 
+fn try_auto_step(
+    target_xz: Vec3,
+    half_width: f32,
+    height: f32,
+    world: &World,
+    registry: &BlockRegistry,
+) -> Option<f32> {
+    let lifted = Vec3::new(target_xz.x, target_xz.y + STAIR_STEP_HEIGHT, target_xz.z);
+    if aabb_intersects_solid(lifted, half_width, height, COLLISION_SKIN, world, registry) {
+        return None;
+    }
+
+    let aabb = AABB::from_player(lifted, half_width, height);
+    let min_x = (aabb.min.x + COLLISION_SKIN).floor() as i32;
+    let max_x = (aabb.max.x - COLLISION_SKIN).floor() as i32;
+    let min_z = (aabb.min.z + COLLISION_SKIN).floor() as i32;
+    let max_z = (aabb.max.z - COLLISION_SKIN).floor() as i32;
+    let min_y = (target_xz.y - 0.5).floor() as i32 - 1;
+    let max_y = (lifted.y + FACE_TOLERANCE).ceil() as i32;
+
+    let mut best_y: Option<f32> = None;
+    for y in min_y..=max_y {
+        for z in min_z..=max_z {
+            for x in min_x..=max_x {
+                let (boxes, count) = block_collision_boxes(world, registry, IVec3::new(x, y, z));
+                for i in 0..count {
+                    let bbox = boxes[i];
+                    if aabb.max.x <= bbox.min.x + COLLISION_SKIN
+                        || aabb.min.x >= bbox.max.x - COLLISION_SKIN
+                        || aabb.max.z <= bbox.min.z + COLLISION_SKIN
+                        || aabb.min.z >= bbox.max.z - COLLISION_SKIN
+                    {
+                        continue;
+                    }
+                    if bbox.max.y <= lifted.y + FACE_TOLERANCE
+                        && bbox.max.y > target_xz.y + COLLISION_SKIN
+                    {
+                        if best_y.map_or(true, |by| bbox.max.y > by) {
+                            best_y = Some(bbox.max.y);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best_y.map(|y| (y * 1024.0).round() / 1024.0)
+}
+
 /// Swept axis-separated AABB collision resolution with floating-point skin protection.
 /// Guarantees that clamping against a wall on X or Z never leaves a 1-ULP (`f32`) overlap
 /// that could false-trigger vertical floor/ceiling snapping on the Y axis.
@@ -504,9 +638,10 @@ pub fn resolve_entity_movement(
     let steps = ((max_axis_disp / 0.35).ceil() as usize).clamp(1, 8);
     let step_dt = dt / (steps as f32);
 
+    let started_on_ground = *on_ground;
     *on_ground = false;
 
-    for _ in 0..steps {
+    for step_idx in 0..steps {
         // --- 1. Sweep Y axis ---
         let orig_dy = velocity.y * step_dt;
         let mut dy = orig_dy;
@@ -523,28 +658,28 @@ pub fn resolve_entity_movement(
                 for z in min_z..=max_z {
                     for x in min_x..=max_x {
                         let bpos = IVec3::new(x, y, z);
-                        if !registry.is_solid(world.get_block(bpos)) {
-                            continue;
-                        }
-                        let bbox = AABB::from_block(bpos);
-                        if aabb.max.x <= bbox.min.x + COLLISION_SKIN
-                            || aabb.min.x >= bbox.max.x - COLLISION_SKIN
-                            || aabb.max.z <= bbox.min.z + COLLISION_SKIN
-                            || aabb.min.z >= bbox.max.z - COLLISION_SKIN
-                        {
-                            continue;
-                        }
-
-                        if dy < 0.0 && aabb.min.y >= bbox.max.y - FACE_TOLERANCE {
-                            let allowed = (bbox.max.y - aabb.min.y).min(0.0);
-                            if allowed > dy {
-                                dy = allowed;
+                        let (boxes, count) = block_collision_boxes(world, registry, bpos);
+                        for i in 0..count {
+                            let bbox = boxes[i];
+                            if aabb.max.x <= bbox.min.x + COLLISION_SKIN
+                                || aabb.min.x >= bbox.max.x - COLLISION_SKIN
+                                || aabb.max.z <= bbox.min.z + COLLISION_SKIN
+                                || aabb.min.z >= bbox.max.z - COLLISION_SKIN
+                            {
+                                continue;
                             }
-                        } else if dy > 0.0 && aabb.max.y <= bbox.min.y + FACE_TOLERANCE {
-                            let allowed =
-                                (bbox.min.y - COLLISION_SKIN - aabb.max.y).max(0.0);
-                            if allowed < dy {
-                                dy = allowed;
+
+                            if dy < 0.0 && aabb.min.y >= bbox.max.y - FACE_TOLERANCE {
+                                let allowed = (bbox.max.y - aabb.min.y).min(0.0);
+                                if allowed > dy {
+                                    dy = allowed;
+                                }
+                            } else if dy > 0.0 && aabb.max.y <= bbox.min.y + FACE_TOLERANCE {
+                                let allowed =
+                                    (bbox.min.y - COLLISION_SKIN - aabb.max.y).max(0.0);
+                                if allowed < dy {
+                                    dy = allowed;
+                                }
                             }
                         }
                     }
@@ -562,12 +697,14 @@ pub fn resolve_entity_movement(
             }
         }
 
+        let can_step = *on_ground || (step_idx == 0 && started_on_ground);
+
         // --- 2. Sweep X axis ---
         let orig_dx = velocity.x * step_dt;
         let mut dx = orig_dx;
         if dx.abs() > 0.0 {
             let aabb = AABB::from_player(*position, half_width, height);
-            let min_y = (aabb.min.y + COLLISION_SKIN).floor() as i32;
+            let min_y = (aabb.min.y + COLLISION_SKIN).floor() as i32 - 1;
             let max_y = (aabb.max.y - COLLISION_SKIN).floor() as i32;
             let min_z = (aabb.min.z + COLLISION_SKIN).floor() as i32;
             let max_z = (aabb.max.z - COLLISION_SKIN).floor() as i32;
@@ -580,31 +717,31 @@ pub fn resolve_entity_movement(
                 for z in min_z..=max_z {
                     for x in min_x..=max_x {
                         let bpos = IVec3::new(x, y, z);
-                        if !registry.is_solid(world.get_block(bpos)) {
-                            continue;
-                        }
-                        let bbox = AABB::from_block(bpos);
-                        if aabb.max.y <= bbox.min.y + COLLISION_SKIN
-                            || aabb.min.y >= bbox.max.y - COLLISION_SKIN
-                            || aabb.max.z <= bbox.min.z + COLLISION_SKIN
-                            || aabb.min.z >= bbox.max.z - COLLISION_SKIN
-                        {
-                            continue;
-                        }
-
-                        if dx > 0.0 && aabb.max.x <= bbox.min.x + FACE_TOLERANCE {
-                            let allowed =
-                                (bbox.min.x - COLLISION_SKIN - aabb.max.x).max(0.0);
-                            if allowed < dx {
-                                dx = allowed;
-                                hit_face_x = Some(bbox.min.x - half_width - COLLISION_SKIN);
+                        let (boxes, count) = block_collision_boxes(world, registry, bpos);
+                        for i in 0..count {
+                            let bbox = boxes[i];
+                            if aabb.max.y <= bbox.min.y + COLLISION_SKIN
+                                || aabb.min.y >= bbox.max.y - COLLISION_SKIN
+                                || aabb.max.z <= bbox.min.z + COLLISION_SKIN
+                                || aabb.min.z >= bbox.max.z - COLLISION_SKIN
+                            {
+                                continue;
                             }
-                        } else if dx < 0.0 && aabb.min.x >= bbox.max.x - FACE_TOLERANCE {
-                            let allowed =
-                                (bbox.max.x + COLLISION_SKIN - aabb.min.x).min(0.0);
-                            if allowed > dx {
-                                dx = allowed;
-                                hit_face_x = Some(bbox.max.x + half_width + COLLISION_SKIN);
+
+                            if dx > 0.0 && aabb.max.x <= bbox.min.x + FACE_TOLERANCE {
+                                let allowed =
+                                    (bbox.min.x - COLLISION_SKIN - aabb.max.x).max(0.0);
+                                if allowed < dx {
+                                    dx = allowed;
+                                    hit_face_x = Some(bbox.min.x - half_width - COLLISION_SKIN);
+                                }
+                            } else if dx < 0.0 && aabb.min.x >= bbox.max.x - FACE_TOLERANCE {
+                                let allowed =
+                                    (bbox.max.x + COLLISION_SKIN - aabb.min.x).min(0.0);
+                                if allowed > dx {
+                                    dx = allowed;
+                                    hit_face_x = Some(bbox.max.x + half_width + COLLISION_SKIN);
+                                }
                             }
                         }
                     }
@@ -612,8 +749,21 @@ pub fn resolve_entity_movement(
             }
 
             if let Some(clamped_x) = hit_face_x {
-                position.x = clamped_x;
-                velocity.x = 0.0;
+                let stepped = can_step
+                    .then(|| {
+                        let target = Vec3::new(position.x + orig_dx, position.y, position.z);
+                        try_auto_step(target, half_width, height, world, registry)
+                            .map(|new_y| (target.x, new_y))
+                    })
+                    .flatten();
+                if let Some((new_x, new_y)) = stepped {
+                    position.x = new_x;
+                    position.y = new_y;
+                    *on_ground = true;
+                } else {
+                    position.x = clamped_x;
+                    velocity.x = 0.0;
+                }
             } else {
                 position.x += dx;
             }
@@ -626,7 +776,7 @@ pub fn resolve_entity_movement(
             let aabb = AABB::from_player(*position, half_width, height);
             let min_x = (aabb.min.x + COLLISION_SKIN).floor() as i32;
             let max_x = (aabb.max.x - COLLISION_SKIN).floor() as i32;
-            let min_y = (aabb.min.y + COLLISION_SKIN).floor() as i32;
+            let min_y = (aabb.min.y + COLLISION_SKIN).floor() as i32 - 1;
             let max_y = (aabb.max.y - COLLISION_SKIN).floor() as i32;
             let min_z = (aabb.min.z + dz.min(0.0)).floor() as i32 - 1;
             let max_z = (aabb.max.z + dz.max(0.0)).ceil() as i32 + 1;
@@ -637,31 +787,31 @@ pub fn resolve_entity_movement(
                 for z in min_z..=max_z {
                     for x in min_x..=max_x {
                         let bpos = IVec3::new(x, y, z);
-                        if !registry.is_solid(world.get_block(bpos)) {
-                            continue;
-                        }
-                        let bbox = AABB::from_block(bpos);
-                        if aabb.max.x <= bbox.min.x + COLLISION_SKIN
-                            || aabb.min.x >= bbox.max.x - COLLISION_SKIN
-                            || aabb.max.y <= bbox.min.y + COLLISION_SKIN
-                            || aabb.min.y >= bbox.max.y - COLLISION_SKIN
-                        {
-                            continue;
-                        }
-
-                        if dz > 0.0 && aabb.max.z <= bbox.min.z + FACE_TOLERANCE {
-                            let allowed =
-                                (bbox.min.z - COLLISION_SKIN - aabb.max.z).max(0.0);
-                            if allowed < dz {
-                                dz = allowed;
-                                hit_face_z = Some(bbox.min.z - half_width - COLLISION_SKIN);
+                        let (boxes, count) = block_collision_boxes(world, registry, bpos);
+                        for i in 0..count {
+                            let bbox = boxes[i];
+                            if aabb.max.x <= bbox.min.x + COLLISION_SKIN
+                                || aabb.min.x >= bbox.max.x - COLLISION_SKIN
+                                || aabb.max.y <= bbox.min.y + COLLISION_SKIN
+                                || aabb.min.y >= bbox.max.y - COLLISION_SKIN
+                            {
+                                continue;
                             }
-                        } else if dz < 0.0 && aabb.min.z >= bbox.max.z - FACE_TOLERANCE {
-                            let allowed =
-                                (bbox.max.z + COLLISION_SKIN - aabb.min.z).min(0.0);
-                            if allowed > dz {
-                                dz = allowed;
-                                hit_face_z = Some(bbox.max.z + half_width + COLLISION_SKIN);
+
+                            if dz > 0.0 && aabb.max.z <= bbox.min.z + FACE_TOLERANCE {
+                                let allowed =
+                                    (bbox.min.z - COLLISION_SKIN - aabb.max.z).max(0.0);
+                                if allowed < dz {
+                                    dz = allowed;
+                                    hit_face_z = Some(bbox.min.z - half_width - COLLISION_SKIN);
+                                }
+                            } else if dz < 0.0 && aabb.min.z >= bbox.max.z - FACE_TOLERANCE {
+                                let allowed =
+                                    (bbox.max.z + COLLISION_SKIN - aabb.min.z).min(0.0);
+                                if allowed > dz {
+                                    dz = allowed;
+                                    hit_face_z = Some(bbox.max.z + half_width + COLLISION_SKIN);
+                                }
                             }
                         }
                     }
@@ -669,8 +819,21 @@ pub fn resolve_entity_movement(
             }
 
             if let Some(clamped_z) = hit_face_z {
-                position.z = clamped_z;
-                velocity.z = 0.0;
+                let stepped = can_step
+                    .then(|| {
+                        let target = Vec3::new(position.x, position.y, position.z + orig_dz);
+                        try_auto_step(target, half_width, height, world, registry)
+                            .map(|new_y| (target.z, new_y))
+                    })
+                    .flatten();
+                if let Some((new_z, new_y)) = stepped {
+                    position.z = new_z;
+                    position.y = new_y;
+                    *on_ground = true;
+                } else {
+                    position.z = clamped_z;
+                    velocity.z = 0.0;
+                }
             } else {
                 position.z += dz;
             }
@@ -888,6 +1051,76 @@ mod tests {
                 &registry
             ),
             "Player should be pushed out of solid blocks immediately, got pos={:?}",
+            player.position
+        );
+    }
+
+    #[test]
+    fn test_stairs_walk_up_without_jumping() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, 0)));
+
+        for z in 0..8 {
+            for x in 0..16 {
+                world.set_block(IVec3::new(x, 0, z), BlockId::STONE);
+            }
+        }
+        // Stair at (4, 1, 4) facing NegX (3): lower step on -X side (x=4..4.5, y=1.5), upper step on +X side (x=4.5..5.0, y=2.0)
+        world.set_block(IVec3::new(4, 1, 4), BlockId::OAK_STAIRS);
+        world.set_block_facing(IVec3::new(4, 1, 4), 3);
+        for x in 5..16 {
+            world.set_block(IVec3::new(x, 1, 4), BlockId::STONE);
+        }
+
+        let mut player = PlayerPhysics::new(Vec3::new(3.2, 1.0, 4.5));
+        player.on_ground = true;
+
+        let mut reached_half_step = false;
+        for _ in 0..120 {
+            player.update(1.0 / 60.0, Vec3::X, false, false, &world, &registry);
+            if (player.position.y - 1.5).abs() < 0.05 {
+                reached_half_step = true;
+            }
+        }
+
+        assert!(
+            reached_half_step,
+            "Player should step onto 0.5-high bottom stair step without jumping"
+        );
+        assert!(
+            (player.position.y - 2.0).abs() < 1e-2 && player.position.x > 5.0,
+            "Player should walk all the way up the stairs onto y=2.0 without jumping, got pos={:?}",
+            player.position
+        );
+    }
+
+    #[test]
+    fn test_fence_blocks_player_jump() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, 0)));
+
+        for z in 0..8 {
+            for x in 0..8 {
+                world.set_block(IVec3::new(x, 0, z), BlockId::STONE);
+            }
+        }
+        // Fence wall along x = 4 (hitbox extends from y=1.0 to y=2.5)
+        for z in 0..8 {
+            world.set_block(IVec3::new(4, 1, z), BlockId::OAK_FENCE);
+        }
+
+        let mut player = PlayerPhysics::new(Vec3::new(3.2, 1.0, 4.5));
+        player.on_ground = true;
+
+        for _ in 0..120 {
+            player.update(1.0 / 60.0, Vec3::X, true, false, &world, &registry);
+        }
+
+        assert!(
+            player.position.x + player.half_width <= 4.0 + 1e-3,
+            "Player should not be able to jump over a 1.5-tall oak fence, got pos={:?}",
             player.position
         );
     }

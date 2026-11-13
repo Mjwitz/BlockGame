@@ -1002,6 +1002,64 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
         let d = grain + shade;
         Rgba([clamp(166, d), clamp(128, d), clamp(78, d), 255])
     });
+
+    // 335: Oak Stairs item icon, 336: Cobblestone Stairs item icon, 337: Brick Stairs item icon
+    let stair_styles: [(u16, [i32; 3], [i32; 3]); 3] = [
+        (335, [172, 134, 82], [116, 86, 48]),   // Oak
+        (336, [132, 134, 138], [86, 88, 92]),   // Cobblestone
+        (337, [162, 74, 60], [116, 52, 42]),    // Brick
+    ];
+    for (tile_id, base, edge) in stair_styles {
+        atlas.paint_tile(tile_id, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            // L-shaped stair silhouette inside 4..28
+            let in_bottom = x >= 4 && x <= 27 && y >= 16 && y <= 27;
+            let in_top_back = x >= 4 && x <= 16 && y >= 4 && y < 16;
+            if !in_bottom && !in_top_back {
+                return Rgba([0, 0, 0, 0]);
+            }
+            let is_border = x == 4
+                || y == 27
+                || (in_top_back && (y == 4 || x == 16))
+                || (in_bottom && (x == 27 || (y == 16 && x >= 16)));
+            if is_border {
+                return Rgba([edge[0] as u8, edge[1] as u8, edge[2] as u8, 255]);
+            }
+            let n = (hash(px, py, tile_id as u32) % 19) - 9;
+            let step_line = if y == 16 || (tile_id == 337 && (y % 6 == 0 || (x + (y / 6) * 6) % 12 == 0)) {
+                -18
+            } else if y < 16 {
+                10
+            } else {
+                0
+            };
+            let d = n + step_line;
+            Rgba([
+                clamp(base[0], d),
+                clamp(base[1], d),
+                clamp(base[2], d),
+                255,
+            ])
+        });
+    }
+
+    // 338: Oak Fence item icon (two vertical posts + two horizontal rails)
+    atlas.paint_tile(338, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let in_left_post = x >= 6 && x <= 11 && y >= 4 && y <= 27;
+        let in_right_post = x >= 20 && x <= 25 && y >= 4 && y <= 27;
+        let in_top_rail = x >= 4 && x <= 27 && y >= 9 && y <= 13;
+        let in_bot_rail = x >= 4 && x <= 27 && y >= 19 && y <= 23;
+        if !in_left_post && !in_right_post && !in_top_rail && !in_bot_rail {
+            return Rgba([0, 0, 0, 0]);
+        }
+        let grain = (hash(px / 2, py, 338) % 15) - 7;
+        let shade = if in_left_post || in_right_post { 10 } else { -12 };
+        let d = grain + shade;
+        Rgba([clamp(170, d), clamp(132, d), clamp(80, d), 255])
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

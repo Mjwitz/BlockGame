@@ -344,13 +344,18 @@ impl AnimalEntity {
             let block_in_front = world.get_block(IVec3::new(check_x, check_y, check_z));
             let block_above_front = world.get_block(IVec3::new(check_x, check_y + 1, check_z));
 
-            // Jump if obstacle is 1 block high with air above
-            if registry.is_solid(block_in_front) && !registry.is_solid(block_above_front) {
+            // Jump if obstacle is 1 block high with air above (never jump over 1.5-tall fences)
+            if registry.is_solid(block_in_front)
+                && block_in_front != BlockId::OAK_FENCE
+                && !registry.is_solid(block_above_front)
+            {
                 self.velocity.y = 7.0;
                 self.on_ground = false;
                 self.stuck_timer = 0.0;
-            } else if registry.is_solid(block_in_front) && registry.is_solid(block_above_front) {
-                // High obstacle (wall/tree): turn away smoothly
+            } else if registry.is_solid(block_in_front)
+                && (block_in_front == BlockId::OAK_FENCE || registry.is_solid(block_above_front))
+            {
+                // High obstacle (wall/tree/fence): turn away smoothly
                 if self.flee_timer <= 0.0 {
                     self.yaw += PI * 0.5 + self.next_f32() * PI;
                     self.wander_timer = 1.5 + self.next_f32() * 2.5;
