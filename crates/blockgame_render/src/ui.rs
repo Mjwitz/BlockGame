@@ -275,6 +275,9 @@ pub struct SettingsUiState {
     pub music_volume: f32,
     pub invert_y: bool,
     pub fullscreen: bool,
+    pub vsync: bool,
+    pub view_bobbing: bool,
+    pub show_debug_hud: bool,
 }
 
 pub struct UiBuilder;
@@ -4588,9 +4591,9 @@ impl UiBuilder {
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        let start_y = screen_h * 0.22;
+        let start_y = screen_h * 0.16;
         let row_h = 34.0;
-        let gap_y = 24.0;
+        let gap_y = 14.0;
 
         let col = (index / 3) as f32;
         let row = (index % 3) as f32;
@@ -4602,14 +4605,23 @@ impl UiBuilder {
         ]
     }
 
-    /// Returns the toggle button rectangle `[x, y, w, h]` for toggle index `0..2`.
+    /// Returns the toggle button rectangle `[x, y, w, h]` for toggle index `0..5`.
     pub fn settings_toggle_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let col_w = 270.0;
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        let y = screen_h * 0.22 + 3.0 * (34.0 + 24.0) + 12.0;
-        [start_x + (index as f32) * (col_w + gap_x), y, col_w, 38.0]
+        let base_y = screen_h * 0.16 + 3.0 * (34.0 + 14.0) + 14.0;
+        let row_h = 36.0;
+        let gap_y = 12.0;
+        let col = (index % 2) as f32;
+        let row = (index / 2) as f32;
+        [
+            start_x + col * (col_w + gap_x),
+            base_y + row * (row_h + gap_y),
+            col_w,
+            row_h,
+        ]
     }
 
     /// Returns `[x, y, w, h]` for the `Reset to Defaults` button on the Settings screen.
@@ -4618,7 +4630,7 @@ impl UiBuilder {
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        [start_x, screen_h * 0.78, col_w, 42.0]
+        [start_x, screen_h * 0.80, col_w, 42.0]
     }
 
     /// Returns `[x, y, w, h]` for the `Done` button on the Settings screen.
@@ -4627,7 +4639,7 @@ impl UiBuilder {
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        [start_x + col_w + gap_x, screen_h * 0.78, col_w, 42.0]
+        [start_x + col_w + gap_x, screen_h * 0.80, col_w, 42.0]
     }
 
     /// Builds the interactive Settings screen with sliders, toggles, and action buttons.
@@ -4656,7 +4668,7 @@ impl UiBuilder {
         Self::draw_string(
             mesh,
             (screen_w - tw) * 0.5,
-            screen_h * 0.09,
+            screen_h * 0.07,
             title,
             15.0,
             20.0,
@@ -4696,7 +4708,6 @@ impl UiBuilder {
             let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3])
                 || active_slider == Some(idx);
 
-            // Outer track box
             let border = if hovered {
                 [0.88, 0.78, 0.42, 0.95]
             } else {
@@ -4712,7 +4723,6 @@ impl UiBuilder {
                 [0.10, 0.12, 0.16, 0.96],
             );
 
-            // Filled bar
             let fill_w = ((r[2] - 4.0) * *norm).max(0.0);
             if fill_w > 0.0 {
                 mesh.add_quad(
@@ -4729,7 +4739,6 @@ impl UiBuilder {
                 );
             }
 
-            // Slider thumb
             let thumb_w = 8.0;
             let thumb_x = (r[0] + 2.0 + (r[2] - 4.0 - thumb_w) * *norm)
                 .clamp(r[0] + 2.0, r[0] + r[2] - 2.0 - thumb_w);
@@ -4759,16 +4768,27 @@ impl UiBuilder {
             );
         }
 
-        let invert_label = format!(
-            "Invert Y-Axis: {}",
-            if settings.invert_y { "ON" } else { "OFF" }
-        );
-        let fullscreen_label = format!(
-            "Fullscreen: {}",
-            if settings.fullscreen { "ON" } else { "OFF" }
-        );
+        let toggles = [
+            format!(
+                "Invert Y-Axis: {}",
+                if settings.invert_y { "ON" } else { "OFF" }
+            ),
+            format!(
+                "Fullscreen: {}",
+                if settings.fullscreen { "ON" } else { "OFF" }
+            ),
+            format!("VSync: {}", if settings.vsync { "ON" } else { "OFF" }),
+            format!(
+                "View Bobbing: {}",
+                if settings.view_bobbing { "ON" } else { "OFF" }
+            ),
+            format!(
+                "Debug HUD (F3): {}",
+                if settings.show_debug_hud { "ON" } else { "OFF" }
+            ),
+        ];
 
-        for (idx, label) in [invert_label, fullscreen_label].iter().enumerate() {
+        for (idx, label) in toggles.iter().enumerate() {
             let r = Self::settings_toggle_rect(screen_w, screen_h, idx);
             Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
         }
@@ -4796,6 +4816,57 @@ impl UiBuilder {
             cursor_pos,
             true,
         );
+    }
+
+    /// Draws the top-left F3 debug telemetry overlay (FPS, XYZ, chunk, facing, time).
+    pub fn draw_debug_overlay(
+        mesh: &mut UiMesh,
+        fps: u32,
+        pos: [f32; 3],
+        chunk: [i32; 3],
+        facing: &str,
+        time_ticks: f32,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let lines = [
+            format!("BlockGame  |  FPS: {}", fps),
+            format!("XYZ: {:.1} / {:.1} / {:.1}", pos[0], pos[1], pos[2]),
+            format!(
+                "Chunk: ({}, {}, {})  |  Facing: {}",
+                chunk[0], chunk[1], chunk[2], facing
+            ),
+            format!("Time: {:.0} ticks", time_ticks),
+        ];
+        let mut max_w = 0.0_f32;
+        for line in &lines {
+            max_w = max_w.max(Self::string_width(line, 8.5, 1.0));
+        }
+        let box_x = 10.0;
+        let box_y = 10.0;
+        let box_w = max_w + 16.0;
+        let box_h = lines.len() as f32 * 16.0 + 12.0;
+
+        mesh.add_quad(
+            box_x,
+            box_y,
+            box_w,
+            box_h,
+            white_uv,
+            [0.04, 0.05, 0.08, 0.65],
+        );
+
+        for (i, line) in lines.iter().enumerate() {
+            Self::draw_string(
+                mesh,
+                box_x + 8.0,
+                box_y + 7.0 + i as f32 * 16.0,
+                line,
+                8.5,
+                12.0,
+                1.0,
+                [0.92, 0.95, 1.0, 0.96],
+            );
+        }
     }
 
     /// Returns layout rectangles for the Multiplayer Lobby screen:

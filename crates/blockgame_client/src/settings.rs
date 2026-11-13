@@ -19,6 +19,12 @@ pub struct GameSettings {
     pub invert_y: bool,
     /// Borderless fullscreen window mode.
     pub fullscreen: bool,
+    /// Vertical synchronization (VSync).
+    pub vsync: bool,
+    /// First-person held item / hand view bobbing while walking.
+    pub view_bobbing: bool,
+    /// Show top-left FPS and coordinate debug HUD overlay (also toggled via F3).
+    pub show_debug_hud: bool,
 }
 
 impl Default for GameSettings {
@@ -32,6 +38,9 @@ impl Default for GameSettings {
             music_volume: 0.65,
             invert_y: false,
             fullscreen: false,
+            vsync: true,
+            view_bobbing: true,
+            show_debug_hud: false,
         }
     }
 }
@@ -126,6 +135,21 @@ impl GameSettings {
                         settings.fullscreen = v;
                     }
                 }
+                "vsync" => {
+                    if let Ok(v) = val.parse::<bool>() {
+                        settings.vsync = v;
+                    }
+                }
+                "view_bobbing" => {
+                    if let Ok(v) = val.parse::<bool>() {
+                        settings.view_bobbing = v;
+                    }
+                }
+                "show_debug_hud" => {
+                    if let Ok(v) = val.parse::<bool>() {
+                        settings.show_debug_hud = v;
+                    }
+                }
                 _ => {}
             }
         }
@@ -145,7 +169,10 @@ impl GameSettings {
              sfx_volume={:.2}\n\
              music_volume={:.2}\n\
              invert_y={}\n\
-             fullscreen={}\n",
+             fullscreen={}\n\
+             vsync={}\n\
+             view_bobbing={}\n\
+             show_debug_hud={}\n",
             self.render_distance,
             self.fov_degrees,
             self.mouse_sensitivity,
@@ -153,7 +180,10 @@ impl GameSettings {
             self.sfx_volume,
             self.music_volume,
             self.invert_y,
-            self.fullscreen
+            self.fullscreen,
+            self.vsync,
+            self.view_bobbing,
+            self.show_debug_hud
         );
         if let Err(e) = std::fs::write(path, content) {
             log::warn!("Failed to save settings to {:?}: {}", path, e);
@@ -176,6 +206,9 @@ mod tests {
             music_volume: 0.45,
             invert_y: true,
             fullscreen: true,
+            vsync: false,
+            view_bobbing: false,
+            show_debug_hud: true,
         };
         s.clamp_all();
         assert_eq!(s.render_distance, GameSettings::MAX_RENDER_DISTANCE);
@@ -197,5 +230,8 @@ mod tests {
         assert!((loaded.music_volume - s.music_volume).abs() < 0.02);
         assert_eq!(loaded.invert_y, s.invert_y);
         assert_eq!(loaded.fullscreen, s.fullscreen);
+        assert_eq!(loaded.vsync, s.vsync);
+        assert_eq!(loaded.view_bobbing, s.view_bobbing);
+        assert_eq!(loaded.show_debug_hud, s.show_debug_hud);
     }
 }

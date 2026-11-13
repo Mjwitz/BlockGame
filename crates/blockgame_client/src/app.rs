@@ -74,6 +74,7 @@ pub struct AppState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface_config: wgpu::SurfaceConfiguration,
+    supported_present_modes: Vec<wgpu::PresentMode>,
     depth_view: wgpu::TextureView,
     pipeline: VoxelPipeline,
     wireframe_pipeline: WireframePipeline,
@@ -138,6 +139,9 @@ pub struct AppState {
     pub next_mp_drop_nonce: u32,
     pub local_chat_messages: Vec<blockgame_core::net::ChatEntry>,
     pub total_time: f32,
+    pub fps_display: u32,
+    pub fps_frame_count: u32,
+    pub fps_timer: Instant,
     pub walk_distance: f32,
     pub punch_timer: f32,
     pub last_footstep_dist: f32,
@@ -167,7 +171,7 @@ impl AppState {
         self.saved_worlds = list_saved_worlds(&self.saves_root);
     }
 
-    /// Applies `self.settings` live to camera FOV, render distance, audio volumes, and fullscreen mode.
+    /// Applies `self.settings` live to camera FOV, render distance, audio volumes, VSync, and fullscreen mode.
     pub fn apply_settings(&mut self) {
         self.settings.clamp_all();
         self.render_distance = self.settings.render_distance;
@@ -187,6 +191,44 @@ impl AppState {
         if self.window.fullscreen() != desired_fs {
             self.window.set_fullscreen(desired_fs);
         }
+
+        let desired_present = if self.settings.vsync {
+            if self
+                .supported_present_modes
+                .contains(&wgpu::PresentMode::AutoVsync)
+            {
+                wgpu::PresentMode::AutoVsync
+            } else if self
+                .supported_present_modes
+                .contains(&wgpu::PresentMode::Fifo)
+            {
+                wgpu::PresentMode::Fifo
+            } else {
+                self.surface_config.present_mode
+            }
+        } else if self
+            .supported_present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else if self
+            .supported_present_modes
+            .contains(&wgpu::PresentMode::AutoNoVsync)
+        {
+            wgpu::PresentMode::AutoNoVsync
+        } else if self
+            .supported_present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+        {
+            wgpu::PresentMode::Immediate
+        } else {
+            self.surface_config.present_mode
+        };
+
+        if self.surface_config.present_mode != desired_present {
+            self.surface_config.present_mode = desired_present;
+            self.surface.configure(&self.device, &self.surface_config);
+        }
     }
 
     /// Builds a `SettingsUiState` snapshot for `UiBuilder::build_settings_screen`.
@@ -200,6 +242,9 @@ impl AppState {
             music_volume: self.settings.music_volume,
             invert_y: self.settings.invert_y,
             fullscreen: self.settings.fullscreen,
+            vsync: self.settings.vsync,
+            view_bobbing: self.settings.view_bobbing,
+            show_debug_hud: self.settings.show_debug_hud,
         }
     }
 
@@ -864,6 +909,7 @@ impl ApplicationHandler for BlockGameApp {
             device,
             queue,
             surface_config,
+            supported_present_modes: surface_caps.present_modes,
             depth_view,
             pipeline,
             wireframe_pipeline,
@@ -933,6 +979,9 @@ impl ApplicationHandler for BlockGameApp {
             next_mp_drop_nonce: 1,
             local_chat_messages: Vec::new(),
             total_time: 0.0,
+            fps_display: 0,
+            fps_frame_count: 0,
+            fps_timer: Instant::now(),
             walk_distance: 0.0,
             punch_timer: 0.0,
             last_footstep_dist: 0.0,
@@ -954,6 +1003,9 @@ impl ApplicationHandler for BlockGameApp {
             mouse_captured: false,
             last_frame_time: Instant::now(),
         });
+        if let Some(s) = self.state.as_mut() {
+            s.apply_settings();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1333,17 +1385,19 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 if !handled {
-                                    for idx in 0..2 {
+                                    for idx in 0..5 {
                                         let r = UiBuilder::settings_toggle_rect(
                                             screen_w, screen_h, idx,
                                         );
                                         if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
                                         {
-                                            if idx == 0 {
-                                                state.settings.invert_y = !state.settings.invert_y;
-                                            } else {
-                                                state.settings.fullscreen =
-                                                    !state.settings.fullscreen;
+                                            match idx {
+                                                0 => state.settings.invert_y = !state.settings.invert_y,
+                                                1 => state.settings.fullscreen = !state.settings.fullscreen,
+                                                2 => state.settings.vsync = !state.settings.vsync,
+                                                3 => state.settings.view_bobbing = !state.settings.view_bobbing,
+                                                4 => state.settings.show_debug_hud = !state.settings.show_debug_hud,
+                                                _ => {}
                                             }
                                             state.apply_settings();
                                             state.settings.save(std::path::Path::new("settings.cfg"));
@@ -2595,6 +2649,10 @@ impl ApplicationHandler for BlockGameApp {
                     KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
                     KeyCode::Tab if !state.inventory_open => {
                         state.tab_held = pressed;
+                    }
+                    KeyCode::F3 if pressed && !state.inventory_open => {
+                        state.settings.show_debug_hud = !state.settings.show_debug_hud;
+                        state.settings.save(std::path::Path::new("settings.cfg"));
                     }
                     KeyCode::F5 if pressed && !state.inventory_open => {
                         state.third_person = !state.third_person;
@@ -3905,6 +3963,19 @@ impl ApplicationHandler for BlockGameApp {
                             );
                         }
                     } else {
+                        state.fps_frame_count += 1;
+                        let elapsed = state.fps_timer.elapsed().as_secs_f32();
+                        if elapsed >= 0.5 {
+                            state.fps_display = (state.fps_frame_count as f32 / elapsed).round() as u32;
+                            state.fps_frame_count = 0;
+                            state.fps_timer = Instant::now();
+                        }
+
+                        let bob_dist = if state.settings.view_bobbing {
+                            state.walk_distance
+                        } else {
+                            0.0
+                        };
                         UiBuilder::build_hud_with_armor(
                             &mut state.ui_mesh,
                             screen_w,
@@ -3912,11 +3983,46 @@ impl ApplicationHandler for BlockGameApp {
                             &state.inventory,
                             state.active_hotbar_slot,
                             &state.item_registry,
-                            state.walk_distance,
+                            bob_dist,
                             punch_time,
                             &state.player_stats,
                             state.armor.total_defense(&state.item_registry),
                         );
+
+                        if state.settings.show_debug_hud {
+                            let pos = state.player.position;
+                            let (cpos, _, _, _) =
+                                blockgame_core::world::world_to_chunk_coords(pos.floor().as_ivec3());
+                            let yaw = state.camera.yaw.rem_euclid(std::f32::consts::TAU);
+                            let facing = if !(std::f32::consts::FRAC_PI_4
+                                ..3.0 * std::f32::consts::FRAC_PI_4)
+                                .contains(&yaw)
+                            {
+                                if (3.0 * std::f32::consts::FRAC_PI_4
+                                    ..5.0 * std::f32::consts::FRAC_PI_4)
+                                    .contains(&yaw)
+                                {
+                                    "West (-X)"
+                                } else if (5.0 * std::f32::consts::FRAC_PI_4
+                                    ..7.0 * std::f32::consts::FRAC_PI_4)
+                                    .contains(&yaw)
+                                {
+                                    "North (-Z)"
+                                } else {
+                                    "East (+X)"
+                                }
+                            } else {
+                                "South (+Z)"
+                            };
+                            UiBuilder::draw_debug_overlay(
+                                &mut state.ui_mesh,
+                                state.fps_display,
+                                [pos.x, pos.y, pos.z],
+                                [cpos.0.x, cpos.0.y, cpos.0.z],
+                                facing,
+                                state.day_night.time,
+                            );
+                        }
 
                         // Draw floating 3D-to-2D username nametags for remote players (and local player in F5 third-person)
                         let mut nametag_models = Vec::new();
