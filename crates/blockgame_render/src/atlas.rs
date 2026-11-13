@@ -1060,6 +1060,50 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
         let d = grain + shade;
         Rgba([clamp(170, d), clamp(132, d), clamp(80, d), 255])
     });
+
+    // 339: Sheep fluffy wool coat
+    atlas.paint_tile(339, |px, py| {
+        let puff = (hash(px / 3, py / 3, 339) % 18) - 9;
+        let fine = (hash(px, py, 3391) % 9) - 4;
+        let d = puff + fine;
+        Rgba([clamp(242, d), clamp(240, d), clamp(234, d), 255])
+    });
+
+    // 340: Sheep face (white wool fringe at top, pale skin face, dark eyes, pink nose)
+    atlas.paint_tile(340, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if y <= 7 || (y <= 10 && (x <= 5 || x >= 26)) {
+            let puff = (hash(px / 2, py / 2, 340) % 14) - 7;
+            return Rgba([clamp(242, puff), clamp(240, puff), clamp(234, puff), 255]);
+        }
+        // Left eye: sclera + dark pupil
+        if y >= 13 && y <= 16 {
+            if (x >= 4 && x <= 7) || (x >= 24 && x <= 27) {
+                return Rgba([250, 250, 250, 255]);
+            }
+            if (x >= 8 && x <= 10) || (x >= 21 && x <= 23) {
+                return Rgba([34, 34, 40, 255]);
+            }
+        }
+        // Pink nose / snout
+        if y >= 22 && y <= 26 && x >= 11 && x <= 20 {
+            let n = (hash(px, py, 3402) % 9) - 4;
+            return Rgba([clamp(232, n), clamp(166, n), clamp(172, n), 255]);
+        }
+        let skin = (hash(px / 2, py / 2, 3401) % 9) - 4;
+        Rgba([clamp(226, skin), clamp(196, skin), clamp(174, skin), 255])
+    });
+
+    // 341: Sheep legs (pale skin with darker hooves at bottom)
+    atlas.paint_tile(341, |px, py| {
+        let n = (hash(px, py, 341) % 9) - 4;
+        if py >= 25 {
+            Rgba([clamp(92, n), clamp(82, n), clamp(76, n), 255])
+        } else {
+            Rgba([clamp(218, n), clamp(188, n), clamp(166, n), 255])
+        }
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

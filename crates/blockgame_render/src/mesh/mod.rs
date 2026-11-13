@@ -2159,6 +2159,95 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
                     sin_y,
                 );
             }
+            AnimalKind::Sheep => {
+                let uvs_wool = get_animal_uvs(339);
+                let uvs_face = get_animal_uvs(340);
+                let uvs_legs = get_animal_uvs(341);
+
+                // Fluffy wool body
+                add_animal_box(
+                    &mut mesh,
+                    [-0.36, 0.42, -0.52],
+                    [0.36, 1.08, 0.52],
+                    &uvs_wool,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Head (wool top/sides/back, pale face with eyes on front)
+                add_animal_box(
+                    &mut mesh,
+                    [-0.22, 0.82, 0.52],
+                    [0.22, 1.25, 0.96],
+                    &uvs_wool,
+                    Some(&uvs_face),
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // 4 Legs
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.30, 0.0, 0.28],
+                    [-0.14, 0.42, 0.44],
+                    0.42,
+                    0.36,
+                    leg_swing,
+                    &uvs_legs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.14, 0.0, 0.28],
+                    [0.30, 0.42, 0.44],
+                    0.42,
+                    0.36,
+                    -leg_swing,
+                    &uvs_legs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.30, 0.0, -0.44],
+                    [-0.14, 0.42, -0.28],
+                    0.42,
+                    -0.36,
+                    -leg_swing,
+                    &uvs_legs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.14, 0.0, -0.44],
+                    [0.30, 0.42, -0.28],
+                    0.42,
+                    -0.36,
+                    leg_swing,
+                    &uvs_legs,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+            }
         }
     }
 

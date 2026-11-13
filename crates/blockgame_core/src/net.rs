@@ -138,6 +138,15 @@ pub enum ClientPacket {
     PickupItemDrop {
         drop_id: u64,
     },
+    SetSleeping {
+        sleeping: bool,
+    },
+}
+
+/// Returns `true` when `ticks` (0..24000) is nighttime (sun below the horizon).
+pub fn is_night_ticks(ticks: f32) -> bool {
+    let angle = (ticks.rem_euclid(24000.0) / 24000.0) * std::f32::consts::TAU;
+    angle.sin() < 0.0
 }
 
 /// Packets sent from the `MultiplayerServer` to connected `MultiplayerClient`s.
@@ -333,6 +342,10 @@ impl ClientPacket {
                 write_u8(&mut payload, 11)?;
                 write_u64(&mut payload, *drop_id)?;
             }
+            Self::SetSleeping { sleeping } => {
+                write_u8(&mut payload, 12)?;
+                write_bool(&mut payload, *sleeping)?;
+            }
         }
         wrap_frame(&payload)
     }
@@ -453,6 +466,10 @@ impl ClientPacket {
             11 => {
                 let drop_id = read_u64(&mut r)?;
                 Ok(Self::PickupItemDrop { drop_id })
+            }
+            12 => {
+                let sleeping = read_bool(&mut r)?;
+                Ok(Self::SetSleeping { sleeping })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -932,6 +949,7 @@ struct ConnectedClient {
     session_token: [u8; 16],
     model: PlayerModelState,
     saved_state: SavedPlayerState,
+    is_sleeping: bool,
 }
 
 /// Authoritative Multiplayer Server managing authentication, persistent user accounts,
@@ -1199,6 +1217,11 @@ fn run_server_loop(
     let mut clients: Vec<ConnectedClient> = Vec::new();
     let mut next_player_id: u32 = 1;
     let mut last_tick = Instant::now();
+    if save_data.metadata.day_night_time <= 1.0 {
+        save_data.metadata.day_night_time =
+            (save_data.metadata.day_night_time * 24000.0).rem_euclid(24000.0);
+    }
+
     let mut last_autosave = Instant::now();
     let tick_interval = Duration::from_millis(50); // 20 TPS
 
@@ -1219,6 +1242,7 @@ fn run_server_loop(
                 session_token: [0u8; 16],
                 model: PlayerModelState::new(pid, "", default_spawn, 0),
                 saved_state: SavedPlayerState::default(),
+                is_sleeping: false,
             });
         }
 
@@ -1717,6 +1741,42 @@ fn run_server_loop(
                             }
                         }
                     }
+                    ClientPacket::SetSleeping { sleeping } if clients[idx].authenticated => {
+                        if sleeping && !is_night_ticks(save_data.metadata.day_night_time) {
+                            clients[idx].is_sleeping = false;
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ChatBroadcast {
+                                    sender: "Server".to_string(),
+                                    message: "You can only sleep at night.".to_string(),
+                                    is_system: true,
+                                },
+                            ));
+                        } else {
+                            let prev = clients[idx].is_sleeping;
+                            clients[idx].is_sleeping = sleeping;
+                            if sleeping && !prev {
+                                let total = clients.iter().filter(|c| c.authenticated).count();
+                                let sleeping_count = clients
+                                    .iter()
+                                    .filter(|c| c.authenticated && c.is_sleeping)
+                                    .count();
+                                if total > 1 && sleeping_count * 2 < total {
+                                    outgoing_broadcasts.push((
+                                        None,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            message: format!(
+                                                "{} is sleeping ({}/{} players, need at least 50% to skip night).",
+                                                clients[idx].username, sleeping_count, total
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     ClientPacket::Ping { timestamp_ms } => {
                         direct_sends.push((pid, ServerPacket::Pong { timestamp_ms }));
                     }
@@ -1726,6 +1786,29 @@ fn run_server_loop(
                     }
                     _ => {}
                 }
+            }
+        }
+
+        // Check if enough players (>= 50%) are sleeping to advance night to daytime
+        if is_night_ticks(save_data.metadata.day_night_time) {
+            let total = clients.iter().filter(|c| c.authenticated).count();
+            let sleeping_count = clients
+                .iter()
+                .filter(|c| c.authenticated && c.is_sleeping)
+                .count();
+            if total > 0 && sleeping_count > 0 && sleeping_count * 2 >= total {
+                save_data.metadata.day_night_time = 1000.0;
+                for c in clients.iter_mut() {
+                    c.is_sleeping = false;
+                }
+                outgoing_broadcasts.push((
+                    None,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        message: "Good morning! Night skipped as players slept.".to_string(),
+                        is_system: true,
+                    },
+                ));
             }
         }
 
@@ -1770,6 +1853,29 @@ fn run_server_loop(
             }
         }
 
+        // Re-check 50% sleep threshold in case a non-sleeping player disconnected
+        if !disconnected_indices.is_empty() && is_night_ticks(save_data.metadata.day_night_time) {
+            let total = clients.iter().filter(|c| c.authenticated).count();
+            let sleeping_count = clients
+                .iter()
+                .filter(|c| c.authenticated && c.is_sleeping)
+                .count();
+            if total > 0 && sleeping_count > 0 && sleeping_count * 2 >= total {
+                save_data.metadata.day_night_time = 1000.0;
+                for c in clients.iter_mut() {
+                    c.is_sleeping = false;
+                }
+                outgoing_broadcasts.push((
+                    None,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        message: "Good morning! Night skipped as players slept.".to_string(),
+                        is_system: true,
+                    },
+                ));
+            }
+        }
+
         // Send broadcast packets
         for (exclude_pid, pkt) in outgoing_broadcasts {
             if let Ok(bytes) = pkt.encode() {
@@ -1788,10 +1894,15 @@ fn run_server_loop(
             let dt = now.duration_since(last_tick).as_secs_f32().min(0.2);
             last_tick = now;
 
-            // Advance server day/night time (600s full cycle)
+            // Advance server day/night time (20 ticks/sec, 24000 ticks full cycle)
             save_data.metadata.total_time += dt;
             save_data.metadata.day_night_time =
-                (save_data.metadata.day_night_time + dt / 600.0).fract();
+                (save_data.metadata.day_night_time + 20.0 * dt).rem_euclid(24000.0);
+            if !is_night_ticks(save_data.metadata.day_night_time) {
+                for c in clients.iter_mut() {
+                    c.is_sleeping = false;
+                }
+            }
 
             for c in clients.iter_mut() {
                 if c.model.hurt_timer > 0.0 {
@@ -2633,6 +2744,60 @@ mod tests {
         assert!(world_dir.join("permissions.txt").exists(), "permissions.txt must be saved");
         assert!(world_dir.join("bans.txt").exists(), "bans.txt must be saved");
 
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_sleep_50_percent_threshold() {
+        let temp_root = std::env::temp_dir().join("blockgame_net_sleep_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).unwrap();
+
+        let mut meta = WorldMetadata::new("Sleep World", 4242);
+        meta.folder_name = "sleep_world".to_string();
+        meta.day_night_time = 18000.0; // Midnight (nighttime)
+        let save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+
+        let mut server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "sleep_world".to_string(),
+            "Sleep World".to_string(),
+            4242,
+            Some(save_data),
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server");
+
+        let addr_str = server.local_addr().to_string();
+        let (mut p1, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepA", "pw1", 0).unwrap();
+        let (mut p2, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepB", "pw2", 1).unwrap();
+        let (mut p3, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepC", "pw3", 0).unwrap();
+
+        // 1 of 3 sleeping (< 50%): should remain nighttime
+        p1.send(&ClientPacket::SetSleeping { sleeping: true });
+        thread::sleep(Duration::from_millis(120));
+        let pkts = p1.poll_packets();
+        let latest_time = pkts.iter().rev().find_map(|p| match p {
+            ServerPacket::WorldSnapshot { day_night_time, .. } => Some(*day_night_time),
+            _ => None,
+        }).expect("Expected WorldSnapshot");
+        assert!(is_night_ticks(latest_time), "1/3 sleeping must not skip night, got {}", latest_time);
+
+        // 2 of 3 sleeping (>= 50%): should advance to daytime (~1000.0)
+        p2.send(&ClientPacket::SetSleeping { sleeping: true });
+        thread::sleep(Duration::from_millis(120));
+        let pkts2 = p3.poll_packets();
+        let morning_time = pkts2.iter().rev().find_map(|p| match p {
+            ServerPacket::WorldSnapshot { day_night_time, .. } => Some(*day_night_time),
+            _ => None,
+        }).expect("Expected WorldSnapshot");
+        assert!(!is_night_ticks(morning_time), "2/3 sleeping (>=50%) must advance to daytime, got {}", morning_time);
+
+        p1.disconnect();
+        p2.disconnect();
+        p3.disconnect();
+        server.shutdown();
         let _ = std::fs::remove_dir_all(&temp_root);
     }
 }

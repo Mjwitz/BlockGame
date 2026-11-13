@@ -677,6 +677,7 @@ pub fn save_entities_file(
             AnimalKind::Cow => 0,
             AnimalKind::Pig => 1,
             AnimalKind::Chicken => 2,
+            AnimalKind::Sheep => 3,
         };
         write_u32(&mut w, animal.id)?;
         write_u8(&mut w, kind_u8)?;
@@ -763,6 +764,8 @@ pub fn load_entities_file(
         let kind = match kind_u8 {
             0 => AnimalKind::Cow,
             1 => AnimalKind::Pig,
+            2 => AnimalKind::Chicken,
+            3 => AnimalKind::Sheep,
             _ => AnimalKind::Chicken,
         };
         let position = read_vec3(&mut r)?;
@@ -1206,6 +1209,8 @@ fn load_legacy_world_bin(
         let kind = match kind_u8 {
             0 => AnimalKind::Cow,
             1 => AnimalKind::Pig,
+            2 => AnimalKind::Chicken,
+            3 => AnimalKind::Sheep,
             _ => AnimalKind::Chicken,
         };
         let position = read_vec3(&mut r)?;

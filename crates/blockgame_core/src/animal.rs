@@ -13,6 +13,7 @@ pub enum AnimalKind {
     Cow,
     Pig,
     Chicken,
+    Sheep,
 }
 
 impl AnimalKind {
@@ -21,6 +22,7 @@ impl AnimalKind {
             Self::Cow => "Cow",
             Self::Pig => "Pig",
             Self::Chicken => "Chicken",
+            Self::Sheep => "Sheep",
         }
     }
 
@@ -30,6 +32,7 @@ impl AnimalKind {
             Self::Cow => (0.45, 1.4),
             Self::Pig => (0.45, 0.9),
             Self::Chicken => (0.25, 0.7),
+            Self::Sheep => (0.45, 1.3),
         }
     }
 
@@ -38,6 +41,7 @@ impl AnimalKind {
             Self::Cow => 10.0,
             Self::Pig => 10.0,
             Self::Chicken => 4.0,
+            Self::Sheep => 8.0,
         }
     }
 
@@ -46,6 +50,7 @@ impl AnimalKind {
             Self::Cow => 1.2,
             Self::Pig => 1.3,
             Self::Chicken => 1.4,
+            Self::Sheep => 1.25,
         }
     }
 
@@ -54,6 +59,7 @@ impl AnimalKind {
             Self::Cow => 3.2,
             Self::Pig => 3.5,
             Self::Chicken => 3.0,
+            Self::Sheep => 3.3,
         }
     }
 }
@@ -179,6 +185,9 @@ impl AnimalEntity {
                 if roll2 > 0 {
                     drops.push(ItemSlot::new(ItemId::FEATHER, roll2 + 1));
                 }
+            }
+            AnimalKind::Sheep => {
+                drops.push(ItemSlot::new(ItemId::WHITE_WOOL, 1 + roll2));
             }
         }
 
@@ -507,5 +516,14 @@ mod tests {
             cow.update(0.1, &world, &registry);
         }
         assert!(cow.health < 10.0, "Submerged animal should take drowning damage");
+    }
+
+    #[test]
+    fn test_sheep_drops_white_wool() {
+        let sheep = AnimalEntity::new(42, AnimalKind::Sheep, Vec3::ZERO);
+        let drops = sheep.generate_drops();
+        assert!(!drops.is_empty(), "Sheep must drop wool");
+        assert_eq!(drops[0].item_id, ItemId::WHITE_WOOL);
+        assert!(drops[0].count >= 1 && drops[0].count <= 2);
     }
 }

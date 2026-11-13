@@ -82,6 +82,7 @@ pub struct AppState {
     pub player_stats: PlayerStats,
     pub death_handled: bool,
     pub respawn_point: Option<Vec3>,
+    pub is_sleeping: bool,
     camera: Camera,
     camera_uniform: CameraUniform,
     pub day_night: DayNightCycle,
@@ -783,6 +784,7 @@ impl ApplicationHandler for BlockGameApp {
             player_stats: PlayerStats::new(),
             death_handled: false,
             respawn_point: None,
+            is_sleeping: false,
             camera,
             camera_uniform,
             day_night,
@@ -1704,10 +1706,60 @@ impl ApplicationHandler for BlockGameApp {
                                     hit.hit_voxel.y as f32 + 0.65,
                                     hit.hit_voxel.z as f32 + 0.5,
                                 ));
-                                if state.day_night.sun_height() < 0.0 {
+                                let is_night = state.day_night.sun_height() < 0.0;
+                                if let Some(client) = &mut state.mp_client {
+                                    if is_night {
+                                        state.is_sleeping = !state.is_sleeping;
+                                        client.send(&blockgame_core::net::ClientPacket::SetSleeping {
+                                            sleeping: state.is_sleeping,
+                                        });
+                                        let msg = if state.is_sleeping {
+                                            "You are sleeping in bed. Move to wake up."
+                                        } else {
+                                            "You left the bed."
+                                        };
+                                        state.local_chat_messages.push(
+                                            blockgame_core::net::ChatEntry {
+                                                sender: "System".to_string(),
+                                                message: msg.to_string(),
+                                                is_system: true,
+                                                age: 0.0,
+                                            },
+                                        );
+                                    } else {
+                                        state.local_chat_messages.push(
+                                            blockgame_core::net::ChatEntry {
+                                                sender: "System".to_string(),
+                                                message: "You can only sleep at night. Respawn point set.".to_string(),
+                                                is_system: true,
+                                                age: 0.0,
+                                            },
+                                        );
+                                    }
+                                } else if is_night {
                                     state.day_night.set_time(1000.0);
                                     state.player_stats.health = (state.player_stats.health + 4.0)
                                         .min(state.player_stats.max_health);
+                                    state.local_chat_messages.push(
+                                        blockgame_core::net::ChatEntry {
+                                            sender: "System".to_string(),
+                                            message: "You slept through the night. Good morning!".to_string(),
+                                            is_system: true,
+                                            age: 0.0,
+                                        },
+                                    );
+                                } else {
+                                    state.local_chat_messages.push(
+                                        blockgame_core::net::ChatEntry {
+                                            sender: "System".to_string(),
+                                            message: "You can only sleep at night. Respawn point set.".to_string(),
+                                            is_system: true,
+                                            age: 0.0,
+                                        },
+                                    );
+                                }
+                                if state.local_chat_messages.len() > 25 {
+                                    state.local_chat_messages.remove(0);
                                 }
                                 state.punch_timer = 0.15;
                                 return;
@@ -2676,6 +2728,9 @@ impl ApplicationHandler for BlockGameApp {
                                     players,
                                 } => {
                                     state.day_night.time = day_night_time;
+                                    if !blockgame_core::net::is_night_ticks(day_night_time) {
+                                        state.is_sleeping = false;
+                                    }
                                     let local_id = client.player_id;
                                     client.remote_players.clear();
                                     for p in players {
@@ -2808,6 +2863,14 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         if wish_dir.length_squared() > 0.0 {
                             wish_dir = wish_dir.normalize();
+                            if state.is_sleeping {
+                                state.is_sleeping = false;
+                                if let Some(client) = &mut state.mp_client {
+                                    client.send(&blockgame_core::net::ClientPacket::SetSleeping {
+                                        sleeping: false,
+                                    });
+                                }
+                            }
                         }
 
                         // If flying, vertical movement with Space / Shift
