@@ -975,6 +975,33 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
         }
         Rgba([186, 44, 38, 255]) // Red blanket
     });
+
+    // 333: Oak Door Top (frame + 4 recessed transparent window panes)
+    atlas.paint_tile(333, |px, py| {
+        let is_frame = px < 5 || px >= 27 || py < 4 || py >= 28;
+        let in_window = !is_frame;
+        let is_lattice = in_window && ((px >= 15 && px <= 16) || (py >= 15 && py <= 16));
+        if in_window && !is_lattice {
+            return Rgba([0, 0, 0, 0]);
+        }
+        let grain = (hash(px / 2, py, 333) % 15) - 7;
+        let shade = if is_frame { -8 } else { 8 };
+        let d = grain + shade;
+        Rgba([clamp(166, d), clamp(128, d), clamp(78, d), 255])
+    });
+
+    // 334: Oak Door Bottom (solid oak wood panel with recessed panels & iron doorknob)
+    atlas.paint_tile(334, |px, py| {
+        let is_knob = px >= 23 && px <= 26 && py >= 2 && py <= 5;
+        if is_knob {
+            return Rgba([70, 74, 80, 255]);
+        }
+        let is_frame = px < 5 || px >= 27 || py < 3 || py >= 29 || (py >= 14 && py <= 17);
+        let grain = (hash(px / 2, py, 334) % 15) - 7;
+        let shade = if is_frame { 8 } else { -12 };
+        let d = grain + shade;
+        Rgba([clamp(166, d), clamp(128, d), clamp(78, d), 255])
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

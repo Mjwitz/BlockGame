@@ -144,14 +144,15 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::OAK_DOOR_CLOSED || block_id == BlockId::OAK_DOOR_OPEN {
+                    if block_id.is_door() {
                         self.build_door(
                             &mut mesh,
                             chunk.pos,
                             ix,
                             iy,
                             iz,
-                            block_id == BlockId::OAK_DOOR_OPEN,
+                            block_id.is_door_open(),
+                            block_id.is_door_top(),
                             &light_map,
                         );
                         continue;
@@ -992,6 +993,7 @@ impl<'a> ChunkMesher<'a> {
         y: i32,
         z: i32,
         is_open: bool,
+        is_top: bool,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
         let origin = chunk_pos.to_world_origin();
@@ -999,7 +1001,7 @@ impl<'a> ChunkMesher<'a> {
         let fy = (origin.y + y) as f32;
         let fz = (origin.z + z) as f32;
 
-        let tile = 316;
+        let tile = if is_top { 333 } else { 334 };
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
@@ -2778,12 +2780,14 @@ mod tests {
         fence_chunk.set(5, 4, 4, BlockId::OAK_FENCE);
         assert_eq!(mesher.mesh_chunk(&fence_chunk).vertices.len(), 2 * (24 + 48));
 
-        // Door (closed & open): 1 box = 24 vertices
+        // Door (bottom & top, closed & open): 1 box = 24 vertices each
         let mut door_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         door_chunk.set(4, 4, 4, BlockId::OAK_DOOR_CLOSED);
-        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 24);
+        door_chunk.set(4, 5, 4, BlockId::OAK_DOOR_TOP_CLOSED);
+        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 48);
         door_chunk.set(4, 4, 4, BlockId::OAK_DOOR_OPEN);
-        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 24);
+        door_chunk.set(4, 5, 4, BlockId::OAK_DOOR_TOP_OPEN);
+        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 48);
 
         // Bed: 1 mattress + 4 legs = 5 boxes = 120 vertices
         let mut bed_chunk = Chunk::new(ChunkPos::new(0, 0, 0));

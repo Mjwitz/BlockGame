@@ -682,6 +682,19 @@ impl WorldManager {
             };
             world.set_block(pos, replacement);
 
+            // If breaking one half of a 2-block-tall door, also remove the other half cleanly
+            if current.is_door() {
+                let pair_pos = if current.is_door_top() {
+                    pos - IVec3::Y
+                } else {
+                    pos + IVec3::Y
+                };
+                if world.get_block(pair_pos).is_door() {
+                    world.set_block(pair_pos, BlockId::AIR);
+                    Self::add_chunk_and_neighbors(pair_pos, &mut chunks_to_rebuild);
+                }
+            }
+
             // Check unsupported attached blocks that depend on pos
             let (unsupported_drops, modified_positions, spawned_falling) =
                 break_unsupported_attached(pos, &mut world, &self.registry);
@@ -923,8 +936,21 @@ impl WorldManager {
                 }
             }
 
+            // 2-block-tall Oak Door requires empty space at pos + Y (and no player collision)
+            if block_id == BlockId::OAK_DOOR_CLOSED {
+                let top_pos = pos + IVec3::Y;
+                if !world.get_block(top_pos).is_air() || player_aabb.intersects(&AABB::from_block(top_pos)) {
+                    return false;
+                }
+            }
+
             let is_light_source = block_id.is_emissive();
             world.set_block(pos, block_id);
+            if block_id == BlockId::OAK_DOOR_CLOSED {
+                let top_pos = pos + IVec3::Y;
+                world.set_block(top_pos, BlockId::OAK_DOOR_TOP_CLOSED);
+                Self::add_chunk_and_neighbors(top_pos, &mut chunks_to_rebuild);
+            }
             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
                 world.get_or_create_furnace(pos);
             }

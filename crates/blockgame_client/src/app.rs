@@ -1647,13 +1647,16 @@ impl ApplicationHandler for BlockGameApp {
                                 state.window.set_cursor_visible(true);
                                 return;
                             }
-                            if block_id == BlockId::OAK_DOOR_CLOSED
-                                || block_id == BlockId::OAK_DOOR_OPEN
-                            {
-                                let next_block = if block_id == BlockId::OAK_DOOR_CLOSED {
-                                    BlockId::OAK_DOOR_OPEN
+                            if block_id.is_door() {
+                                let next_block = block_id.toggled_door();
+                                let pair_pos = if block_id.is_door_top() {
+                                    hit.hit_voxel - IVec3::Y
                                 } else {
-                                    BlockId::OAK_DOOR_CLOSED
+                                    hit.hit_voxel + IVec3::Y
+                                };
+                                let pair_block = {
+                                    let world_guard = state.world_manager.world().lock().unwrap();
+                                    world_guard.get_block(pair_pos)
                                 };
                                 state.world_manager.apply_remote_block_update(
                                     hit.hit_voxel,
@@ -1661,6 +1664,23 @@ impl ApplicationHandler for BlockGameApp {
                                     &state.device,
                                     &state.pipeline,
                                 );
+                                if pair_block.is_door() {
+                                    let next_pair = pair_block.toggled_door();
+                                    state.world_manager.apply_remote_block_update(
+                                        pair_pos,
+                                        next_pair,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::BlockChange {
+                                                pos: pair_pos,
+                                                block_id: next_pair,
+                                            },
+                                        );
+                                    }
+                                }
                                 if let Some(client) = &mut state.mp_client {
                                     client.send(
                                         &blockgame_core::net::ClientPacket::BlockChange {
@@ -1928,6 +1948,14 @@ impl ApplicationHandler for BlockGameApp {
                                                         block_id: actual_block,
                                                     },
                                                 );
+                                                if actual_block == BlockId::OAK_DOOR_CLOSED {
+                                                    client.send(
+                                                        &blockgame_core::net::ClientPacket::BlockChange {
+                                                            pos: target_pos + IVec3::Y,
+                                                            block_id: BlockId::OAK_DOOR_TOP_CLOSED,
+                                                        },
+                                                    );
+                                                }
                                             }
                                             state.audio.play_block_place(
                                                 block_id,
@@ -3218,6 +3246,19 @@ impl ApplicationHandler for BlockGameApp {
                                                         block_id: post_break_block,
                                                     },
                                                 );
+                                                if broken.is_door() {
+                                                    let pair_pos = if broken.is_door_top() {
+                                                        target_voxel - IVec3::Y
+                                                    } else {
+                                                        target_voxel + IVec3::Y
+                                                    };
+                                                    client.send(
+                                                        &blockgame_core::net::ClientPacket::BlockChange {
+                                                            pos: pair_pos,
+                                                            block_id: BlockId::AIR,
+                                                        },
+                                                    );
+                                                }
                                             }
                                             state.audio.play_block_break(
                                                 broken,

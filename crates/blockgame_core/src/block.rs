@@ -107,10 +107,44 @@ impl BlockId {
     pub const PUMPKIN: Self = Self(93);
     pub const JACK_O_LANTERN: Self = Self(94);
     pub const MELON: Self = Self(95);
+    pub const OAK_DOOR_TOP_CLOSED: Self = Self(96);
+    pub const OAK_DOOR_TOP_OPEN: Self = Self(97);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
         self.0 == 0
+    }
+
+    #[inline]
+    pub const fn is_door(&self) -> bool {
+        matches!(
+            *self,
+            Self::OAK_DOOR_CLOSED
+                | Self::OAK_DOOR_OPEN
+                | Self::OAK_DOOR_TOP_CLOSED
+                | Self::OAK_DOOR_TOP_OPEN
+        )
+    }
+
+    #[inline]
+    pub const fn is_door_top(&self) -> bool {
+        matches!(*self, Self::OAK_DOOR_TOP_CLOSED | Self::OAK_DOOR_TOP_OPEN)
+    }
+
+    #[inline]
+    pub const fn is_door_open(&self) -> bool {
+        matches!(*self, Self::OAK_DOOR_OPEN | Self::OAK_DOOR_TOP_OPEN)
+    }
+
+    #[inline]
+    pub const fn toggled_door(&self) -> Self {
+        match *self {
+            Self::OAK_DOOR_CLOSED => Self::OAK_DOOR_OPEN,
+            Self::OAK_DOOR_OPEN => Self::OAK_DOOR_CLOSED,
+            Self::OAK_DOOR_TOP_CLOSED => Self::OAK_DOOR_TOP_OPEN,
+            Self::OAK_DOOR_TOP_OPEN => Self::OAK_DOOR_TOP_CLOSED,
+            other => other,
+        }
     }
 
     #[inline]
@@ -1331,7 +1365,7 @@ impl BlockRegistry {
             is_solid: true,
             is_transparent: true,
             luminance: 0,
-            textures: [316; 6],
+            textures: [334; 6],
             hardness: 3.0,
             required_tool: Some(ToolType::Axe),
             min_tier: ToolTier::None,
@@ -1345,7 +1379,35 @@ impl BlockRegistry {
             is_solid: false,
             is_transparent: true,
             luminance: 0,
-            textures: [316; 6],
+            textures: [334; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::OAK_DOOR),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::OAK_DOOR_TOP_CLOSED,
+            name: "Oak Door Top",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [333; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::OAK_DOOR),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::OAK_DOOR_TOP_OPEN,
+            name: "Oak Door Top (Open)",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [333; 6],
             hardness: 3.0,
             required_tool: Some(ToolType::Axe),
             min_tier: ToolTier::None,
