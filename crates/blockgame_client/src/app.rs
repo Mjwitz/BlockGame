@@ -81,6 +81,7 @@ pub struct AppState {
     player: PlayerPhysics,
     pub player_stats: PlayerStats,
     pub death_handled: bool,
+    pub respawn_point: Option<Vec3>,
     camera: Camera,
     camera_uniform: CameraUniform,
     pub day_night: DayNightCycle,
@@ -781,6 +782,7 @@ impl ApplicationHandler for BlockGameApp {
             player,
             player_stats: PlayerStats::new(),
             death_handled: false,
+            respawn_point: None,
             camera,
             camera_uniform,
             day_night,
@@ -1643,6 +1645,51 @@ impl ApplicationHandler for BlockGameApp {
                                     .window
                                     .set_cursor_grab(winit::window::CursorGrabMode::None);
                                 state.window.set_cursor_visible(true);
+                                return;
+                            }
+                            if block_id == BlockId::OAK_DOOR_CLOSED
+                                || block_id == BlockId::OAK_DOOR_OPEN
+                            {
+                                let next_block = if block_id == BlockId::OAK_DOOR_CLOSED {
+                                    BlockId::OAK_DOOR_OPEN
+                                } else {
+                                    BlockId::OAK_DOOR_CLOSED
+                                };
+                                state.world_manager.apply_remote_block_update(
+                                    hit.hit_voxel,
+                                    next_block,
+                                    &state.device,
+                                    &state.pipeline,
+                                );
+                                if let Some(client) = &mut state.mp_client {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::BlockChange {
+                                            pos: hit.hit_voxel,
+                                            block_id: next_block,
+                                        },
+                                    );
+                                }
+                                state.audio.play_block_place(
+                                    next_block,
+                                    hit.hit_voxel.as_vec3() + Vec3::splat(0.5),
+                                    state.camera.position,
+                                    state.camera.yaw,
+                                );
+                                state.punch_timer = 0.15;
+                                return;
+                            }
+                            if block_id == BlockId::BED {
+                                state.respawn_point = Some(Vec3::new(
+                                    hit.hit_voxel.x as f32 + 0.5,
+                                    hit.hit_voxel.y as f32 + 0.65,
+                                    hit.hit_voxel.z as f32 + 0.5,
+                                ));
+                                if state.day_night.sun_height() < 0.0 {
+                                    state.day_night.set_time(1000.0);
+                                    state.player_stats.health = (state.player_stats.health + 4.0)
+                                        .min(state.player_stats.max_health);
+                                }
+                                state.punch_timer = 0.15;
                                 return;
                             }
                         }

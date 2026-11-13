@@ -88,6 +88,9 @@ impl TextureAtlas {
         // Paint 4 distinct 3D Player Character Skins at tiles 272..287 (4 tiles per skin: HeadFront, HeadSide, Torso, Legs)
         paint_player_skin_tiles(&mut atlas);
 
+        // Paint decorative block & item tiles (288..332)
+        paint_decorative_tiles(&mut atlas);
+
         atlas
     }
 
@@ -586,6 +589,420 @@ fn paint_player_skin_tiles(atlas: &mut TextureAtlas) {
     }
 }
 
+/// Paints all decorative block & item tiles at indices 288..=332.
+fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
+    let clamp = |base: i32, delta: i32| -> u8 { (base + delta).clamp(0, 255) as u8 };
+    let hash = |x: u32, y: u32, seed: u32| -> i32 {
+        let h = x
+            .wrapping_mul(374761393)
+            .wrapping_add(y.wrapping_mul(668265263))
+            .wrapping_add(seed.wrapping_mul(2147483647));
+        let h = (h ^ (h >> 13)).wrapping_mul(1274126177);
+        ((h ^ (h >> 16)) & 0xFF) as i32
+    };
+
+    // 288: Bricks
+    atlas.paint_tile(288, |px, py| {
+        let row = py / 8;
+        let in_row_y = py % 8;
+        let x_offset = if row % 2 == 1 { 8 } else { 0 };
+        let shifted_x = (px + x_offset) % 32;
+        let col = shifted_x / 16;
+        let in_brick_x = shifted_x % 16;
+
+        // Mortar lines
+        if in_row_y == 0 || in_brick_x == 0 {
+            let n = (hash(px, py, 288) % 13) - 6;
+            return Rgba([clamp(196, n), clamp(192, n), clamp(184, n), 255]);
+        }
+
+        let brick_var = (hash(col + row * 2, row, 289) % 21) - 10;
+        let px_n = (hash(px, py, 290) % 13) - 6;
+        let bevel = if in_row_y == 1 || in_brick_x == 1 {
+            14
+        } else if in_row_y == 7 || in_brick_x == 15 {
+            -16
+        } else {
+            0
+        };
+        let d = brick_var + px_n + bevel;
+        Rgba([clamp(158, d), clamp(72, d / 2), clamp(58, d / 2), 255])
+    });
+
+    // 289..=301: 13 Wool colors
+    let palette: [[i32; 3]; 13] = [
+        [236, 238, 240], // 0: White
+        [176, 46, 38],   // 1: Red
+        [240, 128, 34],  // 2: Orange
+        [248, 212, 52],  // 3: Yellow
+        [128, 199, 31],  // 4: Lime
+        [84, 125, 42],   // 5: Green
+        [22, 156, 156],  // 6: Cyan
+        [52, 74, 178],   // 7: Blue
+        [137, 50, 184],  // 8: Purple
+        [243, 139, 170], // 9: Pink
+        [131, 84, 50],   // 10: Brown
+        [100, 104, 108], // 11: Gray
+        [32, 34, 38],    // 12: Black
+    ];
+
+    for (i, rgb) in palette.iter().enumerate() {
+        let tile_id = 289 + i as u16;
+        atlas.paint_tile(tile_id, |px, py| {
+            let weave = if ((px / 2) + (py / 2)) % 2 == 0 { 6 } else { -6 };
+            let fiber = (hash(px, py, tile_id as u32) % 17) - 8;
+            let d = weave + fiber;
+            Rgba([
+                clamp(rgb[0], d),
+                clamp(rgb[1], d),
+                clamp(rgb[2], d),
+                255,
+            ])
+        });
+    }
+
+    // 302..=314: 13 Dye item sprites
+    for (i, rgb) in palette.iter().enumerate() {
+        let tile_id = 302 + i as u16;
+        atlas.paint_tile(tile_id, |px, py| {
+            let dx = px as f32 - 15.5;
+            let dy = py as f32 - 16.5;
+            // Organic dye powder pile / pouch silhouette
+            let r2 = (dx * dx) / 1.15 + (dy * dy) * 1.1;
+            let wobble = ((hash(px / 2, py / 2, tile_id as u32) % 12) - 6) as f32;
+            let dist = r2.sqrt() + wobble * 0.15;
+            if dist > 10.5 {
+                return Rgba([0, 0, 0, 0]);
+            }
+            if dist > 9.0 {
+                return Rgba([
+                    clamp(rgb[0] / 3, 0),
+                    clamp(rgb[1] / 3, 0),
+                    clamp(rgb[2] / 3, 0),
+                    255,
+                ]);
+            }
+            let n = (hash(px, py, tile_id as u32 + 50) % 19) - 9;
+            let highlight = if dx < -2.0 && dy < -2.0 { 26 } else if dy > 3.0 { -22 } else { 0 };
+            let d = n + highlight;
+            Rgba([
+                clamp(rgb[0], d),
+                clamp(rgb[1], d),
+                clamp(rgb[2], d),
+                255,
+            ])
+        });
+    }
+
+    // 315: Brick item sprite (single clay brick)
+    atlas.paint_tile(315, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Isometric-ish brick bar
+        let in_top = y >= 9 && y <= 16 && x >= 6 + (16 - y) && x <= 25 - (16 - y) / 2;
+        let in_front = y > 16 && y <= 23 && x >= 6 && x <= 25;
+        if !in_top && !in_front {
+            return Rgba([0, 0, 0, 0]);
+        }
+        let is_edge = y == 9 || y == 23 || x == 6 || x == 25;
+        if is_edge {
+            return Rgba([92, 38, 28, 255]);
+        }
+        let n = (hash(px, py, 315) % 13) - 6;
+        if in_top {
+            Rgba([clamp(182, n), clamp(86, n / 2), clamp(68, n / 2), 255])
+        } else {
+            Rgba([clamp(146, n), clamp(64, n / 2), clamp(50, n / 2), 255])
+        }
+    });
+
+    // 316: Oak Door texture
+    atlas.paint_tile(316, |px, py| {
+        let is_frame = px < 4 || px >= 28 || py < 3 || py >= 29;
+        let is_mid_bar = py >= 15 && py <= 18;
+        let in_upper_window = !is_frame && py >= 4 && py <= 14;
+        let is_lattice = in_upper_window && ((px >= 15 && px <= 16) || (py >= 9 && py <= 10));
+        let is_knob = px >= 23 && px <= 26 && py >= 16 && py <= 19;
+
+        if is_knob {
+            return Rgba([70, 74, 80, 255]);
+        }
+        if in_upper_window && !is_lattice {
+            // Transparent window cutouts so you can see through!
+            return Rgba([0, 0, 0, 0]);
+        }
+        let grain = (hash(px / 2, py, 316) % 15) - 7;
+        let shade = if is_frame || is_mid_bar { -10 } else { 8 };
+        let d = grain + shade;
+        Rgba([clamp(166, d), clamp(128, d), clamp(78, d), 255])
+    });
+
+    // 317: Bed Top (white pillow + red blanket)
+    atlas.paint_tile(317, |px, py| {
+        let n = (hash(px, py, 317) % 11) - 5;
+        if py < 10 {
+            // White pillow with subtle border
+            let border = if px < 2 || px >= 30 || py < 2 || py >= 8 { -22 } else { 0 };
+            Rgba([clamp(238, n + border), clamp(240, n + border), clamp(244, n + border), 255])
+        } else if py < 13 {
+            // Folded white sheet trim
+            Rgba([clamp(225, n), clamp(228, n), clamp(232, n), 255])
+        } else {
+            // Red blanket
+            let fold = if px < 2 || px >= 30 || py >= 30 { -18 } else { 0 };
+            Rgba([clamp(182, n + fold), clamp(44, n / 2), clamp(38, n / 2), 255])
+        }
+    });
+
+    // 318: Bed Side (red blanket overhang + white mattress + oak frame & legs)
+    atlas.paint_tile(318, |px, py| {
+        let n = (hash(px, py, 318) % 11) - 5;
+        if py < 12 {
+            // Blanket overhang on right 2/3, white pillow/sheet on left 1/3
+            if px < 10 {
+                Rgba([clamp(234, n), clamp(236, n), clamp(240, n), 255])
+            } else {
+                Rgba([clamp(176, n), clamp(42, n / 2), clamp(36, n / 2), 255])
+            }
+        } else if py < 20 {
+            // Oak wood bed frame
+            Rgba([clamp(158, n), clamp(118, n), clamp(72, n), 255])
+        } else {
+            // Legs at ends, transparent underneath
+            if px < 5 || px >= 27 {
+                Rgba([clamp(132, n), clamp(96, n), clamp(56, n), 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        }
+    });
+
+    // 319..=325: 7 Flowers
+    // 319: Poppy (red)
+    paint_flower_tile(atlas, 319, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 11;
+        let r2 = dx * dx + dy * dy;
+        if r2 <= 6 {
+            Some(Rgba([45, 30, 25, 255])) // Dark center
+        } else if r2 <= 42 {
+            Some(Rgba([220, 40, 35, 255])) // Red petals
+        } else if px >= 15 && px <= 16 && py >= 14 {
+            Some(Rgba([62, 138, 48, 255])) // Stem
+        } else if py >= 22 && py <= 26 && ((px >= 12 && px <= 14) || (px >= 17 && px <= 19)) {
+            Some(Rgba([72, 156, 56, 255])) // Leaves
+        } else {
+            None
+        }
+    });
+
+    // 320: Dandelion (yellow)
+    paint_flower_tile(atlas, 320, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 12;
+        let r2 = dx * dx + dy * dy;
+        if r2 <= 30 {
+            Some(Rgba([250, 218, 40, 255]))
+        } else if px >= 15 && px <= 16 && py >= 16 {
+            Some(Rgba([65, 142, 48, 255]))
+        } else if py >= 23 && py <= 27 && (px >= 12 && px <= 14) {
+            Some(Rgba([76, 162, 58, 255]))
+        } else {
+            None
+        }
+    });
+
+    // 321: Blue Orchid
+    paint_flower_tile(atlas, 321, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 10;
+        if dx * dx + dy * dy <= 36 || ((px as i32 - 12).pow(2) + (py as i32 - 16).pow(2) <= 14) {
+            Some(Rgba([48, 172, 232, 255]))
+        } else if px >= 15 && px <= 16 && py >= 14 {
+            Some(Rgba([54, 130, 52, 255]))
+        } else {
+            None
+        }
+    });
+
+    // 322: Allium (purple pom-pom)
+    paint_flower_tile(atlas, 322, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 9;
+        let r2 = dx * dx + dy * dy;
+        if r2 <= 38 {
+            let shade = if (px + py) % 2 == 0 { 20 } else { -12 };
+            Some(Rgba([
+                clamp(178, shade),
+                clamp(88, shade / 2),
+                clamp(214, shade),
+                255,
+            ]))
+        } else if px >= 15 && px <= 16 && py >= 14 {
+            Some(Rgba([68, 148, 54, 255]))
+        } else {
+            None
+        }
+    });
+
+    // 323: Orange Tulip
+    paint_flower_tile(atlas, 323, |px, py| {
+        paint_tulip_pixel(px, py, [242, 132, 34])
+    });
+
+    // 324: Pink Tulip
+    paint_flower_tile(atlas, 324, |px, py| {
+        paint_tulip_pixel(px, py, [244, 136, 178])
+    });
+
+    // 325: Oxeye Daisy
+    paint_flower_tile(atlas, 325, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 11;
+        let r2 = dx * dx + dy * dy;
+        if r2 <= 8 {
+            Some(Rgba([248, 210, 42, 255])) // Yellow center
+        } else if r2 <= 44 && (dx.abs() <= 2 || dy.abs() <= 2 || (dx.abs() - dy.abs()).abs() <= 2) {
+            Some(Rgba([244, 246, 250, 255])) // White petals
+        } else if px >= 15 && px <= 16 && py >= 14 {
+            Some(Rgba([64, 142, 50, 255]))
+        } else {
+            None
+        }
+    });
+
+    // 326: Pumpkin Side (orange vertical ribs)
+    atlas.paint_tile(326, |px, py| {
+        let rib = ((px % 8) as i32 - 4).abs() * 6;
+        let n = (hash(px, py, 326) % 11) - 5;
+        let top_bot = if py < 2 || py >= 30 { -16 } else { 0 };
+        let d = n - rib + top_bot;
+        Rgba([clamp(228, d), clamp(128, d / 2), clamp(26, d / 3), 255])
+    });
+
+    // 327: Pumpkin Top/Bottom
+    atlas.paint_tile(327, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 16;
+        if dx.abs() <= 2 && dy.abs() <= 2 {
+            return Rgba([102, 118, 48, 255]); // Woody stem
+        }
+        let radial = ((dx.abs() == dy.abs()) || dx == 0 || dy == 0) as i32 * -18;
+        let n = (hash(px, py, 327) % 11) - 5;
+        let d = n + radial;
+        Rgba([clamp(220, d), clamp(122, d / 2), clamp(24, d / 3), 255])
+    });
+
+    // 328: Jack o'Lantern Front
+    atlas.paint_tile(328, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let left_eye = x >= 6 && x <= 11 && y >= 9 && y <= 14 && (y - 9) >= (x - 8).abs();
+        let right_eye = x >= 20 && x <= 25 && y >= 9 && y <= 14 && (y - 9) >= (x - 22).abs();
+        let nose = x >= 14 && x <= 17 && y >= 15 && y <= 18;
+        let mouth = y >= 21 && y <= 26 && x >= 7 && x <= 24
+            && !((y == 21 && (x == 11 || x == 19)) || (y == 26 && (x == 14 || x == 15)));
+        if left_eye || right_eye || nose || mouth {
+            return Rgba([255, 240, 120, 255]); // Glowing carved face
+        }
+        let rib = ((px % 8) as i32 - 4).abs() * 6;
+        let n = (hash(px, py, 328) % 11) - 5;
+        let d = n - rib;
+        Rgba([clamp(228, d), clamp(128, d / 2), clamp(26, d / 3), 255])
+    });
+
+    // 329: Melon Side (green striped rind)
+    atlas.paint_tile(329, |px, py| {
+        let stripe = if (px % 8) < 3 { -28 } else { 10 };
+        let n = (hash(px, py, 329) % 15) - 7;
+        let d = stripe + n;
+        Rgba([clamp(112, d), clamp(172, d), clamp(56, d / 2), 255])
+    });
+
+    // 330: Melon Top/Bottom
+    atlas.paint_tile(330, |px, py| {
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 16;
+        if dx.abs() <= 1 && dy.abs() <= 1 {
+            return Rgba([82, 108, 42, 255]);
+        }
+        let stripe = if (dx.abs() + dy.abs()) % 6 < 2 { -24 } else { 8 };
+        let n = (hash(px, py, 330) % 13) - 6;
+        let d = stripe + n;
+        Rgba([clamp(112, d), clamp(172, d), clamp(56, d / 2), 255])
+    });
+
+    // 331: Melon Slice item sprite
+    atlas.paint_tile(331, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 10;
+        let r2 = x * x + y * y;
+        if y < 0 || r2 > 14 * 14 {
+            return Rgba([0, 0, 0, 0]);
+        }
+        if r2 > 12 * 12 {
+            return Rgba([58, 138, 44, 255]); // Dark green rind
+        }
+        if r2 > 10 * 10 {
+            return Rgba([186, 224, 152, 255]); // Pale pith
+        }
+        // Seeds
+        if (x == -4 && y == 5) || (x == 0 && y == 7) || (x == 4 && y == 5) {
+            return Rgba([32, 24, 20, 255]);
+        }
+        let n = (hash(px, py, 331) % 13) - 6;
+        Rgba([clamp(228, n), clamp(64, n / 2), clamp(64, n / 2), 255])
+    });
+
+    // 332: Bed item sprite (side-view mini bed)
+    atlas.paint_tile(332, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if x < 4 || x > 27 || y < 11 || y > 24 {
+            return Rgba([0, 0, 0, 0]);
+        }
+        if y >= 20 {
+            if x <= 7 || x >= 24 {
+                return Rgba([130, 94, 54, 255]); // Legs
+            }
+            return Rgba([0, 0, 0, 0]);
+        }
+        if y >= 17 {
+            return Rgba([158, 118, 72, 255]); // Frame
+        }
+        if x <= 11 {
+            return Rgba([240, 242, 246, 255]); // Pillow
+        }
+        Rgba([186, 44, 38, 255]) // Red blanket
+    });
+}
+
+fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)
+where
+    F: FnMut(u32, u32) -> Option<Rgba<u8>>,
+{
+    atlas.paint_tile(tile_id, |px, py| f(px, py).unwrap_or(Rgba([0, 0, 0, 0])));
+}
+
+fn paint_tulip_pixel(px: u32, py: u32, petal_rgb: [u8; 3]) -> Option<Rgba<u8>> {
+    let x = px as i32;
+    let y = py as i32;
+    if y >= 6 && y <= 14 && x >= 12 && x <= 19 {
+        // Tulip cup with notched top
+        if y == 6 && (x == 14 || x == 17) {
+            return None;
+        }
+        return Some(Rgba([petal_rgb[0], petal_rgb[1], petal_rgb[2], 255]));
+    }
+    if x >= 15 && x <= 16 && y >= 15 {
+        return Some(Rgba([64, 142, 50, 255]));
+    }
+    if y >= 21 && y <= 26 && ((x >= 12 && x <= 14) || (x >= 17 && x <= 19)) {
+        return Some(Rgba([74, 158, 58, 255]));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,6 +1081,29 @@ mod tests {
             moist_px[1] < dry_px[1],
             "Moist farmland should be darker than dry farmland (green)"
         );
+    }
+
+    #[test]
+    fn test_decorative_atlas_tiles() {
+        let atlas = TextureAtlas::generate_default();
+        // Bricks (288), 13 Wools (289..=301), Bed Top (317), Pumpkins (326..=328), Melons (329..=330)
+        let opaque_tiles: Vec<u16> = (288..=301)
+            .chain(std::iter::once(317))
+            .chain(326..=330)
+            .collect();
+        for tile_id in opaque_tiles {
+            let tx = (tile_id as u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (tile_id as u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let px = atlas.image.get_pixel(tx + 16, ty + 16);
+            assert_eq!(px[3], 255, "Decorative tile {} must be opaque", tile_id);
+        }
+        // Dyes (302..=314) must be opaque at center (16, 16) and transparent at corner (0, 0)
+        for tile_id in 302..=314u16 {
+            let tx = (tile_id as u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (tile_id as u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            assert_eq!(atlas.image.get_pixel(tx + 16, ty + 16)[3], 255);
+            assert_eq!(atlas.image.get_pixel(tx, ty)[3], 0);
+        }
     }
 }
 

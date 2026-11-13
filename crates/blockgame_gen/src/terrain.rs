@@ -569,6 +569,45 @@ impl TerrainGenerator {
                             && (tree_hash(wx, wz, self.seed.wrapping_add(777)) % 100) < grass_chance
                         {
                             chunk.set(lx, ly, lz, BlockId::TALL_GRASS);
+                        } else {
+                            // Flower, Pumpkin, and Melon scattering on unoccupied grass/podzol
+                            let fh = tree_hash(wx, wz, self.seed.wrapping_add(919));
+                            let flower_pct = match biome {
+                                Biome::Plains => 5,
+                                Biome::Forest => 4,
+                                Biome::Swamp => 3,
+                                Biome::DarkForest => 2,
+                                Biome::Taiga | Biome::Savanna => 2,
+                                _ => 0,
+                            };
+                            if flower_pct > 0 && (fh % 100) < flower_pct {
+                                let flower = match biome {
+                                    Biome::Swamp => BlockId::BLUE_ORCHID,
+                                    Biome::Taiga | Biome::Savanna => {
+                                        if (fh >> 8) % 2 == 0 {
+                                            BlockId::DANDELION
+                                        } else {
+                                            BlockId::POPPY
+                                        }
+                                    }
+                                    _ => match (fh >> 8) % 6 {
+                                        0 => BlockId::POPPY,
+                                        1 => BlockId::DANDELION,
+                                        2 => BlockId::ALLIUM,
+                                        3 => BlockId::ORANGE_TULIP,
+                                        4 => BlockId::PINK_TULIP,
+                                        _ => BlockId::OXEYE_DAISY,
+                                    },
+                                };
+                                chunk.set(lx, ly, lz, flower);
+                            } else if matches!(biome, Biome::Plains | Biome::Forest | Biome::Taiga)
+                                && fh % 280 == 0
+                            {
+                                chunk.set(lx, ly, lz, BlockId::PUMPKIN);
+                            } else if matches!(biome, Biome::Jungle | Biome::Swamp) && fh % 220 == 0
+                            {
+                                chunk.set(lx, ly, lz, BlockId::MELON);
+                            }
                         }
                     }
                 }

@@ -115,6 +115,51 @@ impl ItemId {
     pub const GOLD_AXE: Self = Self(105);
     pub const GOLD_SHOVEL: Self = Self(106);
     pub const GOLD_HOE: Self = Self(107);
+    pub const BRICK: Self = Self(108);
+    pub const BRICKS: Self = Self(109);
+    pub const WHITE_WOOL: Self = Self(110);
+    pub const RED_WOOL: Self = Self(111);
+    pub const ORANGE_WOOL: Self = Self(112);
+    pub const YELLOW_WOOL: Self = Self(113);
+    pub const LIME_WOOL: Self = Self(114);
+    pub const GREEN_WOOL: Self = Self(115);
+    pub const CYAN_WOOL: Self = Self(116);
+    pub const BLUE_WOOL: Self = Self(117);
+    pub const PURPLE_WOOL: Self = Self(118);
+    pub const PINK_WOOL: Self = Self(119);
+    pub const BROWN_WOOL: Self = Self(120);
+    pub const GRAY_WOOL: Self = Self(121);
+    pub const BLACK_WOOL: Self = Self(122);
+    pub const WHITE_DYE: Self = Self(123);
+    pub const RED_DYE: Self = Self(124);
+    pub const ORANGE_DYE: Self = Self(125);
+    pub const YELLOW_DYE: Self = Self(126);
+    pub const LIME_DYE: Self = Self(127);
+    pub const GREEN_DYE: Self = Self(128);
+    pub const CYAN_DYE: Self = Self(129);
+    pub const BLUE_DYE: Self = Self(130);
+    pub const PURPLE_DYE: Self = Self(131);
+    pub const PINK_DYE: Self = Self(132);
+    pub const BROWN_DYE: Self = Self(133);
+    pub const GRAY_DYE: Self = Self(134);
+    pub const BLACK_DYE: Self = Self(135);
+    pub const OAK_STAIRS: Self = Self(136);
+    pub const COBBLESTONE_STAIRS: Self = Self(137);
+    pub const BRICK_STAIRS: Self = Self(138);
+    pub const OAK_FENCE: Self = Self(139);
+    pub const OAK_DOOR: Self = Self(140);
+    pub const BED: Self = Self(141);
+    pub const POPPY: Self = Self(142);
+    pub const DANDELION: Self = Self(143);
+    pub const BLUE_ORCHID: Self = Self(144);
+    pub const ALLIUM: Self = Self(145);
+    pub const ORANGE_TULIP: Self = Self(146);
+    pub const PINK_TULIP: Self = Self(147);
+    pub const OXEYE_DAISY: Self = Self(148);
+    pub const PUMPKIN: Self = Self(149);
+    pub const JACK_O_LANTERN: Self = Self(150);
+    pub const MELON: Self = Self(151);
+    pub const MELON_SLICE: Self = Self(152);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1650,6 +1695,238 @@ impl ItemRegistry {
             tool_tier: Some(ToolTier::Gold),
             icon_tile: 269,
         });
+
+        // Bricks
+        self.register(ItemDef {
+            id: ItemId::BRICK,
+            name: "blockgame:brick",
+            display_name: "Brick",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 315,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BRICKS,
+            name: "blockgame:bricks",
+            display_name: "Bricks",
+            max_stack: 64,
+            placeable_block: Some(BlockId::BRICKS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 288,
+        });
+
+        // Wool (13 colors)
+        let wool_defs = [
+            (ItemId::WHITE_WOOL, BlockId::WHITE_WOOL, "blockgame:white_wool", "White Wool", 289),
+            (ItemId::RED_WOOL, BlockId::RED_WOOL, "blockgame:red_wool", "Red Wool", 290),
+            (ItemId::ORANGE_WOOL, BlockId::ORANGE_WOOL, "blockgame:orange_wool", "Orange Wool", 291),
+            (ItemId::YELLOW_WOOL, BlockId::YELLOW_WOOL, "blockgame:yellow_wool", "Yellow Wool", 292),
+            (ItemId::LIME_WOOL, BlockId::LIME_WOOL, "blockgame:lime_wool", "Lime Wool", 293),
+            (ItemId::GREEN_WOOL, BlockId::GREEN_WOOL, "blockgame:green_wool", "Green Wool", 294),
+            (ItemId::CYAN_WOOL, BlockId::CYAN_WOOL, "blockgame:cyan_wool", "Cyan Wool", 295),
+            (ItemId::BLUE_WOOL, BlockId::BLUE_WOOL, "blockgame:blue_wool", "Blue Wool", 296),
+            (ItemId::PURPLE_WOOL, BlockId::PURPLE_WOOL, "blockgame:purple_wool", "Purple Wool", 297),
+            (ItemId::PINK_WOOL, BlockId::PINK_WOOL, "blockgame:pink_wool", "Pink Wool", 298),
+            (ItemId::BROWN_WOOL, BlockId::BROWN_WOOL, "blockgame:brown_wool", "Brown Wool", 299),
+            (ItemId::GRAY_WOOL, BlockId::GRAY_WOOL, "blockgame:gray_wool", "Gray Wool", 300),
+            (ItemId::BLACK_WOOL, BlockId::BLACK_WOOL, "blockgame:black_wool", "Black Wool", 301),
+        ];
+        for (id, block_id, name, display_name, icon_tile) in wool_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 64,
+                placeable_block: Some(block_id),
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Dyes (13 colors)
+        let dye_defs = [
+            (ItemId::WHITE_DYE, "blockgame:white_dye", "White Dye", 302),
+            (ItemId::RED_DYE, "blockgame:red_dye", "Red Dye", 303),
+            (ItemId::ORANGE_DYE, "blockgame:orange_dye", "Orange Dye", 304),
+            (ItemId::YELLOW_DYE, "blockgame:yellow_dye", "Yellow Dye", 305),
+            (ItemId::LIME_DYE, "blockgame:lime_dye", "Lime Dye", 306),
+            (ItemId::GREEN_DYE, "blockgame:green_dye", "Green Dye", 307),
+            (ItemId::CYAN_DYE, "blockgame:cyan_dye", "Cyan Dye", 308),
+            (ItemId::BLUE_DYE, "blockgame:blue_dye", "Blue Dye", 309),
+            (ItemId::PURPLE_DYE, "blockgame:purple_dye", "Purple Dye", 310),
+            (ItemId::PINK_DYE, "blockgame:pink_dye", "Pink Dye", 311),
+            (ItemId::BROWN_DYE, "blockgame:brown_dye", "Brown Dye", 312),
+            (ItemId::GRAY_DYE, "blockgame:gray_dye", "Gray Dye", 313),
+            (ItemId::BLACK_DYE, "blockgame:black_dye", "Black Dye", 314),
+        ];
+        for (id, name, display_name, icon_tile) in dye_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 64,
+                placeable_block: None,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Stairs, Fence, Door, Bed
+        self.register(ItemDef {
+            id: ItemId::OAK_STAIRS,
+            name: "blockgame:oak_stairs",
+            display_name: "Oak Stairs",
+            max_stack: 64,
+            placeable_block: Some(BlockId::OAK_STAIRS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 4,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::COBBLESTONE_STAIRS,
+            name: "blockgame:cobblestone_stairs",
+            display_name: "Cobblestone Stairs",
+            max_stack: 64,
+            placeable_block: Some(BlockId::COBBLESTONE_STAIRS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 16,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BRICK_STAIRS,
+            name: "blockgame:brick_stairs",
+            display_name: "Brick Stairs",
+            max_stack: 64,
+            placeable_block: Some(BlockId::BRICK_STAIRS),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 288,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::OAK_FENCE,
+            name: "blockgame:oak_fence",
+            display_name: "Oak Fence",
+            max_stack: 64,
+            placeable_block: Some(BlockId::OAK_FENCE),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 4,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::OAK_DOOR,
+            name: "blockgame:oak_door",
+            display_name: "Oak Door",
+            max_stack: 64,
+            placeable_block: Some(BlockId::OAK_DOOR_CLOSED),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 316,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BED,
+            name: "blockgame:bed",
+            display_name: "Red Bed",
+            max_stack: 1,
+            placeable_block: Some(BlockId::BED),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 332,
+        });
+
+        // Flowers
+        let flower_defs = [
+            (ItemId::POPPY, BlockId::POPPY, "blockgame:poppy", "Poppy", 319),
+            (ItemId::DANDELION, BlockId::DANDELION, "blockgame:dandelion", "Dandelion", 320),
+            (ItemId::BLUE_ORCHID, BlockId::BLUE_ORCHID, "blockgame:blue_orchid", "Blue Orchid", 321),
+            (ItemId::ALLIUM, BlockId::ALLIUM, "blockgame:allium", "Allium", 322),
+            (ItemId::ORANGE_TULIP, BlockId::ORANGE_TULIP, "blockgame:orange_tulip", "Orange Tulip", 323),
+            (ItemId::PINK_TULIP, BlockId::PINK_TULIP, "blockgame:pink_tulip", "Pink Tulip", 324),
+            (ItemId::OXEYE_DAISY, BlockId::OXEYE_DAISY, "blockgame:oxeye_daisy", "Oxeye Daisy", 325),
+        ];
+        for (id, block_id, name, display_name, icon_tile) in flower_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 64,
+                placeable_block: Some(block_id),
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Pumpkins and Melons
+        self.register(ItemDef {
+            id: ItemId::PUMPKIN,
+            name: "blockgame:pumpkin",
+            display_name: "Pumpkin",
+            max_stack: 64,
+            placeable_block: Some(BlockId::PUMPKIN),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 326,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::JACK_O_LANTERN,
+            name: "blockgame:jack_o_lantern",
+            display_name: "Jack o'Lantern",
+            max_stack: 64,
+            placeable_block: Some(BlockId::JACK_O_LANTERN),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 328,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::MELON,
+            name: "blockgame:melon",
+            display_name: "Melon",
+            max_stack: 64,
+            placeable_block: Some(BlockId::MELON),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 329,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::MELON_SLICE,
+            name: "blockgame:melon_slice",
+            display_name: "Melon Slice",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 331,
+        });
+        self.register_food(ItemId::MELON_SLICE, FoodDef::new(2, 1.2));
     }
 }
 

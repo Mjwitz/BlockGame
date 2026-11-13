@@ -626,6 +626,9 @@ impl UiBuilder {
                     || b == blockgame_core::block::BlockId::WHEAT_1
                     || b == blockgame_core::block::BlockId::WHEAT_2
                     || b == blockgame_core::block::BlockId::WHEAT_3
+                    || b == blockgame_core::block::BlockId::OAK_DOOR_CLOSED
+                    || b == blockgame_core::block::BlockId::BED
+                    || b.is_flower()
             }
             None => false,
         };

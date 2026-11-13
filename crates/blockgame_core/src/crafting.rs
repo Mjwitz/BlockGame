@@ -1655,6 +1655,188 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::BUCKET, 1),
         });
+
+        // Cactus -> Green Dye (Smelting)
+        self.register(Recipe::Smelting {
+            name: "Green Dye from Cactus",
+            input: ItemId::CACTUS,
+            output: ItemSlot::new(ItemId::GREEN_DYE, 1),
+        });
+
+        // Terracotta -> 4 Bricks (Shapeless)
+        self.register(Recipe::Shapeless {
+            name: "Bricks from Terracotta",
+            inputs: vec![ItemId::TERRACOTTA],
+            output: ItemSlot::new(ItemId::BRICK, 4),
+        });
+
+        // 4 Bricks -> 1 Bricks block (Shaped 2x2)
+        self.register(Recipe::Shaped {
+            name: "Bricks Block",
+            width: 2,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::BRICK),
+                Some(ItemId::BRICK),
+                Some(ItemId::BRICK),
+                Some(ItemId::BRICK),
+            ],
+            output: ItemSlot::new(ItemId::BRICKS, 1),
+        });
+
+        // 4 Feathers -> 1 White Wool (Shaped 2x2)
+        self.register(Recipe::Shaped {
+            name: "White Wool from Feathers",
+            width: 2,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::FEATHER),
+                Some(ItemId::FEATHER),
+                Some(ItemId::FEATHER),
+                Some(ItemId::FEATHER),
+            ],
+            output: ItemSlot::new(ItemId::WHITE_WOOL, 1),
+        });
+
+        // Flowers & Coal -> Dyes (Shapeless)
+        let direct_dyes = [
+            ("Red Dye from Poppy", ItemId::POPPY, ItemId::RED_DYE),
+            ("Yellow Dye from Dandelion", ItemId::DANDELION, ItemId::YELLOW_DYE),
+            ("Blue Dye from Blue Orchid", ItemId::BLUE_ORCHID, ItemId::BLUE_DYE),
+            ("Purple Dye from Allium", ItemId::ALLIUM, ItemId::PURPLE_DYE),
+            ("Orange Dye from Orange Tulip", ItemId::ORANGE_TULIP, ItemId::ORANGE_DYE),
+            ("Pink Dye from Pink Tulip", ItemId::PINK_TULIP, ItemId::PINK_DYE),
+            ("White Dye from Oxeye Daisy", ItemId::OXEYE_DAISY, ItemId::WHITE_DYE),
+            ("Black Dye from Coal", ItemId::COAL, ItemId::BLACK_DYE),
+        ];
+        for (name, input, output) in direct_dyes {
+            self.register(Recipe::Shapeless {
+                name,
+                inputs: vec![input],
+                output: ItemSlot::new(output, 1),
+            });
+        }
+
+        // Dye Mixing (Shapeless 2-input -> 2x output)
+        let mixed_dyes = [
+            ("Orange Dye", ItemId::RED_DYE, ItemId::YELLOW_DYE, ItemId::ORANGE_DYE),
+            ("Cyan Dye", ItemId::BLUE_DYE, ItemId::GREEN_DYE, ItemId::CYAN_DYE),
+            ("Lime Dye", ItemId::GREEN_DYE, ItemId::WHITE_DYE, ItemId::LIME_DYE),
+            ("Gray Dye", ItemId::BLACK_DYE, ItemId::WHITE_DYE, ItemId::GRAY_DYE),
+            ("Brown Dye", ItemId::RED_DYE, ItemId::BLACK_DYE, ItemId::BROWN_DYE),
+            ("Purple Dye", ItemId::RED_DYE, ItemId::BLUE_DYE, ItemId::PURPLE_DYE),
+            ("Pink Dye", ItemId::RED_DYE, ItemId::WHITE_DYE, ItemId::PINK_DYE),
+        ];
+        for (name, a, b, out) in mixed_dyes {
+            self.register(Recipe::Shapeless {
+                name,
+                inputs: vec![a, b],
+                output: ItemSlot::new(out, 2),
+            });
+        }
+
+        // Wool Dyeing (Shapeless: White Wool + Dye -> Colored Wool)
+        let wool_dyes = [
+            ("Red Wool", ItemId::RED_DYE, ItemId::RED_WOOL),
+            ("Orange Wool", ItemId::ORANGE_DYE, ItemId::ORANGE_WOOL),
+            ("Yellow Wool", ItemId::YELLOW_DYE, ItemId::YELLOW_WOOL),
+            ("Lime Wool", ItemId::LIME_DYE, ItemId::LIME_WOOL),
+            ("Green Wool", ItemId::GREEN_DYE, ItemId::GREEN_WOOL),
+            ("Cyan Wool", ItemId::CYAN_DYE, ItemId::CYAN_WOOL),
+            ("Blue Wool", ItemId::BLUE_DYE, ItemId::BLUE_WOOL),
+            ("Purple Wool", ItemId::PURPLE_DYE, ItemId::PURPLE_WOOL),
+            ("Pink Wool", ItemId::PINK_DYE, ItemId::PINK_WOOL),
+            ("Brown Wool", ItemId::BROWN_DYE, ItemId::BROWN_WOOL),
+            ("Gray Wool", ItemId::GRAY_DYE, ItemId::GRAY_WOOL),
+            ("Black Wool", ItemId::BLACK_DYE, ItemId::BLACK_WOOL),
+        ];
+        for (name, dye, wool) in wool_dyes {
+            self.register(Recipe::Shapeless {
+                name,
+                inputs: vec![ItemId::WHITE_WOOL, dye],
+                output: ItemSlot::new(wool, 1),
+            });
+        }
+
+        // Stairs (3x3 L-shape -> 4 Stairs)
+        let stair_recipes = [
+            ("Oak Stairs", ItemId::PLANKS, ItemId::OAK_STAIRS),
+            ("Cobblestone Stairs", ItemId::COBBLESTONE, ItemId::COBBLESTONE_STAIRS),
+            ("Brick Stairs", ItemId::BRICKS, ItemId::BRICK_STAIRS),
+        ];
+        for (name, mat, out) in stair_recipes {
+            self.register(Recipe::Shaped {
+                name,
+                width: 3,
+                height: 3,
+                pattern: vec![
+                    Some(mat), None, None,
+                    Some(mat), Some(mat), None,
+                    Some(mat), Some(mat), Some(mat),
+                ],
+                output: ItemSlot::new(out, 4),
+            });
+        }
+
+        // Oak Fence (3x2: Planks | Stick | Planks x2 -> 3 Oak Fence)
+        self.register(Recipe::Shaped {
+            name: "Oak Fence",
+            width: 3,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::PLANKS), Some(ItemId::STICK), Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), Some(ItemId::STICK), Some(ItemId::PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::OAK_FENCE, 3),
+        });
+
+        // Oak Door (2x3: 6 Planks -> 3 Oak Doors)
+        self.register(Recipe::Shaped {
+            name: "Oak Door",
+            width: 2,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::OAK_DOOR, 3),
+        });
+
+        // Bed (3x2: 3 White Wool over 3 Planks -> 1 Bed)
+        self.register(Recipe::Shaped {
+            name: "Bed",
+            width: 3,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::WHITE_WOOL), Some(ItemId::WHITE_WOOL), Some(ItemId::WHITE_WOOL),
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS), Some(ItemId::PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::BED, 1),
+        });
+
+        // Jack o'Lantern (Shapeless: Pumpkin + Torch)
+        self.register(Recipe::Shapeless {
+            name: "Jack o'Lantern",
+            inputs: vec![ItemId::PUMPKIN, ItemId::TORCH],
+            output: ItemSlot::new(ItemId::JACK_O_LANTERN, 1),
+        });
+
+        // Melon Block (3x3: 9 Melon Slices -> 1 Melon)
+        self.register(Recipe::Shaped {
+            name: "Melon Block",
+            width: 3,
+            height: 3,
+            pattern: vec![Some(ItemId::MELON_SLICE); 9],
+            output: ItemSlot::new(ItemId::MELON, 1),
+        });
+
+        // Melon Slices from Melon Block (Shapeless: 1 Melon -> 4 Melon Slices)
+        self.register(Recipe::Shapeless {
+            name: "Melon Slices",
+            inputs: vec![ItemId::MELON],
+            output: ItemSlot::new(ItemId::MELON_SLICE, 4),
+        });
     }
 }
 
@@ -1667,6 +1849,7 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
         ItemId::COBBLESTONE => Some(ItemId::STONE),
         ItemId::SAND => Some(ItemId::GLASS),
         ItemId::CLAY => Some(ItemId::TERRACOTTA),
+        ItemId::CACTUS => Some(ItemId::GREEN_DYE),
         ItemId::RAW_BEEF => Some(ItemId::COOKED_STEAK),
         ItemId::RAW_PORKCHOP => Some(ItemId::COOKED_PORKCHOP),
         ItemId::RAW_CHICKEN => Some(ItemId::COOKED_CHICKEN),
@@ -1693,7 +1876,10 @@ pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
         | ItemId::DARK_OAK_PLANKS
         | ItemId::CRAFTING_TABLE
         | ItemId::CHEST
-        | ItemId::FURNACE => 15.0,
+        | ItemId::FURNACE
+        | ItemId::OAK_STAIRS
+        | ItemId::OAK_FENCE
+        | ItemId::OAK_DOOR => 15.0,
         ItemId::STICK
         | ItemId::MUSHROOM_STEM
         | ItemId::RED_MUSHROOM_BLOCK
@@ -2111,5 +2297,84 @@ mod tests {
 
         // 5. Wooden sword fuel
         assert_eq!(get_fuel_burn_time(ItemId::WOODEN_SWORD), 10.0);
+    }
+
+    #[test]
+    fn test_decorative_blocks_and_dyes_crafting() {
+        let cm = CraftingManager::new();
+
+        // 1. Terracotta -> 4 Bricks -> 1 Bricks block
+        let mut grid = CraftingGrid::new_2x2();
+        grid.set(0, 0, ItemSlot::new(ItemId::TERRACOTTA, 1));
+        assert_eq!(cm.craft(&mut grid), Some(ItemSlot::new(ItemId::BRICK, 4)));
+
+        let mut brick_grid = CraftingGrid::new_2x2();
+        for y in 0..2 {
+            for x in 0..2 {
+                brick_grid.set(x, y, ItemSlot::new(ItemId::BRICK, 1));
+            }
+        }
+        assert_eq!(
+            cm.craft(&mut brick_grid),
+            Some(ItemSlot::new(ItemId::BRICKS, 1))
+        );
+
+        // 2. Flower -> Dye, Dye mixing, and Wool dyeing
+        let mut flower_grid = CraftingGrid::new_2x2();
+        flower_grid.set(0, 0, ItemSlot::new(ItemId::POPPY, 1));
+        assert_eq!(
+            cm.craft(&mut flower_grid),
+            Some(ItemSlot::new(ItemId::RED_DYE, 1))
+        );
+
+        let mut mix_grid = CraftingGrid::new_2x2();
+        mix_grid.set(0, 0, ItemSlot::new(ItemId::RED_DYE, 1));
+        mix_grid.set(1, 0, ItemSlot::new(ItemId::YELLOW_DYE, 1));
+        assert_eq!(
+            cm.craft(&mut mix_grid),
+            Some(ItemSlot::new(ItemId::ORANGE_DYE, 2))
+        );
+
+        let mut wool_grid = CraftingGrid::new_2x2();
+        wool_grid.set(0, 0, ItemSlot::new(ItemId::WHITE_WOOL, 1));
+        wool_grid.set(0, 1, ItemSlot::new(ItemId::CYAN_DYE, 1));
+        assert_eq!(
+            cm.craft(&mut wool_grid),
+            Some(ItemSlot::new(ItemId::CYAN_WOOL, 1))
+        );
+
+        // 3. Bed (3 White Wool over 3 Planks)
+        let mut bed_grid = CraftingGrid::new_3x3();
+        for x in 0..3 {
+            bed_grid.set(x, 0, ItemSlot::new(ItemId::WHITE_WOOL, 1));
+            bed_grid.set(x, 1, ItemSlot::new(ItemId::PLANKS, 1));
+        }
+        assert_eq!(cm.craft(&mut bed_grid), Some(ItemSlot::new(ItemId::BED, 1)));
+
+        // 4. Stairs, Fence, Door, Jack o'Lantern, Melon, Cactus smelting
+        let mut stairs_grid = CraftingGrid::new_3x3();
+        stairs_grid.set(0, 0, ItemSlot::new(ItemId::BRICKS, 1));
+        stairs_grid.set(0, 1, ItemSlot::new(ItemId::BRICKS, 1));
+        stairs_grid.set(1, 1, ItemSlot::new(ItemId::BRICKS, 1));
+        stairs_grid.set(0, 2, ItemSlot::new(ItemId::BRICKS, 1));
+        stairs_grid.set(1, 2, ItemSlot::new(ItemId::BRICKS, 1));
+        stairs_grid.set(2, 2, ItemSlot::new(ItemId::BRICKS, 1));
+        assert_eq!(
+            cm.craft(&mut stairs_grid),
+            Some(ItemSlot::new(ItemId::BRICK_STAIRS, 4))
+        );
+
+        let mut jack_grid = CraftingGrid::new_2x2();
+        jack_grid.set(0, 0, ItemSlot::new(ItemId::PUMPKIN, 1));
+        jack_grid.set(1, 1, ItemSlot::new(ItemId::TORCH, 1));
+        assert_eq!(
+            cm.craft(&mut jack_grid),
+            Some(ItemSlot::new(ItemId::JACK_O_LANTERN, 1))
+        );
+
+        assert_eq!(
+            get_smelting_output(ItemId::CACTUS),
+            Some(ItemId::GREEN_DYE)
+        );
     }
 }

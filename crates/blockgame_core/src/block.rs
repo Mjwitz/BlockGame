@@ -76,6 +76,37 @@ impl BlockId {
     pub const SEA_LANTERN: Self = Self(62);
     pub const SEAGRASS: Self = Self(63);
     pub const FARMLAND_MOIST: Self = Self(64);
+    pub const BRICKS: Self = Self(65);
+    pub const WHITE_WOOL: Self = Self(66);
+    pub const RED_WOOL: Self = Self(67);
+    pub const ORANGE_WOOL: Self = Self(68);
+    pub const YELLOW_WOOL: Self = Self(69);
+    pub const LIME_WOOL: Self = Self(70);
+    pub const GREEN_WOOL: Self = Self(71);
+    pub const CYAN_WOOL: Self = Self(72);
+    pub const BLUE_WOOL: Self = Self(73);
+    pub const PURPLE_WOOL: Self = Self(74);
+    pub const PINK_WOOL: Self = Self(75);
+    pub const BROWN_WOOL: Self = Self(76);
+    pub const GRAY_WOOL: Self = Self(77);
+    pub const BLACK_WOOL: Self = Self(78);
+    pub const OAK_STAIRS: Self = Self(79);
+    pub const COBBLESTONE_STAIRS: Self = Self(80);
+    pub const BRICK_STAIRS: Self = Self(81);
+    pub const OAK_FENCE: Self = Self(82);
+    pub const OAK_DOOR_CLOSED: Self = Self(83);
+    pub const OAK_DOOR_OPEN: Self = Self(84);
+    pub const BED: Self = Self(85);
+    pub const POPPY: Self = Self(86);
+    pub const DANDELION: Self = Self(87);
+    pub const BLUE_ORCHID: Self = Self(88);
+    pub const ALLIUM: Self = Self(89);
+    pub const ORANGE_TULIP: Self = Self(90);
+    pub const PINK_TULIP: Self = Self(91);
+    pub const OXEYE_DAISY: Self = Self(92);
+    pub const PUMPKIN: Self = Self(93);
+    pub const JACK_O_LANTERN: Self = Self(94);
+    pub const MELON: Self = Self(95);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -93,11 +124,34 @@ impl BlockId {
     }
 
     #[inline]
+    pub const fn is_flower(&self) -> bool {
+        matches!(
+            *self,
+            Self::POPPY
+                | Self::DANDELION
+                | Self::BLUE_ORCHID
+                | Self::ALLIUM
+                | Self::ORANGE_TULIP
+                | Self::PINK_TULIP
+                | Self::OXEYE_DAISY
+        )
+    }
+
+    #[inline]
+    pub const fn is_stairs(&self) -> bool {
+        matches!(
+            *self,
+            Self::OAK_STAIRS | Self::COBBLESTONE_STAIRS | Self::BRICK_STAIRS
+        )
+    }
+
+    #[inline]
     pub const fn luminance(&self) -> u8 {
         match self.0 {
             13 => 14, // TORCH
             27 => 13, // FURNACE_LIT
             62 => 15, // SEA_LANTERN
+            94 => 15, // JACK_O_LANTERN
             _ => 0,
         }
     }
@@ -121,6 +175,13 @@ impl BlockId {
                 | Self::TORCH
                 | Self::LILY_PAD
                 | Self::SEAGRASS
+                | Self::POPPY
+                | Self::DANDELION
+                | Self::BLUE_ORCHID
+                | Self::ALLIUM
+                | Self::ORANGE_TULIP
+                | Self::PINK_TULIP
+                | Self::OXEYE_DAISY
         )
     }
 
@@ -137,7 +198,14 @@ impl BlockId {
             | Self::WHEAT_3
             | Self::LILY_PAD
             | Self::FARMLAND
-            | Self::FARMLAND_MOIST => false,
+            | Self::FARMLAND_MOIST
+            | Self::POPPY
+            | Self::DANDELION
+            | Self::BLUE_ORCHID
+            | Self::ALLIUM
+            | Self::ORANGE_TULIP
+            | Self::PINK_TULIP
+            | Self::OXEYE_DAISY => false,
             _ => true,
         }
     }
@@ -160,6 +228,13 @@ impl BlockId {
                 | Self::WHEAT_2
                 | Self::WHEAT_3
                 | Self::LILY_PAD
+                | Self::POPPY
+                | Self::DANDELION
+                | Self::BLUE_ORCHID
+                | Self::ALLIUM
+                | Self::ORANGE_TULIP
+                | Self::PINK_TULIP
+                | Self::OXEYE_DAISY
         )
     }
 
@@ -1149,6 +1224,220 @@ impl BlockRegistry {
             drop_count: (1, 1),
         });
 
+        registry.register(BlockDefinition {
+            id: BlockId::BRICKS,
+            name: "Bricks",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [288; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::BRICKS),
+            drop_count: (1, 1),
+        });
+
+        let wool_defs = [
+            (BlockId::WHITE_WOOL, "White Wool", 289, ItemId::WHITE_WOOL),
+            (BlockId::RED_WOOL, "Red Wool", 290, ItemId::RED_WOOL),
+            (BlockId::ORANGE_WOOL, "Orange Wool", 291, ItemId::ORANGE_WOOL),
+            (BlockId::YELLOW_WOOL, "Yellow Wool", 292, ItemId::YELLOW_WOOL),
+            (BlockId::LIME_WOOL, "Lime Wool", 293, ItemId::LIME_WOOL),
+            (BlockId::GREEN_WOOL, "Green Wool", 294, ItemId::GREEN_WOOL),
+            (BlockId::CYAN_WOOL, "Cyan Wool", 295, ItemId::CYAN_WOOL),
+            (BlockId::BLUE_WOOL, "Blue Wool", 296, ItemId::BLUE_WOOL),
+            (BlockId::PURPLE_WOOL, "Purple Wool", 297, ItemId::PURPLE_WOOL),
+            (BlockId::PINK_WOOL, "Pink Wool", 298, ItemId::PINK_WOOL),
+            (BlockId::BROWN_WOOL, "Brown Wool", 299, ItemId::BROWN_WOOL),
+            (BlockId::GRAY_WOOL, "Gray Wool", 300, ItemId::GRAY_WOOL),
+            (BlockId::BLACK_WOOL, "Black Wool", 301, ItemId::BLACK_WOOL),
+        ];
+        for (id, name, tile, drop) in wool_defs {
+            registry.register(BlockDefinition {
+                id,
+                name,
+                is_solid: true,
+                is_transparent: false,
+                luminance: 0,
+                textures: [tile; 6],
+                hardness: 0.8,
+                required_tool: None,
+                min_tier: ToolTier::None,
+                drop_item: Some(drop),
+                drop_count: (1, 1),
+            });
+        }
+
+        registry.register(BlockDefinition {
+            id: BlockId::OAK_STAIRS,
+            name: "Oak Stairs",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [10; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::OAK_STAIRS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::COBBLESTONE_STAIRS,
+            name: "Cobblestone Stairs",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [5; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COBBLESTONE_STAIRS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BRICK_STAIRS,
+            name: "Brick Stairs",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [288; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::BRICK_STAIRS),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::OAK_FENCE,
+            name: "Oak Fence",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [10; 6],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::OAK_FENCE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::OAK_DOOR_CLOSED,
+            name: "Oak Door",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            textures: [316; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::OAK_DOOR),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::OAK_DOOR_OPEN,
+            name: "Oak Door (Open)",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [316; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::OAK_DOOR),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BED,
+            name: "Bed",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            // PosY: Bed Top (317), NegY: Planks (10), Sides: Bed Side (318)
+            textures: [317, 10, 318, 318, 318, 318],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::BED),
+            drop_count: (1, 1),
+        });
+
+        let flower_defs = [
+            (BlockId::POPPY, "Poppy", 319, ItemId::POPPY),
+            (BlockId::DANDELION, "Dandelion", 320, ItemId::DANDELION),
+            (BlockId::BLUE_ORCHID, "Blue Orchid", 321, ItemId::BLUE_ORCHID),
+            (BlockId::ALLIUM, "Allium", 322, ItemId::ALLIUM),
+            (BlockId::ORANGE_TULIP, "Orange Tulip", 323, ItemId::ORANGE_TULIP),
+            (BlockId::PINK_TULIP, "Pink Tulip", 324, ItemId::PINK_TULIP),
+            (BlockId::OXEYE_DAISY, "Oxeye Daisy", 325, ItemId::OXEYE_DAISY),
+        ];
+        for (id, name, tile, drop) in flower_defs {
+            registry.register(BlockDefinition {
+                id,
+                name,
+                is_solid: false,
+                is_transparent: true,
+                luminance: 0,
+                textures: [tile; 6],
+                hardness: 0.0,
+                required_tool: None,
+                min_tier: ToolTier::None,
+                drop_item: Some(drop),
+                drop_count: (1, 1),
+            });
+        }
+
+        registry.register(BlockDefinition {
+            id: BlockId::PUMPKIN,
+            name: "Pumpkin",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 327, NegY: 327, Sides: 326
+            textures: [327, 327, 326, 326, 326, 326],
+            hardness: 1.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::PUMPKIN),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::JACK_O_LANTERN,
+            name: "Jack o'Lantern",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 15,
+            // PosY: 327, NegY: 327, PosZ: 328 (lit face), other sides: 326
+            textures: [327, 327, 328, 326, 326, 326],
+            hardness: 1.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::JACK_O_LANTERN),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::MELON,
+            name: "Melon",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 330, NegY: 330, Sides: 329
+            textures: [330, 330, 329, 329, 329, 329],
+            hardness: 1.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::MELON_SLICE),
+            drop_count: (3, 5),
+        });
+
         registry
     }
 
@@ -1283,7 +1572,7 @@ where
     F: FnMut(IVec3) -> BlockId,
 {
     match id {
-        BlockId::TALL_GRASS => {
+        b if b == BlockId::TALL_GRASS || b.is_flower() => {
             let current = get_block(pos);
             if current == BlockId::WATER {
                 return false;

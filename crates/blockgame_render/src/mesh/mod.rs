@@ -115,6 +115,7 @@ impl<'a> ChunkMesher<'a> {
                         || block_id == BlockId::WHEAT_2
                         || block_id == BlockId::WHEAT_3
                         || block_id == BlockId::TALL_GRASS
+                        || block_id.is_flower()
                     {
                         self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
                         continue;
@@ -122,6 +123,42 @@ impl<'a> ChunkMesher<'a> {
 
                     if block_id == BlockId::LILY_PAD {
                         self.build_lily_pad(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                        continue;
+                    }
+
+                    if block_id.is_stairs() {
+                        self.build_stairs(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
+                        continue;
+                    }
+
+                    if block_id == BlockId::OAK_FENCE {
+                        self.build_fence(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            &light_map,
+                            &query_block,
+                        );
+                        continue;
+                    }
+
+                    if block_id == BlockId::OAK_DOOR_CLOSED || block_id == BlockId::OAK_DOOR_OPEN {
+                        self.build_door(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            block_id == BlockId::OAK_DOOR_OPEN,
+                            &light_map,
+                        );
+                        continue;
+                    }
+
+                    if block_id == BlockId::BED {
+                        self.build_bed(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
                         continue;
                     }
 
@@ -751,6 +788,293 @@ impl<'a> ChunkMesher<'a> {
             base_index + 2,
             base_index,
         ]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_box(
+        &self,
+        mesh: &mut ChunkMesh,
+        x0: f32,
+        y0: f32,
+        z0: f32,
+        x1: f32,
+        y1: f32,
+        z1: f32,
+        tiles: [u16; 6], // [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
+        light: [f32; 2],
+    ) {
+        let mut add_quad =
+            |positions: [[f32; 3]; 4], normal: [f32; 3], tile_id: u16, ao: f32| {
+                let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+                let uvs = [
+                    [u_min, v_max],
+                    [u_max, v_max],
+                    [u_max, v_min],
+                    [u_min, v_min],
+                ];
+                let start_idx = mesh.vertices.len() as u32;
+                for i in 0..4 {
+                    mesh.vertices.push(VoxelVertex {
+                        position: positions[i],
+                        uv: uvs[i],
+                        normal,
+                        ao,
+                        light,
+                    });
+                }
+                mesh.indices.extend_from_slice(&[
+                    start_idx,
+                    start_idx + 1,
+                    start_idx + 2,
+                    start_idx + 2,
+                    start_idx + 3,
+                    start_idx,
+                ]);
+            };
+
+        // South (+Z)
+        add_quad(
+            [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            [0.0, 0.0, 1.0],
+            tiles[0],
+            0.92,
+        );
+        // North (-Z)
+        add_quad(
+            [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
+            [0.0, 0.0, -1.0],
+            tiles[1],
+            0.92,
+        );
+        // East (+X)
+        add_quad(
+            [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
+            [1.0, 0.0, 0.0],
+            tiles[2],
+            0.85,
+        );
+        // West (-X)
+        add_quad(
+            [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
+            [-1.0, 0.0, 0.0],
+            tiles[3],
+            0.85,
+        );
+        // Top (+Y)
+        add_quad(
+            [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]],
+            [0.0, 1.0, 0.0],
+            tiles[4],
+            1.0,
+        );
+        // Bottom (-Y)
+        add_quad(
+            [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            [0.0, -1.0, 0.0],
+            tiles[5],
+            0.75,
+        );
+    }
+
+    fn build_stairs(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        block_id: BlockId,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let tile = self.registry.get_texture(block_id, Direction::PosY);
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Bottom half slab
+        self.add_box(
+            mesh,
+            fx,
+            fy,
+            fz,
+            fx + 1.0,
+            fy + 0.5,
+            fz + 1.0,
+            [tile; 6],
+            light,
+        );
+        // Upper back step
+        self.add_box(
+            mesh,
+            fx,
+            fy + 0.5,
+            fz,
+            fx + 1.0,
+            fy + 1.0,
+            fz + 0.5,
+            [tile; 6],
+            light,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_fence<F>(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+        query_block: &F,
+    ) where
+        F: Fn(i32, i32, i32) -> BlockId,
+    {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let tile = self.registry.get_texture(BlockId::OAK_FENCE, Direction::PosY);
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Center post (4/16 = 0.25 wide, centered at 0.375..0.625)
+        self.add_box(
+            mesh,
+            fx + 0.375,
+            fy,
+            fz + 0.375,
+            fx + 0.625,
+            fy + 1.0,
+            fz + 0.625,
+            [tile; 6],
+            light,
+        );
+
+        let connects = |nx: i32, ny: i32, nz: i32| -> bool {
+            let id = query_block(nx, ny, nz);
+            id == BlockId::OAK_FENCE || self.registry.is_solid(id)
+        };
+
+        // +X rail
+        if connects(x + 1, y, z) {
+            self.add_box(mesh, fx + 0.625, fy + 0.75, fz + 0.4375, fx + 1.0, fy + 0.9375, fz + 0.5625, [tile; 6], light);
+            self.add_box(mesh, fx + 0.625, fy + 0.375, fz + 0.4375, fx + 1.0, fy + 0.5625, fz + 0.5625, [tile; 6], light);
+        }
+        // -X rail
+        if connects(x - 1, y, z) {
+            self.add_box(mesh, fx, fy + 0.75, fz + 0.4375, fx + 0.375, fy + 0.9375, fz + 0.5625, [tile; 6], light);
+            self.add_box(mesh, fx, fy + 0.375, fz + 0.4375, fx + 0.375, fy + 0.5625, fz + 0.5625, [tile; 6], light);
+        }
+        // +Z rail
+        if connects(x, y, z + 1) {
+            self.add_box(mesh, fx + 0.4375, fy + 0.75, fz + 0.625, fx + 0.5625, fy + 0.9375, fz + 1.0, [tile; 6], light);
+            self.add_box(mesh, fx + 0.4375, fy + 0.375, fz + 0.625, fx + 0.5625, fy + 0.5625, fz + 1.0, [tile; 6], light);
+        }
+        // -Z rail
+        if connects(x, y, z - 1) {
+            self.add_box(mesh, fx + 0.4375, fy + 0.75, fz, fx + 0.5625, fy + 0.9375, fz + 0.375, [tile; 6], light);
+            self.add_box(mesh, fx + 0.4375, fy + 0.375, fz, fx + 0.5625, fy + 0.5625, fz + 0.375, [tile; 6], light);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_door(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        is_open: bool,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let tile = 316;
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        if is_open {
+            self.add_box(
+                mesh,
+                fx,
+                fy,
+                fz,
+                fx + 0.1875,
+                fy + 1.0,
+                fz + 1.0,
+                [tile; 6],
+                light,
+            );
+        } else {
+            self.add_box(
+                mesh,
+                fx,
+                fy,
+                fz,
+                fx + 1.0,
+                fy + 1.0,
+                fz + 0.1875,
+                [tile; 6],
+                light,
+            );
+        }
+    }
+
+    fn build_bed(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Mattress & frame
+        self.add_box(
+            mesh,
+            fx + 0.05,
+            fy + 0.1875,
+            fz + 0.05,
+            fx + 0.95,
+            fy + 0.5625,
+            fz + 0.95,
+            [318, 318, 318, 318, 317, 4],
+            light,
+        );
+        // 4 corner oak legs
+        for (lx0, lx1) in [(0.05, 0.22), (0.78, 0.95)] {
+            for (lz0, lz1) in [(0.05, 0.22), (0.78, 0.95)] {
+                self.add_box(
+                    mesh,
+                    fx + lx0,
+                    fy,
+                    fz + lz0,
+                    fx + lx1,
+                    fy + 0.1875,
+                    fz + lz1,
+                    [4; 6],
+                    light,
+                );
+            }
+        }
     }
 
     fn calculate_face_ao<F>(&self, x: i32, y: i32, z: i32, dir: Direction, query: &F) -> [f32; 4]
@@ -2434,5 +2758,41 @@ mod tests {
         assert_eq!(mesh.face_count(), 42);
         assert_eq!(mesh.vertices.len(), 42 * 4);
         assert_eq!(mesh.indices.len(), 42 * 6);
+    }
+
+    #[test]
+    fn test_decorative_block_meshes() {
+        let reg = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&reg);
+
+        // Stairs: 2 boxes = 12 faces = 48 vertices
+        let mut stairs_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        stairs_chunk.set(4, 4, 4, BlockId::OAK_STAIRS);
+        let stairs_mesh = mesher.mesh_chunk(&stairs_chunk);
+        assert_eq!(stairs_mesh.vertices.len(), 48);
+
+        // Isolated Fence: 1 post box = 6 faces = 24 vertices; connected to neighbor fence adds 2 rail boxes (+48 vertices)
+        let mut fence_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        fence_chunk.set(4, 4, 4, BlockId::OAK_FENCE);
+        assert_eq!(mesher.mesh_chunk(&fence_chunk).vertices.len(), 24);
+        fence_chunk.set(5, 4, 4, BlockId::OAK_FENCE);
+        assert_eq!(mesher.mesh_chunk(&fence_chunk).vertices.len(), 2 * (24 + 48));
+
+        // Door (closed & open): 1 box = 24 vertices
+        let mut door_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        door_chunk.set(4, 4, 4, BlockId::OAK_DOOR_CLOSED);
+        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 24);
+        door_chunk.set(4, 4, 4, BlockId::OAK_DOOR_OPEN);
+        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 24);
+
+        // Bed: 1 mattress + 4 legs = 5 boxes = 120 vertices
+        let mut bed_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        bed_chunk.set(4, 4, 4, BlockId::BED);
+        assert_eq!(mesher.mesh_chunk(&bed_chunk).vertices.len(), 120);
+
+        // Flower (Poppy): crossed quads = 16 vertices
+        let mut flower_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        flower_chunk.set(4, 4, 4, BlockId::POPPY);
+        assert_eq!(mesher.mesh_chunk(&flower_chunk).vertices.len(), 16);
     }
 }
