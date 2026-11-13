@@ -431,7 +431,12 @@ pub fn compute_light_at(
     registry: &BlockRegistry,
 ) -> f32 {
     let max_y = (crate::chunk::VERTICAL_CHUNKS * 16) - 1;
-    let mut sky_light = 15.0 * sun_intensity.clamp(0.0, 1.0);
+    let sun = sun_intensity.clamp(0.0, 1.0);
+    let mut sky_light = if sun > 0.05 {
+        10.0 + 5.0 * ((sun - 0.05) / 0.95)
+    } else {
+        10.0 * (sun / 0.05)
+    };
     if sky_light > 0.0 {
         for y in (pos.y + 1)..=max_y {
             let b = world.get_block(IVec3::new(pos.x, y, pos.z));

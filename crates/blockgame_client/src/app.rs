@@ -1723,7 +1723,7 @@ impl ApplicationHandler for BlockGameApp {
                                     hit.hit_voxel.y as f32 + 0.65,
                                     hit.hit_voxel.z as f32 + 0.5,
                                 ));
-                                let is_night = state.day_night.sun_height() < 0.0;
+                                let is_night = state.day_night.sun_height() <= 0.05;
                                 if let Some(client) = &mut state.mp_client {
                                     if is_night {
                                         state.is_sleeping = !state.is_sleeping;

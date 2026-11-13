@@ -146,7 +146,7 @@ pub enum ClientPacket {
 /// Returns `true` when `ticks` (0..24000) is nighttime (sun below the horizon).
 pub fn is_night_ticks(ticks: f32) -> bool {
     let angle = (ticks.rem_euclid(24000.0) / 24000.0) * std::f32::consts::TAU;
-    angle.sin() < 0.0
+    angle.sin() <= 0.05
 }
 
 /// Packets sent from the `MultiplayerServer` to connected `MultiplayerClient`s.
