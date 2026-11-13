@@ -1,0 +1,10 @@
+### Navigation
+- [[Home]]
+- [[Getting Started|Getting-Started]]
+- [[Controls and UI|Controls-and-UI]]
+- [[Gameplay and Survival|Gameplay-and-Survival]]
+- [[Mobs and Breeding|Mobs-and-Breeding]]
+- [[World and Biomes|World-and-Biomes]]
+- [[Multiplayer and Server Guide|Multiplayer-and-Server-Guide]]
+- [[Commands and Permissions|Commands-and-Permissions]]
+- [[Building and Releasing|Building-and-Releasing]]
