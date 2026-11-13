@@ -4585,15 +4585,25 @@ impl UiBuilder {
         );
     }
 
+    /// Returns the tab button rectangle `[x, y, w, h]` for tab `0` (General) or `1` (Controls).
+    pub fn settings_tab_rect(screen_w: f32, screen_h: f32, tab_idx: usize) -> [f32; 4] {
+        let col_w = 270.0;
+        let gap_x = 24.0;
+        let total_w = col_w * 2.0 + gap_x;
+        let start_x = (screen_w - total_w) * 0.5;
+        let y = screen_h * 0.13;
+        [start_x + (tab_idx as f32) * (col_w + gap_x), y, col_w, 34.0]
+    }
+
     /// Returns the slider rectangle `[x, y, w, h]` for slider index `0..6`.
     pub fn settings_slider_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let col_w = 270.0;
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        let start_y = screen_h * 0.16;
-        let row_h = 34.0;
-        let gap_y = 14.0;
+        let start_y = screen_h * 0.21;
+        let row_h = 32.0;
+        let gap_y = 12.0;
 
         let col = (index / 3) as f32;
         let row = (index % 3) as f32;
@@ -4611,14 +4621,33 @@ impl UiBuilder {
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        let base_y = screen_h * 0.16 + 3.0 * (34.0 + 14.0) + 14.0;
-        let row_h = 36.0;
-        let gap_y = 12.0;
+        let base_y = screen_h * 0.21 + 3.0 * (32.0 + 12.0) + 12.0;
+        let row_h = 34.0;
+        let gap_y = 10.0;
         let col = (index % 2) as f32;
         let row = (index / 2) as f32;
         [
             start_x + col * (col_w + gap_x),
             base_y + row * (row_h + gap_y),
+            col_w,
+            row_h,
+        ]
+    }
+
+    /// Returns the keybind button rectangle `[x, y, w, h]` for keybind index `0..12`.
+    pub fn settings_keybind_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
+        let col_w = 270.0;
+        let gap_x = 24.0;
+        let total_w = col_w * 2.0 + gap_x;
+        let start_x = (screen_w - total_w) * 0.5;
+        let start_y = screen_h * 0.21;
+        let row_h = 32.0;
+        let gap_y = 10.0;
+        let col = (index / 6) as f32;
+        let row = (index % 6) as f32;
+        [
+            start_x + col * (col_w + gap_x),
+            start_y + row * (row_h + gap_y),
             col_w,
             row_h,
         ]
@@ -4630,7 +4659,7 @@ impl UiBuilder {
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        [start_x, screen_h * 0.80, col_w, 42.0]
+        [start_x, screen_h * 0.82, col_w, 42.0]
     }
 
     /// Returns `[x, y, w, h]` for the `Done` button on the Settings screen.
@@ -4639,16 +4668,19 @@ impl UiBuilder {
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        [start_x + col_w + gap_x, screen_h * 0.80, col_w, 42.0]
+        [start_x + col_w + gap_x, screen_h * 0.82, col_w, 42.0]
     }
 
-    /// Builds the interactive Settings screen with sliders, toggles, and action buttons.
+    /// Builds the interactive Settings screen with General and Controls tabs.
     pub fn build_settings_screen(
         mesh: &mut UiMesh,
         screen_w: f32,
         screen_h: f32,
         settings: SettingsUiState,
+        settings_tab: usize,
         active_slider: Option<usize>,
+        listening_keybind: Option<usize>,
+        keybinds: &[(&str, &str)],
         cursor_pos: [f32; 2],
     ) {
         mesh.clear();
@@ -4668,7 +4700,7 @@ impl UiBuilder {
         Self::draw_string(
             mesh,
             (screen_w - tw) * 0.5,
-            screen_h * 0.07,
+            screen_h * 0.05,
             title,
             15.0,
             20.0,
@@ -4676,121 +4708,197 @@ impl UiBuilder {
             [1.0, 1.0, 1.0, 1.0],
         );
 
-        let sliders: [(String, f32); 6] = [
-            (
-                format!("Render Distance: {} chunks", settings.render_distance),
-                ((settings.render_distance - 2) as f32 / 10.0).clamp(0.0, 1.0),
-            ),
-            (
-                format!("FOV: {:.0} deg", settings.fov_degrees),
-                ((settings.fov_degrees - 50.0) / 60.0).clamp(0.0, 1.0),
-            ),
-            (
-                format!("Sensitivity: {:.0}%", settings.mouse_sensitivity * 100.0),
-                ((settings.mouse_sensitivity - 0.2) / 2.3).clamp(0.0, 1.0),
-            ),
-            (
-                format!("Master Volume: {:.0}%", settings.master_volume * 100.0),
-                settings.master_volume.clamp(0.0, 1.0),
-            ),
-            (
-                format!("SFX Volume: {:.0}%", settings.sfx_volume * 100.0),
-                settings.sfx_volume.clamp(0.0, 1.0),
-            ),
-            (
-                format!("Music Volume: {:.0}%", settings.music_volume * 100.0),
-                settings.music_volume.clamp(0.0, 1.0),
-            ),
-        ];
-
-        for (idx, (label, norm)) in sliders.iter().enumerate() {
-            let r = Self::settings_slider_rect(screen_w, screen_h, idx);
-            let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3])
-                || active_slider == Some(idx);
-
-            let border = if hovered {
-                [0.88, 0.78, 0.42, 0.95]
+        for (tab_idx, tab_label) in ["General", "Controls"].iter().enumerate() {
+            let r = Self::settings_tab_rect(screen_w, screen_h, tab_idx);
+            let is_active = settings_tab == tab_idx;
+            let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
+            let border = if is_active {
+                [0.92, 0.82, 0.45, 1.0]
+            } else if hovered {
+                [0.70, 0.74, 0.82, 0.95]
             } else {
-                [0.34, 0.37, 0.44, 0.90]
+                [0.34, 0.37, 0.44, 0.88]
+            };
+            let bg = if is_active {
+                [0.20, 0.36, 0.28, 0.96]
+            } else {
+                [0.12, 0.14, 0.19, 0.92]
             };
             mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
-            mesh.add_quad(
-                r[0] + 2.0,
-                r[1] + 2.0,
-                r[2] - 4.0,
-                r[3] - 4.0,
-                white_uv,
-                [0.10, 0.12, 0.16, 0.96],
-            );
-
-            let fill_w = ((r[2] - 4.0) * *norm).max(0.0);
-            if fill_w > 0.0 {
-                mesh.add_quad(
-                    r[0] + 2.0,
-                    r[1] + 2.0,
-                    fill_w,
-                    r[3] - 4.0,
-                    white_uv,
-                    if hovered {
-                        [0.24, 0.50, 0.34, 0.85]
-                    } else {
-                        [0.18, 0.38, 0.28, 0.80]
-                    },
-                );
-            }
-
-            let thumb_w = 8.0;
-            let thumb_x = (r[0] + 2.0 + (r[2] - 4.0 - thumb_w) * *norm)
-                .clamp(r[0] + 2.0, r[0] + r[2] - 2.0 - thumb_w);
-            mesh.add_quad(
-                thumb_x,
-                r[1] + 2.0,
-                thumb_w,
-                r[3] - 4.0,
-                white_uv,
-                if hovered {
-                    [0.95, 0.88, 0.55, 1.0]
-                } else {
-                    [0.75, 0.78, 0.85, 0.95]
-                },
-            );
-
-            let lw = Self::string_width(label, 9.5, 1.0);
+            mesh.add_quad(r[0] + 2.0, r[1] + 2.0, r[2] - 4.0, r[3] - 4.0, white_uv, bg);
+            let lw = Self::string_width(tab_label, 10.5, 1.0);
             Self::draw_string(
                 mesh,
                 r[0] + (r[2] - lw) * 0.5,
-                r[1] + (r[3] - 13.0) * 0.5,
-                label,
-                9.5,
-                13.0,
+                r[1] + (r[3] - 14.0) * 0.5,
+                tab_label,
+                10.5,
+                14.0,
                 1.0,
                 [1.0, 1.0, 1.0, 1.0],
             );
         }
 
-        let toggles = [
-            format!(
-                "Invert Y-Axis: {}",
-                if settings.invert_y { "ON" } else { "OFF" }
-            ),
-            format!(
-                "Fullscreen: {}",
-                if settings.fullscreen { "ON" } else { "OFF" }
-            ),
-            format!("VSync: {}", if settings.vsync { "ON" } else { "OFF" }),
-            format!(
-                "View Bobbing: {}",
-                if settings.view_bobbing { "ON" } else { "OFF" }
-            ),
-            format!(
-                "Debug HUD (F3): {}",
-                if settings.show_debug_hud { "ON" } else { "OFF" }
-            ),
-        ];
+        if settings_tab == 0 {
+            let sliders: [(String, f32); 6] = [
+                (
+                    format!("Render Distance: {} chunks", settings.render_distance),
+                    ((settings.render_distance - 2) as f32 / 10.0).clamp(0.0, 1.0),
+                ),
+                (
+                    format!("FOV: {:.0} deg", settings.fov_degrees),
+                    ((settings.fov_degrees - 50.0) / 60.0).clamp(0.0, 1.0),
+                ),
+                (
+                    format!("Sensitivity: {:.0}%", settings.mouse_sensitivity * 100.0),
+                    ((settings.mouse_sensitivity - 0.2) / 2.3).clamp(0.0, 1.0),
+                ),
+                (
+                    format!("Master Volume: {:.0}%", settings.master_volume * 100.0),
+                    settings.master_volume.clamp(0.0, 1.0),
+                ),
+                (
+                    format!("SFX Volume: {:.0}%", settings.sfx_volume * 100.0),
+                    settings.sfx_volume.clamp(0.0, 1.0),
+                ),
+                (
+                    format!("Music Volume: {:.0}%", settings.music_volume * 100.0),
+                    settings.music_volume.clamp(0.0, 1.0),
+                ),
+            ];
 
-        for (idx, label) in toggles.iter().enumerate() {
-            let r = Self::settings_toggle_rect(screen_w, screen_h, idx);
-            Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
+            for (idx, (label, norm)) in sliders.iter().enumerate() {
+                let r = Self::settings_slider_rect(screen_w, screen_h, idx);
+                let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3])
+                    || active_slider == Some(idx);
+
+                let border = if hovered {
+                    [0.88, 0.78, 0.42, 0.95]
+                } else {
+                    [0.34, 0.37, 0.44, 0.90]
+                };
+                mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+                mesh.add_quad(
+                    r[0] + 2.0,
+                    r[1] + 2.0,
+                    r[2] - 4.0,
+                    r[3] - 4.0,
+                    white_uv,
+                    [0.10, 0.12, 0.16, 0.96],
+                );
+
+                let fill_w = ((r[2] - 4.0) * *norm).max(0.0);
+                if fill_w > 0.0 {
+                    mesh.add_quad(
+                        r[0] + 2.0,
+                        r[1] + 2.0,
+                        fill_w,
+                        r[3] - 4.0,
+                        white_uv,
+                        if hovered {
+                            [0.24, 0.50, 0.34, 0.85]
+                        } else {
+                            [0.18, 0.38, 0.28, 0.80]
+                        },
+                    );
+                }
+
+                let thumb_w = 8.0;
+                let thumb_x = (r[0] + 2.0 + (r[2] - 4.0 - thumb_w) * *norm)
+                    .clamp(r[0] + 2.0, r[0] + r[2] - 2.0 - thumb_w);
+                mesh.add_quad(
+                    thumb_x,
+                    r[1] + 2.0,
+                    thumb_w,
+                    r[3] - 4.0,
+                    white_uv,
+                    if hovered {
+                        [0.95, 0.88, 0.55, 1.0]
+                    } else {
+                        [0.75, 0.78, 0.85, 0.95]
+                    },
+                );
+
+                let lw = Self::string_width(label, 9.5, 1.0);
+                Self::draw_string(
+                    mesh,
+                    r[0] + (r[2] - lw) * 0.5,
+                    r[1] + (r[3] - 13.0) * 0.5,
+                    label,
+                    9.5,
+                    13.0,
+                    1.0,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+            }
+
+            let toggles = [
+                format!(
+                    "Invert Y-Axis: {}",
+                    if settings.invert_y { "ON" } else { "OFF" }
+                ),
+                format!(
+                    "Fullscreen: {}",
+                    if settings.fullscreen { "ON" } else { "OFF" }
+                ),
+                format!("VSync: {}", if settings.vsync { "ON" } else { "OFF" }),
+                format!(
+                    "View Bobbing: {}",
+                    if settings.view_bobbing { "ON" } else { "OFF" }
+                ),
+                format!(
+                    "Debug HUD (F3): {}",
+                    if settings.show_debug_hud { "ON" } else { "OFF" }
+                ),
+            ];
+
+            for (idx, label) in toggles.iter().enumerate() {
+                let r = Self::settings_toggle_rect(screen_w, screen_h, idx);
+                Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
+            }
+        } else {
+            for (idx, (action, key_name)) in keybinds.iter().enumerate() {
+                let r = Self::settings_keybind_rect(screen_w, screen_h, idx);
+                let is_listening = listening_keybind == Some(idx);
+                let label = if is_listening {
+                    format!("{}: [Press Key]", action)
+                } else {
+                    format!("{}: {}", action, key_name)
+                };
+                if is_listening {
+                    mesh.add_quad(
+                        r[0],
+                        r[1],
+                        r[2],
+                        r[3],
+                        white_uv,
+                        [0.95, 0.82, 0.35, 1.0],
+                    );
+                    mesh.add_quad(
+                        r[0] + 2.0,
+                        r[1] + 2.0,
+                        r[2] - 4.0,
+                        r[3] - 4.0,
+                        white_uv,
+                        [0.22, 0.20, 0.10, 0.96],
+                    );
+                    let lw = Self::string_width(&label, 9.5, 1.0);
+                    Self::draw_string(
+                        mesh,
+                        r[0] + (r[2] - lw) * 0.5,
+                        r[1] + (r[3] - 13.0) * 0.5,
+                        &label,
+                        9.5,
+                        13.0,
+                        1.0,
+                        [1.0, 0.95, 0.65, 1.0],
+                    );
+                } else {
+                    Self::draw_menu_button(
+                        mesh, r[0], r[1], r[2], r[3], &label, cursor_pos, true,
+                    );
+                }
+            }
         }
 
         let reset_r = Self::settings_reset_button_rect(screen_w, screen_h);

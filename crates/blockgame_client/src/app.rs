@@ -97,6 +97,8 @@ pub struct AppState {
     pub render_distance: i32,
     pub settings: crate::settings::GameSettings,
     pub active_settings_slider: Option<usize>,
+    pub settings_tab: usize,
+    pub listening_keybind: Option<usize>,
     pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
@@ -931,6 +933,8 @@ impl ApplicationHandler for BlockGameApp {
             render_distance: settings.render_distance,
             settings,
             active_settings_slider: None,
+            settings_tab: 0,
+            listening_keybind: None,
             registry: self.registry.clone(),
             inventory,
             armor: blockgame_core::item::ArmorEquipment::new(),
@@ -1369,38 +1373,81 @@ impl ApplicationHandler for BlockGameApp {
                             }
                             AppScreen::Settings { return_to_pause } => {
                                 let mut handled = false;
-                                for idx in 0..6 {
-                                    let r = UiBuilder::settings_slider_rect(screen_w, screen_h, idx);
+                                for tab_idx in 0..2 {
+                                    let r = UiBuilder::settings_tab_rect(screen_w, screen_h, tab_idx);
                                     if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
-                                        state.active_settings_slider = Some(idx);
-                                        state.update_settings_slider(
-                                            idx,
-                                            cpos[0],
-                                            screen_w,
-                                            screen_h,
-                                        );
+                                        state.settings_tab = tab_idx;
+                                        state.active_settings_slider = None;
+                                        state.listening_keybind = None;
                                         handled = true;
                                         break;
                                     }
                                 }
 
-                                if !handled {
-                                    for idx in 0..5 {
-                                        let r = UiBuilder::settings_toggle_rect(
+                                if !handled && state.settings_tab == 0 {
+                                    for idx in 0..6 {
+                                        let r = UiBuilder::settings_slider_rect(
                                             screen_w, screen_h, idx,
                                         );
                                         if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
                                         {
-                                            match idx {
-                                                0 => state.settings.invert_y = !state.settings.invert_y,
-                                                1 => state.settings.fullscreen = !state.settings.fullscreen,
-                                                2 => state.settings.vsync = !state.settings.vsync,
-                                                3 => state.settings.view_bobbing = !state.settings.view_bobbing,
-                                                4 => state.settings.show_debug_hud = !state.settings.show_debug_hud,
-                                                _ => {}
+                                            state.active_settings_slider = Some(idx);
+                                            state.update_settings_slider(
+                                                idx, cpos[0], screen_w, screen_h,
+                                            );
+                                            handled = true;
+                                            break;
+                                        }
+                                    }
+
+                                    if !handled {
+                                        for idx in 0..5 {
+                                            let r = UiBuilder::settings_toggle_rect(
+                                                screen_w, screen_h, idx,
+                                            );
+                                            if UiBuilder::is_rect_hovered(
+                                                cpos, r[0], r[1], r[2], r[3],
+                                            ) {
+                                                match idx {
+                                                    0 => {
+                                                        state.settings.invert_y =
+                                                            !state.settings.invert_y
+                                                    }
+                                                    1 => {
+                                                        state.settings.fullscreen =
+                                                            !state.settings.fullscreen
+                                                    }
+                                                    2 => {
+                                                        state.settings.vsync =
+                                                            !state.settings.vsync
+                                                    }
+                                                    3 => {
+                                                        state.settings.view_bobbing =
+                                                            !state.settings.view_bobbing
+                                                    }
+                                                    4 => {
+                                                        state.settings.show_debug_hud =
+                                                            !state.settings.show_debug_hud
+                                                    }
+                                                    _ => {}
+                                                }
+                                                state.apply_settings();
+                                                state
+                                                    .settings
+                                                    .save(std::path::Path::new("settings.cfg"));
+                                                handled = true;
+                                                break;
                                             }
-                                            state.apply_settings();
-                                            state.settings.save(std::path::Path::new("settings.cfg"));
+                                        }
+                                    }
+                                } else if !handled && state.settings_tab == 1 {
+                                    for idx in 0..crate::settings::KeyBinds::COUNT {
+                                        let r = UiBuilder::settings_keybind_rect(
+                                            screen_w, screen_h, idx,
+                                        );
+                                        if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
+                                        {
+                                            state.listening_keybind = Some(idx);
                                             handled = true;
                                             break;
                                         }
@@ -1414,6 +1461,7 @@ impl ApplicationHandler for BlockGameApp {
                                         cpos, reset_r[0], reset_r[1], reset_r[2], reset_r[3],
                                     ) {
                                         state.settings = crate::settings::GameSettings::default();
+                                        state.listening_keybind = None;
                                         state.apply_settings();
                                         state.settings.save(std::path::Path::new("settings.cfg"));
                                         handled = true;
@@ -1426,6 +1474,7 @@ impl ApplicationHandler for BlockGameApp {
                                     if UiBuilder::is_rect_hovered(
                                         cpos, done_r[0], done_r[1], done_r[2], done_r[3],
                                     ) {
+                                        state.listening_keybind = None;
                                         state.settings.save(std::path::Path::new("settings.cfg"));
                                         state.screen = if return_to_pause {
                                             AppScreen::Paused {
@@ -2413,7 +2462,15 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
                         AppScreen::Settings { return_to_pause } => {
-                            if key == KeyCode::Escape {
+                            if let Some(bind_idx) = state.listening_keybind {
+                                if key == KeyCode::Escape {
+                                    state.listening_keybind = None;
+                                } else if crate::settings::key_code_to_str(key).is_some() {
+                                    state.settings.keybinds.set_by_index(bind_idx, key);
+                                    state.listening_keybind = None;
+                                    state.settings.save(std::path::Path::new("settings.cfg"));
+                                }
+                            } else if key == KeyCode::Escape {
                                 state.active_settings_slider = None;
                                 state.settings.save(std::path::Path::new("settings.cfg"));
                                 state.screen = if return_to_pause {
@@ -2645,83 +2702,45 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
 
-                match key {
-                    KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
-                    KeyCode::Tab if !state.inventory_open => {
-                        state.tab_held = pressed;
-                    }
-                    KeyCode::F3 if pressed && !state.inventory_open => {
-                        state.settings.show_debug_hud = !state.settings.show_debug_hud;
-                        state.settings.save(std::path::Path::new("settings.cfg"));
-                    }
-                    KeyCode::F5 if pressed && !state.inventory_open => {
-                        state.third_person = !state.third_person;
-                    }
-                    KeyCode::KeyR
-                        if pressed && state.inventory_open && !state.jei_search_focused =>
-                    {
-                        if let Some(id) = find_hovered_item(state) {
-                            state.jei_recipe_modal = Some(JeiRecipeModalState {
-                                target_item: id,
-                                is_usage_mode: false,
-                                recipe_index: 0,
-                            });
-                            return;
-                        }
-                    }
-                    KeyCode::KeyU
-                        if pressed && state.inventory_open && !state.jei_search_focused =>
-                    {
-                        if let Some(id) = find_hovered_item(state) {
-                            state.jei_recipe_modal = Some(JeiRecipeModalState {
-                                target_item: id,
-                                is_usage_mode: true,
-                                recipe_index: 0,
-                            });
-                            return;
-                        }
-                    }
-                    KeyCode::KeyW => state.moving_forward = pressed,
-                    KeyCode::KeyS => state.moving_backward = pressed,
-                    KeyCode::KeyA => state.moving_left = pressed,
-                    KeyCode::KeyD => state.moving_right = pressed,
-                    KeyCode::Space => state.jumping = pressed,
-                    KeyCode::ControlLeft => state.sprinting = pressed,
-                    KeyCode::KeyF if pressed => {
-                        state.player.toggle_flight();
-                        log::info!("Flying mode: {}", state.player.flying);
-                    }
-                    KeyCode::KeyE if pressed => {
-                        state.mouse_left_down = false;
-                        state.break_progress = 0.0;
-                        state.breaking_voxel = None;
-                        state.cracking_buffer = None;
-                        state.active_chest_pos = None;
-                        state.active_furnace_pos = None;
-                        state.jei_recipe_modal = None;
-                        state.jei_search_focused = false;
-                        if state.inventory_open {
-                            // Safely return crafting grid items and cursor held item to inventory
-                            let grid_items: Vec<_> =
-                                state.crafting_grid.slots.drain(..).collect();
-                            for slot in grid_items {
-                                if !slot.is_empty() {
-                                    if let Some(rem) =
-                                        state.inventory.add_item(slot, &state.item_registry)
-                                    {
-                                        state.spawn_drop_synced(
-                                            state.player.position,
-                                            Vec3::new(0.0, 2.0, 0.0),
-                                            rem,
-                                        );
-                                    }
-                                }
-                            }
-                            if !state.cursor_held.is_empty() {
-                                let held =
-                                    std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                let kb = state.settings.keybinds.clone();
+                if key == kb.player_list && !state.inventory_open {
+                    state.tab_held = pressed;
+                } else if key == kb.debug_hud && pressed && !state.inventory_open {
+                    state.settings.show_debug_hud = !state.settings.show_debug_hud;
+                    state.settings.save(std::path::Path::new("settings.cfg"));
+                } else if key == kb.third_person && pressed && !state.inventory_open {
+                    state.third_person = !state.third_person;
+                } else if key == kb.forward {
+                    state.moving_forward = pressed;
+                } else if key == kb.backward {
+                    state.moving_backward = pressed;
+                } else if key == kb.left {
+                    state.moving_left = pressed;
+                } else if key == kb.right {
+                    state.moving_right = pressed;
+                } else if key == kb.jump {
+                    state.jumping = pressed;
+                } else if key == kb.sprint {
+                    state.sprinting = pressed;
+                } else if key == kb.flight && pressed {
+                    state.player.toggle_flight();
+                    log::info!("Flying mode: {}", state.player.flying);
+                } else if key == kb.inventory && pressed {
+                    state.mouse_left_down = false;
+                    state.break_progress = 0.0;
+                    state.breaking_voxel = None;
+                    state.cracking_buffer = None;
+                    state.active_chest_pos = None;
+                    state.active_furnace_pos = None;
+                    state.jei_recipe_modal = None;
+                    state.jei_search_focused = false;
+                    if state.inventory_open {
+                        let grid_items: Vec<_> =
+                            state.crafting_grid.slots.drain(..).collect();
+                        for slot in grid_items {
+                            if !slot.is_empty() {
                                 if let Some(rem) =
-                                    state.inventory.add_item(held, &state.item_registry)
+                                    state.inventory.add_item(slot, &state.item_registry)
                                 {
                                     state.spawn_drop_synced(
                                         state.player.position,
@@ -2730,37 +2749,99 @@ impl ApplicationHandler for BlockGameApp {
                                     );
                                 }
                             }
-                            state.inventory_open = false;
-                            state.mouse_captured = true;
-                            let _ = state
-                                .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                            state.window.set_cursor_visible(false);
-                        } else {
-                            // Open 2x2 backpack inventory
-                            state.crafting_grid = CraftingGrid::new_2x2();
-                            state.inventory_open = true;
-                            state.mouse_captured = false;
-                            let _ = state
-                                .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None);
-                            state.window.set_cursor_visible(true);
                         }
+                        if !state.cursor_held.is_empty() {
+                            let held =
+                                std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                            if let Some(rem) =
+                                state.inventory.add_item(held, &state.item_registry)
+                            {
+                                state.spawn_drop_synced(
+                                    state.player.position,
+                                    Vec3::new(0.0, 2.0, 0.0),
+                                    rem,
+                                );
+                            }
+                        }
+                        state.inventory_open = false;
+                        state.mouse_captured = true;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        state.window.set_cursor_visible(false);
+                    } else {
+                        state.crafting_grid = CraftingGrid::new_2x2();
+                        state.inventory_open = true;
+                        state.mouse_captured = false;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                        state.window.set_cursor_visible(true);
                     }
-                    KeyCode::Escape if pressed => {
-                        state.mouse_left_down = false;
-                        state.break_progress = 0.0;
-                        state.breaking_voxel = None;
-                        state.cracking_buffer = None;
-                        state.active_chest_pos = None;
-                        state.active_furnace_pos = None;
-                        if state.inventory_open {
-                            let grid_items: Vec<_> =
-                                state.crafting_grid.slots.drain(..).collect();
-                            for slot in grid_items {
-                                if !slot.is_empty() {
+                } else if key == kb.chat && pressed && !state.inventory_open {
+                    state.moving_forward = false;
+                    state.moving_backward = false;
+                    state.moving_left = false;
+                    state.moving_right = false;
+                    state.jumping = false;
+                    state.sprinting = false;
+                    state.chat_open = true;
+                    state.chat_input.clear();
+                } else {
+                    match key {
+                        KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
+                        KeyCode::KeyR
+                            if pressed && state.inventory_open && !state.jei_search_focused =>
+                        {
+                            if let Some(id) = find_hovered_item(state) {
+                                state.jei_recipe_modal = Some(JeiRecipeModalState {
+                                    target_item: id,
+                                    is_usage_mode: false,
+                                    recipe_index: 0,
+                                });
+                                return;
+                            }
+                        }
+                        KeyCode::KeyU
+                            if pressed && state.inventory_open && !state.jei_search_focused =>
+                        {
+                            if let Some(id) = find_hovered_item(state) {
+                                state.jei_recipe_modal = Some(JeiRecipeModalState {
+                                    target_item: id,
+                                    is_usage_mode: true,
+                                    recipe_index: 0,
+                                });
+                                return;
+                            }
+                        }
+                        KeyCode::Escape if pressed => {
+                            state.mouse_left_down = false;
+                            state.break_progress = 0.0;
+                            state.breaking_voxel = None;
+                            state.cracking_buffer = None;
+                            state.active_chest_pos = None;
+                            state.active_furnace_pos = None;
+                            if state.inventory_open {
+                                let grid_items: Vec<_> =
+                                    state.crafting_grid.slots.drain(..).collect();
+                                for slot in grid_items {
+                                    if !slot.is_empty() {
+                                        if let Some(rem) =
+                                            state.inventory.add_item(slot, &state.item_registry)
+                                        {
+                                            state.spawn_drop_synced(
+                                                state.player.position,
+                                                Vec3::new(0.0, 2.0, 0.0),
+                                                rem,
+                                            );
+                                        }
+                                    }
+                                }
+                                if !state.cursor_held.is_empty() {
+                                    let held =
+                                        std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
                                     if let Some(rem) =
-                                        state.inventory.add_item(slot, &state.item_registry)
+                                        state.inventory.add_item(held, &state.item_registry)
                                     {
                                         state.spawn_drop_synced(
                                             state.player.position,
@@ -2769,70 +2850,45 @@ impl ApplicationHandler for BlockGameApp {
                                         );
                                     }
                                 }
+                                state.inventory_open = false;
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            } else {
+                                state.moving_forward = false;
+                                state.moving_backward = false;
+                                state.moving_left = false;
+                                state.moving_right = false;
+                                state.jumping = false;
+                                state.sprinting = false;
+                                state.screen = AppScreen::Paused {
+                                    status_message: None,
+                                };
+                                state.mouse_captured = false;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
                             }
-                            if !state.cursor_held.is_empty() {
-                                let held =
-                                    std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
-                                if let Some(rem) =
-                                    state.inventory.add_item(held, &state.item_registry)
-                                {
-                                    state.spawn_drop_synced(
-                                        state.player.position,
-                                        Vec3::new(0.0, 2.0, 0.0),
-                                        rem,
-                                    );
-                                }
-                            }
-                            state.inventory_open = false;
-                            state.mouse_captured = true;
-                            let _ = state
-                                .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                            state.window.set_cursor_visible(false);
-                        } else {
-                            // Open Pause Menu
-                            state.moving_forward = false;
-                            state.moving_backward = false;
-                            state.moving_left = false;
-                            state.moving_right = false;
-                            state.jumping = false;
-                            state.sprinting = false;
-                            state.screen = AppScreen::Paused {
-                                status_message: None,
-                            };
-                            state.mouse_captured = false;
-                            let _ = state
-                                .window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None);
-                            state.window.set_cursor_visible(true);
                         }
+                        KeyCode::KeyY if pressed && !state.inventory_open => {
+                            state.day_night.time =
+                                (state.day_night.time + 3000.0).rem_euclid(24000.0);
+                            log::info!("Time of day advanced to: {:.1} ticks", state.day_night.time);
+                        }
+                        KeyCode::Digit1 if pressed => state.active_hotbar_slot = 0,
+                        KeyCode::Digit2 if pressed => state.active_hotbar_slot = 1,
+                        KeyCode::Digit3 if pressed => state.active_hotbar_slot = 2,
+                        KeyCode::Digit4 if pressed => state.active_hotbar_slot = 3,
+                        KeyCode::Digit5 if pressed => state.active_hotbar_slot = 4,
+                        KeyCode::Digit6 if pressed => state.active_hotbar_slot = 5,
+                        KeyCode::Digit7 if pressed => state.active_hotbar_slot = 6,
+                        KeyCode::Digit8 if pressed => state.active_hotbar_slot = 7,
+                        KeyCode::Digit9 if pressed => state.active_hotbar_slot = 8,
+                        _ => {}
                     }
-                    KeyCode::KeyT if pressed && !state.inventory_open => {
-                        state.moving_forward = false;
-                        state.moving_backward = false;
-                        state.moving_left = false;
-                        state.moving_right = false;
-                        state.jumping = false;
-                        state.sprinting = false;
-                        state.chat_open = true;
-                        state.chat_input.clear();
-                    }
-                    KeyCode::KeyY if pressed && !state.inventory_open => {
-                        // Advance time of day by 3 hours (3000 ticks)
-                        state.day_night.time = (state.day_night.time + 3000.0).rem_euclid(24000.0);
-                        log::info!("Time of day advanced to: {:.1} ticks", state.day_night.time);
-                    }
-                    // Hotbar slot selection 1-9
-                    KeyCode::Digit1 if pressed => state.active_hotbar_slot = 0,
-                    KeyCode::Digit2 if pressed => state.active_hotbar_slot = 1,
-                    KeyCode::Digit3 if pressed => state.active_hotbar_slot = 2,
-                    KeyCode::Digit4 if pressed => state.active_hotbar_slot = 3,
-                    KeyCode::Digit5 if pressed => state.active_hotbar_slot = 4,
-                    KeyCode::Digit6 if pressed => state.active_hotbar_slot = 5,
-                    KeyCode::Digit7 if pressed => state.active_hotbar_slot = 6,
-                    KeyCode::Digit8 if pressed => state.active_hotbar_slot = 7,
-                    KeyCode::Digit9 if pressed => state.active_hotbar_slot = 8,
-                    _ => {}
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -4220,12 +4276,16 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         AppScreen::Settings { .. } => {
                             let ui_settings = state.settings_ui_state();
+                            let keybinds = state.settings.keybinds.labels_and_keys();
                             UiBuilder::build_settings_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
                                 ui_settings,
+                                state.settings_tab,
                                 state.active_settings_slider,
+                                state.listening_keybind,
+                                &keybinds,
                                 state.cursor_pos,
                             );
                         }
