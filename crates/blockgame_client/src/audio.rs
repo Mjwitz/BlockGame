@@ -731,6 +731,15 @@ pub struct AudioManager {
 }
 
 impl AudioManager {
+    /// Updates master, SFX, and music volume levels (`0.0..=1.0`).
+    pub fn set_volumes(&self, master: f32, sfx: f32, music: f32) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.master_volume = master.clamp(0.0, 1.0);
+            m.sfx_volume = sfx.clamp(0.0, 1.0);
+            m.music_volume = music.clamp(0.0, 1.0);
+        }
+    }
+
     /// Initializes the audio manager and playback device.
     ///
     /// Gracefully falls back to silent operation if no audio hardware is found.

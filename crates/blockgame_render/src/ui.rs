@@ -264,6 +264,19 @@ pub struct RecipeModalParams<'a> {
     pub is_usage_mode: bool,
 }
 
+/// Snapshot of client settings passed to `UiBuilder::build_settings_screen`.
+#[derive(Debug, Clone, Copy)]
+pub struct SettingsUiState {
+    pub render_distance: i32,
+    pub fov_degrees: f32,
+    pub mouse_sensitivity: f32,
+    pub master_volume: f32,
+    pub sfx_volume: f32,
+    pub music_volume: f32,
+    pub invert_y: bool,
+    pub fullscreen: bool,
+}
+
 pub struct UiBuilder;
 
 impl UiBuilder {
@@ -4563,6 +4576,222 @@ impl UiBuilder {
             back_rect[1],
             back_rect[2],
             back_rect[3],
+            "Done",
+            cursor_pos,
+            true,
+        );
+    }
+
+    /// Returns the slider rectangle `[x, y, w, h]` for slider index `0..6`.
+    pub fn settings_slider_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
+        let col_w = 270.0;
+        let gap_x = 24.0;
+        let total_w = col_w * 2.0 + gap_x;
+        let start_x = (screen_w - total_w) * 0.5;
+        let start_y = screen_h * 0.22;
+        let row_h = 34.0;
+        let gap_y = 24.0;
+
+        let col = (index / 3) as f32;
+        let row = (index % 3) as f32;
+        [
+            start_x + col * (col_w + gap_x),
+            start_y + row * (row_h + gap_y),
+            col_w,
+            row_h,
+        ]
+    }
+
+    /// Returns the toggle button rectangle `[x, y, w, h]` for toggle index `0..2`.
+    pub fn settings_toggle_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
+        let col_w = 270.0;
+        let gap_x = 24.0;
+        let total_w = col_w * 2.0 + gap_x;
+        let start_x = (screen_w - total_w) * 0.5;
+        let y = screen_h * 0.22 + 3.0 * (34.0 + 24.0) + 12.0;
+        [start_x + (index as f32) * (col_w + gap_x), y, col_w, 38.0]
+    }
+
+    /// Returns `[x, y, w, h]` for the `Reset to Defaults` button on the Settings screen.
+    pub fn settings_reset_button_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
+        let col_w = 270.0;
+        let gap_x = 24.0;
+        let total_w = col_w * 2.0 + gap_x;
+        let start_x = (screen_w - total_w) * 0.5;
+        [start_x, screen_h * 0.78, col_w, 42.0]
+    }
+
+    /// Returns `[x, y, w, h]` for the `Done` button on the Settings screen.
+    pub fn settings_done_button_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
+        let col_w = 270.0;
+        let gap_x = 24.0;
+        let total_w = col_w * 2.0 + gap_x;
+        let start_x = (screen_w - total_w) * 0.5;
+        [start_x + col_w + gap_x, screen_h * 0.78, col_w, 42.0]
+    }
+
+    /// Builds the interactive Settings screen with sliders, toggles, and action buttons.
+    pub fn build_settings_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        settings: SettingsUiState,
+        active_slider: Option<usize>,
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.05, 0.06, 0.09, 0.82],
+        );
+
+        let title = "Settings";
+        let tw = Self::string_width(title, 15.0, 1.5);
+        Self::draw_string(
+            mesh,
+            (screen_w - tw) * 0.5,
+            screen_h * 0.09,
+            title,
+            15.0,
+            20.0,
+            1.5,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+
+        let sliders: [(String, f32); 6] = [
+            (
+                format!("Render Distance: {} chunks", settings.render_distance),
+                ((settings.render_distance - 2) as f32 / 10.0).clamp(0.0, 1.0),
+            ),
+            (
+                format!("FOV: {:.0} deg", settings.fov_degrees),
+                ((settings.fov_degrees - 50.0) / 60.0).clamp(0.0, 1.0),
+            ),
+            (
+                format!("Sensitivity: {:.0}%", settings.mouse_sensitivity * 100.0),
+                ((settings.mouse_sensitivity - 0.2) / 2.3).clamp(0.0, 1.0),
+            ),
+            (
+                format!("Master Volume: {:.0}%", settings.master_volume * 100.0),
+                settings.master_volume.clamp(0.0, 1.0),
+            ),
+            (
+                format!("SFX Volume: {:.0}%", settings.sfx_volume * 100.0),
+                settings.sfx_volume.clamp(0.0, 1.0),
+            ),
+            (
+                format!("Music Volume: {:.0}%", settings.music_volume * 100.0),
+                settings.music_volume.clamp(0.0, 1.0),
+            ),
+        ];
+
+        for (idx, (label, norm)) in sliders.iter().enumerate() {
+            let r = Self::settings_slider_rect(screen_w, screen_h, idx);
+            let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3])
+                || active_slider == Some(idx);
+
+            // Outer track box
+            let border = if hovered {
+                [0.88, 0.78, 0.42, 0.95]
+            } else {
+                [0.34, 0.37, 0.44, 0.90]
+            };
+            mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+            mesh.add_quad(
+                r[0] + 2.0,
+                r[1] + 2.0,
+                r[2] - 4.0,
+                r[3] - 4.0,
+                white_uv,
+                [0.10, 0.12, 0.16, 0.96],
+            );
+
+            // Filled bar
+            let fill_w = ((r[2] - 4.0) * *norm).max(0.0);
+            if fill_w > 0.0 {
+                mesh.add_quad(
+                    r[0] + 2.0,
+                    r[1] + 2.0,
+                    fill_w,
+                    r[3] - 4.0,
+                    white_uv,
+                    if hovered {
+                        [0.24, 0.50, 0.34, 0.85]
+                    } else {
+                        [0.18, 0.38, 0.28, 0.80]
+                    },
+                );
+            }
+
+            // Slider thumb
+            let thumb_w = 8.0;
+            let thumb_x = (r[0] + 2.0 + (r[2] - 4.0 - thumb_w) * *norm)
+                .clamp(r[0] + 2.0, r[0] + r[2] - 2.0 - thumb_w);
+            mesh.add_quad(
+                thumb_x,
+                r[1] + 2.0,
+                thumb_w,
+                r[3] - 4.0,
+                white_uv,
+                if hovered {
+                    [0.95, 0.88, 0.55, 1.0]
+                } else {
+                    [0.75, 0.78, 0.85, 0.95]
+                },
+            );
+
+            let lw = Self::string_width(label, 9.5, 1.0);
+            Self::draw_string(
+                mesh,
+                r[0] + (r[2] - lw) * 0.5,
+                r[1] + (r[3] - 13.0) * 0.5,
+                label,
+                9.5,
+                13.0,
+                1.0,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+        }
+
+        let invert_label = format!(
+            "Invert Y-Axis: {}",
+            if settings.invert_y { "ON" } else { "OFF" }
+        );
+        let fullscreen_label = format!(
+            "Fullscreen: {}",
+            if settings.fullscreen { "ON" } else { "OFF" }
+        );
+
+        for (idx, label) in [invert_label, fullscreen_label].iter().enumerate() {
+            let r = Self::settings_toggle_rect(screen_w, screen_h, idx);
+            Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
+        }
+
+        let reset_r = Self::settings_reset_button_rect(screen_w, screen_h);
+        Self::draw_menu_button(
+            mesh,
+            reset_r[0],
+            reset_r[1],
+            reset_r[2],
+            reset_r[3],
+            "Reset to Defaults",
+            cursor_pos,
+            true,
+        );
+
+        let done_r = Self::settings_done_button_rect(screen_w, screen_h);
+        Self::draw_menu_button(
+            mesh,
+            done_r[0],
+            done_r[1],
+            done_r[2],
+            done_r[3],
             "Done",
             cursor_pos,
             true,

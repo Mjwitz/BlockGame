@@ -94,6 +94,8 @@ pub struct AppState {
     pub saved_worlds: Vec<WorldMetadata>,
     pub active_world_metadata: Option<WorldMetadata>,
     pub render_distance: i32,
+    pub settings: crate::settings::GameSettings,
+    pub active_settings_slider: Option<usize>,
     pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
@@ -163,6 +165,76 @@ pub struct AppState {
 impl AppState {
     pub fn refresh_saved_worlds(&mut self) {
         self.saved_worlds = list_saved_worlds(&self.saves_root);
+    }
+
+    /// Applies `self.settings` live to camera FOV, render distance, audio volumes, and fullscreen mode.
+    pub fn apply_settings(&mut self) {
+        self.settings.clamp_all();
+        self.render_distance = self.settings.render_distance;
+        self.world_manager
+            .set_render_distance(self.settings.render_distance);
+        self.camera.fovy = self.settings.fov_degrees.to_radians();
+        self.audio.set_volumes(
+            self.settings.master_volume,
+            self.settings.sfx_volume,
+            self.settings.music_volume,
+        );
+        let desired_fs = if self.settings.fullscreen {
+            Some(winit::window::Fullscreen::Borderless(None))
+        } else {
+            None
+        };
+        if self.window.fullscreen() != desired_fs {
+            self.window.set_fullscreen(desired_fs);
+        }
+    }
+
+    /// Builds a `SettingsUiState` snapshot for `UiBuilder::build_settings_screen`.
+    pub fn settings_ui_state(&self) -> blockgame_render::ui::SettingsUiState {
+        blockgame_render::ui::SettingsUiState {
+            render_distance: self.settings.render_distance,
+            fov_degrees: self.settings.fov_degrees,
+            mouse_sensitivity: self.settings.mouse_sensitivity,
+            master_volume: self.settings.master_volume,
+            sfx_volume: self.settings.sfx_volume,
+            music_volume: self.settings.music_volume,
+            invert_y: self.settings.invert_y,
+            fullscreen: self.settings.fullscreen,
+        }
+    }
+
+    /// Updates a specific settings slider (`0..6`) from horizontal cursor position and applies it live.
+    pub fn update_settings_slider(
+        &mut self,
+        slider_idx: usize,
+        cursor_x: f32,
+        screen_w: f32,
+        screen_h: f32,
+    ) {
+        let r = UiBuilder::settings_slider_rect(screen_w, screen_h, slider_idx);
+        let t = ((cursor_x - (r[0] + 2.0)) / (r[2] - 4.0).max(1.0)).clamp(0.0, 1.0);
+        match slider_idx {
+            0 => {
+                self.settings.render_distance = (2.0 + t * 10.0).round() as i32;
+            }
+            1 => {
+                self.settings.fov_degrees = (50.0 + t * 60.0).round();
+            }
+            2 => {
+                self.settings.mouse_sensitivity = 0.2 + t * 2.3;
+            }
+            3 => {
+                self.settings.master_volume = t;
+            }
+            4 => {
+                self.settings.sfx_volume = t;
+            }
+            5 => {
+                self.settings.music_volume = t;
+            }
+            _ => {}
+        }
+        self.apply_settings();
     }
 
     /// Spawns an item drop into the world. In multiplayer, automatically assigns a unique drop ID,
@@ -771,7 +843,19 @@ impl ApplicationHandler for BlockGameApp {
         let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
         window.set_cursor_visible(true);
 
+        let settings = crate::settings::GameSettings::load(std::path::Path::new("settings.cfg"));
+        let mut camera = camera;
+        camera.fovy = settings.fov_degrees.to_radians();
+        if settings.fullscreen {
+            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
+
         let audio = crate::audio::AudioManager::new();
+        audio.set_volumes(
+            settings.master_volume,
+            settings.sfx_volume,
+            settings.music_volume,
+        );
         let music_scheduler = crate::audio::MusicScheduler::new(audio.music_track_count());
 
         self.state = Some(AppState {
@@ -798,7 +882,9 @@ impl ApplicationHandler for BlockGameApp {
             saves_root,
             saved_worlds,
             active_world_metadata: None,
-            render_distance: self.render_distance,
+            render_distance: settings.render_distance,
+            settings,
+            active_settings_slider: None,
             registry: self.registry.clone(),
             inventory,
             armor: blockgame_core::item::ArmorEquipment::new(),
@@ -905,6 +991,18 @@ impl ApplicationHandler for BlockGameApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor_pos = [position.x as f32, position.y as f32];
+                if matches!(state.screen, AppScreen::Settings { .. }) {
+                    if let Some(slider_idx) = state.active_settings_slider {
+                        let screen_w = state.surface_config.width as f32;
+                        let screen_h = state.surface_config.height as f32;
+                        state.update_settings_slider(
+                            slider_idx,
+                            state.cursor_pos[0],
+                            screen_w,
+                            screen_h,
+                        );
+                    }
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if state.screen != AppScreen::InGame {
@@ -926,6 +1024,11 @@ impl ApplicationHandler for BlockGameApp {
                 ..
             } => {
                 let pressed = mouse_btn_state == ElementState::Pressed;
+                if !pressed && button == MouseButton::Left {
+                    if state.active_settings_slider.take().is_some() {
+                        state.settings.save(std::path::Path::new("settings.cfg"));
+                    }
+                }
 
                 // Handle Title Screen, World Select, Create World, Settings, Multiplayer Lobby, and Pause Menu clicks
                 if state.screen != AppScreen::InGame {
@@ -1213,21 +1316,71 @@ impl ApplicationHandler for BlockGameApp {
                                 }
                             }
                             AppScreen::Settings { return_to_pause } => {
-                                let back_r = UiBuilder::notice_back_button_rect(screen_w, screen_h);
-                                if UiBuilder::is_rect_hovered(
-                                    cpos,
-                                    back_r[0],
-                                    back_r[1],
-                                    back_r[2],
-                                    back_r[3],
-                                ) {
-                                    state.screen = if return_to_pause {
-                                        AppScreen::Paused {
-                                            status_message: None,
+                                let mut handled = false;
+                                for idx in 0..6 {
+                                    let r = UiBuilder::settings_slider_rect(screen_w, screen_h, idx);
+                                    if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
+                                        state.active_settings_slider = Some(idx);
+                                        state.update_settings_slider(
+                                            idx,
+                                            cpos[0],
+                                            screen_w,
+                                            screen_h,
+                                        );
+                                        handled = true;
+                                        break;
+                                    }
+                                }
+
+                                if !handled {
+                                    for idx in 0..2 {
+                                        let r = UiBuilder::settings_toggle_rect(
+                                            screen_w, screen_h, idx,
+                                        );
+                                        if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
+                                        {
+                                            if idx == 0 {
+                                                state.settings.invert_y = !state.settings.invert_y;
+                                            } else {
+                                                state.settings.fullscreen =
+                                                    !state.settings.fullscreen;
+                                            }
+                                            state.apply_settings();
+                                            state.settings.save(std::path::Path::new("settings.cfg"));
+                                            handled = true;
+                                            break;
                                         }
-                                    } else {
-                                        AppScreen::Title
-                                    };
+                                    }
+                                }
+
+                                if !handled {
+                                    let reset_r =
+                                        UiBuilder::settings_reset_button_rect(screen_w, screen_h);
+                                    if UiBuilder::is_rect_hovered(
+                                        cpos, reset_r[0], reset_r[1], reset_r[2], reset_r[3],
+                                    ) {
+                                        state.settings = crate::settings::GameSettings::default();
+                                        state.apply_settings();
+                                        state.settings.save(std::path::Path::new("settings.cfg"));
+                                        handled = true;
+                                    }
+                                }
+
+                                if !handled {
+                                    let done_r =
+                                        UiBuilder::settings_done_button_rect(screen_w, screen_h);
+                                    if UiBuilder::is_rect_hovered(
+                                        cpos, done_r[0], done_r[1], done_r[2], done_r[3],
+                                    ) {
+                                        state.settings.save(std::path::Path::new("settings.cfg"));
+                                        state.screen = if return_to_pause {
+                                            AppScreen::Paused {
+                                                status_message: None,
+                                            }
+                                        } else {
+                                            AppScreen::Title
+                                        };
+                                    }
                                 }
                             }
                             AppScreen::MultiplayerLobby {
@@ -2207,6 +2360,8 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         AppScreen::Settings { return_to_pause } => {
                             if key == KeyCode::Escape {
+                                state.active_settings_slider = None;
+                                state.settings.save(std::path::Path::new("settings.cfg"));
                                 state.screen = if return_to_pause {
                                     AppScreen::Paused {
                                         status_message: None,
@@ -3958,20 +4113,13 @@ impl ApplicationHandler for BlockGameApp {
                             );
                         }
                         AppScreen::Settings { .. } => {
-                            let render_dist_line =
-                                format!("Render Distance: {} chunks", state.render_distance);
-                            let lines = [
-                                render_dist_line.as_str(),
-                                "Controls: WASD Move | Space Jump | Ctrl Sprint | F Fly | F5 3rd Person",
-                                "T Chat | Tab Player List | E Inventory | R Recipe | U Uses | Esc Pause",
-                                "Textures: Faithful 32x Procedural Atlas + 3D Player Skins",
-                            ];
-                            UiBuilder::build_notice_or_settings_screen(
+                            let ui_settings = state.settings_ui_state();
+                            UiBuilder::build_settings_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
-                                "Settings",
-                                &lines,
+                                ui_settings,
+                                state.active_settings_slider,
                                 state.cursor_pos,
                             );
                         }
@@ -4304,9 +4452,10 @@ impl ApplicationHandler for BlockGameApp {
                 && !state.player_stats.is_dead
             {
                 if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-                    let sensitivity = 0.003;
+                    let sensitivity = 0.003 * state.settings.mouse_sensitivity;
+                    let y_sign = if state.settings.invert_y { -1.0 } else { 1.0 };
                     state.camera.yaw += (dx as f32) * sensitivity;
-                    state.camera.pitch -= (dy as f32) * sensitivity;
+                    state.camera.pitch -= (dy as f32) * sensitivity * y_sign;
                     let max_pitch = 89.0_f32.to_radians();
                     state.camera.pitch = state.camera.pitch.clamp(-max_pitch, max_pitch);
                 }

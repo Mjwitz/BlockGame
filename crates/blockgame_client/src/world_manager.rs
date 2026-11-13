@@ -117,6 +117,11 @@ impl WorldManager {
     }
 
     /// Synchronously pre-generates (skipping chunks already loaded from save) and meshes the area
+    /// Updates the active chunk render distance (`2..=12`).
+    pub fn set_render_distance(&mut self, render_distance: i32) {
+        self.render_distance = render_distance.clamp(2, 12);
+    }
+
     /// around `center_pos`.
     pub fn init_area_around(
         &mut self,

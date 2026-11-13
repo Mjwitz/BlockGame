@@ -1,10 +1,12 @@
 mod app;
 pub mod audio;
 mod headless;
+pub mod settings;
 mod world_manager;
 
 use app::BlockGameApp;
 use blockgame_core::block::BlockRegistry;
+use std::path::Path;
 use std::sync::Arc;
 use winit::event_loop::EventLoop;
 
@@ -12,7 +14,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let registry = Arc::new(BlockRegistry::new());
-    let render_distance: i32 = 4;
+    let loaded_settings = settings::GameSettings::load(Path::new("settings.cfg"));
+    let render_distance: i32 = loaded_settings.render_distance;
 
     let args: Vec<String> = std::env::args().collect();
 
