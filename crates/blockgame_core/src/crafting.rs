@@ -1872,6 +1872,86 @@ impl CraftingManager {
             pattern: vec![Some(ItemId::STRING); 4],
             output: ItemSlot::new(ItemId::WHITE_WOOL, 1),
         });
+
+        // Armor Sets (Leather, Iron, Gold, Diamond)
+        let armor_tiers = [
+            (
+                ItemId::LEATHER,
+                "Leather Cap",
+                ItemId::LEATHER_HELMET,
+                "Leather Tunic",
+                ItemId::LEATHER_CHESTPLATE,
+                "Leather Pants",
+                ItemId::LEATHER_LEGGINGS,
+                "Leather Boots",
+                ItemId::LEATHER_BOOTS,
+            ),
+            (
+                ItemId::IRON_INGOT,
+                "Iron Helmet",
+                ItemId::IRON_HELMET,
+                "Iron Chestplate",
+                ItemId::IRON_CHESTPLATE,
+                "Iron Leggings",
+                ItemId::IRON_LEGGINGS,
+                "Iron Boots",
+                ItemId::IRON_BOOTS,
+            ),
+            (
+                ItemId::GOLD_INGOT,
+                "Golden Helmet",
+                ItemId::GOLD_HELMET,
+                "Golden Chestplate",
+                ItemId::GOLD_CHESTPLATE,
+                "Golden Leggings",
+                ItemId::GOLD_LEGGINGS,
+                "Golden Boots",
+                ItemId::GOLD_BOOTS,
+            ),
+            (
+                ItemId::DIAMOND,
+                "Diamond Helmet",
+                ItemId::DIAMOND_HELMET,
+                "Diamond Chestplate",
+                ItemId::DIAMOND_CHESTPLATE,
+                "Diamond Leggings",
+                ItemId::DIAMOND_LEGGINGS,
+                "Diamond Boots",
+                ItemId::DIAMOND_BOOTS,
+            ),
+        ];
+
+        for (mat, h_name, h_id, c_name, c_id, l_name, l_id, b_name, b_id) in armor_tiers {
+            let m = Some(mat);
+            self.register(Recipe::Shaped {
+                name: h_name,
+                width: 3,
+                height: 2,
+                pattern: vec![m, m, m, m, None, m],
+                output: ItemSlot::new(h_id, 1),
+            });
+            self.register(Recipe::Shaped {
+                name: c_name,
+                width: 3,
+                height: 3,
+                pattern: vec![m, None, m, m, m, m, m, m, m],
+                output: ItemSlot::new(c_id, 1),
+            });
+            self.register(Recipe::Shaped {
+                name: l_name,
+                width: 3,
+                height: 3,
+                pattern: vec![m, m, m, m, None, m, m, None, m],
+                output: ItemSlot::new(l_id, 1),
+            });
+            self.register(Recipe::Shaped {
+                name: b_name,
+                width: 3,
+                height: 2,
+                pattern: vec![m, None, m, m, None, m],
+                output: ItemSlot::new(b_id, 1),
+            });
+        }
     }
 }
 

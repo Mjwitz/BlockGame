@@ -165,6 +165,22 @@ impl ItemId {
     pub const STRING: Self = Self(155);
     pub const BONE: Self = Self(156);
     pub const ROTTEN_FLESH: Self = Self(157);
+    pub const LEATHER_HELMET: Self = Self(158);
+    pub const LEATHER_CHESTPLATE: Self = Self(159);
+    pub const LEATHER_LEGGINGS: Self = Self(160);
+    pub const LEATHER_BOOTS: Self = Self(161);
+    pub const IRON_HELMET: Self = Self(162);
+    pub const IRON_CHESTPLATE: Self = Self(163);
+    pub const IRON_LEGGINGS: Self = Self(164);
+    pub const IRON_BOOTS: Self = Self(165);
+    pub const GOLD_HELMET: Self = Self(166);
+    pub const GOLD_CHESTPLATE: Self = Self(167);
+    pub const GOLD_LEGGINGS: Self = Self(168);
+    pub const GOLD_BOOTS: Self = Self(169);
+    pub const DIAMOND_HELMET: Self = Self(170);
+    pub const DIAMOND_CHESTPLATE: Self = Self(171);
+    pub const DIAMOND_LEGGINGS: Self = Self(172);
+    pub const DIAMOND_BOOTS: Self = Self(173);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -321,11 +337,78 @@ impl FoodDef {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmorSlot {
+    Helmet = 0,
+    Chestplate = 1,
+    Leggings = 2,
+    Boots = 3,
+}
+
+impl ArmorSlot {
+    #[inline]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArmorEquipment {
+    pub slots: [ItemSlot; 4],
+}
+
+impl ArmorEquipment {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn total_defense(&self, registry: &ItemRegistry) -> u8 {
+        let mut total: u8 = 0;
+        for slot in &self.slots {
+            if !slot.is_empty() {
+                if let Some((_, def)) = registry.get_armor(slot.item_id) {
+                    total = total.saturating_add(def);
+                }
+            }
+        }
+        total.min(20)
+    }
+
+    /// Returns the damage multiplier (1.0 with 0 armor, down to 0.20 at 20 armor points).
+    pub fn damage_multiplier(&self, registry: &ItemRegistry) -> f32 {
+        let defense = self.total_defense(registry) as f32;
+        (1.0 - defense * 0.04).clamp(0.2, 1.0)
+    }
+
+    /// Applies durability wear to all equipped armor pieces when taking damage.
+    /// Returns `true` if any piece broke.
+    pub fn damage_armor(&mut self, raw_damage: f32, registry: &ItemRegistry) -> bool {
+        if raw_damage <= 0.0 {
+            return false;
+        }
+        let wear = (raw_damage / 4.0).ceil().max(1.0) as u16;
+        let mut any_broke = false;
+        for slot in &mut self.slots {
+            if !slot.is_empty() {
+                if let Some(def) = registry.get(slot.item_id) {
+                    if let Some(max_dur) = def.durability {
+                        if slot.damage_tool(wear, max_dur) {
+                            any_broke = true;
+                        }
+                    }
+                }
+            }
+        }
+        any_broke
+    }
+}
+
 pub struct ItemRegistry {
     items: Vec<Option<ItemDef>>,
     by_name: HashMap<String, ItemId>,
     block_to_item: HashMap<BlockId, ItemId>,
     food_properties: HashMap<ItemId, FoodDef>,
+    armor_properties: HashMap<ItemId, (ArmorSlot, u8)>,
 }
 
 impl Default for ItemRegistry {
@@ -341,6 +424,7 @@ impl ItemRegistry {
             by_name: HashMap::new(),
             block_to_item: HashMap::new(),
             food_properties: HashMap::new(),
+            armor_properties: HashMap::new(),
         };
         reg.register_default_items();
         reg
@@ -368,6 +452,18 @@ impl ItemRegistry {
 
     pub fn is_food(&self, id: ItemId) -> bool {
         self.food_properties.contains_key(&id)
+    }
+
+    pub fn register_armor(&mut self, id: ItemId, slot: ArmorSlot, defense: u8) {
+        self.armor_properties.insert(id, (slot, defense));
+    }
+
+    pub fn get_armor(&self, id: ItemId) -> Option<(ArmorSlot, u8)> {
+        self.armor_properties.get(&id).copied()
+    }
+
+    pub fn is_armor(&self, id: ItemId) -> bool {
+        self.armor_properties.contains_key(&id)
     }
 
     pub fn get(&self, id: ItemId) -> Option<&ItemDef> {
@@ -1993,6 +2089,40 @@ impl ItemRegistry {
             icon_tile: 348,
         });
         self.register_food(ItemId::ROTTEN_FLESH, FoodDef::new(4, 0.8));
+
+        let armor_defs: [(ItemId, &'static str, &'static str, u16, ArmorSlot, u8, u32); 16] = [
+            (ItemId::LEATHER_HELMET, "blockgame:leather_helmet", "Leather Cap", 55, ArmorSlot::Helmet, 1, 356),
+            (ItemId::LEATHER_CHESTPLATE, "blockgame:leather_chestplate", "Leather Tunic", 80, ArmorSlot::Chestplate, 3, 357),
+            (ItemId::LEATHER_LEGGINGS, "blockgame:leather_leggings", "Leather Pants", 75, ArmorSlot::Leggings, 2, 358),
+            (ItemId::LEATHER_BOOTS, "blockgame:leather_boots", "Leather Boots", 65, ArmorSlot::Boots, 1, 359),
+            (ItemId::IRON_HELMET, "blockgame:iron_helmet", "Iron Helmet", 165, ArmorSlot::Helmet, 2, 360),
+            (ItemId::IRON_CHESTPLATE, "blockgame:iron_chestplate", "Iron Chestplate", 240, ArmorSlot::Chestplate, 6, 361),
+            (ItemId::IRON_LEGGINGS, "blockgame:iron_leggings", "Iron Leggings", 225, ArmorSlot::Leggings, 5, 362),
+            (ItemId::IRON_BOOTS, "blockgame:iron_boots", "Iron Boots", 195, ArmorSlot::Boots, 2, 363),
+            (ItemId::GOLD_HELMET, "blockgame:gold_helmet", "Golden Helmet", 77, ArmorSlot::Helmet, 2, 364),
+            (ItemId::GOLD_CHESTPLATE, "blockgame:gold_chestplate", "Golden Chestplate", 112, ArmorSlot::Chestplate, 5, 365),
+            (ItemId::GOLD_LEGGINGS, "blockgame:gold_leggings", "Golden Leggings", 105, ArmorSlot::Leggings, 3, 366),
+            (ItemId::GOLD_BOOTS, "blockgame:gold_boots", "Golden Boots", 91, ArmorSlot::Boots, 1, 367),
+            (ItemId::DIAMOND_HELMET, "blockgame:diamond_helmet", "Diamond Helmet", 363, ArmorSlot::Helmet, 3, 368),
+            (ItemId::DIAMOND_CHESTPLATE, "blockgame:diamond_chestplate", "Diamond Chestplate", 528, ArmorSlot::Chestplate, 8, 369),
+            (ItemId::DIAMOND_LEGGINGS, "blockgame:diamond_leggings", "Diamond Leggings", 495, ArmorSlot::Leggings, 6, 370),
+            (ItemId::DIAMOND_BOOTS, "blockgame:diamond_boots", "Diamond Boots", 429, ArmorSlot::Boots, 3, 371),
+        ];
+
+        for (id, name, display_name, dur, slot, defense, icon_tile) in armor_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
+                durability: Some(dur),
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+            self.register_armor(id, slot, defense);
+        }
     }
 }
 
@@ -2266,5 +2396,26 @@ mod tests {
         let broke = gold_pick.damage_tool(1, 32);
         assert!(broke);
         assert!(gold_pick.is_empty());
+    }
+
+    #[test]
+    fn test_armor_defense_and_durability() {
+        let registry = ItemRegistry::new();
+        let mut armor = ArmorEquipment::new();
+        assert_eq!(armor.total_defense(&registry), 0);
+        assert!((armor.damage_multiplier(&registry) - 1.0).abs() < 1e-5);
+
+        // Full Diamond Armor = 3 + 8 + 6 + 3 = 20 defense -> 80% reduction (0.2x damage)
+        armor.slots[ArmorSlot::Helmet.index()] = ItemSlot::new(ItemId::DIAMOND_HELMET, 1);
+        armor.slots[ArmorSlot::Chestplate.index()] = ItemSlot::new(ItemId::DIAMOND_CHESTPLATE, 1);
+        armor.slots[ArmorSlot::Leggings.index()] = ItemSlot::new(ItemId::DIAMOND_LEGGINGS, 1);
+        armor.slots[ArmorSlot::Boots.index()] = ItemSlot::new(ItemId::DIAMOND_BOOTS, 1);
+        assert_eq!(armor.total_defense(&registry), 20);
+        assert!((armor.damage_multiplier(&registry) - 0.2).abs() < 1e-5);
+
+        // Damage wears durability
+        let broke = armor.damage_armor(8.0, &registry);
+        assert!(!broke);
+        assert_eq!(armor.slots[ArmorSlot::Helmet.index()].durability, 361);
     }
 }

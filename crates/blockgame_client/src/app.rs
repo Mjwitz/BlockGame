@@ -97,6 +97,7 @@ pub struct AppState {
     pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
+    pub armor: blockgame_core::item::ArmorEquipment,
     pub active_hotbar_slot: usize,
     pub item_registry: Arc<ItemRegistry>,
     pub crafting_manager: CraftingManager,
@@ -799,6 +800,7 @@ impl ApplicationHandler for BlockGameApp {
             render_distance: self.render_distance,
             registry: self.registry.clone(),
             inventory,
+            armor: blockgame_core::item::ArmorEquipment::new(),
             active_hotbar_slot: 0,
             item_registry,
             crafting_manager,
@@ -1810,6 +1812,17 @@ impl ApplicationHandler for BlockGameApp {
                                 state.punch_timer = 0.15;
                             }
                             return;
+                        }
+
+                        // 1c. Quick-Equip Armor on Right-Click
+                        if !held_slot.is_empty() {
+                            if let Some((armor_slot, _)) = state.item_registry.get_armor(held_slot.item_id) {
+                                let idx = armor_slot.index();
+                                let prev = std::mem::replace(&mut state.armor.slots[idx], held_slot);
+                                state.inventory.set(state.active_hotbar_slot, prev);
+                                state.punch_timer = 0.12;
+                                return;
+                            }
                         }
 
                         // 2. Hoe Tilling (Grass or Dirt with Hoe -> Farmland)
@@ -2973,11 +2986,20 @@ impl ApplicationHandler for BlockGameApp {
 
                     // Apply damage and trigger hurt audio on health decrease
                     let prev_health = state.player_stats.health;
+                    let armor_mult = state.armor.damage_multiplier(&state.item_registry);
                     if fall_damage > 0.0 && !state.player_stats.is_dead {
-                        state.player_stats.take_damage(fall_damage);
+                        if state.player_stats.take_damage(fall_damage * armor_mult)
+                            && state.armor.damage_armor(fall_damage, &state.item_registry)
+                        {
+                            state.audio.play_tool_break();
+                        }
                     }
                     if is_touching_cactus {
-                        state.player_stats.take_damage(1.0);
+                        if state.player_stats.take_damage(1.0 * armor_mult)
+                            && state.armor.damage_armor(1.0, &state.item_registry)
+                        {
+                            state.audio.play_tool_break();
+                        }
                     }
 
                     // Update walking distance & movement exhaustion (advances ONLY when moving)
@@ -3059,6 +3081,15 @@ impl ApplicationHandler for BlockGameApp {
                                     let angle = (i as f32) * 0.7;
                                     let vel = Vec3::new(angle.cos() * 2.0, 3.0, angle.sin() * 2.0);
                                     drops_to_scatter.push((vel, slot));
+                                }
+                            }
+                            // Scatter equipped armor
+                            for (i, slot) in state.armor.slots.iter_mut().enumerate() {
+                                if !slot.is_empty() {
+                                    let drop_slot = std::mem::replace(slot, ItemSlot::EMPTY);
+                                    let angle = (i as f32) * 1.1;
+                                    let vel = Vec3::new(angle.cos() * 2.0, 3.0, angle.sin() * 2.0);
+                                    drops_to_scatter.push((vel, drop_slot));
                                 }
                             }
                             // Scatter cursor held item
@@ -3191,7 +3222,16 @@ impl ApplicationHandler for BlockGameApp {
                         && !state.player_stats.is_dead
                         && !state.player.flying
                     {
-                        state.player_stats.take_damage(total_hostile_dmg);
+                        let armor_mult = state.armor.damage_multiplier(&state.item_registry);
+                        if state
+                            .player_stats
+                            .take_damage(total_hostile_dmg * armor_mult)
+                            && state
+                                .armor
+                                .damage_armor(total_hostile_dmg, &state.item_registry)
+                        {
+                            state.audio.play_tool_break();
+                        }
                     }
                     state
                         .world_manager
@@ -3674,7 +3714,7 @@ impl ApplicationHandler for BlockGameApp {
                                 .crafting_manager
                                 .find_match(&state.crafting_grid)
                                 .map(|(_, out)| out);
-                            UiBuilder::build_inventory_screen(
+                            UiBuilder::build_inventory_screen_with_armor(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
@@ -3687,10 +3727,11 @@ impl ApplicationHandler for BlockGameApp {
                                 &state.item_registry,
                                 Some(&jei_params),
                                 modal_params.as_ref(),
+                                &state.armor.slots,
                             );
                         }
                     } else {
-                        UiBuilder::build_hud(
+                        UiBuilder::build_hud_with_armor(
                             &mut state.ui_mesh,
                             screen_w,
                             screen_h,
@@ -3700,6 +3741,7 @@ impl ApplicationHandler for BlockGameApp {
                             state.walk_distance,
                             punch_time,
                             &state.player_stats,
+                            state.armor.total_defense(&state.item_registry),
                         );
 
                         // Draw floating 3D-to-2D username nametags for remote players (and local player in F5 third-person)
@@ -4373,6 +4415,42 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
                     is_right_click,
                     &state.item_registry,
                 );
+            }
+            return;
+        }
+    }
+
+    // 5. Armor Equipment Slots
+    for idx in 0..4 {
+        let rect = UiBuilder::armor_slot_rect(screen_w, screen_h, grid_h, idx);
+        if cx >= rect[0]
+            && cx < rect[0] + rect[2]
+            && cy >= rect[1]
+            && cy < rect[1] + rect[3]
+        {
+            if state.cursor_held.is_empty() {
+                if !state.armor.slots[idx].is_empty() {
+                    if state.shift_down {
+                        if let Some(rem) =
+                            state.inventory.add_item(state.armor.slots[idx], &state.item_registry)
+                        {
+                            state.armor.slots[idx] = rem;
+                        } else {
+                            state.armor.slots[idx] = ItemSlot::EMPTY;
+                        }
+                    } else {
+                        state.cursor_held =
+                            std::mem::replace(&mut state.armor.slots[idx], ItemSlot::EMPTY);
+                    }
+                }
+            } else if let Some((armor_slot, _)) =
+                state.item_registry.get_armor(state.cursor_held.item_id)
+            {
+                if armor_slot.index() == idx {
+                    let prev =
+                        std::mem::replace(&mut state.armor.slots[idx], state.cursor_held);
+                    state.cursor_held = prev;
+                }
             }
             return;
         }

@@ -1278,6 +1278,108 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
         let n = (hash(px / 2, py / 2, 355) % 13) - 6;
         Rgba([clamp(42, n), clamp(36, n), clamp(44, n), 255])
     });
+
+    // 356..=371: Armor Item Icons (Leather, Iron, Gold, Diamond x Helmet, Chestplate, Leggings, Boots)
+    let armor_palettes: [([u8; 3], [u8; 3], [u8; 3]); 4] = [
+        ([148, 92, 52], [182, 118, 72], [96, 56, 30]),     // Leather
+        ([196, 202, 210], [234, 238, 245], [116, 122, 130]), // Iron
+        ([238, 194, 48], [255, 232, 115], [166, 122, 20]), // Gold
+        ([72, 216, 208], [148, 246, 242], [32, 146, 142]), // Diamond
+    ];
+    for (tier_idx, (base, hi, dark)) in armor_palettes.iter().enumerate() {
+        let base_tile = 356 + (tier_idx as u16) * 4;
+        // Helmet
+        atlas.paint_tile(base_tile, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            let in_dome = y >= 7 && y <= 14 && x >= 7 && x <= 24;
+            let in_sides = y >= 15 && y <= 20 && ((x >= 7 && x <= 11) || (x >= 20 && x <= 24));
+            if in_dome || in_sides {
+                if y == 7 || x == 7 || x == 24 || y == 20 {
+                    Rgba([dark[0], dark[1], dark[2], 255])
+                } else if y <= 10 && x <= 18 {
+                    Rgba([hi[0], hi[1], hi[2], 255])
+                } else {
+                    Rgba([base[0], base[1], base[2], 255])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+        // Chestplate
+        atlas.paint_tile(base_tile + 1, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            let in_shoulders = y >= 6 && y <= 12 && x >= 4 && x <= 27 && !(y <= 8 && x >= 12 && x <= 19);
+            let in_torso = y >= 13 && y <= 26 && x >= 9 && x <= 22;
+            if in_shoulders || in_torso {
+                if x == 4 || x == 27 || y == 6 || y == 26 || (in_torso && (x == 9 || x == 22)) {
+                    Rgba([dark[0], dark[1], dark[2], 255])
+                } else if y <= 12 && x <= 16 {
+                    Rgba([hi[0], hi[1], hi[2], 255])
+                } else {
+                    Rgba([base[0], base[1], base[2], 255])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+        // Leggings
+        atlas.paint_tile(base_tile + 2, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            let in_waist = y >= 6 && y <= 11 && x >= 8 && x <= 23;
+            let in_legs = y >= 12 && y <= 26 && ((x >= 8 && x <= 14) || (x >= 17 && x <= 23));
+            if in_waist || in_legs {
+                if y == 6 || y == 26 || x == 8 || x == 23 || (in_legs && (x == 14 || x == 17)) {
+                    Rgba([dark[0], dark[1], dark[2], 255])
+                } else if y <= 13 && x <= 15 {
+                    Rgba([hi[0], hi[1], hi[2], 255])
+                } else {
+                    Rgba([base[0], base[1], base[2], 255])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+        // Boots
+        atlas.paint_tile(base_tile + 3, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            let left_boot = (y >= 13 && y <= 24 && x >= 7 && x <= 13) || (y >= 20 && y <= 24 && x >= 5 && x <= 13);
+            let right_boot = (y >= 13 && y <= 24 && x >= 18 && x <= 24) || (y >= 20 && y <= 24 && x >= 18 && x <= 26);
+            if left_boot || right_boot {
+                if y == 24 || y == 13 || x == 5 || x == 26 {
+                    Rgba([dark[0], dark[1], dark[2], 255])
+                } else if y <= 17 {
+                    Rgba([hi[0], hi[1], hi[2], 255])
+                } else {
+                    Rgba([base[0], base[1], base[2], 255])
+                }
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+    }
+
+    // 372: HUD Armor Shield/Chestplate Icon (white/silver tintable)
+    atlas.paint_tile(372, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let in_shoulders = y >= 4 && y <= 12 && x >= 3 && x <= 28 && !(y <= 7 && x >= 11 && x <= 20);
+        let in_torso = y >= 13 && y <= 27 && x >= 8 && x <= 23;
+        if in_shoulders || in_torso {
+            if x == 3 || x == 28 || y == 4 || y == 27 || (in_torso && (x == 8 || x == 23)) {
+                Rgba([55, 58, 65, 255])
+            } else if y <= 11 && x <= 16 {
+                Rgba([255, 255, 255, 255])
+            } else {
+                Rgba([210, 215, 224, 255])
+            }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

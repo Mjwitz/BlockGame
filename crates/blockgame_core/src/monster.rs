@@ -423,17 +423,34 @@ pub fn has_sky_access(pos: IVec3, world: &World, registry: &BlockRegistry) -> bo
 }
 
 /// Computes effective light level (0.0..=15.0) at `pos` combining scaled sky light and nearby emissive block light.
+/// Sky light passes through leaves with mild attenuation (1 level per leaf block), preventing daytime spawning under trees.
 pub fn compute_light_at(
     pos: IVec3,
     sun_intensity: f32,
     world: &World,
     registry: &BlockRegistry,
 ) -> f32 {
-    let sky_light = if has_sky_access(pos, world, registry) {
-        15.0 * sun_intensity.clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
+    let max_y = (crate::chunk::VERTICAL_CHUNKS * 16) - 1;
+    let mut sky_light = 15.0 * sun_intensity.clamp(0.0, 1.0);
+    if sky_light > 0.0 {
+        for y in (pos.y + 1)..=max_y {
+            let b = world.get_block(IVec3::new(pos.x, y, pos.z));
+            if b.is_leaves() {
+                sky_light = (sky_light - 1.0).max(0.0);
+                if sky_light <= 0.0 {
+                    break;
+                }
+            } else if b.is_water() {
+                sky_light = (sky_light - 2.0).max(0.0);
+                if sky_light <= 0.0 {
+                    break;
+                }
+            } else if registry.is_solid(b) {
+                sky_light = 0.0;
+                break;
+            }
+        }
+    }
 
     let mut block_light: f32 = 0.0;
     for (rel_pos, lum) in world.get_light_sources_near(pos, 15) {
@@ -545,5 +562,46 @@ mod tests {
         assert_eq!(sk_drops[0].item_id, ItemId::BONE);
         assert_eq!(sk_drops[1].item_id, ItemId::ARROW);
         assert_eq!(sp.generate_drops()[0].item_id, ItemId::STRING);
+    }
+
+    #[test]
+    fn test_sky_light_passes_through_leaves_stops_daytime_spawn() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        for z in 0..16 {
+            for x in 0..16 {
+                chunk.set(x, 0, z, BlockId::GRASS);
+            }
+        }
+        world.insert_chunk(chunk);
+
+        // Place a 2-layer leaf canopy above (8, 1, 8)
+        world.set_block(IVec3::new(8, 4, 8), BlockId::LEAVES);
+        world.set_block(IVec3::new(8, 5, 8), BlockId::BIRCH_LEAVES);
+
+        // Daytime under tree canopy: sky light passes through leaves -> no spawn
+        assert!(
+            !can_monster_spawn_at(IVec3::new(8, 1, 8), MonsterKind::Zombie, 1.0, &world, &registry),
+            "Sky light through leaves should prevent daytime monster spawning under trees"
+        );
+        // Nighttime under tree canopy: dark -> spawns allowed
+        assert!(can_monster_spawn_at(
+            IVec3::new(8, 1, 8),
+            MonsterKind::Zombie,
+            0.0,
+            &world,
+            &registry
+        ));
+
+        // Solid stone roof blocks sky light -> dark cave spawns even during daytime
+        world.set_block(IVec3::new(4, 4, 4), BlockId::STONE);
+        assert!(can_monster_spawn_at(
+            IVec3::new(4, 1, 4),
+            MonsterKind::Zombie,
+            1.0,
+            &world,
+            &registry
+        ));
     }
 }

@@ -281,6 +281,7 @@ impl UiBuilder {
     pub const FLAME_FULL_TILE: u16 = 184;
     pub const BUBBLE_FULL_TILE: u16 = 201;
     pub const BUBBLE_POP_TILE: u16 = 202;
+    pub const ARMOR_ICON_TILE: u16 = 372;
 
     pub const SLOT_SIZE: f32 = 48.0;
     pub const SLOT_GAP: f32 = 5.0;
@@ -1818,6 +1819,32 @@ impl UiBuilder {
         punch_time: f32,
         stats: &blockgame_core::player::PlayerStats,
     ) {
+        Self::build_hud_with_armor(
+            mesh,
+            screen_w,
+            screen_h,
+            inventory,
+            active_slot,
+            registry,
+            walk_distance,
+            punch_time,
+            stats,
+            0,
+        );
+    }
+
+    pub fn build_hud_with_armor(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        inventory: &Inventory,
+        active_slot: usize,
+        registry: &ItemRegistry,
+        walk_distance: f32,
+        punch_time: f32,
+        stats: &blockgame_core::player::PlayerStats,
+        armor_points: u8,
+    ) {
         mesh.clear();
 
         // 0. Full-screen Underwater Screen Overlay (When Player is Submerged)
@@ -1947,6 +1974,24 @@ impl UiBuilder {
                     heart_half_uv,
                     [1.0, 1.0, 1.0, 1.0],
                 );
+            }
+        }
+
+        // 4b. Armor Points Bar (10 chestplate icons above health hearts when armor > 0)
+        if armor_points > 0 {
+            let armor_y = bars_y - icon_size - 4.0;
+            let armor_uv = TextureAtlas::get_uv_bounds(Self::ARMOR_ICON_TILE);
+            for i in 0..10u8 {
+                let ax = start_x + (i as f32) * icon_spacing;
+                let threshold = (i + 1) * 2;
+                let tint = if armor_points >= threshold {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else if armor_points >= threshold - 1 {
+                    [0.65, 0.70, 0.78, 0.9]
+                } else {
+                    [0.2, 0.2, 0.25, 0.55]
+                };
+                mesh.add_quad(ax, armor_y, icon_size, icon_size, armor_uv, tint);
             }
         }
 
@@ -2120,6 +2165,20 @@ impl UiBuilder {
         }
     }
 
+    /// Returns `[x, y, size, size]` for armor slot `idx` (0=Helmet, 1=Chestplate, 2=Leggings, 3=Boots).
+    pub fn armor_slot_rect(screen_w: f32, screen_h: f32, grid_h: usize, idx: usize) -> [f32; 4] {
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
+        let inv_w = 9.0 * slot_size + 8.0 * slot_gap;
+        let inv_start_x = (screen_w - inv_w) * 0.5;
+        let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
+        let ax = inv_start_x - slot_size - 16.0;
+        let ay = inv_start_y + (idx as f32) * (slot_size + slot_gap)
+            + if idx == 3 { 16.0 } else { 0.0 };
+        [ax, ay, slot_size, slot_size]
+    }
+
     /// Builds the full Inventory & 2x2 Crafting Screen Overlay.
     pub fn build_inventory_screen(
         mesh: &mut UiMesh,
@@ -2134,6 +2193,39 @@ impl UiBuilder {
         registry: &ItemRegistry,
         jei_params: Option<&JeiParams>,
         recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        Self::build_inventory_screen_with_armor(
+            mesh,
+            screen_w,
+            screen_h,
+            inventory,
+            active_hotbar_slot,
+            crafting_grid,
+            crafting_result,
+            cursor_held,
+            cursor_pos,
+            registry,
+            jei_params,
+            recipe_modal,
+            &[ItemSlot::EMPTY; 4],
+        );
+    }
+
+    /// Builds the full Inventory & Crafting Screen Overlay with 4 Armor equipment slots.
+    pub fn build_inventory_screen_with_armor(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        crafting_grid: &CraftingGrid,
+        crafting_result: Option<ItemSlot>,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+        armor: &[ItemSlot; 4],
     ) {
         mesh.clear();
 
@@ -2334,6 +2426,49 @@ impl UiBuilder {
                         hovered_item_name = Some(def.display_name);
                     }
                 }
+            }
+        }
+
+        // 4b. Armor Equipment Slots (Helmet, Chestplate, Leggings, Boots) to the left of inventory
+        let armor_labels = ["H", "C", "L", "B"];
+        for (idx, item_slot) in armor.iter().enumerate() {
+            let rect = Self::armor_slot_rect(screen_w, screen_h, grid_h, idx);
+            let ax = rect[0];
+            let ay = rect[1];
+            mesh.add_quad(ax, ay, slot_size, slot_size, slot_uv, [0.92, 0.92, 1.0, 0.95]);
+            if !item_slot.is_empty() {
+                if let Some(def) = registry.get(item_slot.item_id) {
+                    let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                    let icon_pad = 6.0;
+                    mesh.add_quad(
+                        ax + icon_pad,
+                        ay + icon_pad,
+                        slot_size - icon_pad * 2.0,
+                        slot_size - icon_pad * 2.0,
+                        icon_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    Self::draw_durability_bar(mesh, ax, ay, slot_size, *item_slot, registry);
+
+                    if cursor_pos[0] >= ax
+                        && cursor_pos[0] <= ax + slot_size
+                        && cursor_pos[1] >= ay
+                        && cursor_pos[1] <= ay + slot_size
+                    {
+                        hovered_item_name = Some(def.display_name);
+                    }
+                }
+            } else {
+                Self::draw_string(
+                    mesh,
+                    ax + slot_size * 0.5 - 5.0,
+                    ay + slot_size * 0.5 - 6.0,
+                    armor_labels[idx],
+                    10.0,
+                    12.0,
+                    1.0,
+                    [0.55, 0.58, 0.65, 0.75],
+                );
             }
         }
 
