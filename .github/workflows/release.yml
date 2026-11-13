@@ -1,0 +1,129 @@
+name: Build and Release Executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            libasound2-dev \
+            libx11-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release -p blockgame_client -p blockgame_server
+
+      - name: Package Linux archive
+        run: |
+          mkdir -p dist/BlockGame-linux-x86_64
+          cp target/release/blockgame_client dist/BlockGame-linux-x86_64/
+          cp target/release/blockgame_server dist/BlockGame-linux-x86_64/
+          cat << 'EOF' > dist/BlockGame-linux-x86_64/README.txt
+          BlockGame (Linux x86_64)
+          ========================
+
+          Run the Game Client:
+            ./blockgame_client
+
+          Run the Dedicated Multiplayer Server:
+            ./blockgame_server --port 25565 --world "MyWorld" --seed 1337
+
+          For all server options:
+            ./blockgame_server --help
+          EOF
+          tar -czf BlockGame-linux-x86_64.tar.gz -C dist BlockGame-linux-x86_64
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlockGame-linux-x86_64
+          path: BlockGame-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release -p blockgame_client -p blockgame_server
+
+      - name: Package Windows archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/BlockGame-windows-x86_64 | Out-Null
+          Copy-Item target/release/blockgame_client.exe dist/BlockGame-windows-x86_64/
+          Copy-Item target/release/blockgame_server.exe dist/BlockGame-windows-x86_64/
+          @"
+          BlockGame (Windows x86_64)
+          ==========================
+
+          Run the Game Client:
+            Double-click blockgame_client.exe
+
+          Run the Dedicated Multiplayer Server:
+            .\blockgame_server.exe --port 25565 --world "MyWorld" --seed 1337
+
+          For all server options:
+            .\blockgame_server.exe --help
+          "@ | Set-Content -Path dist/BlockGame-windows-x86_64/README.txt -Encoding UTF8
+          Compress-Archive -Path dist/BlockGame-windows-x86_64 -DestinationPath BlockGame-windows-x86_64.zip -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlockGame-windows-x86_64
+          path: BlockGame-windows-x86_64.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/BlockGame-linux-x86_64/BlockGame-linux-x86_64.tar.gz
+            artifacts/BlockGame-windows-x86_64/BlockGame-windows-x86_64.zip
