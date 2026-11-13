@@ -109,10 +109,32 @@ impl BlockId {
     pub const MELON: Self = Self(95);
     pub const OAK_DOOR_TOP_CLOSED: Self = Self(96);
     pub const OAK_DOOR_TOP_OPEN: Self = Self(97);
+    pub const BED_HEAD: Self = Self(98);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
         self.0 == 0
+    }
+
+    #[inline]
+    pub const fn is_bed(&self) -> bool {
+        matches!(*self, Self::BED | Self::BED_HEAD)
+    }
+
+    #[inline]
+    pub const fn is_bed_head(&self) -> bool {
+        self.0 == Self::BED_HEAD.0
+    }
+
+    /// Returns the horizontal offset from the foot block (`BED`) to the head block (`BED_HEAD`).
+    #[inline]
+    pub fn bed_head_offset(facing: u8) -> glam::IVec3 {
+        match facing {
+            1 => glam::IVec3::new(0, 0, 1),  // facing NegZ -> head toward +Z
+            2 => glam::IVec3::new(-1, 0, 0), // facing PosX -> head toward -X
+            3 => glam::IVec3::new(1, 0, 0),  // facing NegX -> head toward +X
+            _ => glam::IVec3::new(0, 0, -1), // facing PosZ (0) -> head toward -Z
+        }
     }
 
     #[inline]
@@ -1422,6 +1444,20 @@ impl BlockRegistry {
             is_transparent: true,
             luminance: 0,
             // PosY: Bed Top (317), NegY: Planks (10), Sides: Bed Side (318)
+            textures: [317, 10, 318, 318, 318, 318],
+            hardness: 0.2,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::BED),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BED_HEAD,
+            name: "Bed",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
             textures: [317, 10, 318, 318, 318, 318],
             hardness: 0.2,
             required_tool: None,

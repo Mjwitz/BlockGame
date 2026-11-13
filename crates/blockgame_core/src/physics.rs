@@ -380,6 +380,19 @@ pub fn block_collision_boxes(
         );
     }
 
+    if block.is_bed() {
+        return (
+            [
+                AABB::new(
+                    Vec3::new(fx, fy, fz),
+                    Vec3::new(fx + 1.0, fy + 0.5625, fz + 1.0),
+                ),
+                fallback,
+            ],
+            1,
+        );
+    }
+
     ([fallback; 2], 1)
 }
 

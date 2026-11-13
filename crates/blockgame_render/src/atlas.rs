@@ -1104,6 +1104,26 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
             Rgba([clamp(218, n), clamp(188, n), clamp(166, n), 255])
         }
     });
+
+    // 342: Bed Head Top (white pillow + folded sheet trim)
+    atlas.paint_tile(342, |px, py| {
+        let n = (hash(px, py, 342) % 11) - 5;
+        if py < 20 {
+            let border = if px < 3 || px >= 29 || py < 3 || py >= 18 { -20 } else { 0 };
+            Rgba([clamp(240, n + border), clamp(242, n + border), clamp(246, n + border), 255])
+        } else if py < 26 {
+            Rgba([clamp(224, n), clamp(228, n), clamp(234, n), 255])
+        } else {
+            Rgba([clamp(182, n), clamp(44, n / 2), clamp(38, n / 2), 255])
+        }
+    });
+
+    // 343: Bed Foot Top (red blanket with subtle border)
+    atlas.paint_tile(343, |px, py| {
+        let n = (hash(px, py, 343) % 11) - 5;
+        let fold = if px < 2 || px >= 30 || py >= 29 { -18 } else { 0 };
+        Rgba([clamp(182, n + fold), clamp(44, n / 2), clamp(38, n / 2), 255])
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

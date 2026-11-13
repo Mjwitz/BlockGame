@@ -194,8 +194,18 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::BED {
-                        self.build_bed(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                    if block_id.is_bed() {
+                        let facing = chunk.get_facing_unchecked(ix as usize, iy as usize, iz as usize);
+                        self.build_bed(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            block_id.is_bed_head(),
+                            facing,
+                            &light_map,
+                        );
                         continue;
                     }
 
@@ -1082,6 +1092,8 @@ impl<'a> ChunkMesher<'a> {
         x: i32,
         y: i32,
         z: i32,
+        is_head: bool,
+        facing: u8,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
         let origin = chunk_pos.to_world_origin();
@@ -1092,33 +1104,53 @@ impl<'a> ChunkMesher<'a> {
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
-        // Mattress & frame
+        // Mattress & frame bounds: flush at the middle seam between foot and head
+        // facing: 0=PosZ (foot +Z, head -Z), 1=NegZ (foot -Z, head +Z), 2=PosX (foot +X, head -X), 3=NegX (foot -X, head +X)
+        let (x0, x1, z0, z1) = match (facing, is_head) {
+            (0, false) => (0.05, 0.95, 0.0, 0.95),
+            (0, true) => (0.05, 0.95, 0.05, 1.0),
+            (1, false) => (0.05, 0.95, 0.05, 1.0),
+            (1, true) => (0.05, 0.95, 0.0, 0.95),
+            (2, false) => (0.0, 0.95, 0.05, 0.95),
+            (2, true) => (0.05, 1.0, 0.05, 0.95),
+            (3, false) => (0.05, 1.0, 0.05, 0.95),
+            (3, true) => (0.0, 0.95, 0.05, 0.95),
+            _ => (0.05, 0.95, 0.0, 0.95),
+        };
+
+        let top_tile = if is_head { 342 } else { 343 };
+        // [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
         self.add_box(
             mesh,
-            fx + 0.05,
+            fx + x0,
             fy + 0.1875,
-            fz + 0.05,
-            fx + 0.95,
+            fz + z0,
+            fx + x1,
             fy + 0.5625,
-            fz + 0.95,
-            [318, 318, 318, 318, 317, 4],
+            fz + z1,
+            [318, 318, 318, 318, top_tile, 10],
             light,
         );
-        // 4 corner oak legs
-        for (lx0, lx1) in [(0.05, 0.22), (0.78, 0.95)] {
-            for (lz0, lz1) in [(0.05, 0.22), (0.78, 0.95)] {
-                self.add_box(
-                    mesh,
-                    fx + lx0,
-                    fy,
-                    fz + lz0,
-                    fx + lx1,
-                    fy + 0.1875,
-                    fz + lz1,
-                    [4; 6],
-                    light,
-                );
-            }
+
+        // 2 outer corner oak legs on this half (using Oak Planks tile 10)
+        let leg_coords: [(f32, f32, f32, f32); 2] = match (facing, is_head) {
+            (0, false) | (1, true) => [(0.05, 0.22, 0.78, 0.95), (0.78, 0.95, 0.78, 0.95)],
+            (0, true) | (1, false) => [(0.05, 0.22, 0.05, 0.22), (0.78, 0.95, 0.05, 0.22)],
+            (2, false) | (3, true) => [(0.78, 0.95, 0.05, 0.22), (0.78, 0.95, 0.78, 0.95)],
+            _ => [(0.05, 0.22, 0.05, 0.22), (0.05, 0.22, 0.78, 0.95)],
+        };
+        for (lx0, lx1, lz0, lz1) in leg_coords {
+            self.add_box(
+                mesh,
+                fx + lx0,
+                fy,
+                fz + lz0,
+                fx + lx1,
+                fy + 0.1875,
+                fz + lz1,
+                [10; 6],
+                light,
+            );
         }
     }
 
@@ -2921,10 +2953,11 @@ mod tests {
         door_chunk.set(4, 5, 4, BlockId::OAK_DOOR_TOP_OPEN);
         assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 48);
 
-        // Bed: 1 mattress + 4 legs = 5 boxes = 120 vertices
+        // 2-block Bed: foot (1 mattress + 2 legs = 72) + head (1 mattress + 2 legs = 72) = 144 vertices
         let mut bed_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         bed_chunk.set(4, 4, 4, BlockId::BED);
-        assert_eq!(mesher.mesh_chunk(&bed_chunk).vertices.len(), 120);
+        bed_chunk.set(4, 4, 3, BlockId::BED_HEAD);
+        assert_eq!(mesher.mesh_chunk(&bed_chunk).vertices.len(), 144);
 
         // Flower (Poppy): crossed quads = 16 vertices
         let mut flower_chunk = Chunk::new(ChunkPos::new(0, 0, 0));

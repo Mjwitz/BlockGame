@@ -1700,7 +1700,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.punch_timer = 0.15;
                                 return;
                             }
-                            if block_id == BlockId::BED {
+                            if block_id.is_bed() {
                                 state.respawn_point = Some(Vec3::new(
                                     hit.hit_voxel.x as f32 + 0.5,
                                     hit.hit_voxel.y as f32 + 0.65,

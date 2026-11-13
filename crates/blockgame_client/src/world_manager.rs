@@ -680,6 +680,7 @@ impl WorldManager {
             } else {
                 BlockId::AIR
             };
+            let facing_before_break = world.get_block_facing(pos);
             world.set_block(pos, replacement);
 
             // If breaking one half of a 2-block-tall door, also remove the other half cleanly
@@ -690,6 +691,20 @@ impl WorldManager {
                     pos + IVec3::Y
                 };
                 if world.get_block(pair_pos).is_door() {
+                    world.set_block(pair_pos, BlockId::AIR);
+                    Self::add_chunk_and_neighbors(pair_pos, &mut chunks_to_rebuild);
+                }
+            }
+
+            // If breaking one half of a 2-block-long bed, also remove the other half cleanly
+            if current.is_bed() {
+                let offset = BlockId::bed_head_offset(facing_before_break);
+                let pair_pos = if current.is_bed_head() {
+                    pos - offset
+                } else {
+                    pos + offset
+                };
+                if world.get_block(pair_pos).is_bed() {
                     world.set_block(pair_pos, BlockId::AIR);
                     Self::add_chunk_and_neighbors(pair_pos, &mut chunks_to_rebuild);
                 }
@@ -956,6 +971,14 @@ impl WorldManager {
                 }
             }
 
+            // 2-block-long Bed requires empty space at head_pos (and no player collision)
+            if block_id == BlockId::BED {
+                let head_pos = pos + BlockId::bed_head_offset(facing);
+                if !world.get_block(head_pos).is_air() || player_aabb.intersects(&AABB::from_block(head_pos)) {
+                    return false;
+                }
+            }
+
             let is_light_source = block_id.is_emissive();
             world.set_block(pos, block_id);
             world.set_block_facing(pos, facing);
@@ -964,6 +987,12 @@ impl WorldManager {
                 world.set_block(top_pos, BlockId::OAK_DOOR_TOP_CLOSED);
                 world.set_block_facing(top_pos, facing);
                 Self::add_chunk_and_neighbors(top_pos, &mut chunks_to_rebuild);
+            }
+            if block_id == BlockId::BED {
+                let head_pos = pos + BlockId::bed_head_offset(facing);
+                world.set_block(head_pos, BlockId::BED_HEAD);
+                world.set_block_facing(head_pos, facing);
+                Self::add_chunk_and_neighbors(head_pos, &mut chunks_to_rebuild);
             }
             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
                 world.get_or_create_furnace(pos);
