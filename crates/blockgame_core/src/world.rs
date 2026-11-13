@@ -202,12 +202,38 @@ impl World {
         if let Some(chunk) = self.chunks.get_mut(&cpos) {
             let ok = chunk.set(lx, ly, lz, block_id);
             if ok {
+                if block_id.is_air() {
+                    chunk.set_facing(lx, ly, lz, 0);
+                }
                 self.dirty_chunks.insert(cpos);
                 if block_id.is_emissive() {
                     self.light_sources.insert(world_pos);
                 } else {
                     self.light_sources.remove(&world_pos);
                 }
+            }
+            ok
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn get_block_facing(&self, world_pos: IVec3) -> u8 {
+        let (cpos, lx, ly, lz) = world_to_chunk_coords(world_pos);
+        match self.chunks.get(&cpos) {
+            Some(chunk) => chunk.get_facing_unchecked(lx, ly, lz),
+            None => 0,
+        }
+    }
+
+    #[inline]
+    pub fn set_block_facing(&mut self, world_pos: IVec3, facing: u8) -> bool {
+        let (cpos, lx, ly, lz) = world_to_chunk_coords(world_pos);
+        if let Some(chunk) = self.chunks.get_mut(&cpos) {
+            let ok = chunk.set_facing(lx, ly, lz, facing);
+            if ok {
+                self.dirty_chunks.insert(cpos);
             }
             ok
         } else {

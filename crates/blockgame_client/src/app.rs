@@ -1927,9 +1927,19 @@ impl ApplicationHandler for BlockGameApp {
                                             } else {
                                                 hit.place_voxel
                                             };
-                                        let placed = state.world_manager.place_block(
+                                        let dx = state.player.position.x - (target_pos.x as f32 + 0.5);
+                                        let dz = state.player.position.z - (target_pos.z as f32 + 0.5);
+                                        let facing = if dx.abs() > dz.abs() {
+                                            if dx > 0.0 { 2 } else { 3 }
+                                        } else if dz > 0.0 {
+                                            0
+                                        } else {
+                                            1
+                                        };
+                                        let placed = state.world_manager.place_block_with_facing(
                                             target_pos,
                                             block_id,
+                                            facing,
                                             &state.player.aabb(),
                                             &state.device,
                                             &state.pipeline,

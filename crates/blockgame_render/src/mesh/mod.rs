@@ -37,6 +37,30 @@ impl ChunkMesh {
     }
 }
 
+/// Maps a world-space face direction to the block's local texture direction
+/// given horizontal facing (`0 = PosZ`, `1 = NegZ`, `2 = PosX`, `3 = NegX`).
+#[inline]
+fn rotate_horizontal_dir(dir: Direction, facing: u8) -> Direction {
+    match (facing, dir) {
+        (1, Direction::PosZ) => Direction::NegZ,
+        (1, Direction::NegZ) => Direction::PosZ,
+        (1, Direction::PosX) => Direction::NegX,
+        (1, Direction::NegX) => Direction::PosX,
+
+        (2, Direction::PosX) => Direction::PosZ,
+        (2, Direction::NegX) => Direction::NegZ,
+        (2, Direction::NegZ) => Direction::PosX,
+        (2, Direction::PosZ) => Direction::NegX,
+
+        (3, Direction::NegX) => Direction::PosZ,
+        (3, Direction::PosX) => Direction::NegZ,
+        (3, Direction::PosZ) => Direction::PosX,
+        (3, Direction::NegZ) => Direction::NegX,
+
+        _ => dir,
+    }
+}
+
 pub struct ChunkMesher<'a> {
     registry: &'a BlockRegistry,
 }
@@ -126,8 +150,19 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    let facing = chunk.get_facing_unchecked(x, y, z);
+
                     if block_id.is_stairs() {
-                        self.build_stairs(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
+                        self.build_stairs(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            block_id,
+                            facing,
+                            &light_map,
+                        );
                         continue;
                     }
 
@@ -153,6 +188,7 @@ impl<'a> ChunkMesher<'a> {
                             iz,
                             block_id.is_door_open(),
                             block_id.is_door_top(),
+                            facing,
                             &light_map,
                         );
                         continue;
@@ -277,7 +313,8 @@ impl<'a> ChunkMesher<'a> {
 
                         // Only generate face if the neighbor block is transparent
                         if self.registry.is_transparent(neighbor_id) {
-                            let tile_id = self.registry.get_texture(block_id, dir);
+                            let tex_dir = rotate_horizontal_dir(dir, facing);
+                            let tile_id = self.registry.get_texture(block_id, tex_dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
 
                             // Sample light from adjacent air block (supports boundary voxels from [-1..16])
@@ -877,6 +914,7 @@ impl<'a> ChunkMesher<'a> {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_stairs(
         &self,
         mesh: &mut ChunkMesh,
@@ -885,6 +923,7 @@ impl<'a> ChunkMesher<'a> {
         y: i32,
         z: i32,
         block_id: BlockId,
+        facing: u8,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
         let origin = chunk_pos.to_world_origin();
@@ -908,15 +947,21 @@ impl<'a> ChunkMesher<'a> {
             [tile; 6],
             light,
         );
-        // Upper back step
+        // Upper back step (opposite to facing so the stairs face toward the player)
+        let (ux0, uz0, ux1, uz1) = match facing {
+            1 => (0.0, 0.5, 1.0, 1.0), // Facing NegZ -> back at +Z
+            2 => (0.0, 0.0, 0.5, 1.0), // Facing PosX -> back at -X
+            3 => (0.5, 0.0, 1.0, 1.0), // Facing NegX -> back at +X
+            _ => (0.0, 0.0, 1.0, 0.5), // Facing PosZ (default) -> back at -Z
+        };
         self.add_box(
             mesh,
-            fx,
+            fx + ux0,
             fy + 0.5,
-            fz,
-            fx + 1.0,
+            fz + uz0,
+            fx + ux1,
             fy + 1.0,
-            fz + 0.5,
+            fz + uz1,
             [tile; 6],
             light,
         );
@@ -994,6 +1039,7 @@ impl<'a> ChunkMesher<'a> {
         z: i32,
         is_open: bool,
         is_top: bool,
+        facing: u8,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
         let origin = chunk_pos.to_world_origin();
@@ -1005,31 +1051,28 @@ impl<'a> ChunkMesher<'a> {
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
-        if is_open {
-            self.add_box(
-                mesh,
-                fx,
-                fy,
-                fz,
-                fx + 0.1875,
-                fy + 1.0,
-                fz + 1.0,
-                [tile; 6],
-                light,
-            );
-        } else {
-            self.add_box(
-                mesh,
-                fx,
-                fy,
-                fz,
-                fx + 1.0,
-                fy + 1.0,
-                fz + 0.1875,
-                [tile; 6],
-                light,
-            );
-        }
+        let (x0, z0, x1, z1) = match (facing, is_open) {
+            // Facing PosZ (+Z) or NegZ (-Z): closed spans X, open swings onto X edge
+            (0, false) => (0.0, 0.8125, 1.0, 1.0),
+            (1, false) => (0.0, 0.0, 1.0, 0.1875),
+            (0, true) | (1, true) => (0.0, 0.0, 0.1875, 1.0),
+            // Facing PosX (+X) or NegX (-X): closed spans Z, open swings onto Z edge
+            (2, false) => (0.8125, 0.0, 1.0, 1.0),
+            (3, false) => (0.0, 0.0, 0.1875, 1.0),
+            (2, true) | (3, true) => (0.0, 0.0, 1.0, 0.1875),
+            _ => (0.0, 0.8125, 1.0, 1.0),
+        };
+        self.add_box(
+            mesh,
+            fx + x0,
+            fy,
+            fz + z0,
+            fx + x1,
+            fy + 1.0,
+            fz + z1,
+            [tile; 6],
+            light,
+        );
     }
 
     fn build_bed(

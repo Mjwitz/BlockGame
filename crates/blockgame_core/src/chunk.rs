@@ -30,6 +30,7 @@ impl ChunkPos {
 pub struct Chunk {
     pub pos: ChunkPos,
     blocks: [BlockId; CHUNK_VOLUME],
+    facings: [u8; CHUNK_VOLUME],
 }
 
 impl Chunk {
@@ -37,6 +38,7 @@ impl Chunk {
         Self {
             pos,
             blocks: [BlockId::AIR; CHUNK_VOLUME],
+            facings: [0; CHUNK_VOLUME],
         }
     }
 
@@ -78,6 +80,21 @@ impl Chunk {
     }
 
     #[inline]
+    pub fn get_facing_unchecked(&self, x: usize, y: usize, z: usize) -> u8 {
+        self.facings[Self::index(x, y, z)]
+    }
+
+    #[inline]
+    pub fn set_facing(&mut self, x: usize, y: usize, z: usize, facing: u8) -> bool {
+        if x < CHUNK_SIZE_X && y < CHUNK_SIZE_Y && z < CHUNK_SIZE_Z {
+            self.facings[Self::index(x, y, z)] = facing & 0x03;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
     pub fn raw_blocks(&self) -> &[BlockId; CHUNK_VOLUME] {
         &self.blocks
     }
@@ -87,9 +104,20 @@ impl Chunk {
         &mut self.blocks
     }
 
+    #[inline]
+    pub fn raw_facings(&self) -> &[u8; CHUNK_VOLUME] {
+        &self.facings
+    }
+
+    #[inline]
+    pub fn raw_facings_mut(&mut self) -> &mut [u8; CHUNK_VOLUME] {
+        &mut self.facings
+    }
+
     /// Fills the entire chunk with a specific block.
     pub fn fill(&mut self, id: BlockId) {
         self.blocks.fill(id);
+        self.facings.fill(0);
     }
 }
 

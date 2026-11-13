@@ -879,6 +879,18 @@ impl WorldManager {
         device: &wgpu::Device,
         pipeline: &VoxelPipeline,
     ) -> bool {
+        self.place_block_with_facing(pos, block_id, 0, player_aabb, device, pipeline)
+    }
+
+    pub fn place_block_with_facing(
+        &mut self,
+        pos: IVec3,
+        block_id: BlockId,
+        facing: u8,
+        player_aabb: &AABB,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
         // Prevent placing inside player collider if block is solid
         if self.registry.is_solid(block_id) {
             let block_box = AABB::from_block(pos);
@@ -946,9 +958,11 @@ impl WorldManager {
 
             let is_light_source = block_id.is_emissive();
             world.set_block(pos, block_id);
+            world.set_block_facing(pos, facing);
             if block_id == BlockId::OAK_DOOR_CLOSED {
                 let top_pos = pos + IVec3::Y;
                 world.set_block(top_pos, BlockId::OAK_DOOR_TOP_CLOSED);
+                world.set_block_facing(top_pos, facing);
                 Self::add_chunk_and_neighbors(top_pos, &mut chunks_to_rebuild);
             }
             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
