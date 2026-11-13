@@ -2286,6 +2286,311 @@ pub fn build_animals_mesh(animals: &[AnimalEntity]) -> ChunkMesh {
     mesh
 }
 
+/// Builds dynamic 3D meshes for active monsters (Zombies, Skeletons, Spiders).
+pub fn build_monsters_mesh(monsters: &[blockgame_core::monster::MonsterEntity]) -> ChunkMesh {
+    use blockgame_core::monster::MonsterKind;
+    let mut mesh = ChunkMesh::new();
+
+    for m in monsters {
+        if m.dead {
+            continue;
+        }
+        let cos_y = m.yaw.cos();
+        let sin_y = m.yaw.sin();
+        let ao = if m.hurt_timer > 0.0 || m.burning_timer > 0.0 {
+            1.45
+        } else {
+            1.0
+        };
+        let light = [0.95, if m.burning_timer > 0.0 { 1.0 } else { 0.4 }];
+        let pos = m.position;
+        let leg_swing = m.walk_anim_timer.sin() * 0.45;
+
+        match m.kind {
+            MonsterKind::Zombie => {
+                let uvs_head = get_animal_uvs(349);
+                let uvs_shirt = get_animal_uvs(350);
+                let uvs_pants = get_animal_uvs(351);
+
+                // Head
+                add_animal_box(
+                    &mut mesh,
+                    [-0.24, 1.45, -0.24],
+                    [0.24, 1.93, 0.24],
+                    &uvs_shirt,
+                    Some(&uvs_head),
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Torso
+                add_animal_box(
+                    &mut mesh,
+                    [-0.24, 0.72, -0.14],
+                    [0.24, 1.45, 0.14],
+                    &uvs_shirt,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Outstretched Zombie Arms
+                add_animal_box(
+                    &mut mesh,
+                    [-0.44, 1.18, 0.0],
+                    [-0.24, 1.42, 0.68],
+                    &uvs_shirt,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.24, 1.18, 0.0],
+                    [0.44, 1.42, 0.68],
+                    &uvs_shirt,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Legs
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.22, 0.0, -0.11],
+                    [-0.02, 0.72, 0.11],
+                    0.72,
+                    0.0,
+                    leg_swing,
+                    &uvs_pants,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.02, 0.0, -0.11],
+                    [0.22, 0.72, 0.11],
+                    0.72,
+                    0.0,
+                    -leg_swing,
+                    &uvs_pants,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+            }
+            MonsterKind::Skeleton => {
+                let uvs_skull = get_animal_uvs(352);
+                let uvs_bones = get_animal_uvs(353);
+
+                // Skull
+                add_animal_box(
+                    &mut mesh,
+                    [-0.23, 1.45, -0.23],
+                    [0.23, 1.91, 0.23],
+                    &uvs_bones,
+                    Some(&uvs_skull),
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Ribcage torso
+                add_animal_box(
+                    &mut mesh,
+                    [-0.22, 0.72, -0.12],
+                    [0.22, 1.45, 0.12],
+                    &uvs_bones,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Slim arms aiming forward
+                add_animal_box(
+                    &mut mesh,
+                    [-0.36, 1.22, 0.0],
+                    [-0.22, 1.38, 0.62],
+                    &uvs_bones,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.22, 1.22, 0.0],
+                    [0.36, 1.38, 0.62],
+                    &uvs_bones,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Slim bone legs
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.18, 0.0, -0.07],
+                    [-0.04, 0.72, 0.07],
+                    0.72,
+                    0.0,
+                    leg_swing,
+                    &uvs_bones,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.04, 0.0, -0.07],
+                    [0.18, 0.72, 0.07],
+                    0.72,
+                    0.0,
+                    -leg_swing,
+                    &uvs_bones,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+            }
+            MonsterKind::Spider => {
+                let uvs_face = get_animal_uvs(354);
+                let uvs_body = get_animal_uvs(355);
+
+                // Abdomen
+                add_animal_box(
+                    &mut mesh,
+                    [-0.35, 0.25, -0.62],
+                    [0.35, 0.78, 0.08],
+                    &uvs_body,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Thorax
+                add_animal_box(
+                    &mut mesh,
+                    [-0.22, 0.28, 0.08],
+                    [0.22, 0.64, 0.34],
+                    &uvs_body,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Head with glowing red eyes
+                add_animal_box(
+                    &mut mesh,
+                    [-0.26, 0.26, 0.34],
+                    [0.26, 0.68, 0.72],
+                    &uvs_body,
+                    Some(&uvs_face),
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // 8 Spider legs (4 per side)
+                for i in 0..4 {
+                    let lz = -0.25 + (i as f32) * 0.22;
+                    let phase = if i % 2 == 0 { leg_swing } else { -leg_swing };
+                    add_animal_leg_box(
+                        &mut mesh,
+                        [-0.78, 0.0, lz - 0.05],
+                        [-0.26, 0.38, lz + 0.05],
+                        0.38,
+                        lz,
+                        phase,
+                        &uvs_body,
+                        ao,
+                        light,
+                        pos,
+                        cos_y,
+                        sin_y,
+                    );
+                    add_animal_leg_box(
+                        &mut mesh,
+                        [0.26, 0.0, lz - 0.05],
+                        [0.78, 0.38, lz + 0.05],
+                        0.38,
+                        lz,
+                        -phase,
+                        &uvs_body,
+                        ao,
+                        light,
+                        pos,
+                        cos_y,
+                        sin_y,
+                    );
+                }
+            }
+        }
+    }
+
+    mesh
+}
+
+/// Builds dynamic 3D meshes for flying/stuck Arrow projectiles.
+pub fn build_arrows_mesh(arrows: &[blockgame_core::monster::ArrowProjectile]) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+    let uvs_shaft = get_animal_uvs(10); // Oak planks wood shaft
+
+    for arrow in arrows {
+        if arrow.dead {
+            continue;
+        }
+        let dir = arrow.velocity.normalize_or_zero();
+        let yaw = dir.x.atan2(dir.z);
+        let cos_y = yaw.cos();
+        let sin_y = yaw.sin();
+        add_animal_box(
+            &mut mesh,
+            [-0.035, -0.035, -0.28],
+            [0.035, 0.035, 0.28],
+            &uvs_shaft,
+            None,
+            1.0,
+            [1.0, 0.4],
+            arrow.position,
+            cos_y,
+            sin_y,
+        );
+    }
+
+    mesh
+}
+
 /// Builds dynamic 3D meshes for active falling gravity blocks (Sand, Red Sand, Gravel).
 pub fn build_falling_blocks_mesh(
     falling_blocks: &[FallingBlock],

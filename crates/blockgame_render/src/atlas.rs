@@ -1124,6 +1124,160 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
         let fold = if px < 2 || px >= 30 || py >= 29 { -18 } else { 0 };
         Rgba([clamp(182, n + fold), clamp(44, n / 2), clamp(38, n / 2), 255])
     });
+
+    // 344: Bow item sprite (curved oak bow + white bowstring)
+    atlas.paint_tile(344, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Bowstring connecting (6,6) to (25,25)
+        if (x + y - 31).abs() <= 0 && x >= 7 && x <= 24 {
+            return Rgba([230, 232, 236, 255]);
+        }
+        // Curved wooden limbs
+        let dx = x - 8;
+        let dy = y - 23;
+        let r2 = dx * dx + dy * dy;
+        let on_arc = r2 >= 15 * 15 && r2 <= 19 * 19 && x >= 6 && y <= 26;
+        let on_tip = ((x == 6 || x == 7) && (y >= 5 && y <= 8)) || ((x >= 23 && x <= 26) && (y == 24 || y == 25));
+        if on_arc || on_tip {
+            let n = (hash(px, py, 344) % 13) - 6;
+            return Rgba([clamp(148, n), clamp(104, n), clamp(58, n), 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 345: Arrow item sprite (diagonal shaft, stone tip top-right, white fletching bottom-left)
+    atlas.paint_tile(345, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Arrowhead top-right
+        if (x >= 21 && x <= 27 && y >= 4 && y <= 10) && (x - y >= 13 && x - y <= 20) && (x + y <= 34) {
+            let n = (hash(px, py, 345) % 13) - 6;
+            return Rgba([clamp(165, n), clamp(170, n), clamp(178, n), 255]);
+        }
+        // Fletching bottom-left
+        if x >= 4 && x <= 10 && y >= 21 && y <= 27 && ((x + y - 31).abs() <= 3) && (x <= 9 && y >= 22) {
+            return Rgba([238, 240, 244, 255]);
+        }
+        // Wooden shaft along x + y == 31
+        if (x + y - 31).abs() <= 1 && x >= 6 && x <= 24 {
+            let n = (hash(px, py, 3451) % 9) - 4;
+            return Rgba([clamp(152, n), clamp(112, n), clamp(66, n), 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 346: String item sprite
+    atlas.paint_tile(346, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        let r2 = x * x + y * y;
+        if (r2 >= 42 && r2 <= 95) || ((x + y).abs() <= 1 && r2 <= 110) {
+            let n = (hash(px, py, 346) % 15) - 7;
+            return Rgba([clamp(236, n), clamp(238, n), clamp(242, n), 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 347: Bone item sprite
+    atlas.paint_tile(347, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let in_shaft = (x + y - 31).abs() <= 2 && x >= 7 && x <= 24;
+        let in_knob1 = (x - 7).pow(2) + (y - 23).pow(2) <= 10 || (x - 9).pow(2) + (y - 25).pow(2) <= 10;
+        let in_knob2 = (x - 24).pow(2) + (y - 7).pow(2) <= 10 || (x - 22).pow(2) + (y - 9).pow(2) <= 10;
+        if in_shaft || in_knob1 || in_knob2 {
+            let n = (hash(px, py, 347) % 11) - 5;
+            return Rgba([clamp(236, n), clamp(232, n), clamp(216, n), 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 348: Rotten Flesh item sprite
+    atlas.paint_tile(348, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        if x * x + (y * 3 / 2) * (y * 3 / 2) <= 115 {
+            let n = (hash(px, py, 348) % 19) - 9;
+            if (px + py) % 7 == 0 {
+                return Rgba([clamp(92, n), clamp(118, n), clamp(58, n), 255]); // Greenish rot
+            }
+            return Rgba([clamp(146, n), clamp(78, n), clamp(58, n), 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 349: Zombie Head/Face (green skin, dark hollow eyes & mouth)
+    atlas.paint_tile(349, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if y >= 13 && y <= 16 && ((x >= 6 && x <= 11) || (x >= 20 && x <= 25)) {
+            return Rgba([22, 28, 22, 255]); // Hollow eyes
+        }
+        if y >= 22 && y <= 25 && x >= 11 && x <= 20 {
+            return Rgba([42, 62, 36, 255]); // Mouth
+        }
+        let n = (hash(px / 2, py / 2, 349) % 15) - 7;
+        Rgba([clamp(82, n), clamp(134, n), clamp(72, n), 255])
+    });
+
+    // 350: Zombie Shirt (teal-blue shirt)
+    atlas.paint_tile(350, |px, py| {
+        let n = (hash(px / 2, py / 2, 350) % 15) - 7;
+        Rgba([clamp(36, n), clamp(128, n), clamp(142, n), 255])
+    });
+
+    // 351: Zombie Pants (indigo-blue trousers)
+    atlas.paint_tile(351, |px, py| {
+        let n = (hash(px / 2, py / 2, 351) % 15) - 7;
+        Rgba([clamp(56, n), clamp(54, n), clamp(124, n), 255])
+    });
+
+    // 352: Skeleton Skull/Face
+    atlas.paint_tile(352, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if y >= 12 && y <= 17 && ((x >= 5 && x <= 11) || (x >= 20 && x <= 26)) {
+            return Rgba([24, 24, 28, 255]); // Eye sockets
+        }
+        if y >= 19 && y <= 22 && x >= 14 && x <= 17 {
+            return Rgba([38, 38, 42, 255]); // Nasal cavity
+        }
+        if y >= 24 && y <= 27 && x >= 8 && x <= 23 && (x % 4 != 0) {
+            return Rgba([46, 46, 50, 255]); // Teeth gaps
+        }
+        let n = (hash(px / 2, py / 2, 352) % 13) - 6;
+        Rgba([clamp(228, n), clamp(228, n), clamp(222, n), 255])
+    });
+
+    // 353: Skeleton Bones / Ribcage
+    atlas.paint_tile(353, |px, py| {
+        let n = (hash(px / 2, py / 2, 353) % 13) - 6;
+        if py % 6 < 2 && px >= 6 && px <= 25 {
+            Rgba([clamp(140, n), clamp(140, n), clamp(136, n), 255])
+        } else {
+            Rgba([clamp(220, n), clamp(220, n), clamp(214, n), 255])
+        }
+    });
+
+    // 354: Spider Face (charcoal-black with 8 glowing crimson-red eyes)
+    atlas.paint_tile(354, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let is_big_eye = y >= 12 && y <= 16 && ((x >= 6 && x <= 10) || (x >= 21 && x <= 25));
+        let is_small_eye = y >= 19 && y <= 22 && ((x >= 9 && x <= 12) || (x >= 19 && x <= 22));
+        if is_big_eye || is_small_eye {
+            return Rgba([230, 28, 28, 255]); // Glowing red eyes
+        }
+        let n = (hash(px / 2, py / 2, 354) % 11) - 5;
+        Rgba([clamp(34, n), clamp(30, n), clamp(36, n), 255])
+    });
+
+    // 355: Spider Carapace / Legs
+    atlas.paint_tile(355, |px, py| {
+        let n = (hash(px / 2, py / 2, 355) % 13) - 6;
+        Rgba([clamp(42, n), clamp(36, n), clamp(44, n), 255])
+    });
 }
 
 fn paint_flower_tile<F>(atlas: &mut TextureAtlas, tile_id: u16, mut f: F)

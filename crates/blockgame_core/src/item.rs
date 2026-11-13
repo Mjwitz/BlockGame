@@ -160,6 +160,11 @@ impl ItemId {
     pub const JACK_O_LANTERN: Self = Self(150);
     pub const MELON: Self = Self(151);
     pub const MELON_SLICE: Self = Self(152);
+    pub const BOW: Self = Self(153);
+    pub const ARROW: Self = Self(154);
+    pub const STRING: Self = Self(155);
+    pub const BONE: Self = Self(156);
+    pub const ROTTEN_FLESH: Self = Self(157);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -1927,6 +1932,67 @@ impl ItemRegistry {
             icon_tile: 331,
         });
         self.register_food(ItemId::MELON_SLICE, FoodDef::new(2, 1.2));
+
+        self.register(ItemDef {
+            id: ItemId::BOW,
+            name: "blockgame:bow",
+            display_name: "Bow",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(384),
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 344,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::ARROW,
+            name: "blockgame:arrow",
+            display_name: "Arrow",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 345,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::STRING,
+            name: "blockgame:string",
+            display_name: "String",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 346,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::BONE,
+            name: "blockgame:bone",
+            display_name: "Bone",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 347,
+        });
+
+        self.register(ItemDef {
+            id: ItemId::ROTTEN_FLESH,
+            name: "blockgame:rotten_flesh",
+            display_name: "Rotten Flesh",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 348,
+        });
+        self.register_food(ItemId::ROTTEN_FLESH, FoodDef::new(4, 0.8));
     }
 }
 

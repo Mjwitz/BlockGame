@@ -1837,6 +1837,41 @@ impl CraftingManager {
             inputs: vec![ItemId::MELON],
             output: ItemSlot::new(ItemId::MELON_SLICE, 4),
         });
+
+        // Bow (3x3: 3 Sticks + 3 String)
+        self.register(Recipe::Shaped {
+            name: "Bow",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None, Some(ItemId::STICK), Some(ItemId::STRING),
+                Some(ItemId::STICK), None, Some(ItemId::STRING),
+                None, Some(ItemId::STICK), Some(ItemId::STRING),
+            ],
+            output: ItemSlot::new(ItemId::BOW, 1),
+        });
+
+        // Arrow (1x3: Cobblestone + Stick + Feather -> 4 Arrows)
+        self.register(Recipe::Shaped {
+            name: "Arrow",
+            width: 1,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::COBBLESTONE),
+                Some(ItemId::STICK),
+                Some(ItemId::FEATHER),
+            ],
+            output: ItemSlot::new(ItemId::ARROW, 4),
+        });
+
+        // White Wool from String (2x2: 4 String -> 1 White Wool)
+        self.register(Recipe::Shaped {
+            name: "White Wool (String)",
+            width: 2,
+            height: 2,
+            pattern: vec![Some(ItemId::STRING); 4],
+            output: ItemSlot::new(ItemId::WHITE_WOOL, 1),
+        });
     }
 }
 

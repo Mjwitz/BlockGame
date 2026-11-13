@@ -14,6 +14,7 @@ use blockgame_core::{
     chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
     entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus},
     item::{ItemId, ItemSlot},
+    monster::{can_monster_spawn_at, ArrowProjectile, MonsterEntity, MonsterKind},
     physics::AABB,
     world::{world_to_chunk_coords, World},
 };
@@ -39,6 +40,12 @@ pub struct WorldManager {
     pub falling_blocks: Vec<FallingBlock>,
     pub animals: Vec<AnimalEntity>,
     pub next_animal_id: u32,
+    pub monsters: Vec<MonsterEntity>,
+    pub arrows: Vec<ArrowProjectile>,
+    pub next_monster_id: u32,
+    pub next_arrow_id: u32,
+    monster_spawn_timer: f32,
+    monster_rng_state: u64,
     pub planted_crops: Vec<(IVec3, f32)>,
     pub active_farmland: Vec<(IVec3, f32)>,
     pub growing_cacti: Vec<(IVec3, f32)>,
@@ -49,6 +56,10 @@ pub struct WorldManager {
 impl WorldManager {
     pub fn new(seed: u32, render_distance: i32, registry: Arc<BlockRegistry>) -> Self {
         let (mesh_tx, mesh_rx) = mpsc::channel();
+        let mut monster_rng_state = (seed as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ 0x853c49e6748fea9b;
+        if monster_rng_state == 0 {
+            monster_rng_state = 0x853c49e6748fea9b;
+        }
 
         Self {
             world: Arc::new(Mutex::new(World::new())),
@@ -67,6 +78,12 @@ impl WorldManager {
             falling_blocks: Vec::new(),
             animals: Vec::new(),
             next_animal_id: 1,
+            monsters: Vec::new(),
+            arrows: Vec::new(),
+            next_monster_id: 1,
+            next_arrow_id: 1,
+            monster_spawn_timer: 2.0,
+            monster_rng_state,
             planted_crops: Vec::new(),
             active_farmland: Vec::new(),
             growing_cacti: Vec::new(),
@@ -1277,6 +1294,227 @@ impl WorldManager {
         } else {
             false
         }
+    }
+
+    #[inline]
+    fn next_monster_rng_f32(&mut self) -> f32 {
+        self.monster_rng_state ^= self.monster_rng_state << 13;
+        self.monster_rng_state ^= self.monster_rng_state >> 7;
+        self.monster_rng_state ^= self.monster_rng_state << 17;
+        if self.monster_rng_state == 0 {
+            self.monster_rng_state = 0x853c49e6748fea9b;
+        }
+        ((self.monster_rng_state >> 32) as u32 as f32) / (u32::MAX as f32)
+    }
+
+    /// Performs raycast attack against closest monster within reach.
+    pub fn attack_monster(
+        &mut self,
+        ray_origin: Vec3,
+        ray_dir: Vec3,
+        reach: f32,
+        damage: f32,
+    ) -> bool {
+        let mut closest_dist = reach;
+        let mut hit_idx = None;
+
+        for (idx, monster) in self.monsters.iter().enumerate() {
+            if monster.dead {
+                continue;
+            }
+            let bbox = monster.aabb();
+            if let Some(dist) = bbox.intersect_ray(ray_origin, ray_dir, reach) {
+                if dist < closest_dist {
+                    closest_dist = dist;
+                    hit_idx = Some(idx);
+                }
+            }
+        }
+
+        if let Some(idx) = hit_idx {
+            let knockback = ray_dir.normalize_or_zero();
+            self.monsters[idx].take_damage(damage, knockback);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Spawns a player-fired arrow projectile.
+    pub fn spawn_player_arrow(&mut self, position: Vec3, velocity: Vec3, damage: f32) {
+        let id = self.next_arrow_id;
+        self.next_arrow_id = self.next_arrow_id.wrapping_add(1).max(1);
+        self.arrows
+            .push(ArrowProjectile::new(id, position, velocity, true, damage));
+    }
+
+    /// Spawns, updates, and despawns monsters. Returns `(melee_damage_to_player, drops)`.
+    pub fn update_monsters(
+        &mut self,
+        dt: f32,
+        player_pos: Vec3,
+        sun_intensity: f32,
+    ) -> (f32, Vec<(Vec3, Vec<ItemSlot>)>) {
+        let mut total_damage = 0.0;
+        let mut drops = Vec::new();
+
+        self.monster_spawn_timer -= dt;
+        if self.monster_spawn_timer <= 0.0 {
+            self.monster_spawn_timer = 2.5;
+            if self.monsters.len() < 20 {
+                let mut candidates = Vec::new();
+                for _ in 0..4 {
+                    let angle = self.next_monster_rng_f32() * std::f32::consts::TAU;
+                    let dist = 16.0 + self.next_monster_rng_f32() * 22.0;
+                    let wx = (player_pos.x + angle.cos() * dist).floor() as i32;
+                    let wz = (player_pos.z + angle.sin() * dist).floor() as i32;
+                    let kind_roll = self.next_monster_rng_f32();
+                    let kind = if kind_roll < 0.45 {
+                        MonsterKind::Zombie
+                    } else if kind_roll < 0.80 {
+                        MonsterKind::Skeleton
+                    } else {
+                        MonsterKind::Spider
+                    };
+                    candidates.push((wx, wz, kind));
+                }
+
+                let world_guard = self.world.lock().unwrap();
+                let min_y = (player_pos.y as i32 - 18).max(2);
+                let max_y = (player_pos.y as i32 + 16).min(120);
+                for (wx, wz, kind) in candidates {
+                    if self.monsters.len() >= 20 {
+                        break;
+                    }
+                    for wy in (min_y..=max_y).rev() {
+                        let pos = IVec3::new(wx, wy, wz);
+                        if can_monster_spawn_at(pos, kind, sun_intensity, &world_guard, &self.registry) {
+                            let id = self.next_monster_id;
+                            self.next_monster_id = self.next_monster_id.wrapping_add(1).max(1);
+                            self.monsters.push(MonsterEntity::new(
+                                id,
+                                kind,
+                                Vec3::new(wx as f32 + 0.5, wy as f32, wz as f32 + 0.5),
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut spawned_arrows = Vec::new();
+        {
+            let world_guard = self.world.lock().unwrap();
+            for monster in self.monsters.iter_mut() {
+                let outcome =
+                    monster.update(dt, player_pos, sun_intensity, &world_guard, &self.registry);
+                total_damage += outcome.damage_to_player;
+                if let Some((apos, avel)) = outcome.spawned_arrow {
+                    spawned_arrows.push((apos, avel));
+                }
+            }
+        }
+
+        for (apos, avel) in spawned_arrows {
+            let id = self.next_arrow_id;
+            self.next_arrow_id = self.next_arrow_id.wrapping_add(1).max(1);
+            self.arrows.push(ArrowProjectile::new(
+                id,
+                apos,
+                avel,
+                false,
+                MonsterKind::Skeleton.attack_damage(),
+            ));
+        }
+
+        self.monsters.retain(|monster| {
+            if monster.dead {
+                drops.push((monster.position, monster.generate_drops()));
+                false
+            } else {
+                (monster.position - player_pos).length_squared() <= 72.0 * 72.0
+            }
+        });
+
+        (total_damage, drops)
+    }
+
+    /// Updates all active arrow projectiles and applies hits to monsters, animals, or the player.
+    pub fn update_arrows(
+        &mut self,
+        dt: f32,
+        player_pos: Vec3,
+        player_half_width: f32,
+        player_height: f32,
+    ) -> f32 {
+        let mut total_player_damage = 0.0;
+        let player_box = AABB::from_player(player_pos, player_half_width, player_height);
+        let world_guard = self.world.lock().unwrap();
+
+        for arrow in self.arrows.iter_mut() {
+            arrow.update(dt, &world_guard, &self.registry);
+            if arrow.dead || arrow.stuck {
+                continue;
+            }
+
+            if arrow.from_player {
+                let p = arrow.position;
+                let mut hit = false;
+                for monster in self.monsters.iter_mut() {
+                    if monster.dead {
+                        continue;
+                    }
+                    let b = monster.aabb();
+                    if p.x >= b.min.x - 0.15
+                        && p.x <= b.max.x + 0.15
+                        && p.y >= b.min.y - 0.15
+                        && p.y <= b.max.y + 0.15
+                        && p.z >= b.min.z - 0.15
+                        && p.z <= b.max.z + 0.15
+                    {
+                        monster.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
+                        arrow.dead = true;
+                        hit = true;
+                        break;
+                    }
+                }
+                if !hit {
+                    for animal in self.animals.iter_mut() {
+                        if animal.dead {
+                            continue;
+                        }
+                        let b = animal.aabb();
+                        if p.x >= b.min.x - 0.15
+                            && p.x <= b.max.x + 0.15
+                            && p.y >= b.min.y - 0.15
+                            && p.y <= b.max.y + 0.15
+                            && p.z >= b.min.z - 0.15
+                            && p.z <= b.max.z + 0.15
+                        {
+                            animal.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
+                            arrow.dead = true;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                let p = arrow.position;
+                if p.x >= player_box.min.x - 0.1
+                    && p.x <= player_box.max.x + 0.1
+                    && p.y >= player_box.min.y - 0.1
+                    && p.y <= player_box.max.y + 0.1
+                    && p.z >= player_box.min.z - 0.1
+                    && p.z <= player_box.max.z + 0.1
+                {
+                    total_player_damage += arrow.damage;
+                    arrow.dead = true;
+                }
+            }
+        }
+
+        self.arrows.retain(|a| !a.dead);
+        total_player_damage
     }
 
     /// Tills Grass or Dirt into Farmland using a Hoe.

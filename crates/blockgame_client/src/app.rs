@@ -117,6 +117,8 @@ pub struct AppState {
     pub ui_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub item_drop_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub monster_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub arrow_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub player_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     // Multiplayer & 3D Player Model State
@@ -819,6 +821,8 @@ impl ApplicationHandler for BlockGameApp {
                 "Dynamic Item Drop Mesh",
             ),
             animal_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Animal Mesh"),
+            monster_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Monster Mesh"),
+            arrow_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new("Dynamic Arrow Mesh"),
             falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
                 "Dynamic Falling Block Mesh",
             ),
@@ -1532,13 +1536,20 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                 }
                             } else {
-                                let hit_animal = state.world_manager.attack_animal(
+                                let hit_monster = state.world_manager.attack_monster(
                                     state.player.eye_position(),
                                     state.camera.forward(),
                                     3.5,
                                     attack_damage,
                                 );
-                                if hit_animal {
+                                let hit_entity = hit_monster
+                                    || state.world_manager.attack_animal(
+                                        state.player.eye_position(),
+                                        state.camera.forward(),
+                                        3.5,
+                                        attack_damage,
+                                    );
+                                if hit_entity {
                                     state.mouse_left_down = false;
                                     state.breaking_voxel = None;
                                     state.break_progress = 0.0;
@@ -1767,6 +1778,39 @@ impl ApplicationHandler for BlockGameApp {
                         }
 
                         let held_slot = state.inventory.get(state.active_hotbar_slot);
+
+                        // 1b. Bow Firing (consumes 1 Arrow from inventory)
+                        if held_slot.item_id == ItemId::BOW {
+                            let mut arrow_slot_idx = None;
+                            for idx in 0..state.inventory.len() {
+                                let s = state.inventory.get(idx);
+                                if s.item_id == ItemId::ARROW && s.count > 0 {
+                                    arrow_slot_idx = Some(idx);
+                                    break;
+                                }
+                            }
+                            if let Some(idx) = arrow_slot_idx {
+                                let mut arrow_slot = state.inventory.get(idx);
+                                arrow_slot.take(1);
+                                state.inventory.set(idx, arrow_slot);
+
+                                let mut bow_slot = state.inventory.get(state.active_hotbar_slot);
+                                if let Some(def) = state.item_registry.get(ItemId::BOW) {
+                                    if let Some(max_dur) = def.durability {
+                                        if bow_slot.damage_tool(1, max_dur) {
+                                            state.audio.play_tool_break();
+                                        }
+                                        state.inventory.set(state.active_hotbar_slot, bow_slot);
+                                    }
+                                }
+
+                                let dir = state.camera.forward().normalize_or_zero();
+                                let spawn_pos = state.player.eye_position() + dir * 0.45;
+                                state.world_manager.spawn_player_arrow(spawn_pos, dir * 28.0, 6.0);
+                                state.punch_timer = 0.15;
+                            }
+                            return;
+                        }
 
                         // 2. Hoe Tilling (Grass or Dirt with Hoe -> Farmland)
                         if !held_slot.is_empty() {
@@ -3119,12 +3163,35 @@ impl ApplicationHandler for BlockGameApp {
                             .update_item_drops(dt, state.player.position);
                     }
 
-                    // 3b. Update Animals & Planted Crops
+                    // 3b. Update Animals, Monsters, Arrows & Planted Crops
                     let animal_drops = state.world_manager.update_animals(dt);
                     for (pos, drops) in animal_drops {
                         for drop_slot in drops {
                             state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
                         }
+                    }
+                    let (monster_dmg, monster_drops) = state.world_manager.update_monsters(
+                        dt,
+                        state.player.position,
+                        state.day_night.sun_intensity(),
+                    );
+                    for (pos, drops) in monster_drops {
+                        for drop_slot in drops {
+                            state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
+                        }
+                    }
+                    let arrow_dmg = state.world_manager.update_arrows(
+                        dt,
+                        state.player.position,
+                        state.player.half_width,
+                        state.player.height,
+                    );
+                    let total_hostile_dmg = monster_dmg + arrow_dmg;
+                    if total_hostile_dmg > 0.0
+                        && !state.player_stats.is_dead
+                        && !state.player.flying
+                    {
+                        state.player_stats.take_damage(total_hostile_dmg);
                     }
                     state
                         .world_manager
@@ -3910,6 +3977,34 @@ impl ApplicationHandler for BlockGameApp {
                     state.animal_dynamic_mesh.clear();
                 }
 
+                // Upload dynamic 3D Monsters mesh
+                if !state.world_manager.monsters.is_empty() {
+                    let monsters_mesh =
+                        blockgame_render::build_monsters_mesh(&state.world_manager.monsters);
+                    state.monster_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &monsters_mesh.vertices,
+                        &monsters_mesh.indices,
+                    );
+                } else {
+                    state.monster_dynamic_mesh.clear();
+                }
+
+                // Upload dynamic 3D Arrows mesh
+                if !state.world_manager.arrows.is_empty() {
+                    let arrows_mesh =
+                        blockgame_render::build_arrows_mesh(&state.world_manager.arrows);
+                    state.arrow_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &arrows_mesh.vertices,
+                        &arrows_mesh.indices,
+                    );
+                } else {
+                    state.arrow_dynamic_mesh.clear();
+                }
+
                 // Upload dynamic 3D Falling Blocks mesh
                 if !state.world_manager.falling_blocks.is_empty() {
                     let falling_mesh = blockgame_render::build_falling_blocks_mesh(
@@ -4047,6 +4142,10 @@ impl ApplicationHandler for BlockGameApp {
 
                     // Render active 3D animals
                     state.animal_dynamic_mesh.draw(&mut render_pass);
+
+                    // Render active 3D monsters and arrow projectiles
+                    state.monster_dynamic_mesh.draw(&mut render_pass);
+                    state.arrow_dynamic_mesh.draw(&mut render_pass);
 
                     // Render falling gravity blocks (Sand, Gravel, Red Sand)
                     state.falling_block_dynamic_mesh.draw(&mut render_pass);

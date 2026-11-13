@@ -8,6 +8,7 @@ pub mod direction;
 pub mod entity;
 pub mod item;
 pub mod lighting;
+pub mod monster;
 pub mod net;
 pub mod permissions;
 pub mod physics;
@@ -36,6 +37,10 @@ pub use direction::Direction;
 pub use entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus};
 pub use item::{FoodDef, Inventory, ItemDef, ItemId, ItemRegistry, ItemSlot};
 pub use lighting::{calculate_chunk_lighting, ChunkLightMap, LightValue};
+pub use monster::{
+    can_monster_spawn_at, compute_light_at, ArrowProjectile, MonsterEntity, MonsterKind,
+    MonsterTickOutcome,
+};
 pub use net::{
     player_skin_name, ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer,
     PlayerModelState, ServerPacket, DEFAULT_SERVER_PORT,
