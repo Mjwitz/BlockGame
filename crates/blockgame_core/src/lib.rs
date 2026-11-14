@@ -6,6 +6,7 @@ pub mod chunk;
 pub mod command;
 pub mod crafting;
 pub mod direction;
+pub mod directory;
 pub mod entity;
 pub mod item;
 pub mod lighting;

@@ -157,6 +157,13 @@ pub struct AppState {
     pub ptt_down: bool,
     pub voice_transmitting: bool,
     pub speaking_players: HashMap<u32, f32>,
+    pub directory_servers: Vec<blockgame_core::directory::DirectoryServerEntry>,
+    pub selected_directory_idx: Option<usize>,
+    pub directory_loading: bool,
+    pub directory_error: Option<String>,
+    pub directory_rx: Option<
+        std::sync::mpsc::Receiver<Result<Vec<blockgame_core::directory::DirectoryServerEntry>, String>>,
+    >,
     // Hold-to-break mining state
     pub mouse_left_down: bool,
     pub breaking_voxel: Option<IVec3>,
@@ -176,6 +183,49 @@ pub struct AppState {
 impl AppState {
     pub fn refresh_saved_worlds(&mut self) {
         self.saved_worlds = list_saved_worlds(&self.saves_root);
+    }
+
+    /// Spawns a background request to fetch discoverable servers from `self.settings.directory_url`.
+    pub fn refresh_directory_servers(&mut self) {
+        if self.directory_loading {
+            return;
+        }
+        let url = self.settings.directory_url.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.directory_loading = true;
+        self.directory_error = None;
+        self.directory_rx = Some(rx);
+        std::thread::Builder::new()
+            .name("directory-fetch".to_string())
+            .spawn(move || {
+                let res = blockgame_core::directory::fetch_servers(&url);
+                let _ = tx.send(res);
+            })
+            .ok();
+    }
+
+    /// Polls any in-flight directory server list fetch.
+    pub fn poll_directory_servers(&mut self) {
+        if let Some(rx) = &self.directory_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.directory_loading = false;
+                self.directory_rx = None;
+                match res {
+                    Ok(list) => {
+                        self.directory_servers = list;
+                        self.directory_error = None;
+                        if let Some(sel) = self.selected_directory_idx {
+                            if sel >= self.directory_servers.len() {
+                                self.selected_directory_idx = None;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.directory_error = Some(e);
+                    }
+                }
+            }
+        }
     }
 
     /// Applies `self.settings` live to camera FOV, render distance, audio volumes, VSync, and fullscreen mode.
@@ -1017,6 +1067,11 @@ impl ApplicationHandler for BlockGameApp {
             ptt_down: false,
             voice_transmitting: false,
             speaking_players: HashMap::new(),
+            directory_servers: Vec::new(),
+            selected_directory_idx: None,
+            directory_loading: false,
+            directory_error: None,
+            directory_rx: None,
             total_time: 0.0,
             fps_display: 0,
             fps_frame_count: 0,
@@ -1161,6 +1216,7 @@ impl ApplicationHandler for BlockGameApp {
                                         focused_field: 0,
                                         status_message: None,
                                     };
+                                    state.refresh_directory_servers();
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
                                     rects[2][0],
@@ -1627,6 +1683,82 @@ impl ApplicationHandler for BlockGameApp {
                                     cpos, back_r[0], back_r[1], back_r[2], back_r[3],
                                 ) {
                                     state.screen = AppScreen::Title;
+                                } else {
+                                    let (_, refresh_r, row_rects) =
+                                        UiBuilder::multiplayer_browser_layout(screen_w, screen_h);
+                                    if UiBuilder::is_rect_hovered(
+                                        cpos,
+                                        refresh_r[0],
+                                        refresh_r[1],
+                                        refresh_r[2],
+                                        refresh_r[3],
+                                    ) {
+                                        state.refresh_directory_servers();
+                                        state.screen = AppScreen::MultiplayerLobby {
+                                            username_input,
+                                            password_input,
+                                            address_input,
+                                            skin_id,
+                                            focused_field,
+                                            status_message,
+                                        };
+                                    } else {
+                                        let mut clicked_row = None;
+                                        for (idx, r) in row_rects.iter().enumerate() {
+                                            if idx < state.directory_servers.len()
+                                                && UiBuilder::is_rect_hovered(
+                                                    cpos, r[0], r[1], r[2], r[3],
+                                                )
+                                            {
+                                                clicked_row = Some(idx);
+                                                break;
+                                            }
+                                        }
+                                        if let Some(idx) = clicked_row {
+                                            let srv = &state.directory_servers[idx];
+                                            let new_addr = format!("{}:{}", srv.host, srv.port);
+                                            let already_selected =
+                                                state.selected_directory_idx == Some(idx);
+                                            state.selected_directory_idx = Some(idx);
+                                            if already_selected
+                                                && username_input.trim().len() >= 3
+                                            {
+                                                if let Err(err) = state.join_multiplayer_server(
+                                                    &username_input,
+                                                    &password_input,
+                                                    &new_addr,
+                                                    skin_id,
+                                                ) {
+                                                    state.screen = AppScreen::MultiplayerLobby {
+                                                        username_input,
+                                                        password_input,
+                                                        address_input: new_addr,
+                                                        skin_id,
+                                                        focused_field,
+                                                        status_message: Some((err, true)),
+                                                    };
+                                                }
+                                            } else {
+                                                state.screen = AppScreen::MultiplayerLobby {
+                                                    username_input,
+                                                    password_input,
+                                                    address_input: new_addr,
+                                                    skin_id,
+                                                    focused_field,
+                                                    status_message: None,
+                                                };
+                                            }
+                                        } else {
+                                            state.screen = AppScreen::MultiplayerLobby {
+                                                username_input,
+                                                password_input,
+                                                address_input,
+                                                skin_id,
+                                                focused_field,
+                                                status_message,
+                                            };
+                                        }
+                                    }
                                 }
                             }
                             AppScreen::InGame => {}
@@ -4292,6 +4424,7 @@ impl ApplicationHandler for BlockGameApp {
                     // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerLobby):
                     // Slowly orbit camera over the currently loaded 3D terrain around player.position
                     state.total_time += dt;
+                    state.poll_directory_servers();
                     state.world_manager.update(
                         state.player.position,
                         &state.device,
@@ -4422,6 +4555,10 @@ impl ApplicationHandler for BlockGameApp {
                                 *skin_id,
                                 *focused_field,
                                 status_ref,
+                                &state.directory_servers,
+                                state.selected_directory_idx,
+                                state.directory_loading,
+                                state.directory_error.as_deref(),
                                 ui_cursor,
                             );
                         }

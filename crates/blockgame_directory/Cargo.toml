@@ -1,0 +1,15 @@
+[package]
+name = "blockgame_directory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "blockgame_directory"
+path = "src/main.rs"
+
+[dependencies]
+blockgame_core = { path = "../blockgame_core" }
+log = { workspace = true }
+env_logger = { workspace = true }

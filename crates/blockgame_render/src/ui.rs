@@ -5036,25 +5036,28 @@ impl UiBuilder {
         }
     }
 
-    /// Returns layout rectangles for the Multiplayer Lobby screen:
+    /// Returns layout rectangles for the Multiplayer Lobby left-hand account/direct-connect column:
     /// `(username_box, password_box, address_box, [skin_btn, join_btn, host_btn, back_btn])`.
     pub fn multiplayer_lobby_layout(
         screen_w: f32,
         screen_h: f32,
     ) -> ([f32; 4], [f32; 4], [f32; 4], [[f32; 4]; 4]) {
-        let field_w = 380.0;
-        let field_h = 36.0;
-        let fx = (screen_w - field_w) * 0.5;
+        let left_w = 340.0;
+        let gap = 28.0;
+        let right_w = 430.0;
+        let total_w = left_w + gap + right_w;
+        let fx = ((screen_w - total_w) * 0.5).max(24.0);
+        let field_h = 34.0;
 
-        let user_rect = [fx, screen_h * 0.23, field_w, field_h];
-        let pass_rect = [fx, screen_h * 0.35, field_w, field_h];
-        let addr_rect = [fx, screen_h * 0.47, field_w, field_h];
+        let user_rect = [fx, screen_h * 0.23, left_w, field_h];
+        let pass_rect = [fx, screen_h * 0.34, left_w, field_h];
+        let addr_rect = [fx, screen_h * 0.45, left_w, field_h];
 
-        let skin_btn = [fx, screen_h * 0.56, field_w, 36.0];
-        let half_w = (field_w - 12.0) * 0.5;
-        let join_btn = [fx, screen_h * 0.65, half_w, 40.0];
-        let host_btn = [fx + half_w + 12.0, screen_h * 0.65, half_w, 40.0];
-        let back_btn = [fx, screen_h * 0.74, field_w, 38.0];
+        let skin_btn = [fx, screen_h * 0.54, left_w, 36.0];
+        let half_w = (left_w - 10.0) * 0.5;
+        let join_btn = [fx, screen_h * 0.63, half_w, 40.0];
+        let host_btn = [fx + half_w + 10.0, screen_h * 0.63, half_w, 40.0];
+        let back_btn = [fx, screen_h * 0.72, left_w, 38.0];
 
         (
             user_rect,
@@ -5064,7 +5067,39 @@ impl UiBuilder {
         )
     }
 
-    /// Builds the interactive Multiplayer Lobby Screen (Username, Password, Server Address, Skin Preview, Join & Host buttons).
+    /// Returns layout rectangles for the Discoverable Servers browser panel on the Multiplayer Lobby screen:
+    /// `(panel_rect, refresh_btn_rect, row_rects[0..6])`.
+    pub fn multiplayer_browser_layout(
+        screen_w: f32,
+        screen_h: f32,
+    ) -> ([f32; 4], [f32; 4], [[f32; 4]; 6]) {
+        let left_w = 340.0;
+        let gap = 28.0;
+        let right_w = 430.0;
+        let total_w = left_w + gap + right_w;
+        let left_x = ((screen_w - total_w) * 0.5).max(24.0);
+        let right_x = left_x + left_w + gap;
+
+        let panel_y = screen_h * 0.205;
+        let panel_h = (screen_h * 0.59).max(380.0);
+        let panel_rect = [right_x, panel_y, right_w, panel_h];
+        let refresh_btn = [right_x + right_w - 96.0, panel_y + 8.0, 86.0, 26.0];
+
+        let mut rows = [[0.0; 4]; 6];
+        let row_x = right_x + 10.0;
+        let row_w = right_w - 20.0;
+        let row_h = 50.0;
+        let row_gap = 6.0;
+        let rows_start_y = panel_y + 42.0;
+        for (i, row) in rows.iter_mut().enumerate() {
+            *row = [row_x, rows_start_y + i as f32 * (row_h + row_gap), row_w, row_h];
+        }
+
+        (panel_rect, refresh_btn, rows)
+    }
+
+    /// Builds the interactive Multiplayer Lobby Screen (Account, Direct Connect, and Discoverable Servers browser).
+    #[allow(clippy::too_many_arguments)]
     pub fn build_multiplayer_lobby_screen(
         mesh: &mut UiMesh,
         screen_w: f32,
@@ -5075,6 +5110,10 @@ impl UiBuilder {
         skin_id: u8,
         focused_field: usize,
         status_message: Option<(&str, bool)>,
+        directory_servers: &[blockgame_core::directory::DirectoryServerEntry],
+        selected_server_idx: Option<usize>,
+        directory_loading: bool,
+        directory_error: Option<&str>,
         cursor_pos: [f32; 2],
     ) {
         mesh.clear();
@@ -5095,7 +5134,7 @@ impl UiBuilder {
         Self::draw_string(
             mesh,
             (screen_w - header_w) * 0.5,
-            screen_h * 0.11,
+            screen_h * 0.08,
             header,
             13.0,
             18.0,
@@ -5103,12 +5142,12 @@ impl UiBuilder {
             [1.0, 1.0, 1.0, 1.0],
         );
 
-        let sub = "New usernames register automatically; returning usernames verify password";
+        let sub = "Connect directly, host a world, or pick a discoverable server";
         let sub_w = Self::string_width(sub, 8.0, 1.0);
         Self::draw_string(
             mesh,
             (screen_w - sub_w) * 0.5,
-            screen_h * 0.155,
+            screen_h * 0.125,
             sub,
             8.0,
             11.0,
@@ -5173,7 +5212,7 @@ impl UiBuilder {
             true,
         );
 
-        // Draw 32x32 Character Face Avatar preview on the left side of the Skin button
+        // Draw 28x28 Character Face Avatar preview on the left side of the Skin button
         let face_tile = 272 + ((skin_id as u16) % 4) * 4;
         let face_uv = TextureAtlas::get_uv_bounds(face_tile);
         mesh.add_quad(
@@ -5218,6 +5257,177 @@ impl UiBuilder {
             cursor_pos,
             true,
         );
+
+        // Right-hand Discoverable Servers panel
+        let (panel_r, refresh_r, row_rects) =
+            Self::multiplayer_browser_layout(screen_w, screen_h);
+        mesh.add_quad(
+            panel_r[0],
+            panel_r[1],
+            panel_r[2],
+            panel_r[3],
+            white_uv,
+            [0.30, 0.34, 0.42, 0.90],
+        );
+        mesh.add_quad(
+            panel_r[0] + 2.0,
+            panel_r[1] + 2.0,
+            panel_r[2] - 4.0,
+            panel_r[3] - 4.0,
+            white_uv,
+            [0.08, 0.10, 0.14, 0.94],
+        );
+
+        Self::draw_string(
+            mesh,
+            panel_r[0] + 12.0,
+            panel_r[1] + 13.0,
+            "Discoverable Servers",
+            10.0,
+            14.0,
+            1.0,
+            [0.95, 0.96, 1.0, 1.0],
+        );
+
+        Self::draw_menu_button(
+            mesh,
+            refresh_r[0],
+            refresh_r[1],
+            refresh_r[2],
+            refresh_r[3],
+            if directory_loading { "..." } else { "Refresh" },
+            cursor_pos,
+            !directory_loading,
+        );
+
+        if directory_loading && directory_servers.is_empty() {
+            Self::draw_string(
+                mesh,
+                panel_r[0] + 16.0,
+                panel_r[1] + 64.0,
+                "Fetching server list...",
+                9.0,
+                13.0,
+                1.0,
+                [0.72, 0.78, 0.88, 0.90],
+            );
+        } else if let Some(err) = directory_error.filter(|_| directory_servers.is_empty()) {
+            let short_err: String = err.chars().take(48).collect();
+            Self::draw_string(
+                mesh,
+                panel_r[0] + 16.0,
+                panel_r[1] + 64.0,
+                "Directory unreachable:",
+                9.0,
+                13.0,
+                1.0,
+                [1.0, 0.50, 0.50, 1.0],
+            );
+            Self::draw_string(
+                mesh,
+                panel_r[0] + 16.0,
+                panel_r[1] + 84.0,
+                &short_err,
+                8.0,
+                11.5,
+                1.0,
+                [0.85, 0.65, 0.65, 0.95],
+            );
+        } else if directory_servers.is_empty() {
+            Self::draw_string(
+                mesh,
+                panel_r[0] + 16.0,
+                panel_r[1] + 64.0,
+                "No public servers online.",
+                9.0,
+                13.0,
+                1.0,
+                [0.70, 0.75, 0.84, 0.85],
+            );
+        } else {
+            for (idx, srv) in directory_servers.iter().take(row_rects.len()).enumerate() {
+                let r = row_rects[idx];
+                let selected = selected_server_idx == Some(idx);
+                let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
+                let border = if selected {
+                    [0.95, 0.82, 0.35, 1.0]
+                } else if hovered {
+                    [0.65, 0.72, 0.86, 0.95]
+                } else {
+                    [0.24, 0.27, 0.34, 0.88]
+                };
+                let bg = if selected {
+                    [0.16, 0.24, 0.22, 0.96]
+                } else if hovered {
+                    [0.14, 0.17, 0.23, 0.94]
+                } else {
+                    [0.11, 0.13, 0.18, 0.90]
+                };
+                mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+                mesh.add_quad(
+                    r[0] + 2.0,
+                    r[1] + 2.0,
+                    r[2] - 4.0,
+                    r[3] - 4.0,
+                    white_uv,
+                    bg,
+                );
+
+                let name_short: String = srv.name.chars().take(24).collect();
+                Self::draw_string(
+                    mesh,
+                    r[0] + 8.0,
+                    r[1] + 7.0,
+                    &name_short,
+                    9.5,
+                    13.0,
+                    1.0,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+
+                let right_meta = if srv.voice_enabled {
+                    format!("{}/{} [Mic]", srv.players, srv.max_players)
+                } else {
+                    format!("{}/{}", srv.players, srv.max_players)
+                };
+                let meta_w = Self::string_width(&right_meta, 8.5, 1.0);
+                Self::draw_string(
+                    mesh,
+                    r[0] + r[2] - meta_w - 8.0,
+                    r[1] + 8.0,
+                    &right_meta,
+                    8.5,
+                    12.0,
+                    1.0,
+                    [0.48, 0.92, 0.65, 1.0],
+                );
+
+                let motd_short: String = srv.motd.chars().take(34).collect();
+                Self::draw_colored_string(
+                    mesh,
+                    r[0] + 8.0,
+                    r[1] + 27.0,
+                    &motd_short,
+                    8.0,
+                    11.5,
+                    1.0,
+                    [0.78, 0.82, 0.90, 0.95],
+                );
+
+                let addr_str = format!("{}:{}", srv.host, srv.port);
+                let addr_w = Self::string_width(&addr_str, 7.5, 1.0);
+                Self::draw_string(
+                    mesh,
+                    r[0] + r[2] - addr_w - 8.0,
+                    r[1] + 28.0,
+                    &addr_str,
+                    7.5,
+                    11.0,
+                    1.0,
+                    [0.58, 0.64, 0.75, 0.85],
+                );
+            }
+        }
 
         if let Some((msg, is_err)) = status_message {
             let mw = Self::string_width(msg, 9.0, 1.0);
@@ -6039,6 +6249,17 @@ mod tests {
     #[test]
     fn test_build_multiplayer_lobby_and_nametags() {
         let mut mesh = UiMesh::new();
+        let sample_srv = blockgame_core::directory::DirectoryServerEntry {
+            id: "srv-1".to_string(),
+            name: "Official Survival".to_string(),
+            motd: "&bWelcome to BlockGame!".to_string(),
+            host: "15.204.81.97".to_string(),
+            port: 25565,
+            players: 3,
+            max_players: 20,
+            version: "0.1.0".to_string(),
+            voice_enabled: true,
+        };
         UiBuilder::build_multiplayer_lobby_screen(
             &mut mesh,
             1280.0,
@@ -6049,6 +6270,10 @@ mod tests {
             1,
             0,
             Some(("Ready to connect", false)),
+            &[sample_srv],
+            Some(0),
+            false,
+            None,
             [640.0, 360.0],
         );
         assert!(mesh.indices.len() > 0);

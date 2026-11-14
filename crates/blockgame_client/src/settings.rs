@@ -187,6 +187,8 @@ pub struct GameSettings {
     pub voice_volume: f32,
     /// Selected microphone device name (empty = system default).
     pub voice_input_device: String,
+    /// Central server directory URL for discoverable multiplayer servers.
+    pub directory_url: String,
     /// Customizable gameplay keybindings.
     pub keybinds: KeyBinds,
 }
@@ -209,6 +211,7 @@ impl Default for GameSettings {
             voice_mode: 1,
             voice_volume: 1.0,
             voice_input_device: String::new(),
+            directory_url: blockgame_core::directory::DEFAULT_DIRECTORY_URL.to_string(),
             keybinds: KeyBinds::default(),
         }
     }
@@ -446,6 +449,12 @@ impl GameSettings {
                 "voice_input_device" => {
                     settings.voice_input_device = val.trim().to_string();
                 }
+                "directory_url" => {
+                    let trimmed = val.trim();
+                    if !trimmed.is_empty() {
+                        settings.directory_url = trimmed.to_string();
+                    }
+                }
                 _ => {}
             }
         }
@@ -457,6 +466,7 @@ impl GameSettings {
     /// Saves settings to a `key=value` config file.
     pub fn save(&self, path: &Path) {
         let safe_mic = self.voice_input_device.replace(['\r', '\n'], " ");
+        let safe_dir = self.directory_url.replace(['\r', '\n'], "");
         let content = format!(
             "# BlockGame Client Settings\n\
              render_distance={}\n\
@@ -468,6 +478,7 @@ impl GameSettings {
              voice_volume={:.2}\n\
              voice_mode={}\n\
              voice_input_device={}\n\
+             directory_url={}\n\
              invert_y={}\n\
              fullscreen={}\n\
              vsync={}\n\
@@ -496,6 +507,7 @@ impl GameSettings {
             self.voice_volume,
             self.voice_mode,
             safe_mic,
+            safe_dir,
             self.invert_y,
             self.fullscreen,
             self.vsync,
@@ -549,6 +561,7 @@ mod tests {
             voice_mode: 2,
             voice_volume: 0.9,
             voice_input_device: "Studio USB Mic".to_string(),
+            directory_url: "http://15.204.81.97:25569".to_string(),
             keybinds,
         };
         s.clamp_all();

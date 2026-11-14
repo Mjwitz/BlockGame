@@ -6,6 +6,7 @@ members = [
     "crates/blockgame_render",
     "crates/blockgame_client",
     "crates/blockgame_server",
+    "crates/blockgame_directory",
 ]
 
 [workspace.package]
