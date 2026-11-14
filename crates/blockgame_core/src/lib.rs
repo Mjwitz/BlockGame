@@ -1,6 +1,7 @@
 pub mod animal;
 pub mod auth;
 pub mod block;
+pub mod chat;
 pub mod chunk;
 pub mod command;
 pub mod crafting;
@@ -27,6 +28,9 @@ pub use block::{
     apply_water_fill, find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
     is_leaf_supported, place_water_source, try_grow_cactus, BlockDefinition, BlockId,
     BlockRegistry,
+};
+pub use chat::{
+    color_code_to_rgba, escape_color_codes, parse_colored_spans, strip_color_codes, ColorSpan,
 };
 pub use chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, CHUNK_VOLUME};
 pub use command::{

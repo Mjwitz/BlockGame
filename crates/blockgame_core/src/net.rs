@@ -47,6 +47,7 @@ pub fn player_skin_name(skin_id: u8) -> &'static str {
 pub struct PlayerModelState {
     pub player_id: u32,
     pub username: String,
+    pub prefix: String,
     pub position: Vec3, // Feet position (AABB min.y)
     pub velocity: Vec3,
     pub yaw: f32,
@@ -66,6 +67,7 @@ impl PlayerModelState {
         Self {
             player_id,
             username: username.into(),
+            prefix: String::new(),
             position,
             velocity: Vec3::ZERO,
             yaw: 0.0,
@@ -205,6 +207,7 @@ pub enum ServerPacket {
     },
     ChatBroadcast {
         sender: String,
+        prefix: String,
         message: String,
         is_system: bool,
     },
@@ -618,11 +621,13 @@ impl ServerPacket {
             }
             Self::ChatBroadcast {
                 sender,
+                prefix,
                 message,
                 is_system,
             } => {
                 write_u8(&mut payload, 10)?;
                 write_string(&mut payload, sender)?;
+                write_string(&mut payload, prefix)?;
                 write_string(&mut payload, message)?;
                 write_bool(&mut payload, *is_system)?;
             }
@@ -830,10 +835,12 @@ impl ServerPacket {
             }
             10 => {
                 let sender = read_string(&mut r)?;
+                let prefix = read_string(&mut r)?;
                 let message = read_string(&mut r)?;
                 let is_system = read_bool(&mut r)?;
                 Ok(Self::ChatBroadcast {
                     sender,
+                    prefix,
                     message,
                     is_system,
                 })
@@ -1060,6 +1067,11 @@ fn apply_command_output(
 ) {
     if output.save_permissions {
         let _ = perms_manager.save_to_dir(world_dir);
+        for c in clients.iter_mut() {
+            if c.authenticated {
+                c.model.prefix = perms_manager.get_player_prefix(&c.username);
+            }
+        }
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(world_dir);
@@ -1071,6 +1083,7 @@ fn apply_command_output(
                 pid,
                 ServerPacket::ChatBroadcast {
                     sender: "Server".to_string(),
+                    prefix: String::new(),
                     message: fb,
                     is_system: true,
                 },
@@ -1086,6 +1099,7 @@ fn apply_command_output(
             None,
             ServerPacket::ChatBroadcast {
                 sender: "Server".to_string(),
+                prefix: String::new(),
                 message: msg,
                 is_system: true,
             },
@@ -1404,6 +1418,7 @@ fn run_server_loop(
 
                                     player_id: pid,
                                     username: account.username.clone(),
+                                    prefix: perms_manager.get_player_prefix(&account.username),
                                     position: account.player_state.position,
                                     velocity: account.player_state.velocity,
                                     yaw: account.player_state.yaw,
@@ -1490,6 +1505,7 @@ fn run_server_loop(
                                     None,
                                     ServerPacket::ChatBroadcast {
                                         sender: "Server".to_string(),
+                                        prefix: String::new(),
                                         message: format!(
                                             "{} joined the game",
                                             clients[idx].username
@@ -1730,11 +1746,21 @@ fn run_server_loop(
                                     &stop_flag,
                                 );
                             } else {
+                                let prefix = perms_manager.get_player_prefix(&clients[idx].username);
+                                let raw_msg: String = trimmed.chars().take(120).collect();
+                                let message = if perms_manager
+                                    .has_permission(&clients[idx].username, "blockgame.chat.color")
+                                {
+                                    raw_msg
+                                } else {
+                                    crate::chat::escape_color_codes(&raw_msg)
+                                };
                                 outgoing_broadcasts.push((
                                     None,
                                     ServerPacket::ChatBroadcast {
                                         sender: clients[idx].username.clone(),
-                                        message: trimmed.chars().take(120).collect(),
+                                        prefix,
+                                        message,
                                         is_system: false,
                                     },
                                 ));
@@ -1748,6 +1774,7 @@ fn run_server_loop(
                                 pid,
                                 ServerPacket::ChatBroadcast {
                                     sender: "Server".to_string(),
+                                    prefix: String::new(),
                                     message: "You can only sleep at night.".to_string(),
                                     is_system: true,
                                 },
@@ -1766,6 +1793,7 @@ fn run_server_loop(
                                         None,
                                         ServerPacket::ChatBroadcast {
                                             sender: "Server".to_string(),
+                                            prefix: String::new(),
                                             message: format!(
                                                 "{} is sleeping ({}/{} players, need at least 50% to skip night).",
                                                 clients[idx].username, sleeping_count, total
@@ -1805,6 +1833,7 @@ fn run_server_loop(
                     None,
                     ServerPacket::ChatBroadcast {
                         sender: "Server".to_string(),
+                        prefix: String::new(),
                         message: "Good morning! Night skipped as players slept.".to_string(),
                         is_system: true,
                     },
@@ -1846,6 +1875,7 @@ fn run_server_loop(
                     None,
                     ServerPacket::ChatBroadcast {
                         sender: "Server".to_string(),
+                        prefix: String::new(),
                         message: format!("{} left the game", removed.username),
                         is_system: true,
                     },
@@ -1869,6 +1899,7 @@ fn run_server_loop(
                     None,
                     ServerPacket::ChatBroadcast {
                         sender: "Server".to_string(),
+                        prefix: String::new(),
                         message: "Good morning! Night skipped as players slept.".to_string(),
                         is_system: true,
                     },
@@ -1973,6 +2004,7 @@ fn run_server_loop(
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatEntry {
     pub sender: String,
+    pub prefix: String,
     pub message: String,
     pub is_system: bool,
     pub age: f32,
@@ -2074,6 +2106,7 @@ impl MultiplayerClient {
                 remote_players: HashMap::new(),
                 chat_history: vec![ChatEntry {
                     sender: "Server".to_string(),
+                    prefix: String::new(),
                     message: message.clone(),
                     is_system: true,
                     age: 0.0,
@@ -2268,6 +2301,7 @@ fn read_slot<R: Read>(r: &mut R) -> io::Result<ItemSlot> {
 fn write_player_model<W: Write>(w: &mut W, p: &PlayerModelState) -> io::Result<()> {
     write_u32(w, p.player_id)?;
     write_string(w, &p.username)?;
+    write_string(w, &p.prefix)?;
     write_vec3(w, p.position)?;
     write_vec3(w, p.velocity)?;
     write_f32(w, p.yaw)?;
@@ -2286,6 +2320,7 @@ fn read_player_model<R: Read>(r: &mut R) -> io::Result<PlayerModelState> {
     Ok(PlayerModelState {
         player_id: read_u32(r)?,
         username: read_string(r)?,
+        prefix: read_string(r)?,
         position: read_vec3(r)?,
         velocity: read_vec3(r)?,
         yaw: read_f32(r)?,
@@ -2468,6 +2503,7 @@ mod tests {
                 p,
                 ServerPacket::ChatBroadcast {
                     sender,
+                    prefix: _,
                     message,
                     is_system: false,
                 } if sender == "Alice" && message == "Hello Bob!"
@@ -2741,7 +2777,7 @@ mod tests {
 
         // 9. Verify persistence files exist
         let world_dir = temp_root.join("test_cmd_world");
-        assert!(world_dir.join("permissions.txt").exists(), "permissions.txt must be saved");
+        assert!(world_dir.join("permissions.yml").exists(), "permissions.yml must be saved");
         assert!(world_dir.join("bans.txt").exists(), "bans.txt must be saved");
 
         let _ = std::fs::remove_dir_all(&temp_root);

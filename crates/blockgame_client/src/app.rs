@@ -337,6 +337,7 @@ impl AppState {
             } else {
                 self.local_username.clone()
             },
+            prefix: String::new(),
             position: self.player.position,
             velocity: self.player.velocity,
             yaw: self.camera.yaw,
@@ -2005,6 +2006,7 @@ impl ApplicationHandler for BlockGameApp {
                                         state.local_chat_messages.push(
                                             blockgame_core::net::ChatEntry {
                                                 sender: "System".to_string(),
+                                                prefix: String::new(),
                                                 message: msg.to_string(),
                                                 is_system: true,
                                                 age: 0.0,
@@ -2014,6 +2016,7 @@ impl ApplicationHandler for BlockGameApp {
                                         state.local_chat_messages.push(
                                             blockgame_core::net::ChatEntry {
                                                 sender: "System".to_string(),
+                                                prefix: String::new(),
                                                 message: "You can only sleep at night. Respawn point set.".to_string(),
                                                 is_system: true,
                                                 age: 0.0,
@@ -2027,6 +2030,7 @@ impl ApplicationHandler for BlockGameApp {
                                     state.local_chat_messages.push(
                                         blockgame_core::net::ChatEntry {
                                             sender: "System".to_string(),
+                                            prefix: String::new(),
                                             message: "You slept through the night. Good morning!".to_string(),
                                             is_system: true,
                                             age: 0.0,
@@ -2036,6 +2040,7 @@ impl ApplicationHandler for BlockGameApp {
                                     state.local_chat_messages.push(
                                         blockgame_core::net::ChatEntry {
                                             sender: "System".to_string(),
+                                            prefix: String::new(),
                                             message: "You can only sleep at night. Respawn point set.".to_string(),
                                             is_system: true,
                                             age: 0.0,
@@ -2620,6 +2625,7 @@ impl ApplicationHandler for BlockGameApp {
                                     state.local_chat_messages.push(
                                         blockgame_core::net::ChatEntry {
                                             sender,
+                                            prefix: String::new(),
                                             message: msg,
                                             is_system: false,
                                             age: 0.0,
@@ -3096,11 +3102,13 @@ impl ApplicationHandler for BlockGameApp {
                                 }
                                 blockgame_core::net::ServerPacket::ChatBroadcast {
                                     sender,
+                                    prefix,
                                     message,
                                     is_system,
                                 } => {
                                     client.chat_history.push(blockgame_core::net::ChatEntry {
                                         sender,
+                                        prefix,
                                         message,
                                         is_system,
                                         age: 0.0,

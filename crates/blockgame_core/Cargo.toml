@@ -9,3 +9,5 @@ glam.workspace = true
 bytemuck.workspace = true
 log.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true

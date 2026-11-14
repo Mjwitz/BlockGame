@@ -23,6 +23,8 @@ env_logger = "0.11"
 thiserror = "2.0"
 noise = { version = "0.9.0", default-features = false, features = ["std"] }
 rayon = "1.12.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
 
 [profile.release]
 opt-level = 3

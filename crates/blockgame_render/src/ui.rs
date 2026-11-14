@@ -368,6 +368,29 @@ impl UiBuilder {
         }
     }
 
+    /// Computes the rendered width of a string containing `&`-prefixed color codes.
+    pub fn colored_string_width(text: &str, char_w: f32, spacing: f32) -> f32 {
+        let stripped = blockgame_core::strip_color_codes(text);
+        Self::string_width(&stripped, char_w, spacing)
+    }
+
+    /// Draws a string containing `&`-prefixed color codes (`&0`-`&f`, `&r`, `&&`).
+    pub fn draw_colored_string(
+        mesh: &mut UiMesh,
+        mut x: f32,
+        y: f32,
+        text: &str,
+        char_w: f32,
+        char_h: f32,
+        spacing: f32,
+        default_color: [f32; 4],
+    ) {
+        for span in blockgame_core::parse_colored_spans(text, default_color) {
+            Self::draw_string(mesh, x, y, &span.text, char_w, char_h, spacing, span.color);
+            x += Self::string_width(&span.text, char_w, spacing);
+        }
+    }
+
     /// Draws a stack count number in the bottom-right corner of an item slot.
     pub fn draw_stack_number(
         mesh: &mut UiMesh,
@@ -5356,15 +5379,17 @@ impl UiBuilder {
             );
             let line = if entry.is_system {
                 format!("* {}", entry.message)
-            } else {
+            } else if entry.prefix.is_empty() {
                 format!("<{}> {}", entry.sender, entry.message)
+            } else {
+                format!("{}&r<{}> &f{}", entry.prefix, entry.sender, entry.message)
             };
             let text_col = if entry.is_system {
                 [0.98, 0.86, 0.35, alpha]
             } else {
                 [0.95, 0.97, 1.0, alpha]
             };
-            Self::draw_string(
+            Self::draw_colored_string(
                 mesh,
                 chat_x + 6.0,
                 msg_y + 4.0,
@@ -5469,11 +5494,11 @@ impl UiBuilder {
                 );
 
                 let tag = if p.username.eq_ignore_ascii_case(local_username) {
-                    format!("{} (You)", p.username)
+                    format!("{}&r{} (You)", p.prefix, p.username)
                 } else {
-                    p.username.clone()
+                    format!("{}&r{}", p.prefix, p.username)
                 };
-                Self::draw_string(
+                Self::draw_colored_string(
                     mesh,
                     px + 38.0,
                     ry + 6.0,
@@ -5960,6 +5985,7 @@ mod tests {
 
         let chat = vec![blockgame_core::net::ChatEntry {
             sender: "BuilderBob".to_string(),
+            prefix: "&b[Builder] ".to_string(),
             message: "Hello world!".to_string(),
             is_system: false,
             age: 1.0,

@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
@@ -32,11 +33,17 @@ pub fn permission_matches(granted: &str, requested: &str) -> bool {
     false
 }
 
-/// A permission group containing assigned permission nodes and inherited group names.
-#[derive(Debug, Clone, PartialEq)]
+/// A permission group containing assigned permission nodes, inherited groups, and chat prefix.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionGroup {
     pub name: String,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
     pub permissions: Vec<String>,
+    #[serde(default)]
     pub inherits: Vec<String>,
 }
 
@@ -44,6 +51,8 @@ impl PermissionGroup {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            prefix: String::new(),
+            priority: 0,
             permissions: Vec::new(),
             inherits: Vec::new(),
         }
@@ -52,6 +61,23 @@ impl PermissionGroup {
     pub fn with_permissions(name: impl Into<String>, permissions: Vec<String>) -> Self {
         Self {
             name: name.into(),
+            prefix: String::new(),
+            priority: 0,
+            permissions,
+            inherits: Vec::new(),
+        }
+    }
+
+    pub fn with_style(
+        name: impl Into<String>,
+        prefix: impl Into<String>,
+        priority: i32,
+        permissions: Vec<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            prefix: prefix.into(),
+            priority,
             permissions,
             inherits: Vec::new(),
         }
@@ -59,10 +85,12 @@ impl PermissionGroup {
 }
 
 /// A player's permission record containing their assigned groups and direct permissions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerPermissions {
     pub username: String,
+    #[serde(default)]
     pub groups: Vec<String>,
+    #[serde(default)]
     pub permissions: Vec<String>,
 }
 
@@ -76,7 +104,16 @@ impl PlayerPermissions {
     }
 }
 
-/// Full hierarchical permissions manager with group inheritance and persistence.
+/// Serializable YAML schema for `permissions.yml`.
+#[derive(Debug, Serialize, Deserialize)]
+struct PermissionsYamlConfig {
+    #[serde(default)]
+    groups: BTreeMap<String, PermissionGroup>,
+    #[serde(default)]
+    players: BTreeMap<String, PlayerPermissions>,
+}
+
+/// Full hierarchical permissions manager with group inheritance and YAML persistence.
 #[derive(Debug, Clone)]
 pub struct PermissionsManager {
     pub groups: HashMap<String, PermissionGroup>,
@@ -100,14 +137,16 @@ impl PermissionsManager {
         // Admin group has root permissions
         mgr.groups.insert(
             "admin".to_string(),
-            PermissionGroup::with_permissions("admin", vec!["*".to_string()]),
+            PermissionGroup::with_style("admin", "&c[Admin] ", 100, vec!["*".to_string()]),
         );
 
         // Moderator group has kick, tp, and tphere
         mgr.groups.insert(
             "moderator".to_string(),
-            PermissionGroup::with_permissions(
+            PermissionGroup::with_style(
                 "moderator",
+                "&9[Mod] ",
+                50,
                 vec![
                     "blockgame.command.kick".to_string(),
                     "blockgame.command.tp".to_string(),
@@ -119,7 +158,7 @@ impl PermissionsManager {
         // Default group for all regular players
         mgr.groups.insert(
             "default".to_string(),
-            PermissionGroup::with_permissions("default", Vec::new()),
+            PermissionGroup::new("default"),
         );
 
         mgr
@@ -383,48 +422,119 @@ impl PermissionsManager {
         }
     }
 
+    /// Sets the chat prefix for a permission group.
+    pub fn set_group_prefix(&mut self, group_name: &str, prefix: &str) -> Result<(), String> {
+        let key = group_name.trim().to_ascii_lowercase();
+        if let Some(group) = self.groups.get_mut(&key) {
+            group.prefix = prefix.to_string();
+            Ok(())
+        } else {
+            Err(format!("Group '{}' not found.", group_name))
+        }
+    }
+
+    /// Sets the priority for a permission group (higher priority wins for chat prefixes).
+    pub fn set_group_priority(&mut self, group_name: &str, priority: i32) -> Result<(), String> {
+        let key = group_name.trim().to_ascii_lowercase();
+        if let Some(group) = self.groups.get_mut(&key) {
+            group.priority = priority;
+            Ok(())
+        } else {
+            Err(format!("Group '{}' not found.", group_name))
+        }
+    }
+
+    /// Returns the highest-priority non-empty group prefix for `username`.
+    pub fn get_player_prefix(&self, username: &str) -> String {
+        let canonical_user = username.trim().to_ascii_lowercase();
+        let groups = self.get_effective_groups(&canonical_user);
+        let mut best: Option<(i32, &str)> = None;
+        for group_name in &groups {
+            if let Some(group) = self.groups.get(group_name) {
+                if !group.prefix.is_empty() {
+                    if best.map_or(true, |(prio, _)| group.priority > prio) {
+                        best = Some((group.priority, group.prefix.as_str()));
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| p.to_string()).unwrap_or_default()
+    }
+
     // --- Persistence ---
 
-    /// Saves permissions to `<dir>/permissions.txt`.
+    /// Saves permissions to `<dir>/permissions.yml`.
     pub fn save_to_dir(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
-        let path = dir.join("permissions.txt");
+        let path = dir.join("permissions.yml");
+
+        let config = PermissionsYamlConfig {
+            groups: self
+                .groups
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            players: self
+                .players
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        };
+
+        let yaml = serde_yaml::to_string(&config)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("YAML serialize error: {e}")))?;
+
         let mut file = File::create(path)?;
-
         writeln!(file, "# BlockGame Permissions Configuration")?;
-        writeln!(file, "# Groups define sets of permissions; players inherit groups.")?;
-        writeln!(file)?;
-
-        // Write groups
-        for (key, group) in &self.groups {
-            writeln!(file, "[group:{}]", key)?;
-            writeln!(file, "name={}", group.name)?;
-            writeln!(file, "permissions={}", group.permissions.join(","))?;
-            writeln!(file, "inherits={}", group.inherits.join(","))?;
-            writeln!(file)?;
-        }
-
-        // Write players
-        for (key, player) in &self.players {
-            writeln!(file, "[player:{}]", key)?;
-            writeln!(file, "username={}", player.username)?;
-            writeln!(file, "groups={}", player.groups.join(","))?;
-            writeln!(file, "permissions={}", player.permissions.join(","))?;
-            writeln!(file)?;
-        }
-
+        writeln!(file, "# Groups define permissions, inheritance, priority, and & color-coded prefixes.")?;
+        file.write_all(yaml.as_bytes())?;
         file.flush()
     }
 
-    /// Loads permissions from `<dir>/permissions.txt` if available; otherwise returns default configuration.
+    /// Loads permissions from `<dir>/permissions.yml`.
+    /// If `permissions.yml` does not exist but a legacy `permissions.txt` does, migrates it automatically.
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
-        let path = dir.join("permissions.txt");
-        if !path.exists() {
+        let yml_path = dir.join("permissions.yml");
+        if !yml_path.exists() {
+            let legacy_txt_path = dir.join("permissions.txt");
+            if legacy_txt_path.exists() {
+                let migrated = Self::load_legacy_txt(&legacy_txt_path)?;
+                let _ = migrated.save_to_dir(dir);
+                return Ok(migrated);
+            }
+
             let default_mgr = Self::new();
             let _ = default_mgr.save_to_dir(dir);
             return Ok(default_mgr);
         }
 
+        let content = fs::read_to_string(&yml_path)?;
+        let config: PermissionsYamlConfig = serde_yaml::from_str(&content)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid permissions.yml: {e}")))?;
+
+        let mut mgr = Self {
+            groups: config
+                .groups
+                .into_iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v))
+                .collect(),
+            players: config
+                .players
+                .into_iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v))
+                .collect(),
+        };
+
+        if !mgr.groups.contains_key("default") {
+            mgr.groups
+                .insert("default".to_string(), PermissionGroup::new("default"));
+        }
+
+        Ok(mgr)
+    }
+
+    /// Parses legacy `<dir>/permissions.txt` INI-like format for one-time migration to `permissions.yml`.
+    fn load_legacy_txt(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
@@ -445,15 +555,19 @@ impl PermissionsManager {
             }
 
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                // Finish previous section
                 if let Some(sec) = current_section.take() {
                     if let Some(group_key) = sec.strip_prefix("group:") {
-                        mgr.groups.insert(group_key.to_string(), std::mem::replace(&mut cur_group, PermissionGroup::new("")));
+                        mgr.groups.insert(
+                            group_key.to_string(),
+                            std::mem::replace(&mut cur_group, PermissionGroup::new("")),
+                        );
                     } else if let Some(player_key) = sec.strip_prefix("player:") {
-                        mgr.players.insert(player_key.to_string(), std::mem::replace(&mut cur_player, PlayerPermissions::new("")));
+                        mgr.players.insert(
+                            player_key.to_string(),
+                            std::mem::replace(&mut cur_player, PlayerPermissions::new("")),
+                        );
                     }
                 }
-
 
                 let sec_name = &trimmed[1..trimmed.len() - 1];
                 current_section = Some(sec_name.to_string());
@@ -513,7 +627,6 @@ impl PermissionsManager {
             }
         }
 
-        // Finish last section
         if let Some(sec) = current_section {
             if let Some(group_key) = sec.strip_prefix("group:") {
                 mgr.groups.insert(group_key.to_string(), cur_group);
@@ -522,9 +635,9 @@ impl PermissionsManager {
             }
         }
 
-        // Ensure default group always exists
         if !mgr.groups.contains_key("default") {
-            mgr.groups.insert("default".to_string(), PermissionGroup::new("default"));
+            mgr.groups
+                .insert("default".to_string(), PermissionGroup::new("default"));
         }
 
         Ok(mgr)
@@ -696,16 +809,58 @@ mod tests {
 
         let mut pm = PermissionsManager::new();
         pm.create_group("vip").unwrap();
+        pm.set_group_prefix("vip", "&b[VIP] ").unwrap();
+        pm.set_group_priority("vip", 25).unwrap();
         pm.add_group_permission("vip", "blockgame.command.tp").unwrap();
         pm.add_player_group("ExplorerBob", "vip").unwrap();
         pm.add_player_permission("ExplorerBob", "blockgame.command.tphere").unwrap();
 
         pm.save_to_dir(&temp_dir).unwrap();
+        assert!(temp_dir.join("permissions.yml").exists());
 
         let loaded = PermissionsManager::load_from_dir(&temp_dir).unwrap();
         assert!(loaded.has_permission("ExplorerBob", "blockgame.command.tp"));
         assert!(loaded.has_permission("ExplorerBob", "blockgame.command.tphere"));
         assert!(!loaded.has_permission("ExplorerBob", "blockgame.command.ban"));
+        assert_eq!(loaded.get_player_prefix("ExplorerBob"), "&b[VIP] ");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_prefix_priority_and_legacy_txt_migration() {
+        let temp_dir = std::env::temp_dir().join("blockgame_perm_migrate_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Write a legacy permissions.txt
+        let legacy = "\
+[group:default]
+name=default
+permissions=
+inherits=
+
+[group:builder]
+name=builder
+permissions=blockgame.chat.color
+inherits=
+
+[player:alice]
+username=Alice
+groups=default,builder
+permissions=
+";
+        fs::write(temp_dir.join("permissions.txt"), legacy).unwrap();
+
+        let loaded = PermissionsManager::load_from_dir(&temp_dir).unwrap();
+        assert!(temp_dir.join("permissions.yml").exists(), "Should auto-migrate to permissions.yml");
+        assert!(loaded.has_permission("Alice", "blockgame.chat.color"));
+
+        // Priority resolution: admin (100) beats moderator (50)
+        let mut pm = PermissionsManager::new();
+        pm.add_player_group("Alice", "moderator").unwrap();
+        pm.add_player_group("Alice", "admin").unwrap();
+        assert_eq!(pm.get_player_prefix("Alice"), "&c[Admin] ");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

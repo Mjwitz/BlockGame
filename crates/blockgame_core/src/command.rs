@@ -499,11 +499,69 @@ pub fn execute_command(
                                 Err(e) => return CommandOutput::error(e),
                             }
                         }
+                        "prefix" => {
+                            if args.len() < 4 {
+                                return CommandOutput::error(
+                                    "Usage: /perm group <name> prefix <prefix|clear>",
+                                );
+                            }
+                            let raw = args[3..].join(" ");
+                            let prefix = if raw.eq_ignore_ascii_case("clear")
+                                || raw.eq_ignore_ascii_case("none")
+                            {
+                                String::new()
+                            } else if raw.ends_with(' ') {
+                                raw
+                            } else {
+                                format!("{} ", raw)
+                            };
+                            match perms.set_group_prefix(group_name, &prefix) {
+                                Ok(()) => {
+                                    out.save_permissions = true;
+                                    if prefix.is_empty() {
+                                        out.feedback.push(format!(
+                                            "Cleared prefix for group '{}'.",
+                                            group_name
+                                        ));
+                                    } else {
+                                        out.feedback.push(format!(
+                                            "Set prefix for group '{}' to '{}'.",
+                                            group_name, prefix
+                                        ));
+                                    }
+                                }
+                                Err(e) => return CommandOutput::error(e),
+                            }
+                        }
+                        "priority" => {
+                            if args.len() < 4 {
+                                return CommandOutput::error(
+                                    "Usage: /perm group <name> priority <number>",
+                                );
+                            }
+                            let Ok(prio) = args[3].parse::<i32>() else {
+                                return CommandOutput::error(
+                                    "Priority must be an integer (e.g. 0, 50, 100).",
+                                );
+                            };
+                            match perms.set_group_priority(group_name, prio) {
+                                Ok(()) => {
+                                    out.save_permissions = true;
+                                    out.feedback.push(format!(
+                                        "Set priority for group '{}' to {}.",
+                                        group_name, prio
+                                    ));
+                                }
+                                Err(e) => return CommandOutput::error(e),
+                            }
+                        }
                         "list" => {
                             if let Some(group) = perms.groups.get(&group_name.to_ascii_lowercase()) {
                                 out.feedback.push(format!(
-                                    "Group '{}' permissions: {}",
+                                    "Group '{}' (priority: {}, prefix: '{}') permissions: {}",
                                     group.name,
+                                    group.priority,
+                                    group.prefix,
                                     if group.permissions.is_empty() {
                                         "(none)".to_string()
                                     } else {
@@ -516,7 +574,7 @@ pub fn execute_command(
                         }
                         _ => {
                             return CommandOutput::error(
-                                "Unknown group action. Available: create, delete, add, remove, list",
+                                "Unknown group action. Available: create, delete, add, remove, prefix, priority, list",
                             );
                         }
                     }
@@ -650,6 +708,8 @@ pub fn execute_command(
                     out.feedback.push("  /perm list - List all groups".to_string());
                     out.feedback.push("  /perm group <group> create/delete - Manage group".to_string());
                     out.feedback.push("  /perm group <group> add/remove/list <perm> - Manage group perms".to_string());
+                    out.feedback.push("  /perm group <group> prefix <text|clear> - Set group chat prefix".to_string());
+                    out.feedback.push("  /perm group <group> priority <num> - Set group prefix priority".to_string());
                     out.feedback.push("  /perm user <player> group add/remove/list <group> - Player groups".to_string());
                     out.feedback.push("  /perm user <player> add/remove/list <perm> - Direct player perms".to_string());
                 }
