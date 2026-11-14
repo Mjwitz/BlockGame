@@ -2,6 +2,7 @@ mod app;
 pub mod audio;
 mod headless;
 pub mod settings;
+pub mod voice;
 mod world_manager;
 
 use app::BlockGameApp;

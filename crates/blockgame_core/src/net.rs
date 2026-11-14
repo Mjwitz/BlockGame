@@ -143,7 +143,14 @@ pub enum ClientPacket {
     SetSleeping {
         sleeping: bool,
     },
+    VoiceFrame {
+        seq: u32,
+        data: Vec<u8>,
+    },
 }
+
+/// Maximum distance (in blocks) at which proximity voice chat is relayed and audible.
+pub const MAX_VOICE_RANGE: f32 = 48.0;
 
 /// Returns `true` when `ticks` (0..24000) is nighttime (sun below the horizon).
 pub fn is_night_ticks(ticks: f32) -> bool {
@@ -229,6 +236,12 @@ pub enum ServerPacket {
     },
     ReceiveItem {
         item: ItemSlot,
+    },
+    VoiceBroadcast {
+        sender_id: u32,
+        seq: u32,
+        position: Vec3,
+        data: Vec<u8>,
     },
 }
 
@@ -348,6 +361,12 @@ impl ClientPacket {
             Self::SetSleeping { sleeping } => {
                 write_u8(&mut payload, 12)?;
                 write_bool(&mut payload, *sleeping)?;
+            }
+            Self::VoiceFrame { seq, data } => {
+                write_u8(&mut payload, 13)?;
+                write_u32(&mut payload, *seq)?;
+                write_u16(&mut payload, data.len().min(2048) as u16)?;
+                payload.extend_from_slice(&data[..data.len().min(2048)]);
             }
         }
         wrap_frame(&payload)
@@ -473,6 +492,19 @@ impl ClientPacket {
             12 => {
                 let sleeping = read_bool(&mut r)?;
                 Ok(Self::SetSleeping { sleeping })
+            }
+            13 => {
+                let seq = read_u32(&mut r)?;
+                let len = read_u16(&mut r)? as usize;
+                if len > 2048 {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "VoiceFrame payload too large",
+                    ));
+                }
+                let mut data = vec![0u8; len];
+                r.read_exact(&mut data)?;
+                Ok(Self::VoiceFrame { seq, data })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -662,6 +694,19 @@ impl ServerPacket {
             Self::ReceiveItem { item } => {
                 write_u8(&mut payload, 15)?;
                 write_slot(&mut payload, *item)?;
+            }
+            Self::VoiceBroadcast {
+                sender_id,
+                seq,
+                position,
+                data,
+            } => {
+                write_u8(&mut payload, 16)?;
+                write_u32(&mut payload, *sender_id)?;
+                write_u32(&mut payload, *seq)?;
+                write_vec3(&mut payload, *position)?;
+                write_u16(&mut payload, data.len().min(2048) as u16)?;
+                payload.extend_from_slice(&data[..data.len().min(2048)]);
             }
         }
 
@@ -876,6 +921,26 @@ impl ServerPacket {
             15 => {
                 let item = read_slot(&mut r)?;
                 Ok(Self::ReceiveItem { item })
+            }
+            16 => {
+                let sender_id = read_u32(&mut r)?;
+                let seq = read_u32(&mut r)?;
+                let position = read_vec3(&mut r)?;
+                let len = read_u16(&mut r)? as usize;
+                if len > 2048 {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "VoiceBroadcast payload too large",
+                    ));
+                }
+                let mut data = vec![0u8; len];
+                r.read_exact(&mut data)?;
+                Ok(Self::VoiceBroadcast {
+                    sender_id,
+                    seq,
+                    position,
+                    data,
+                })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1807,6 +1872,27 @@ fn run_server_loop(
                     }
                     ClientPacket::Ping { timestamp_ms } => {
                         direct_sends.push((pid, ServerPacket::Pong { timestamp_ms }));
+                    }
+                    ClientPacket::VoiceFrame { seq, data } if clients[idx].authenticated => {
+                        if !data.is_empty() && data.len() <= 2048 {
+                            let sender_pos = clients[idx].model.position;
+                            for other in clients.iter() {
+                                if other.authenticated
+                                    && other.player_id != pid
+                                    && other.model.position.distance(sender_pos) <= MAX_VOICE_RANGE
+                                {
+                                    direct_sends.push((
+                                        other.player_id,
+                                        ServerPacket::VoiceBroadcast {
+                                            sender_id: pid,
+                                            seq,
+                                            position: sender_pos,
+                                            data: data.clone(),
+                                        },
+                                    ));
+                                }
+                            }
+                        }
                     }
                     ClientPacket::Disconnect => {
                         disconnected_indices.push(idx);

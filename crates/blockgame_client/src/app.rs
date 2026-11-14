@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -152,6 +153,10 @@ pub struct AppState {
     pub underwater_sound_timer: f32,
     pub audio: crate::audio::AudioManager,
     pub music_scheduler: crate::audio::MusicScheduler,
+    pub voice_capture: crate::voice::VoiceCaptureManager,
+    pub ptt_down: bool,
+    pub voice_transmitting: bool,
+    pub speaking_players: HashMap<u32, f32>,
     // Hold-to-break mining state
     pub mouse_left_down: bool,
     pub breaking_voxel: Option<IVec3>,
@@ -185,6 +190,7 @@ impl AppState {
             self.settings.sfx_volume,
             self.settings.music_volume,
         );
+        self.audio.set_voice_volume(self.settings.voice_volume);
         let desired_fs = if self.settings.fullscreen {
             Some(winit::window::Fullscreen::Borderless(None))
         } else {
@@ -259,10 +265,12 @@ impl AppState {
             view_bobbing: self.settings.view_bobbing,
             show_debug_hud: self.settings.show_debug_hud,
             ui_scale: self.settings.ui_scale,
+            voice_mode: self.settings.voice_mode,
+            voice_volume: self.settings.voice_volume,
         }
     }
 
-    /// Updates a specific settings slider (`0..6`) from horizontal cursor position and applies it live.
+    /// Updates a specific settings slider (`0..7`) from horizontal cursor position and applies it live.
     pub fn update_settings_slider(
         &mut self,
         slider_idx: usize,
@@ -290,6 +298,9 @@ impl AppState {
             }
             5 => {
                 self.settings.music_volume = t;
+            }
+            6 => {
+                self.settings.voice_volume = t;
             }
             _ => {}
         }
@@ -920,7 +931,9 @@ impl ApplicationHandler for BlockGameApp {
             settings.sfx_volume,
             settings.music_volume,
         );
+        audio.set_voice_volume(settings.voice_volume);
         let music_scheduler = crate::audio::MusicScheduler::new(audio.music_track_count());
+        let voice_capture = crate::voice::VoiceCaptureManager::new();
 
         self.state = Some(AppState {
             window,
@@ -999,6 +1012,10 @@ impl ApplicationHandler for BlockGameApp {
             net_sync_timer: 0.0,
             next_mp_drop_nonce: 1,
             local_chat_messages: Vec::new(),
+            voice_capture,
+            ptt_down: false,
+            voice_transmitting: false,
+            speaking_players: HashMap::new(),
             total_time: 0.0,
             fps_display: 0,
             fps_frame_count: 0,
@@ -1399,7 +1416,7 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 if !handled && state.settings_tab == 0 {
-                                    for idx in 0..6 {
+                                    for idx in 0..7 {
                                         let r = UiBuilder::settings_slider_rect(
                                             screen_w, screen_h, idx,
                                         );
@@ -1415,7 +1432,7 @@ impl ApplicationHandler for BlockGameApp {
                                     }
 
                                     if !handled {
-                                        for idx in 0..6 {
+                                        for idx in 0..7 {
                                             let r = UiBuilder::settings_toggle_rect(
                                                 screen_w, screen_h, idx,
                                             );
@@ -1445,6 +1462,9 @@ impl ApplicationHandler for BlockGameApp {
                                                     }
                                                     5 => {
                                                         state.settings.cycle_ui_scale();
+                                                    }
+                                                    6 => {
+                                                        state.settings.cycle_voice_mode();
                                                     }
                                                     _ => {}
                                                 }
@@ -2726,6 +2746,8 @@ impl ApplicationHandler for BlockGameApp {
                 let kb = state.settings.keybinds.clone();
                 if key == kb.player_list && !state.inventory_open {
                     state.tab_held = pressed;
+                } else if key == kb.push_to_talk && !state.inventory_open {
+                    state.ptt_down = pressed;
                 } else if key == kb.debug_hud && pressed && !state.inventory_open {
                     state.settings.show_debug_hud = !state.settings.show_debug_hud;
                     state.settings.save(std::path::Path::new("settings.cfg"));
@@ -3178,15 +3200,53 @@ impl ApplicationHandler for BlockGameApp {
                                         );
                                     }
                                 }
+                                blockgame_core::net::ServerPacket::VoiceBroadcast {
+                                    sender_id,
+                                    seq,
+                                    position,
+                                    data,
+                                } => {
+                                    if state.settings.voice_mode != 0 && state.settings.voice_volume > 0.001 {
+                                        let pcm = blockgame_core::voice::decode_adpcm_frame(&data);
+                                        if !pcm.is_empty() {
+                                            state.audio.push_spatial_voice(
+                                                sender_id,
+                                                seq,
+                                                &pcm,
+                                                position,
+                                                state.camera.position,
+                                                state.camera.yaw,
+                                            );
+                                            state.speaking_players.insert(sender_id, 0.35);
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
 
                         }
 
+                        // Capture & transmit local proximity voice frames
+                        let frames = state
+                            .voice_capture
+                            .poll_encoded_frames(state.ptt_down, state.settings.voice_mode);
+                        state.voice_transmitting = !frames.is_empty();
+                        for (seq, data) in frames {
+                            client.send(&blockgame_core::net::ClientPacket::VoiceFrame { seq, data });
+                        }
+
                         if !client.connected && kick_reason.is_none() {
                             kick_reason = Some("Connection to server lost.".to_string());
                         }
+                    } else {
+                        let _ = state.voice_capture.poll_encoded_frames(false, 0);
+                        state.voice_transmitting = false;
                     }
+
+                    state.speaking_players.retain(|_, t| {
+                        *t -= dt;
+                        *t > 0.0
+                    });
 
                     if let Some(reason) = kick_reason {
                         state.disconnect_multiplayer();
@@ -4162,6 +4222,24 @@ impl ApplicationHandler for BlockGameApp {
                             state.mp_hosted_server.is_some(),
                             &server_addr,
                         );
+                        if state.mp_client.is_some() {
+                            let ptt_name = crate::settings::key_display_name(
+                                state.settings.keybinds.push_to_talk,
+                            );
+                            let nearby_speakers: Vec<String> = online_models
+                                .iter()
+                                .filter(|p| state.speaking_players.contains_key(&p.player_id))
+                                .map(|p| p.username.clone())
+                                .collect();
+                            UiBuilder::draw_voice_hud_badge(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                state.settings.voice_mode,
+                                state.voice_transmitting,
+                                &ptt_name,
+                                &nearby_speakers,
+                            );
+                        }
                     }
                 } else if let AppScreen::Paused { ref status_message } = state.screen {
                     // Game is paused: keep camera at player eye position without stepping simulation

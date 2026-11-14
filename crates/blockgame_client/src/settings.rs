@@ -16,6 +16,7 @@ pub struct KeyBinds {
     pub player_list: KeyCode,
     pub third_person: KeyCode,
     pub debug_hud: KeyCode,
+    pub push_to_talk: KeyCode,
 }
 
 impl Default for KeyBinds {
@@ -33,12 +34,13 @@ impl Default for KeyBinds {
             player_list: KeyCode::Tab,
             third_person: KeyCode::F5,
             debug_hud: KeyCode::F3,
+            push_to_talk: KeyCode::KeyV,
         }
     }
 }
 
 impl KeyBinds {
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 13;
 
     pub fn labels_and_keys(&self) -> [(&'static str, String); Self::COUNT] {
         [
@@ -54,6 +56,7 @@ impl KeyBinds {
             ("Player List", key_display_name(self.player_list)),
             ("3rd Person", key_display_name(self.third_person)),
             ("Debug HUD", key_display_name(self.debug_hud)),
+            ("Push to Talk", key_display_name(self.push_to_talk)),
         ]
     }
 
@@ -71,6 +74,7 @@ impl KeyBinds {
             9 => self.player_list = key,
             10 => self.third_person = key,
             11 => self.debug_hud = key,
+            12 => self.push_to_talk = key,
             _ => {}
         }
     }
@@ -177,6 +181,10 @@ pub struct GameSettings {
     pub show_debug_hud: bool,
     /// UI scale factor (`0.75`, `1.0`, `1.25`, `1.5`).
     pub ui_scale: f32,
+    /// Proximity voice chat mode (`0` = Off, `1` = Push-to-Talk, `2` = Voice Activity).
+    pub voice_mode: u8,
+    /// Proximity voice chat playback volume (`0.0..=1.0`).
+    pub voice_volume: f32,
     /// Customizable gameplay keybindings.
     pub keybinds: KeyBinds,
 }
@@ -196,6 +204,8 @@ impl Default for GameSettings {
             view_bobbing: true,
             show_debug_hud: false,
             ui_scale: 1.0,
+            voice_mode: 1,
+            voice_volume: 1.0,
             keybinds: KeyBinds::default(),
         }
     }
@@ -209,6 +219,11 @@ impl GameSettings {
     pub const MIN_SENSITIVITY: f32 = 0.2;
     pub const MAX_SENSITIVITY: f32 = 2.5;
     pub const UI_SCALE_PRESETS: [f32; 4] = [0.75, 1.0, 1.25, 1.5];
+
+    /// Cycles `voice_mode` through `Off (0) -> Push-to-Talk (1) -> Voice Activity (2) -> Off (0)`.
+    pub fn cycle_voice_mode(&mut self) {
+        self.voice_mode = (self.voice_mode + 1) % 3;
+    }
 
     /// Cycles `ui_scale` through `0.75x -> 1.0x -> 1.25x -> 1.5x -> 0.75x`.
     pub fn cycle_ui_scale(&mut self) {
@@ -238,6 +253,10 @@ impl GameSettings {
         self.master_volume = self.master_volume.clamp(0.0, 1.0);
         self.sfx_volume = self.sfx_volume.clamp(0.0, 1.0);
         self.music_volume = self.music_volume.clamp(0.0, 1.0);
+        self.voice_volume = self.voice_volume.clamp(0.0, 1.0);
+        if self.voice_mode > 2 {
+            self.voice_mode = 1;
+        }
         if !self.ui_scale.is_finite() {
             self.ui_scale = 1.0;
         } else {
@@ -404,6 +423,23 @@ impl GameSettings {
                         settings.keybinds.debug_hud = k;
                     }
                 }
+                "key_push_to_talk" => {
+                    if let Some(k) = str_to_key_code(val) {
+                        settings.keybinds.push_to_talk = k;
+                    }
+                }
+                "voice_mode" => {
+                    if let Ok(v) = val.parse::<u8>() {
+                        settings.voice_mode = v;
+                    }
+                }
+                "voice_volume" => {
+                    if let Ok(v) = val.parse::<f32>() {
+                        if v.is_finite() {
+                            settings.voice_volume = v;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -422,6 +458,8 @@ impl GameSettings {
              master_volume={:.2}\n\
              sfx_volume={:.2}\n\
              music_volume={:.2}\n\
+             voice_volume={:.2}\n\
+             voice_mode={}\n\
              invert_y={}\n\
              fullscreen={}\n\
              vsync={}\n\
@@ -439,13 +477,16 @@ impl GameSettings {
              key_chat={}\n\
              key_player_list={}\n\
              key_third_person={}\n\
-             key_debug_hud={}\n",
+             key_debug_hud={}\n\
+             key_push_to_talk={}\n",
             self.render_distance,
             self.fov_degrees,
             self.mouse_sensitivity,
             self.master_volume,
             self.sfx_volume,
             self.music_volume,
+            self.voice_volume,
+            self.voice_mode,
             self.invert_y,
             self.fullscreen,
             self.vsync,
@@ -464,6 +505,7 @@ impl GameSettings {
             key_code_to_string(self.keybinds.player_list),
             key_code_to_string(self.keybinds.third_person),
             key_code_to_string(self.keybinds.debug_hud),
+            key_code_to_string(self.keybinds.push_to_talk),
         );
         if let Err(e) = std::fs::write(path, content) {
             log::warn!("Failed to save settings to {:?}: {}", path, e);
@@ -495,6 +537,8 @@ mod tests {
             view_bobbing: false,
             show_debug_hud: true,
             ui_scale: 1.25,
+            voice_mode: 2,
+            voice_volume: 0.9,
             keybinds,
         };
         s.clamp_all();

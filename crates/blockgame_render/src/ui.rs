@@ -279,6 +279,8 @@ pub struct SettingsUiState {
     pub view_bobbing: bool,
     pub show_debug_hud: bool,
     pub ui_scale: f32,
+    pub voice_mode: u8,
+    pub voice_volume: f32,
 }
 
 pub struct UiBuilder;
@@ -4619,18 +4621,18 @@ impl UiBuilder {
         [start_x + (tab_idx as f32) * (col_w + gap_x), y, col_w, 34.0]
     }
 
-    /// Returns the slider rectangle `[x, y, w, h]` for slider index `0..6`.
+    /// Returns the slider rectangle `[x, y, w, h]` for slider index `0..7`.
     pub fn settings_slider_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let col_w = 270.0;
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
         let start_y = screen_h * 0.21;
-        let row_h = 32.0;
-        let gap_y = 12.0;
+        let row_h = 28.0;
+        let gap_y = 10.0;
 
-        let col = (index / 3) as f32;
-        let row = (index % 3) as f32;
+        let col = (index / 4) as f32;
+        let row = (index % 4) as f32;
         [
             start_x + col * (col_w + gap_x),
             start_y + row * (row_h + gap_y),
@@ -4639,15 +4641,15 @@ impl UiBuilder {
         ]
     }
 
-    /// Returns the toggle button rectangle `[x, y, w, h]` for toggle index `0..5`.
+    /// Returns the toggle button rectangle `[x, y, w, h]` for toggle index `0..7`.
     pub fn settings_toggle_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let col_w = 270.0;
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
-        let base_y = screen_h * 0.21 + 3.0 * (32.0 + 12.0) + 12.0;
-        let row_h = 34.0;
-        let gap_y = 10.0;
+        let base_y = screen_h * 0.21 + 4.0 * (28.0 + 10.0) + 8.0;
+        let row_h = 30.0;
+        let gap_y = 8.0;
         let col = (index % 2) as f32;
         let row = (index / 2) as f32;
         [
@@ -4658,17 +4660,17 @@ impl UiBuilder {
         ]
     }
 
-    /// Returns the keybind button rectangle `[x, y, w, h]` for keybind index `0..12`.
+    /// Returns the keybind button rectangle `[x, y, w, h]` for keybind index `0..13`.
     pub fn settings_keybind_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let col_w = 270.0;
         let gap_x = 24.0;
         let total_w = col_w * 2.0 + gap_x;
         let start_x = (screen_w - total_w) * 0.5;
         let start_y = screen_h * 0.21;
-        let row_h = 32.0;
-        let gap_y = 10.0;
-        let col = (index / 6) as f32;
-        let row = (index % 6) as f32;
+        let row_h = 28.0;
+        let gap_y = 8.0;
+        let col = (index / 7) as f32;
+        let row = (index % 7) as f32;
         [
             start_x + col * (col_w + gap_x),
             start_y + row * (row_h + gap_y),
@@ -4764,7 +4766,7 @@ impl UiBuilder {
         }
 
         if settings_tab == 0 {
-            let sliders: [(String, f32); 6] = [
+            let sliders: [(String, f32); 7] = [
                 (
                     format!("Render Distance: {} chunks", settings.render_distance),
                     ((settings.render_distance - 2) as f32 / 10.0).clamp(0.0, 1.0),
@@ -4788,6 +4790,10 @@ impl UiBuilder {
                 (
                     format!("Music Volume: {:.0}%", settings.music_volume * 100.0),
                     settings.music_volume.clamp(0.0, 1.0),
+                ),
+                (
+                    format!("Voice Volume: {:.0}%", settings.voice_volume * 100.0),
+                    settings.voice_volume.clamp(0.0, 1.0),
                 ),
             ];
 
@@ -4865,6 +4871,11 @@ impl UiBuilder {
             } else {
                 "1.0x"
             };
+            let voice_mode_str = match settings.voice_mode {
+                0 => "OFF",
+                2 => "Voice Act",
+                _ => "Push-to-Talk",
+            };
             let toggles = [
                 format!(
                     "Invert Y-Axis: {}",
@@ -4884,6 +4895,7 @@ impl UiBuilder {
                     if settings.show_debug_hud { "ON" } else { "OFF" }
                 ),
                 format!("UI Scale: {}", ui_scale_str),
+                format!("Voice Chat: {}", voice_mode_str),
             ];
 
             for (idx, label) in toggles.iter().enumerate() {
@@ -5522,6 +5534,64 @@ impl UiBuilder {
                     [0.45, 0.95, 0.55, 0.95],
                 );
             }
+        }
+    }
+
+    /// Draws a compact proximity voice chat status badge and nearby speaker indicators.
+    pub fn draw_voice_hud_badge(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        voice_mode: u8,
+        transmitting: bool,
+        ptt_key_name: &str,
+        nearby_speakers: &[String],
+    ) {
+        if voice_mode == 0 && nearby_speakers.is_empty() {
+            return;
+        }
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let badge = if voice_mode == 0 {
+            "Voice: OFF".to_string()
+        } else if transmitting {
+            "MIC: LIVE".to_string()
+        } else if voice_mode == 2 {
+            "Voice: VAD".to_string()
+        } else {
+            format!("Voice: [{}]", ptt_key_name)
+        };
+        let bw = Self::string_width(&badge, 7.5, 1.0) + 14.0;
+        let bx = screen_w - bw - 10.0;
+        let mut by = 10.0;
+        let bg = if transmitting {
+            [0.12, 0.45, 0.22, 0.85]
+        } else {
+            [0.04, 0.05, 0.08, 0.65]
+        };
+        let fg = if transmitting {
+            [0.45, 1.0, 0.55, 1.0]
+        } else {
+            [0.80, 0.88, 0.96, 0.92]
+        };
+        mesh.add_quad(bx, by, bw, 20.0, white_uv, bg);
+        Self::draw_string(mesh, bx + 7.0, by + 4.5, &badge, 7.5, 11.0, 1.0, fg);
+        by += 24.0;
+
+        for speaker in nearby_speakers.iter().take(4) {
+            let label = format!("* {}", speaker);
+            let sw = Self::string_width(&label, 7.5, 1.0) + 12.0;
+            let sx = screen_w - sw - 10.0;
+            mesh.add_quad(sx, by, sw, 18.0, white_uv, [0.06, 0.14, 0.10, 0.72]);
+            Self::draw_string(
+                mesh,
+                sx + 6.0,
+                by + 3.5,
+                &label,
+                7.5,
+                10.5,
+                1.0,
+                [0.55, 0.96, 0.65, 0.96],
+            );
+            by += 20.0;
         }
     }
 }

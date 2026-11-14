@@ -17,6 +17,7 @@ pub mod player;
 pub mod raycast;
 pub mod save;
 pub mod tool;
+pub mod voice;
 pub mod world;
 
 pub use animal::{AnimalEntity, AnimalKind};

@@ -19,7 +19,7 @@ use maudio::{
         Device,
     },
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -143,22 +143,69 @@ struct ActiveVoice {
     fade_speed: f32,
 }
 
+/// Per-player streaming jitter buffer for 16 kHz proximity voice chat.
+pub struct VoiceChatStream {
+    pub samples: VecDeque<f32>,
+    pub cursor: f32,
+    pub volume_l: f32,
+    pub volume_r: f32,
+    pub last_seq: u32,
+}
+
 /// Thread-safe real-time audio mixer.
 pub struct AudioMixer {
     voices: Vec<ActiveVoice>,
+    voice_streams: HashMap<u32, VoiceChatStream>,
     pub master_volume: f32,
     pub sfx_volume: f32,
     pub music_volume: f32,
+    pub voice_volume: f32,
 }
 
 impl AudioMixer {
     pub fn new() -> Self {
         Self {
             voices: Vec::with_capacity(32),
+            voice_streams: HashMap::new(),
             master_volume: 0.8,
             sfx_volume: 0.9,
             music_volume: 0.65,
+            voice_volume: 1.0,
         }
+    }
+
+    /// Queues decoded 16 kHz mono voice samples for a remote player with stereo panning.
+    pub fn push_voice_samples(
+        &mut self,
+        sender_id: u32,
+        seq: u32,
+        pcm: &[f32],
+        volume_l: f32,
+        volume_r: f32,
+    ) {
+        if pcm.is_empty() {
+            return;
+        }
+        let stream = self.voice_streams.entry(sender_id).or_insert_with(|| VoiceChatStream {
+            samples: VecDeque::with_capacity(3200),
+            cursor: 0.0,
+            volume_l,
+            volume_r,
+            last_seq: seq,
+        });
+        if seq < stream.last_seq && stream.last_seq - seq < 1000 {
+            return; // Ignore out-of-order late packets
+        }
+        stream.last_seq = seq;
+        stream.volume_l = volume_l;
+        stream.volume_r = volume_r;
+        // Cap jitter buffer at ~0.5s (8000 samples) to keep latency low
+        if stream.samples.len() > 8000 {
+            let excess = stream.samples.len() - 4000;
+            stream.samples.drain(..excess);
+            stream.cursor = 0.0;
+        }
+        stream.samples.extend(pcm.iter().copied());
     }
 
     /// Add a voice to the active voice list.
@@ -215,6 +262,7 @@ impl AudioMixer {
     pub fn mix(&mut self, output: &mut [f32], sample_rate: u32) {
         let dt = 1.0 / (sample_rate as f32);
         let frame_count = output.len() / 2;
+        let voice_step = 16_000.0 / (sample_rate as f32);
 
         for frame_idx in 0..frame_count {
             let mut left_acc = 0.0;
@@ -256,10 +304,40 @@ impl AudioMixer {
                 voice.cursor += voice.pitch;
             }
 
+            // Mix active proximity voice chat streams (resampled 16 kHz -> output sample_rate)
+            let voice_gain = self.master_volume * self.voice_volume;
+            if voice_gain > 0.001 {
+                for stream in self.voice_streams.values_mut() {
+                    if stream.samples.len() < 2 {
+                        continue;
+                    }
+                    let idx0 = stream.cursor as usize;
+                    if idx0 + 1 >= stream.samples.len() {
+                        continue;
+                    }
+                    let frac = stream.cursor - idx0 as f32;
+                    let sample = stream.samples[idx0] * (1.0 - frac) + stream.samples[idx0 + 1] * frac;
+                    left_acc += sample * stream.volume_l * voice_gain;
+                    right_acc += sample * stream.volume_r * voice_gain;
+                    stream.cursor += voice_step;
+                }
+            }
+
             let out_idx = frame_idx * 2;
             output[out_idx] = (output[out_idx] + left_acc).clamp(-1.0, 1.0);
             output[out_idx + 1] = (output[out_idx + 1] + right_acc).clamp(-1.0, 1.0);
         }
+
+        // Drain consumed voice samples
+        for stream in self.voice_streams.values_mut() {
+            let consumed = stream.cursor as usize;
+            if consumed > 0 {
+                let drain_n = consumed.min(stream.samples.len());
+                stream.samples.drain(..drain_n);
+                stream.cursor -= drain_n as f32;
+            }
+        }
+        self.voice_streams.retain(|_, s| !s.samples.is_empty());
 
         // Retain only voices that still have samples remaining
         self.voices.retain(|v| v.cursor < v.samples.len() as f32);
@@ -737,6 +815,39 @@ impl AudioManager {
             m.master_volume = master.clamp(0.0, 1.0);
             m.sfx_volume = sfx.clamp(0.0, 1.0);
             m.music_volume = music.clamp(0.0, 1.0);
+        }
+    }
+
+    /// Updates proximity voice chat playback volume (`0.0..=1.0`).
+    pub fn set_voice_volume(&self, voice: f32) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.voice_volume = voice.clamp(0.0, 1.0);
+        }
+    }
+
+    /// Queues a decoded 16 kHz mono voice frame with 3D spatial attenuation and stereo panning.
+    pub fn push_spatial_voice(
+        &self,
+        sender_id: u32,
+        seq: u32,
+        pcm: &[f32],
+        sender_pos: Vec3,
+        listener_pos: Vec3,
+        listener_yaw: f32,
+    ) {
+        let (atten, pan) = calculate_spatial_audio(
+            sender_pos,
+            listener_pos,
+            listener_yaw,
+            blockgame_core::net::MAX_VOICE_RANGE,
+        );
+        if atten <= 0.001 {
+            return;
+        }
+        let vol_l = atten * ((1.0 - pan) * 0.5).sqrt();
+        let vol_r = atten * ((1.0 + pan) * 0.5).sqrt();
+        if let Ok(mut m) = self.mixer.lock() {
+            m.push_voice_samples(sender_id, seq, pcm, vol_l, vol_r);
         }
     }
 
