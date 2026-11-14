@@ -265,7 +265,7 @@ pub struct RecipeModalParams<'a> {
 }
 
 /// Snapshot of client settings passed to `UiBuilder::build_settings_screen`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SettingsUiState {
     pub render_distance: i32,
     pub fov_degrees: f32,
@@ -281,6 +281,7 @@ pub struct SettingsUiState {
     pub ui_scale: f32,
     pub voice_mode: u8,
     pub voice_volume: f32,
+    pub voice_input_device: String,
 }
 
 pub struct UiBuilder;
@@ -4876,6 +4877,17 @@ impl UiBuilder {
                 2 => "Voice Act",
                 _ => "Push-to-Talk",
             };
+            let mic_display = if settings.voice_input_device.is_empty() {
+                "Default".to_string()
+            } else {
+                let chars: Vec<char> = settings.voice_input_device.chars().collect();
+                if chars.len() > 19 {
+                    let prefix: String = chars.into_iter().take(16).collect();
+                    format!("{}...", prefix.trim_end())
+                } else {
+                    settings.voice_input_device.clone()
+                }
+            };
             let toggles = [
                 format!(
                     "Invert Y-Axis: {}",
@@ -4896,6 +4908,7 @@ impl UiBuilder {
                 ),
                 format!("UI Scale: {}", ui_scale_str),
                 format!("Voice Chat: {}", voice_mode_str),
+                format!("Mic: {}", mic_display),
             ];
 
             for (idx, label) in toggles.iter().enumerate() {

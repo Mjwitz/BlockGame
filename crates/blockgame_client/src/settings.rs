@@ -185,6 +185,8 @@ pub struct GameSettings {
     pub voice_mode: u8,
     /// Proximity voice chat playback volume (`0.0..=1.0`).
     pub voice_volume: f32,
+    /// Selected microphone device name (empty = system default).
+    pub voice_input_device: String,
     /// Customizable gameplay keybindings.
     pub keybinds: KeyBinds,
 }
@@ -206,6 +208,7 @@ impl Default for GameSettings {
             ui_scale: 1.0,
             voice_mode: 1,
             voice_volume: 1.0,
+            voice_input_device: String::new(),
             keybinds: KeyBinds::default(),
         }
     }
@@ -440,6 +443,9 @@ impl GameSettings {
                         }
                     }
                 }
+                "voice_input_device" => {
+                    settings.voice_input_device = val.trim().to_string();
+                }
                 _ => {}
             }
         }
@@ -450,6 +456,7 @@ impl GameSettings {
 
     /// Saves settings to a `key=value` config file.
     pub fn save(&self, path: &Path) {
+        let safe_mic = self.voice_input_device.replace(['\r', '\n'], " ");
         let content = format!(
             "# BlockGame Client Settings\n\
              render_distance={}\n\
@@ -460,6 +467,7 @@ impl GameSettings {
              music_volume={:.2}\n\
              voice_volume={:.2}\n\
              voice_mode={}\n\
+             voice_input_device={}\n\
              invert_y={}\n\
              fullscreen={}\n\
              vsync={}\n\
@@ -487,6 +495,7 @@ impl GameSettings {
             self.music_volume,
             self.voice_volume,
             self.voice_mode,
+            safe_mic,
             self.invert_y,
             self.fullscreen,
             self.vsync,
@@ -539,6 +548,7 @@ mod tests {
             ui_scale: 1.25,
             voice_mode: 2,
             voice_volume: 0.9,
+            voice_input_device: "Studio USB Mic".to_string(),
             keybinds,
         };
         s.clamp_all();

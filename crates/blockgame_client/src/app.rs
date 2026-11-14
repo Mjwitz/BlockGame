@@ -267,6 +267,7 @@ impl AppState {
             ui_scale: self.settings.ui_scale,
             voice_mode: self.settings.voice_mode,
             voice_volume: self.settings.voice_volume,
+            voice_input_device: self.settings.voice_input_device.clone(),
         }
     }
 
@@ -1432,7 +1433,7 @@ impl ApplicationHandler for BlockGameApp {
                                     }
 
                                     if !handled {
-                                        for idx in 0..7 {
+                                        for idx in 0..8 {
                                             let r = UiBuilder::settings_toggle_rect(
                                                 screen_w, screen_h, idx,
                                             );
@@ -1465,6 +1466,13 @@ impl ApplicationHandler for BlockGameApp {
                                                     }
                                                     6 => {
                                                         state.settings.cycle_voice_mode();
+                                                    }
+                                                    7 => {
+                                                        state.settings.voice_input_device = state
+                                                            .voice_capture
+                                                            .cycle_input_device(
+                                                                &state.settings.voice_input_device,
+                                                            );
                                                     }
                                                     _ => {}
                                                 }
