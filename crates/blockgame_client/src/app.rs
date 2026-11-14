@@ -337,7 +337,11 @@ impl AppState {
             } else {
                 self.local_username.clone()
             },
-            prefix: String::new(),
+            prefix: self
+                .mp_client
+                .as_ref()
+                .map(|c| c.local_prefix.clone())
+                .unwrap_or_default(),
             position: self.player.position,
             velocity: self.player.velocity,
             yaw: self.camera.yaw,
@@ -3095,7 +3099,9 @@ impl ApplicationHandler for BlockGameApp {
                                     let local_id = client.player_id;
                                     client.remote_players.clear();
                                     for p in players {
-                                        if p.player_id != local_id {
+                                        if p.player_id == local_id {
+                                            client.local_prefix = p.prefix;
+                                        } else {
                                             client.remote_players.insert(p.player_id, p);
                                         }
                                     }

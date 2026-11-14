@@ -639,6 +639,18 @@ impl PermissionsManager {
             mgr.groups
                 .insert("default".to_string(), PermissionGroup::new("default"));
         }
+        if let Some(admin) = mgr.groups.get_mut("admin") {
+            if admin.prefix.is_empty() && admin.priority == 0 {
+                admin.prefix = "&c[Admin] ".to_string();
+                admin.priority = 100;
+            }
+        }
+        if let Some(mod_group) = mgr.groups.get_mut("moderator") {
+            if mod_group.prefix.is_empty() && mod_group.priority == 0 {
+                mod_group.prefix = "&9[Mod] ".to_string();
+                mod_group.priority = 50;
+            }
+        }
 
         Ok(mgr)
     }
