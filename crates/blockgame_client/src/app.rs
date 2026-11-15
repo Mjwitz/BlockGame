@@ -19,7 +19,7 @@ use blockgame_core::{
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline,
+    create_depth_texture, ui::ChatActionHitbox, DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline,
     WireframePipeline,
 };
 use glam::{IVec3, Vec3};
@@ -137,6 +137,9 @@ pub struct AppState {
     pub third_person: bool,
     pub chat_open: bool,
     pub chat_input: String,
+    pub chat_scroll: usize,
+    pub chat_hitboxes: Vec<ChatActionHitbox>,
+    pub player_homes: HashMap<String, (Vec3, f32, f32)>,
     pub tab_held: bool,
     pub net_sync_timer: f32,
     pub next_mp_drop_nonce: u32,
@@ -449,6 +452,8 @@ impl AppState {
         }
         self.chat_open = false;
         self.chat_input.clear();
+        self.chat_scroll = 0;
+        self.chat_hitboxes.clear();
         self.tab_held = false;
     }
 
@@ -519,6 +524,8 @@ impl AppState {
         self.local_skin_id = assigned_skin % 4;
         self.chat_open = false;
         self.chat_input.clear();
+        self.chat_scroll = 0;
+        self.chat_hitboxes.clear();
         self.tab_held = false;
         self.net_sync_timer = 0.0;
         self.mp_client = Some(client);
@@ -632,6 +639,7 @@ impl AppState {
             inventory: self.inventory.clone(),
             active_hotbar_slot: self.active_hotbar_slot,
             rank: "default".to_string(),
+            homes: self.player_homes.clone(),
         };
 
         let mut save_data = self.world_manager.capture_save_data(meta, player_state);
@@ -748,6 +756,7 @@ impl AppState {
         self.death_handled = self.player_stats.is_dead;
         self.inventory = save_data.player.inventory;
         self.active_hotbar_slot = save_data.player.active_hotbar_slot.min(8);
+        self.player_homes = save_data.player.homes;
         self.camera.position = self.player.eye_position();
         self.camera.yaw = save_data.player.yaw;
         self.camera.pitch = save_data.player.pitch;
@@ -1059,6 +1068,9 @@ impl ApplicationHandler for BlockGameApp {
             third_person: false,
             chat_open: false,
             chat_input: String::new(),
+            chat_scroll: 0,
+            chat_hitboxes: Vec::new(),
+            player_homes: HashMap::new(),
             tab_held: false,
             net_sync_timer: 0.0,
             next_mp_drop_nonce: 1,
@@ -1157,6 +1169,14 @@ impl ApplicationHandler for BlockGameApp {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
                 };
+                if state.chat_open {
+                    if scroll > 0.0 {
+                        state.chat_scroll = (state.chat_scroll + 1).min(100);
+                    } else if scroll < 0.0 {
+                        state.chat_scroll = state.chat_scroll.saturating_sub(1);
+                    }
+                    return;
+                }
                 if scroll > 0.0 {
                     state.active_hotbar_slot = (state.active_hotbar_slot + 8) % 9;
                 } else if scroll < 0.0 {
@@ -1857,6 +1877,57 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         } else {
                             handle_inventory_click(state, is_right);
+                        }
+                    }
+                    return;
+                }
+
+                if state.chat_open {
+                    if pressed && button == MouseButton::Left {
+                        let (_, _, ui_cpos) = state.ui_metrics();
+                        let mut clicked_command = None;
+                        for hb in &state.chat_hitboxes {
+                            if ui_cpos[0] >= hb.rect[0]
+                                && ui_cpos[0] <= hb.rect[0] + hb.rect[2]
+                                && ui_cpos[1] >= hb.rect[1]
+                                && ui_cpos[1] <= hb.rect[1] + hb.rect[3]
+                            {
+                                clicked_command = Some(hb.command.clone());
+                                break;
+                            }
+                        }
+
+                        if let Some(cmd) = clicked_command {
+                            if let Some(client) = &mut state.mp_client {
+                                client.send(&blockgame_core::net::ClientPacket::Chat {
+                                    message: cmd,
+                                });
+                            } else {
+                                state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                                    sender: if state.local_username.is_empty() {
+                                        "Player".to_string()
+                                    } else {
+                                        state.local_username.clone()
+                                    },
+                                    prefix: String::new(),
+                                    message: cmd,
+                                    is_system: false,
+                                    age: 0.0,
+                                });
+                                if state.local_chat_messages.len() > 100 {
+                                    state.local_chat_messages.remove(0);
+                                }
+                            }
+                            state.chat_open = false;
+                            state.chat_input.clear();
+                            state.chat_scroll = 0;
+                            if !state.inventory_open && !state.player_stats.is_dead {
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
                         }
                     }
                     return;
@@ -2773,6 +2844,14 @@ impl ApplicationHandler for BlockGameApp {
                         if key == KeyCode::Escape {
                             state.chat_open = false;
                             state.chat_input.clear();
+                            state.chat_scroll = 0;
+                            if !state.inventory_open && !state.player_stats.is_dead {
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
                         } else if key == KeyCode::Enter {
                             let msg = state.chat_input.trim().to_string();
                             if !msg.is_empty() {
@@ -2795,13 +2874,21 @@ impl ApplicationHandler for BlockGameApp {
                                             age: 0.0,
                                         },
                                     );
-                                    if state.local_chat_messages.len() > 25 {
+                                    if state.local_chat_messages.len() > 100 {
                                         state.local_chat_messages.remove(0);
                                     }
                                 }
                             }
                             state.chat_open = false;
                             state.chat_input.clear();
+                            state.chat_scroll = 0;
+                            if !state.inventory_open && !state.player_stats.is_dead {
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
                         } else if key == KeyCode::Backspace {
                             state.chat_input.pop();
                         } else if let Some(t) = text {
@@ -2961,7 +3048,7 @@ impl ApplicationHandler for BlockGameApp {
                             .set_cursor_grab(winit::window::CursorGrabMode::None);
                         state.window.set_cursor_visible(true);
                     }
-                } else if key == kb.chat && pressed && !state.inventory_open {
+                } else if (key == kb.chat || key == KeyCode::Slash) && pressed && !state.inventory_open {
                     state.moving_forward = false;
                     state.moving_backward = false;
                     state.moving_left = false;
@@ -2969,7 +3056,17 @@ impl ApplicationHandler for BlockGameApp {
                     state.jumping = false;
                     state.sprinting = false;
                     state.chat_open = true;
-                    state.chat_input.clear();
+                    state.chat_scroll = 0;
+                    if key == KeyCode::Slash {
+                        state.chat_input = "/".to_string();
+                    } else {
+                        state.chat_input.clear();
+                    }
+                    state.mouse_captured = false;
+                    let _ = state
+                        .window
+                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                    state.window.set_cursor_visible(true);
                 } else {
                     match key {
                         KeyCode::ShiftLeft | KeyCode::ShiftRight => state.shift_down = pressed,
@@ -3298,7 +3395,7 @@ impl ApplicationHandler for BlockGameApp {
                                         is_system,
                                         age: 0.0,
                                     });
-                                    if client.chat_history.len() > 30 {
+                                    if client.chat_history.len() > 100 {
                                         client.chat_history.remove(0);
                                     }
                                 }
@@ -4370,13 +4467,15 @@ impl ApplicationHandler for BlockGameApp {
                         } else {
                             state.local_chat_messages.as_slice()
                         };
-                        UiBuilder::draw_multiplayer_hud_overlays(
+                        state.chat_hitboxes = UiBuilder::draw_multiplayer_hud_overlays(
                             &mut state.ui_mesh,
                             screen_w,
                             screen_h,
                             chat_slice,
                             state.chat_open,
                             &state.chat_input,
+                            state.chat_scroll,
+                            ui_cursor,
                             state.tab_held,
                             &online_models,
                             &local_name,

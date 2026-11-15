@@ -429,6 +429,7 @@ impl AuthDatabase {
                     inventory: Inventory::starter_inventory(),
                     active_hotbar_slot: 0,
                     rank: "default".to_string(),
+                    homes: std::collections::HashMap::new(),
                 }
             } else {
                 // Legacy world: fallback to player state saved in users.dat
@@ -441,6 +442,7 @@ impl AuthDatabase {
                     inventory,
                     active_hotbar_slot,
                     rank: "default".to_string(),
+                    homes: std::collections::HashMap::new(),
                 }
             };
 

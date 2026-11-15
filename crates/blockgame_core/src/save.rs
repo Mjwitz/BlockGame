@@ -63,6 +63,7 @@ pub struct SavedPlayerState {
     pub inventory: Inventory,
     pub active_hotbar_slot: usize,
     pub rank: String,
+    pub homes: HashMap<String, (Vec3, f32, f32)>,
 }
 
 impl Default for SavedPlayerState {
@@ -76,6 +77,7 @@ impl Default for SavedPlayerState {
             inventory: Inventory::starter_inventory(),
             active_hotbar_slot: 0,
             rank: "default".to_string(),
+            homes: HashMap::new(),
         }
     }
 }
@@ -337,7 +339,7 @@ pub fn save_player_data(
     let mut w = BufWriter::new(file);
 
     w.write_all(PLAYER_MAGIC)?;
-    write_u32(&mut w, 1)?; // version 1
+    write_u32(&mut w, 2)?; // version 2 with homes
     write_u64(&mut w, current_unix_timestamp())?;
     write_string(&mut w, &player.rank)?;
 
@@ -363,6 +365,15 @@ pub fn save_player_data(
     write_u32(&mut w, player.inventory.slots.len() as u32)?;
     for slot in &player.inventory.slots {
         write_item_slot(&mut w, *slot)?;
+    }
+
+    // Player homes (version 2+)
+    write_u32(&mut w, player.homes.len() as u32)?;
+    for (name, (pos, yaw, pitch)) in &player.homes {
+        write_string(&mut w, name)?;
+        write_vec3(&mut w, *pos)?;
+        write_f32(&mut w, *yaw)?;
+        write_f32(&mut w, *pitch)?;
     }
 
     w.flush()?;
@@ -394,7 +405,7 @@ pub fn load_player_data(
     }
 
     let version = read_u32(&mut r)?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported player data version: {}", version),
@@ -430,6 +441,22 @@ pub fn load_player_data(
         }
     }
 
+    let mut homes = HashMap::new();
+    if version >= 2 {
+        if let Ok(home_count) = read_u32(&mut r) {
+            for _ in 0..home_count {
+                if let (Ok(name), Ok(pos), Ok(yaw), Ok(pitch)) = (
+                    read_string(&mut r),
+                    read_vec3(&mut r),
+                    read_f32(&mut r),
+                    read_f32(&mut r),
+                ) {
+                    homes.insert(name, (pos, yaw, pitch));
+                }
+            }
+        }
+    }
+
     Ok(Some(SavedPlayerState {
         position,
         velocity,
@@ -439,6 +466,7 @@ pub fn load_player_data(
         inventory,
         active_hotbar_slot,
         rank: if rank.is_empty() { "default".to_string() } else { rank },
+        homes,
     }))
 }
 
@@ -980,6 +1008,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 inventory,
                 active_hotbar_slot,
                 rank: "default".to_string(),
+                homes: HashMap::new(),
             })
         } else {
             None

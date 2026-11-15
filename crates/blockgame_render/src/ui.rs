@@ -49,6 +49,24 @@ impl UiVertex {
     }
 }
 
+/// Clickable action button inside the in-game chat log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatActionHitbox {
+    pub rect: [f32; 4],
+    pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChatSegment<'a> {
+    Text(&'a str),
+    Button {
+        label: &'a str,
+        command: String,
+        color: [f32; 4],
+        hover_color: [f32; 4],
+    },
+}
+
 pub struct UiMesh {
     pub vertices: Vec<UiVertex>,
     pub indices: Vec<u32>,
@@ -5544,6 +5562,96 @@ impl UiBuilder {
         }
     }
 
+    pub fn parse_chat_segments<'a>(line: &'a str, alpha: f32) -> Vec<ChatSegment<'a>> {
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(start_rel) = line[cursor..].find('[') {
+        let abs_start = cursor + start_rel;
+        if let Some(end_rel) = line[abs_start..].find(']') {
+            let abs_end = abs_start + end_rel;
+            let inner = &line[abs_start + 1..abs_end];
+            let lower = inner.trim().to_ascii_lowercase();
+
+            let button = if lower == "accept" {
+                Some((
+                    "Accept",
+                    "/tpaccept".to_string(),
+                    [0.15, 0.58, 0.25, alpha],
+                    [0.25, 0.82, 0.38, alpha.max(0.95)],
+                ))
+            } else if lower == "deny" {
+                Some((
+                    "Deny",
+                    "/tpdeny".to_string(),
+                    [0.65, 0.20, 0.20, alpha],
+                    [0.88, 0.28, 0.28, alpha.max(0.95)],
+                ))
+            } else if lower == "spawn" {
+                Some((
+                    "Spawn",
+                    "/spawn".to_string(),
+                    [0.20, 0.45, 0.75, alpha],
+                    [0.30, 0.62, 0.95, alpha.max(0.95)],
+                ))
+            } else if inner.starts_with('/') {
+                Some((
+                    inner,
+                    inner.to_string(),
+                    [0.20, 0.48, 0.62, alpha],
+                    [0.30, 0.65, 0.85, alpha.max(0.95)],
+                ))
+            } else if lower.starts_with("home:") || lower.starts_with("home ") {
+                let hname = inner[5..].trim();
+                Some((
+                    hname,
+                    format!("/home {}", hname),
+                    [0.20, 0.48, 0.62, alpha],
+                    [0.30, 0.65, 0.85, alpha.max(0.95)],
+                ))
+            } else if lower.starts_with("click:") {
+                let cmd = inner[6..].trim();
+                Some((
+                    cmd,
+                    cmd.to_string(),
+                    [0.72, 0.58, 0.18, alpha],
+                    [0.92, 0.75, 0.25, alpha.max(0.95)],
+                ))
+            } else {
+                None
+            };
+
+            if let Some((label, cmd, col, hover_col)) = button {
+                if abs_start > cursor {
+                    segments.push(ChatSegment::Text(&line[cursor..abs_start]));
+                }
+                segments.push(ChatSegment::Button {
+                    label,
+                    command: cmd,
+                    color: col,
+                    hover_color: hover_col,
+                });
+                cursor = abs_end + 1;
+                continue;
+            }
+        }
+        let next_start = abs_start + 1;
+        if next_start <= line.len() {
+            let next_bracket = line[next_start..].find('[').map(|i| next_start + i).unwrap_or(line.len());
+            segments.push(ChatSegment::Text(&line[cursor..next_bracket]));
+            cursor = next_bracket;
+        } else {
+            break;
+        }
+    }
+
+    if cursor < line.len() {
+        segments.push(ChatSegment::Text(&line[cursor..]));
+    }
+
+    segments
+}
+
     /// Draws the in-game Multiplayer Chat Box (bottom-left) and the Tab Online Player List overlay.
     pub fn draw_multiplayer_hud_overlays(
         mesh: &mut UiMesh,
@@ -5552,13 +5660,16 @@ impl UiBuilder {
         chat_history: &[blockgame_core::net::ChatEntry],
         chat_open: bool,
         chat_input: &str,
+        chat_scroll: usize,
+        cursor_pos: [f32; 2],
         tab_held: bool,
         online_players: &[blockgame_core::net::PlayerModelState],
         local_username: &str,
         is_hosting: bool,
         server_addr: &str,
-    ) {
+    ) -> Vec<ChatActionHitbox> {
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let mut hitboxes = Vec::new();
 
         // 1. Top-left small multiplayer status badge
         let badge = if is_hosting {
@@ -5584,16 +5695,49 @@ impl UiBuilder {
         }
 
         // 2. Bottom-left Chat Log & Input Box
-        let visible_messages: Vec<&blockgame_core::net::ChatEntry> = chat_history
-            .iter()
-            .rev()
-            .filter(|m| chat_open || m.age < 9.0)
-            .take(8)
-            .collect();
+        let visible_count = 10;
+        let visible_messages: Vec<&blockgame_core::net::ChatEntry> = if chat_open {
+            let total = chat_history.len();
+            let max_scroll = total.saturating_sub(visible_count);
+            let actual_scroll = chat_scroll.min(max_scroll);
+            chat_history
+                .iter()
+                .rev()
+                .skip(actual_scroll)
+                .take(visible_count)
+                .collect()
+        } else {
+            chat_history
+                .iter()
+                .rev()
+                .filter(|m| m.age < 9.0)
+                .take(8)
+                .collect()
+        };
 
         let chat_x = 14.0;
-        let chat_w = 420.0_f32.min(screen_w * 0.45);
+        let chat_w = 480.0_f32.min(screen_w * 0.55);
         let mut msg_y = screen_h - 140.0;
+
+        // Subtle scrollbar on right edge when chat is open and exceeds visible count
+        if chat_open && chat_history.len() > visible_count {
+            let total = chat_history.len();
+            let max_scroll = total.saturating_sub(visible_count);
+            let actual_scroll = chat_scroll.min(max_scroll);
+            let sb_x = chat_x + chat_w - 4.0;
+            let sb_top = screen_h - 140.0 - (visible_count as f32 - 1.0) * 22.0;
+            let sb_height = (visible_count as f32) * 22.0;
+            mesh.add_quad(sb_x, sb_top, 3.0, sb_height, white_uv, [0.10, 0.12, 0.18, 0.50]);
+            let thumb_h = (sb_height * (visible_count as f32 / total as f32)).max(16.0);
+            let thumb_ratio = if max_scroll > 0 { actual_scroll as f32 / max_scroll as f32 } else { 0.0 };
+            let thumb_y = (sb_top + sb_height - thumb_h) - thumb_ratio * (sb_height - thumb_h);
+            mesh.add_quad(sb_x, thumb_y, 3.0, thumb_h, white_uv, [0.45, 0.70, 0.95, 0.85]);
+
+            if actual_scroll > 0 {
+                let note = format!("▲ Scrolled up (+{})", actual_scroll);
+                Self::draw_string(mesh, chat_x + 6.0, sb_top - 16.0, &note, 7.0, 10.0, 1.0, [0.75, 0.85, 1.0, 0.85]);
+            }
+        }
 
         for entry in visible_messages {
             let alpha = if chat_open {
@@ -5624,16 +5768,57 @@ impl UiBuilder {
             } else {
                 [0.95, 0.97, 1.0, alpha]
             };
-            Self::draw_colored_string(
-                mesh,
-                chat_x + 6.0,
-                msg_y + 4.0,
-                &line,
-                8.0,
-                11.5,
-                1.0,
-                text_col,
-            );
+
+            let segments = Self::parse_chat_segments(&line, alpha);
+            let mut seg_x = chat_x + 6.0;
+            for seg in segments {
+                match seg {
+                    ChatSegment::Text(t) => {
+                        Self::draw_colored_string(
+                            mesh,
+                            seg_x,
+                            msg_y + 4.0,
+                            t,
+                            8.0,
+                            11.5,
+                            1.0,
+                            text_col,
+                        );
+                        seg_x += Self::colored_string_width(t, 8.0, 1.0);
+                    }
+                    ChatSegment::Button { label, command, color, hover_color } => {
+                        let btn_w = Self::string_width(label, 7.5, 1.0) + 10.0;
+                        let btn_h = 16.0;
+                        let btn_y = msg_y + 2.0;
+                        let is_hovered = chat_open && Self::is_rect_hovered(cursor_pos, seg_x, btn_y, btn_w, btn_h);
+                        let bg = if is_hovered { hover_color } else { color };
+                        mesh.add_quad(seg_x, btn_y, btn_w, btn_h, white_uv, bg);
+                        if is_hovered {
+                            mesh.add_quad(seg_x - 1.0, btn_y - 1.0, btn_w + 2.0, 1.0, white_uv, [1.0, 1.0, 1.0, 0.9]);
+                            mesh.add_quad(seg_x - 1.0, btn_y + btn_h, btn_w + 2.0, 1.0, white_uv, [1.0, 1.0, 1.0, 0.9]);
+                            mesh.add_quad(seg_x - 1.0, btn_y, 1.0, btn_h, white_uv, [1.0, 1.0, 1.0, 0.9]);
+                            mesh.add_quad(seg_x + btn_w, btn_y, 1.0, btn_h, white_uv, [1.0, 1.0, 1.0, 0.9]);
+                        }
+                        Self::draw_string(
+                            mesh,
+                            seg_x + 5.0,
+                            btn_y + 3.0,
+                            label,
+                            7.5,
+                            10.5,
+                            1.0,
+                            [1.0, 1.0, 1.0, alpha.max(0.9)],
+                        );
+                        if chat_open {
+                            hitboxes.push(ChatActionHitbox {
+                                rect: [seg_x, btn_y, btn_w, btn_h],
+                                command,
+                            });
+                        }
+                        seg_x += btn_w + 5.0;
+                    }
+                }
+            }
             msg_y -= 22.0;
         }
 
@@ -5758,6 +5943,8 @@ impl UiBuilder {
                 );
             }
         }
+
+        hitboxes
     }
 
     /// Draws a compact proximity voice chat status badge and nearby speaker indicators.
@@ -6298,13 +6485,15 @@ mod tests {
             is_system: false,
             age: 1.0,
         }];
-        UiBuilder::draw_multiplayer_hud_overlays(
+        let _ = UiBuilder::draw_multiplayer_hud_overlays(
             &mut tag_mesh,
             1280.0,
             720.0,
             &chat,
             true,
             "Hi Bob",
+            0,
+            [0.0, 0.0],
             true,
             &[p],
             "Alice_99",
@@ -6312,5 +6501,33 @@ mod tests {
             "127.0.0.1:25565",
         );
         assert!(tag_mesh.indices.len() > 50);
+
+        // Test clickable chat buttons
+        let mut button_mesh = UiMesh::new();
+        let tpa_chat = vec![blockgame_core::net::ChatEntry {
+            sender: "Server".to_string(),
+            prefix: String::new(),
+            message: "<Alice> has requested to teleport to you. [Accept] [Deny]".to_string(),
+            is_system: true,
+            age: 0.0,
+        }];
+        let hitboxes = UiBuilder::draw_multiplayer_hud_overlays(
+            &mut button_mesh,
+            1280.0,
+            720.0,
+            &tpa_chat,
+            true,
+            "",
+            0,
+            [0.0, 0.0],
+            false,
+            &[],
+            "Bob",
+            false,
+            "127.0.0.1:25565",
+        );
+        assert_eq!(hitboxes.len(), 2);
+        assert_eq!(hitboxes[0].command, "/tpaccept");
+        assert_eq!(hitboxes[1].command, "/tpdeny");
     }
 }

@@ -158,7 +158,14 @@ impl PermissionsManager {
         // Default group for all regular players
         mgr.groups.insert(
             "default".to_string(),
-            PermissionGroup::new("default"),
+            PermissionGroup::with_permissions(
+                "default",
+                vec![
+                    "blockgame.command.spawn".to_string(),
+                    "blockgame.command.home".to_string(),
+                    "blockgame.command.tpa".to_string(),
+                ],
+            ),
         );
 
         mgr

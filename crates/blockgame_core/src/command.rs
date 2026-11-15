@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::time::Instant;
+
 use glam::Vec3;
 
 use crate::{
@@ -43,6 +46,28 @@ pub struct OnlinePlayerInfo {
     pub position: Vec3,
     pub yaw: f32,
     pub pitch: f32,
+    pub homes: HashMap<String, (Vec3, f32, f32)>,
+}
+
+impl OnlinePlayerInfo {
+    pub fn new(player_id: u32, username: impl Into<String>, position: Vec3, yaw: f32, pitch: f32) -> Self {
+        Self {
+            player_id,
+            username: username.into(),
+            position,
+            yaw,
+            pitch,
+            homes: HashMap::new(),
+        }
+    }
+}
+
+/// Pending TPA request recorded on the server.
+#[derive(Debug, Clone)]
+pub struct PendingTpaRequest {
+    pub requester_id: u32,
+    pub requester_name: String,
+    pub created_at: Instant,
 }
 
 /// Declarative results produced by executing a command.
@@ -52,6 +77,8 @@ pub struct CommandOutput {
     pub feedback: Vec<String>,
     /// Global system broadcasts sent to all connected players.
     pub broadcasts: Vec<String>,
+    /// Direct messages sent to specific players: `(player_id, message)`.
+    pub direct_messages: Vec<(u32, String)>,
     /// Players to immediately kick with `(player_id, reason)`.
     pub kick_targets: Vec<(u32, String)>,
     /// Teleport directives: `(player_id, target_position, yaw, pitch)`.
@@ -68,6 +95,12 @@ pub struct CommandOutput {
     pub rank_updates: Vec<(String, String)>,
     /// Player accounts/data to reset: `username`.
     pub reset_players: Vec<String>,
+    /// New world spawn point: `position`.
+    pub new_spawn: Option<Vec3>,
+    /// Set home: `(player_id, home_name, position, yaw, pitch)`.
+    pub set_home: Option<(u32, String, Vec3, f32, f32)>,
+    /// Delete home: `(player_id, home_name)`.
+    pub del_home: Option<(u32, String)>,
 }
 
 impl CommandOutput {
@@ -118,6 +151,8 @@ pub fn execute_command(
     perms: &mut PermissionsManager,
     bans: &mut BanManager,
     item_registry: &ItemRegistry,
+    default_spawn: Vec3,
+    tpa_requests: &mut HashMap<u32, PendingTpaRequest>,
 ) -> CommandOutput {
     let mut out = CommandOutput::default();
     let raw = command_line.trim();
@@ -128,8 +163,15 @@ pub fn execute_command(
     }
 
     let parts: Vec<&str> = clean.split_whitespace().collect();
-    let cmd = parts[0].to_ascii_lowercase();
-    let args = &parts[1..];
+    let initial_cmd = parts[0].to_ascii_lowercase();
+    let initial_args = &parts[1..];
+
+    // Handle `/set spawn` alias to `/setspawn`
+    let (cmd, args) = if initial_cmd == "set" && initial_args.first().map(|a| a.eq_ignore_ascii_case("spawn")).unwrap_or(false) {
+        ("setspawn".to_string(), &initial_args[1..])
+    } else {
+        (initial_cmd, initial_args)
+    };
 
     // Helper to check permissions
     let check_perm = |node: &str| -> bool {
@@ -814,7 +856,250 @@ pub fn execute_command(
             ));
         }
 
-        // --- 13. HELP COMMAND ---
+        // --- 13. SPAWN COMMANDS ---
+        "setspawn" => {
+            if !check_perm("blockgame.command.setspawn") {
+                return CommandOutput::error("You do not have permission: blockgame.command.setspawn");
+            }
+            let spawn_pos = if args.len() >= 3 {
+                let x = args[0].parse::<f32>();
+                let y = args[1].parse::<f32>();
+                let z = args[2].parse::<f32>();
+                match (x, y, z) {
+                    (Ok(x), Ok(y), Ok(z)) => Vec3::new(x, y, z),
+                    _ => return CommandOutput::error("Usage: /setspawn [x y z]"),
+                }
+            } else {
+                match source {
+                    CommandSource::Player { player_id, .. } => {
+                        if let Some(p) = online_players.iter().find(|p| p.player_id == *player_id) {
+                            p.position
+                        } else {
+                            default_spawn
+                        }
+                    }
+                    CommandSource::Console => {
+                        return CommandOutput::error("Console must provide coordinates: /setspawn <x> <y> <z>");
+                    }
+                }
+            };
+            out.new_spawn = Some(spawn_pos);
+            out.feedback.push(format!("[Server] World spawn set to ({:.1}, {:.1}, {:.1}).", spawn_pos.x, spawn_pos.y, spawn_pos.z));
+            out.broadcasts.push(format!(
+                "[Server] World spawn set to ({:.1}, {:.1}, {:.1}) by {}. [Spawn]",
+                spawn_pos.x, spawn_pos.y, spawn_pos.z, source.username()
+            ));
+        }
+
+        "spawn" => {
+            if !check_perm("blockgame.command.spawn") {
+                return CommandOutput::error("You do not have permission: blockgame.command.spawn");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /spawn");
+                }
+            };
+            out.teleports.push((player_id, default_spawn, 0.0, 0.0));
+            out.feedback.push(format!(
+                "[Teleport] Teleported to world spawn ({:.1}, {:.1}, {:.1}).",
+                default_spawn.x, default_spawn.y, default_spawn.z
+            ));
+        }
+
+        // --- 14. HOME COMMANDS ---
+        "sethome" => {
+            if !check_perm("blockgame.command.home") {
+                return CommandOutput::error("You do not have permission: blockgame.command.home");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /sethome");
+                }
+            };
+            let home_name = args.first().copied().unwrap_or("home").to_ascii_lowercase();
+            if home_name.len() > 16 || !home_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+                return CommandOutput::error("Home name must be 1-16 alphanumeric characters.");
+            }
+            if let Some(p) = online_players.iter().find(|p| p.player_id == player_id) {
+                if p.homes.len() >= 5 && !p.homes.iter().any(|(k, _)| k.to_ascii_lowercase() == home_name) {
+                    return CommandOutput::error("You have reached the maximum of 5 homes. Use /delhome <name> to delete one.");
+                }
+                out.set_home = Some((player_id, home_name.clone(), p.position, p.yaw, p.pitch));
+                out.feedback.push(format!(
+                    "[Home] Home '{}' set at ({:.1}, {:.1}, {:.1}).",
+                    home_name, p.position.x, p.position.y, p.position.z
+                ));
+            } else {
+                return CommandOutput::error("Player not found online.");
+            }
+        }
+
+        "home" => {
+            if !check_perm("blockgame.command.home") {
+                return CommandOutput::error("You do not have permission: blockgame.command.home");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /home");
+                }
+            };
+            let home_name = args.first().copied().unwrap_or("home").to_ascii_lowercase();
+            if let Some(p) = online_players.iter().find(|p| p.player_id == player_id) {
+                if let Some((_, (pos, yaw, pitch))) = p.homes.iter().find(|(k, _)| k.to_ascii_lowercase() == home_name) {
+                    out.teleports.push((player_id, *pos, *yaw, *pitch));
+                    out.feedback.push(format!("[Home] Teleported to home '{}'.", home_name));
+                } else {
+                    out.feedback.push(format!(
+                        "[Error] Home '{}' not found. Use /homes to view your saved homes.",
+                        home_name
+                    ));
+                }
+            } else {
+                return CommandOutput::error("Player not found online.");
+            }
+        }
+
+        "delhome" => {
+            if !check_perm("blockgame.command.home") {
+                return CommandOutput::error("You do not have permission: blockgame.command.home");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /delhome");
+                }
+            };
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /delhome <name>");
+            }
+            let home_name = args[0].to_ascii_lowercase();
+            if let Some(p) = online_players.iter().find(|p| p.player_id == player_id) {
+                if p.homes.iter().any(|(k, _)| k.to_ascii_lowercase() == home_name) {
+                    out.del_home = Some((player_id, home_name.clone()));
+                    out.feedback.push(format!("[Home] Home '{}' deleted.", home_name));
+                } else {
+                    out.feedback.push(format!("[Error] Home '{}' not found.", home_name));
+                }
+            } else {
+                return CommandOutput::error("Player not found online.");
+            }
+        }
+
+        "homes" => {
+            if !check_perm("blockgame.command.home") {
+                return CommandOutput::error("You do not have permission: blockgame.command.home");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /homes");
+                }
+            };
+            if let Some(p) = online_players.iter().find(|p| p.player_id == player_id) {
+                if p.homes.is_empty() {
+                    out.feedback.push("[Homes] You have no saved homes. Use /sethome [name] to save a home.".to_string());
+                } else {
+                    let mut names: Vec<String> = p.homes.keys().cloned().collect();
+                    names.sort();
+                    let formatted = names.into_iter().map(|n| format!("[/home {}]", n)).collect::<Vec<_>>().join(" ");
+                    out.feedback.push(format!("[Homes] ({}/5): {}", p.homes.len(), formatted));
+                }
+            } else {
+                return CommandOutput::error("Player not found online.");
+            }
+        }
+
+        // --- 15. TPA COMMANDS ---
+        "tpa" => {
+            if !check_perm("blockgame.command.tpa") {
+                return CommandOutput::error("You do not have permission: blockgame.command.tpa");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /tpa");
+                }
+            };
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /tpa <player> (or /tpa accept | /tpa deny)");
+            }
+            if args[0].eq_ignore_ascii_case("accept") {
+                return execute_command(source, "tpaccept", online_players, perms, bans, item_registry, default_spawn, tpa_requests);
+            }
+            if args[0].eq_ignore_ascii_case("deny") {
+                return execute_command(source, "tpdeny", online_players, perms, bans, item_registry, default_spawn, tpa_requests);
+            }
+            let target_name = args[0];
+            let source_username = source.username().to_string();
+            if let Some(target) = online_players.iter().find(|p| p.username.eq_ignore_ascii_case(target_name)) {
+                if target.player_id == player_id {
+                    return CommandOutput::error("You cannot send a teleport request to yourself.");
+                }
+                tpa_requests.insert(target.player_id, PendingTpaRequest {
+                    requester_id: player_id,
+                    requester_name: source_username.clone(),
+                    created_at: Instant::now(),
+                });
+                out.feedback.push(format!("[TPA] Teleport request sent to {}. It expires in 60 seconds.", target.username));
+                out.direct_messages.push((
+                    target.player_id,
+                    format!("[TPA] <{}> has requested to teleport to you. [Accept] [Deny] or /tpaccept / /tpdeny", source_username),
+                ));
+            } else {
+                return CommandOutput::error(format!("Player '{}' is not online.", target_name));
+            }
+        }
+
+        "tpaccept" => {
+            if !check_perm("blockgame.command.tpa") {
+                return CommandOutput::error("You do not have permission: blockgame.command.tpa");
+            }
+            let player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /tpaccept");
+                }
+            };
+            if let Some(req) = tpa_requests.remove(&player_id) {
+                if req.created_at.elapsed() > std::time::Duration::from_secs(60) {
+                    out.feedback.push("[TPA] The teleport request has expired.".to_string());
+                } else if let Some(requester) = online_players.iter().find(|p| p.player_id == req.requester_id) {
+                    if let Some(target) = online_players.iter().find(|p| p.player_id == player_id) {
+                        out.teleports.push((requester.player_id, target.position, target.yaw, target.pitch));
+                        out.feedback.push(format!("[TPA] Accepted teleport request from {}.", req.requester_name));
+                        out.direct_messages.push((requester.player_id, format!("[TPA] Teleporting to {}...", target.username)));
+                    }
+                } else {
+                    out.feedback.push(format!("[TPA] Player '{}' is no longer online.", req.requester_name));
+                }
+            } else {
+                out.feedback.push("[TPA] You have no pending teleport requests.".to_string());
+            }
+        }
+
+        "tpdeny" => {
+            if !check_perm("blockgame.command.tpa") {
+                return CommandOutput::error("You do not have permission: blockgame.command.tpa");
+            }
+            let _player_id = match source {
+                CommandSource::Player { player_id, .. } => *player_id,
+                CommandSource::Console => {
+                    return CommandOutput::error("Only players can execute /tpdeny");
+                }
+            };
+            if let Some(req) = tpa_requests.remove(&_player_id) {
+                out.feedback.push(format!("[TPA] Denied teleport request from {}.", req.requester_name));
+                out.direct_messages.push((req.requester_id, format!("[TPA] {} denied your teleport request.", source.username())));
+            } else {
+                out.feedback.push("[TPA] You have no pending teleport requests.".to_string());
+            }
+        }
+
+        // --- 16. HELP COMMAND ---
         "help" | "?" => {
             out.feedback.push("Available Commands:".to_string());
             if check_perm("blockgame.command.kick") {
@@ -829,6 +1114,23 @@ pub fn execute_command(
             }
             if check_perm("blockgame.command.tphere") {
                 out.feedback.push("  /tphere <player> - Teleport player to your position".to_string());
+            }
+            if check_perm("blockgame.command.spawn") {
+                out.feedback.push("  /spawn - Teleport to world spawn".to_string());
+            }
+            if check_perm("blockgame.command.setspawn") {
+                out.feedback.push("  /setspawn [x y z] - Set world spawn point".to_string());
+            }
+            if check_perm("blockgame.command.home") {
+                out.feedback.push("  /home [name] - Teleport to saved home".to_string());
+                out.feedback.push("  /sethome [name] - Save home location".to_string());
+                out.feedback.push("  /delhome <name> - Delete a saved home".to_string());
+                out.feedback.push("  /homes - List your saved homes".to_string());
+            }
+            if check_perm("blockgame.command.tpa") {
+                out.feedback.push("  /tpa <player> - Request teleport to player".to_string());
+                out.feedback.push("  /tpaccept - Accept incoming teleport request".to_string());
+                out.feedback.push("  /tpdeny - Deny incoming teleport request".to_string());
             }
             if check_perm("blockgame.command.give") {
                 out.feedback.push("  /give <player> <item> [amount] - Give items to player".to_string());
@@ -882,31 +1184,34 @@ mod tests {
         assert_eq!(name3, "Diamond Pickaxe");
     }
 
+    fn exec(
+        source: &CommandSource,
+        cmd: &str,
+        online: &[OnlinePlayerInfo],
+        perms: &mut PermissionsManager,
+        bans: &mut BanManager,
+        registry: &ItemRegistry,
+        spawn: Vec3,
+        tpa: &mut HashMap<u32, PendingTpaRequest>,
+    ) -> CommandOutput {
+        execute_command(source, cmd, online, perms, bans, registry, spawn, tpa)
+    }
+
     #[test]
     fn test_kick_and_ban_commands() {
         let registry = ItemRegistry::new();
         let mut perms = PermissionsManager::new();
         let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(0.0, 64.0, 0.0);
 
         let online = vec![
-            OnlinePlayerInfo {
-                player_id: 1,
-                username: "Alice".to_string(),
-                position: Vec3::new(10.0, 65.0, 10.0),
-                yaw: 0.0,
-                pitch: 0.0,
-            },
-            OnlinePlayerInfo {
-                player_id: 2,
-                username: "Bob".to_string(),
-                position: Vec3::new(20.0, 65.0, 20.0),
-                yaw: 1.0,
-                pitch: 0.0,
-            },
+            OnlinePlayerInfo::new(1, "Alice", Vec3::new(10.0, 65.0, 10.0), 0.0, 0.0),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::new(20.0, 65.0, 20.0), 1.0, 0.0),
         ];
 
         // 1. Bob has default perms; attempting /kick fails
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Player {
                 player_id: 2,
                 username: "Bob".to_string(),
@@ -916,6 +1221,8 @@ mod tests {
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert!(res.kick_targets.is_empty());
         assert!(res.feedback[0].contains("do not have permission"));
@@ -924,7 +1231,7 @@ mod tests {
         perms.add_player_group("Bob", "moderator").unwrap();
 
         // 3. Bob kicks Alice
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Player {
                 player_id: 2,
                 username: "Bob".to_string(),
@@ -934,19 +1241,23 @@ mod tests {
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert_eq!(res.kick_targets.len(), 1);
         assert_eq!(res.kick_targets[0].0, 1);
         assert_eq!(res.kick_targets[0].1, "griefing");
 
         // 4. Console bans Alice
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "ban Alice permanent ban",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert_eq!(res.kick_targets.len(), 1);
         assert!(bans.is_banned("Alice").is_some());
@@ -957,32 +1268,24 @@ mod tests {
         let registry = ItemRegistry::new();
         let mut perms = PermissionsManager::new();
         let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(0.0, 64.0, 0.0);
 
         let online = vec![
-            OnlinePlayerInfo {
-                player_id: 1,
-                username: "Alice".to_string(),
-                position: Vec3::new(10.0, 65.0, 10.0),
-                yaw: 0.0,
-                pitch: 0.0,
-            },
-            OnlinePlayerInfo {
-                player_id: 2,
-                username: "Bob".to_string(),
-                position: Vec3::new(20.0, 65.0, 20.0),
-                yaw: 1.0,
-                pitch: 0.0,
-            },
+            OnlinePlayerInfo::new(1, "Alice", Vec3::new(10.0, 65.0, 10.0), 0.0, 0.0),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::new(20.0, 65.0, 20.0), 1.0, 0.0),
         ];
 
         // Give Bob diamonds from console
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "give Bob diamond 16",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert_eq!(res.gives.len(), 1);
         assert_eq!(res.gives[0].0, 2);
@@ -990,13 +1293,15 @@ mod tests {
         assert_eq!(res.gives[0].1.count, 16);
 
         // Teleport Bob to Alice from console
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "tp Bob Alice",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert_eq!(res.teleports.len(), 1);
         assert_eq!(res.teleports[0].0, 2); // Bob teleported
@@ -1008,39 +1313,47 @@ mod tests {
         let registry = ItemRegistry::new();
         let mut perms = PermissionsManager::new();
         let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(0.0, 64.0, 0.0);
         let online = vec![];
 
         // 1. Console creates group 'builder'
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "perm group builder create",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert!(res.save_permissions);
         assert!(perms.groups.contains_key("builder"));
 
         // 2. Console adds permission to 'builder'
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "perm group builder add blockgame.command.give",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert!(res.save_permissions);
 
         // 3. Assign Charlie to 'builder'
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "perm user Charlie group add builder",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert!(res.save_permissions);
         assert!(perms.has_permission("Charlie", "blockgame.command.give"));
@@ -1052,47 +1365,254 @@ mod tests {
         let registry = ItemRegistry::new();
         let mut perms = PermissionsManager::new();
         let mut bans = BanManager::new();
-        let online = vec![OnlinePlayerInfo {
-            player_id: 1,
-            username: "Steve".to_string(),
-            position: Vec3::new(0.0, 50.0, 0.0),
-            yaw: 0.0,
-            pitch: 0.0,
-        }];
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(0.0, 64.0, 0.0);
+        let online = vec![OnlinePlayerInfo::new(1, "Steve", Vec3::new(0.0, 50.0, 0.0), 0.0, 0.0)];
 
         // Query default rank
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "rank Steve",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert!(res.feedback[0].contains("default"));
 
         // Set rank to moderator
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "rank Steve moderator",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert!(res.save_permissions);
         assert_eq!(res.rank_updates, vec![("Steve".to_string(), "moderator".to_string())]);
         assert!(perms.has_permission("Steve", "blockgame.command.kick"));
 
         // Reset player
-        let res = execute_command(
+        let res = exec(
             &CommandSource::Console,
             "resetplayer Steve",
             &online,
             &mut perms,
             &mut bans,
             &registry,
+            spawn,
+            &mut tpa,
         );
         assert_eq!(res.reset_players, vec!["Steve".to_string()]);
+    }
+
+    #[test]
+    fn test_spawn_and_setspawn_commands() {
+        let registry = ItemRegistry::new();
+        let mut perms = PermissionsManager::new();
+        let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(100.0, 70.0, 200.0);
+        let online = vec![OnlinePlayerInfo::new(1, "Alice", Vec3::new(15.0, 64.0, 25.0), 0.0, 0.0)];
+
+        // 1. Regular player executes /spawn
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/spawn",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.teleports.len(), 1);
+        assert_eq!(res.teleports[0].0, 1);
+        assert_eq!(res.teleports[0].1, spawn);
+
+        // 2. Regular player attempting /setspawn fails (needs perm)
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/setspawn",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.new_spawn.is_none());
+        assert!(res.feedback[0].contains("do not have permission"));
+
+        // 3. Admin / console sets spawn
+        let res = exec(
+            &CommandSource::Console,
+            "/setspawn 50 65 50",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.new_spawn, Some(Vec3::new(50.0, 65.0, 50.0)));
+        assert!(res.broadcasts[0].contains("[Spawn]"));
+
+        // 4. Test alias `/set spawn`
+        let res2 = exec(
+            &CommandSource::Console,
+            "/set spawn 12 34 56",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res2.new_spawn, Some(Vec3::new(12.0, 34.0, 56.0)));
+    }
+
+    #[test]
+    fn test_homes_commands() {
+        let registry = ItemRegistry::new();
+        let mut perms = PermissionsManager::new();
+        let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(0.0, 64.0, 0.0);
+
+        let mut online = vec![OnlinePlayerInfo::new(1, "Alice", Vec3::new(10.0, 65.0, 10.0), 0.0, 0.0)];
+
+        // Alice sets home 'base'
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/sethome base",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.set_home, Some((1, "base".to_string(), Vec3::new(10.0, 65.0, 10.0), 0.0, 0.0)));
+
+        // Record the home into Alice's online player state
+        online[0].homes.insert("base".to_string(), (Vec3::new(10.0, 65.0, 10.0), 0.0, 0.0));
+
+        // Alice moves away and types /home base
+        online[0].position = Vec3::new(500.0, 64.0, 500.0);
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/home base",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.teleports.len(), 1);
+        assert_eq!(res.teleports[0].1, Vec3::new(10.0, 65.0, 10.0));
+
+        // Alice lists homes
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/homes",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.feedback[0].contains("[/home base]"));
+
+        // Alice deletes home 'base'
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/delhome base",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.del_home, Some((1, "base".to_string())));
+    }
+
+    #[test]
+    fn test_tpa_system() {
+        let registry = ItemRegistry::new();
+        let mut perms = PermissionsManager::new();
+        let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let spawn = Vec3::new(0.0, 64.0, 0.0);
+
+        let online = vec![
+            OnlinePlayerInfo::new(1, "Alice", Vec3::new(10.0, 65.0, 10.0), 0.0, 0.0),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::new(50.0, 65.0, 50.0), 0.0, 0.0),
+        ];
+
+        // 1. Alice requests teleport to Bob
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/tpa Bob",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.feedback[0].contains("Teleport request sent to Bob"));
+        assert_eq!(res.direct_messages.len(), 1);
+        assert_eq!(res.direct_messages[0].0, 2); // sent to Bob
+        assert!(res.direct_messages[0].1.contains("[Accept] [Deny]"));
+        assert!(tpa.contains_key(&2));
+
+        // 2. Bob accepts the request
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 2,
+                username: "Bob".to_string(),
+            },
+            "/tpaccept",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.teleports.len(), 1);
+        assert_eq!(res.teleports[0].0, 1); // Alice teleported
+        assert_eq!(res.teleports[0].1, Vec3::new(50.0, 65.0, 50.0)); // to Bob's position
+        assert!(!tpa.contains_key(&2)); // request consumed
     }
 }

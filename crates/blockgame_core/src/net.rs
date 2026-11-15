@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, Cursor, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ use crate::{
     auth::{derive_client_password_token, validate_username, AuthDatabase},
     block::BlockId,
     chunk::ChunkPos,
-    command::{execute_command, CommandOutput, CommandSource, OnlinePlayerInfo},
+    command::{execute_command, CommandOutput, CommandSource, OnlinePlayerInfo, PendingTpaRequest},
     entity::{next_local_drop_id, ItemDrop},
     item::{Inventory, ItemId, ItemRegistry, ItemSlot},
     permissions::{BanManager, PermissionsManager},
@@ -1133,7 +1134,7 @@ fn apply_command_output(
     perms_manager: &mut PermissionsManager,
     ban_manager: &mut BanManager,
     auth_db: &mut AuthDatabase,
-    default_spawn: Vec3,
+    default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
     stop_flag: &Arc<AtomicBool>,
 ) {
@@ -1147,6 +1148,47 @@ fn apply_command_output(
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(world_dir);
+    }
+
+    for (target_pid, msg) in output.direct_messages {
+        direct_sends.push((
+            target_pid,
+            ServerPacket::ChatBroadcast {
+                sender: "Server".to_string(),
+                prefix: String::new(),
+                message: msg,
+                is_system: true,
+            },
+        ));
+    }
+
+    if let Some(pos) = output.new_spawn {
+        *default_spawn = pos;
+        let _ = fs::write(world_dir.join("spawn.txt"), format!("{},{},{}", pos.x, pos.y, pos.z));
+    }
+
+    if let Some((pid, home_name, pos, yaw, pitch)) = output.set_home {
+        if let Some(c) = clients.iter_mut().find(|c| c.player_id == pid) {
+            c.saved_state.homes.insert(home_name.clone(), (pos, yaw, pitch));
+            let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+            let key = c.username.trim().to_ascii_lowercase();
+            if let Some(acc) = auth_db.accounts.get_mut(&key) {
+                acc.player_state.homes.insert(home_name, (pos, yaw, pitch));
+                let _ = auth_db.save_to_dir(world_dir);
+            }
+        }
+    }
+
+    if let Some((pid, home_name)) = output.del_home {
+        if let Some(c) = clients.iter_mut().find(|c| c.player_id == pid) {
+            c.saved_state.homes.remove(&home_name);
+            let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+            let key = c.username.trim().to_ascii_lowercase();
+            if let Some(acc) = auth_db.accounts.get_mut(&key) {
+                acc.player_state.homes.remove(&home_name);
+                let _ = auth_db.save_to_dir(world_dir);
+            }
+        }
     }
 
     for fb in output.feedback {
@@ -1240,7 +1282,7 @@ fn apply_command_output(
         let _ = crate::save::delete_player_data(world_dir, &target_name);
 
         let mut fresh = SavedPlayerState::default();
-        fresh.position = default_spawn;
+        fresh.position = *default_spawn;
 
         // Reset auth_db account
         auth_db.update_player_state(&target_name, 0, fresh.clone());
@@ -1248,14 +1290,14 @@ fn apply_command_output(
 
         // Reset online client if connected
         if let Some(c) = clients.iter_mut().find(|c| c.username.eq_ignore_ascii_case(&target_name)) {
-            c.model.position = default_spawn;
+            c.model.position = *default_spawn;
             c.model.velocity = Vec3::ZERO;
             c.model.health = 20.0;
             c.saved_state = fresh;
             direct_sends.push((
                 c.player_id,
                 ServerPacket::TeleportPlayer {
-                    position: default_spawn,
+                    position: *default_spawn,
                     yaw: 0.0,
                     pitch: 0.0,
                 },
@@ -1300,12 +1342,25 @@ fn run_server_loop(
     let mut world = World::new();
     save_data.apply_to_world(&mut world);
 
-    let default_spawn = if save_data.player.position.length_squared() > 0.1 {
+    let spawn_file = world_dir.join("spawn.txt");
+    let mut default_spawn = if let Ok(s) = fs::read_to_string(&spawn_file) {
+        let parts: Vec<&str> = s.trim().split(',').collect();
+        if parts.len() == 3 {
+            if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+                Vec3::new(x, y, z)
+            } else {
+                save_data.player.position
+            }
+        } else {
+            save_data.player.position
+        }
+    } else if save_data.player.position.length_squared() > 0.1 {
         save_data.player.position
     } else {
         Vec3::new(0.5, 76.0, 0.5)
     };
 
+    let mut tpa_requests: HashMap<u32, PendingTpaRequest> = HashMap::new();
 
     let mut clients: Vec<ConnectedClient> = Vec::new();
     let mut next_player_id: u32 = 1;
@@ -1356,6 +1411,7 @@ fn run_server_loop(
                     position: c.model.position,
                     yaw: c.model.yaw,
                     pitch: c.model.pitch,
+                    homes: c.saved_state.homes.clone(),
                 })
                 .collect();
             let out = execute_command(
@@ -1365,6 +1421,8 @@ fn run_server_loop(
                 &mut perms_manager,
                 &mut ban_manager,
                 &item_registry,
+                default_spawn,
+                &mut tpa_requests,
             );
             apply_command_output(
                 out,
@@ -1376,7 +1434,7 @@ fn run_server_loop(
                 &mut perms_manager,
                 &mut ban_manager,
                 &mut auth_db,
-                default_spawn,
+                &mut default_spawn,
                 &world_dir,
                 &stop_flag,
             );
@@ -1870,6 +1928,7 @@ fn run_server_loop(
                         let trimmed = message.trim();
                         if !trimmed.is_empty() {
                             if trimmed.starts_with('/') {
+                                println!("[Command] <{}> {}", clients[idx].username, trimmed);
                                 log::info!("[Command] <{}> {}", clients[idx].username, trimmed);
                                 let online_infos: Vec<OnlinePlayerInfo> = clients
                                     .iter()
@@ -1880,6 +1939,7 @@ fn run_server_loop(
                                         position: c.model.position,
                                         yaw: c.model.yaw,
                                         pitch: c.model.pitch,
+                                        homes: c.saved_state.homes.clone(),
                                     })
                                     .collect();
                                 let out = execute_command(
@@ -1892,6 +1952,8 @@ fn run_server_loop(
                                     &mut perms_manager,
                                     &mut ban_manager,
                                     &item_registry,
+                                    default_spawn,
+                                    &mut tpa_requests,
                                 );
                                 apply_command_output(
                                     out,
@@ -1903,7 +1965,7 @@ fn run_server_loop(
                                     &mut perms_manager,
                                     &mut ban_manager,
                                     &mut auth_db,
-                                    default_spawn,
+                                    &mut default_spawn,
                                     &world_dir,
                                     &stop_flag,
                                 );
@@ -1918,8 +1980,10 @@ fn run_server_loop(
                                     crate::chat::escape_color_codes(&raw_msg)
                                 };
                                 if prefix.is_empty() {
+                                    println!("[Chat] <{}> {}", clients[idx].username, raw_msg);
                                     log::info!("[Chat] <{}> {}", clients[idx].username, raw_msg);
                                 } else {
+                                    println!("[Chat] <{} {}> {}", prefix, clients[idx].username, raw_msg);
                                     log::info!("[Chat] <{} {}> {}", prefix, clients[idx].username, raw_msg);
                                 }
                                 outgoing_broadcasts.push((
@@ -2055,6 +2119,7 @@ fn run_server_loop(
         disconnected_indices.dedup();
         for &idx in disconnected_indices.iter().rev() {
             let removed = clients.remove(idx);
+            tpa_requests.retain(|target_id, req| *target_id != removed.player_id && req.requester_id != removed.player_id);
             if removed.authenticated {
                 log::info!("Player '{}' (id {}) disconnected", removed.username, removed.player_id);
                 auth_db.update_player_state(
@@ -2586,6 +2651,13 @@ fn write_saved_player_state<W: Write>(w: &mut W, p: &SavedPlayerState) -> io::Re
     for s in &p.inventory.slots {
         write_slot(w, *s)?;
     }
+    write_u32(w, p.homes.len() as u32)?;
+    for (name, (pos, yaw, pitch)) in &p.homes {
+        write_string(w, name)?;
+        write_vec3(w, *pos)?;
+        write_f32(w, *yaw)?;
+        write_f32(w, *pitch)?;
+    }
     Ok(())
 }
 
@@ -2617,6 +2689,20 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
         }
     }
 
+    let mut homes = std::collections::HashMap::new();
+    if let Ok(home_count) = read_u32(r) {
+        for _ in 0..home_count {
+            if let (Ok(name), Ok(pos), Ok(yaw), Ok(pitch)) = (
+                read_string(r),
+                read_vec3(r),
+                read_f32(r),
+                read_f32(r),
+            ) {
+                homes.insert(name, (pos, yaw, pitch));
+            }
+        }
+    }
+
     Ok(SavedPlayerState {
         position,
         velocity,
@@ -2626,6 +2712,7 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
         inventory,
         active_hotbar_slot,
         rank: if rank.is_empty() { "default".to_string() } else { rank },
+        homes,
     })
 }
 

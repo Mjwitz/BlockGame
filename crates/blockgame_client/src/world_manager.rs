@@ -2457,6 +2457,7 @@ mod tests {
             inventory: Inventory::starter_inventory(),
             active_hotbar_slot: 2,
             rank: "default".to_string(),
+            homes: std::collections::HashMap::new(),
         };
 
         let save_data = wm.capture_save_data(meta, player_state);
