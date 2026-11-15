@@ -1020,6 +1020,7 @@ pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct ConnectedClient {
     stream: TcpStream,
+    addr: SocketAddr,
     framer: PacketFramer,
     authenticated: bool,
     player_id: u32,
@@ -1383,6 +1384,7 @@ fn run_server_loop(
             log::info!("Incoming connection from {} (assigned id {})", addr, pid);
             clients.push(ConnectedClient {
                 stream,
+                addr,
                 framer: PacketFramer::new(),
                 authenticated: false,
                 player_id: pid,
@@ -1412,6 +1414,7 @@ fn run_server_loop(
                     yaw: c.model.yaw,
                     pitch: c.model.pitch,
                     homes: c.saved_state.homes.clone(),
+                    ip: c.addr.ip().to_string(),
                 })
                 .collect();
             let out = execute_command(
@@ -1535,6 +1538,30 @@ fn run_server_loop(
                                         "User '{}' is already logged in on this server.",
                                         username.trim()
                                     ),
+                                    seed: 0,
+                                    day_night_time: 0.25,
+                                    player_state: SavedPlayerState::default(),
+                                    skin_id: 0,
+                                },
+                            ));
+                            continue;
+                        }
+
+                        let client_ip = clients
+                            .iter()
+                            .find(|c| c.player_id == pid)
+                            .map(|c| c.addr.ip().to_string())
+                            .unwrap_or_default();
+
+                        if let Some(ban) = ban_manager.is_ip_banned(&client_ip) {
+                            let reason = ban.reason.clone();
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::AuthResponse {
+                                    success: false,
+                                    player_id: 0,
+                                    session_token: [0u8; 16],
+                                    message: format!("Banned IP: {}", reason),
                                     seed: 0,
                                     day_night_time: 0.25,
                                     player_state: SavedPlayerState::default(),
@@ -1940,6 +1967,7 @@ fn run_server_loop(
                                         yaw: c.model.yaw,
                                         pitch: c.model.pitch,
                                         homes: c.saved_state.homes.clone(),
+                                        ip: c.addr.ip().to_string(),
                                     })
                                     .collect();
                                 let out = execute_command(
@@ -3087,15 +3115,55 @@ mod tests {
             MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1)
                 .expect("Bob should be able to reconnect after unban");
 
+        // 9. Admin issues /ban-ip on BobUser
+        server.execute_command("ban-ip BobUser Malicious behavior");
+        thread::sleep(Duration::from_millis(200));
+
+        // Bob receives Kick packet
+        let bob_pkts2 = client_bob2.poll_packets();
+        let kicked_ip = bob_pkts2.iter().any(|p| {
+            matches!(
+                p,
+                ServerPacket::Kick { reason } if reason.contains("Banned IP")
+            )
+        });
+        assert!(kicked_ip, "Bob must receive kick packet for IP ban");
+
+        // 10. Someone tries to log in from the same IP with a DIFFERENT username (Alt account)
+        let alt_res =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobAltAccount", "diff_pass", 0);
+        match alt_res {
+            Err(err_msg) => {
+                assert!(
+                    err_msg.contains("Banned IP") || err_msg.contains("banned"),
+                    "Alt account must be blocked by IP ban, got: {}",
+                    err_msg
+                );
+            }
+            Ok(_) => panic!("Alt account on banned IP must not be allowed to authenticate!"),
+        }
+
+        // 11. Console unbans the IP address
+        let local_ip = client_admin.server_addr.split(':').next().unwrap_or("127.0.0.1");
+        server.execute_command(&format!("unban-ip {}", local_ip));
+        thread::sleep(Duration::from_millis(150));
+
+        // 12. Alt account can now connect after IP unban
+        let (mut client_alt, _) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobAltAccount", "diff_pass", 0)
+                .expect("Alt account should be able to connect after IP unban");
+
         // Clean shutdown
         client_admin.disconnect();
         client_bob2.disconnect();
+        client_alt.disconnect();
         server.shutdown();
 
-        // 9. Verify persistence files exist
+        // 13. Verify persistence files exist
         let world_dir = temp_root.join("test_cmd_world");
         assert!(world_dir.join("permissions.yml").exists(), "permissions.yml must be saved");
         assert!(world_dir.join("bans.txt").exists(), "bans.txt must be saved");
+        assert!(world_dir.join("banned-ips.txt").exists(), "banned-ips.txt must be saved");
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

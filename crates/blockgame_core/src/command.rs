@@ -47,6 +47,7 @@ pub struct OnlinePlayerInfo {
     pub yaw: f32,
     pub pitch: f32,
     pub homes: HashMap<String, (Vec3, f32, f32)>,
+    pub ip: String,
 }
 
 impl OnlinePlayerInfo {
@@ -58,7 +59,13 @@ impl OnlinePlayerInfo {
             yaw,
             pitch,
             homes: HashMap::new(),
+            ip: "127.0.0.1".to_string(),
         }
+    }
+
+    pub fn with_ip(mut self, ip: impl Into<String>) -> Self {
+        self.ip = ip.into();
+        self
     }
 }
 
@@ -266,6 +273,103 @@ pub fn execute_command(
                 out.feedback.push(format!("Unbanned player '{}'.", target_name));
             } else {
                 return CommandOutput::error(format!("Player '{}' is not banned.", target_name));
+            }
+        }
+
+        // --- BAN-IP COMMAND ---
+        "ban-ip" | "banip" => {
+            if !check_perm("blockgame.command.ban") && !check_perm("blockgame.command.banip") {
+                return CommandOutput::error("You do not have permission: blockgame.command.ban");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /ban-ip <player|ip> [reason]");
+            }
+            let target_arg = args[0];
+            let reason = if args.len() > 1 {
+                args[1..].join(" ")
+            } else {
+                "Banned by an operator.".to_string()
+            };
+
+            // Find if target is an online player
+            let target_ip = if let Some(target_player) = online_players
+                .iter()
+                .find(|p| p.username.eq_ignore_ascii_case(target_arg))
+            {
+                target_player.ip.clone()
+            } else if target_arg.parse::<std::net::IpAddr>().is_ok() {
+                target_arg.to_string()
+            } else {
+                return CommandOutput::error(format!(
+                    "Player '{}' is not online and is not a valid IP address.",
+                    target_arg
+                ));
+            };
+
+            bans.ban_ip(&target_ip, &reason, source.username());
+            out.save_bans = true;
+
+            // Kick any online players with this IP
+            for p in online_players {
+                if p.ip == target_ip {
+                    out.kick_targets
+                        .push((p.player_id, format!("Banned IP: {}", reason)));
+                }
+            }
+
+            out.broadcasts.push(format!(
+                "IP {} was banned by {} ({})",
+                target_ip,
+                source.username(),
+                reason
+            ));
+            out.feedback
+                .push(format!("Banned IP '{}' for: {}", target_ip, reason));
+        }
+
+        // --- UNBAN-IP COMMAND ---
+        "unban-ip" | "unbanip" | "pardon-ip" | "pardonip" => {
+            if !check_perm("blockgame.command.ban") && !check_perm("blockgame.command.banip") {
+                return CommandOutput::error("You do not have permission: blockgame.command.ban");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /unban-ip <ip>");
+            }
+            let target_ip = args[0];
+            if bans.unban_ip(target_ip) {
+                out.save_bans = true;
+                out.feedback.push(format!("Unbanned IP '{}'.", target_ip));
+            } else {
+                return CommandOutput::error(format!("IP '{}' is not banned.", target_ip));
+            }
+        }
+
+        // --- BANLIST COMMAND ---
+        "banlist" => {
+            if !check_perm("blockgame.command.ban") && !check_perm("blockgame.command.banip") {
+                return CommandOutput::error("You do not have permission: blockgame.command.ban");
+            }
+            let show_ips = args.first().map_or(false, |a| a.eq_ignore_ascii_case("ips") || a.eq_ignore_ascii_case("ip"));
+            if show_ips {
+                let ip_bans = bans.list_ip_bans();
+                if ip_bans.is_empty() {
+                    out.feedback.push("There are no banned IP addresses.".to_string());
+                } else {
+                    out.feedback.push(format!("There are {} banned IP(s):", ip_bans.len()));
+                    for b in ip_bans {
+                        out.feedback.push(format!(" - {} (by {}, reason: {})", b.ip, b.banned_by, b.reason));
+                    }
+                }
+            } else {
+                let player_bans = bans.list_bans();
+                if player_bans.is_empty() {
+                    out.feedback.push("There are no banned players.".to_string());
+                } else {
+                    out.feedback.push(format!("There are {} banned player(s):", player_bans.len()));
+                    for b in player_bans {
+                        out.feedback.push(format!(" - {} (by {}, reason: {})", b.username, b.banned_by, b.reason));
+                    }
+                }
             }
         }
 
@@ -1108,6 +1212,9 @@ pub fn execute_command(
             if check_perm("blockgame.command.ban") {
                 out.feedback.push("  /ban <player> [reason] - Ban a player from the server".to_string());
                 out.feedback.push("  /unban <player> - Remove ban from a player".to_string());
+                out.feedback.push("  /ban-ip <player|ip> [reason] - Ban an IP address".to_string());
+                out.feedback.push("  /unban-ip <ip> - Remove an IP ban".to_string());
+                out.feedback.push("  /banlist [ips|players] - View banned players or IPs".to_string());
             }
             if check_perm("blockgame.command.tp") {
                 out.feedback.push("  /tp <target> or /tp <player> <target> - Teleport players".to_string());
@@ -1614,5 +1721,95 @@ mod tests {
         assert_eq!(res.teleports[0].0, 1); // Alice teleported
         assert_eq!(res.teleports[0].1, Vec3::new(50.0, 65.0, 50.0)); // to Bob's position
         assert!(!tpa.contains_key(&2)); // request consumed
+    }
+
+    #[test]
+    fn test_ban_ip_and_unban_ip_commands() {
+        let registry = ItemRegistry::new();
+        let mut perms = PermissionsManager::new();
+        let mut bans = BanManager::new();
+        let spawn = Vec3::new(0.5, 76.0, 0.5);
+        let mut tpa = HashMap::new();
+
+        let online = vec![
+            OnlinePlayerInfo::new(1, "Alice", Vec3::ZERO, 0.0, 0.0).with_ip("10.0.0.1"),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::ZERO, 0.0, 0.0).with_ip("10.0.0.2"),
+            OnlinePlayerInfo::new(3, "Charlie", Vec3::ZERO, 0.0, 0.0).with_ip("10.0.0.1"), // Same IP as Alice
+        ];
+
+        // 1. Regular player cannot run /ban-ip
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 2,
+                username: "Bob".to_string(),
+            },
+            "/ban-ip Alice Griefing",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.feedback[0].contains("You do not have permission"));
+        assert!(bans.is_ip_banned("10.0.0.1").is_none());
+
+        // 2. Console runs /ban-ip by player name: resolves Alice's IP (10.0.0.1) and kicks both Alice & Charlie
+        let res = exec(
+            &CommandSource::Console,
+            "/ban-ip Alice Griefing",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(bans.is_ip_banned("10.0.0.1").is_some());
+        assert!(res.save_bans);
+        assert_eq!(res.kick_targets.len(), 2);
+        assert!(res.kick_targets.iter().any(|(id, r)| *id == 1 && r.contains("Griefing")));
+        assert!(res.kick_targets.iter().any(|(id, r)| *id == 3 && r.contains("Griefing")));
+
+        // 3. /banlist ips shows the banned IP
+        let res = exec(
+            &CommandSource::Console,
+            "/banlist ips",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.feedback.iter().any(|f| f.contains("10.0.0.1")));
+
+        // 4. Console runs /unban-ip
+        let res = exec(
+            &CommandSource::Console,
+            "/unban-ip 10.0.0.1",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(bans.is_ip_banned("10.0.0.1").is_none());
+        assert!(res.feedback[0].contains("Unbanned IP '10.0.0.1'"));
+
+        // 5. Console runs /ban-ip directly with raw IP address
+        let res = exec(
+            &CommandSource::Console,
+            "/ban-ip 192.168.1.55 Proxy botting",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(bans.is_ip_banned("192.168.1.55").is_some());
+        assert_eq!(bans.is_ip_banned("192.168.1.55").unwrap().reason, "Proxy botting");
     }
 }

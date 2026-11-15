@@ -672,17 +672,29 @@ pub struct BanEntry {
     pub created_at: u64,
 }
 
-/// Persistent ban list manager (`bans.txt`).
+/// An IP ban record detailing a banned IP address, the banner, reason, and timestamp.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IpBanEntry {
+    pub ip: String,
+    pub reason: String,
+    pub banned_by: String,
+    pub created_at: u64,
+}
+
+/// Persistent ban list manager (`bans.txt` and `banned-ips.txt`).
 #[derive(Debug, Clone, Default)]
 pub struct BanManager {
     /// Keyed by lowercase canonical username
     pub bans: HashMap<String, BanEntry>,
+    /// Keyed by lowercase canonical IP address
+    pub ip_bans: HashMap<String, IpBanEntry>,
 }
 
 impl BanManager {
     pub fn new() -> Self {
         Self {
             bans: HashMap::new(),
+            ip_bans: HashMap::new(),
         }
     }
 
@@ -720,6 +732,40 @@ impl BanManager {
         list
     }
 
+    pub fn ban_ip(&mut self, ip: &str, reason: &str, banned_by: &str) {
+        let key = ip.trim().to_ascii_lowercase();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        self.ip_bans.insert(
+            key,
+            IpBanEntry {
+                ip: ip.trim().to_string(),
+                reason: reason.trim().to_string(),
+                banned_by: banned_by.trim().to_string(),
+                created_at: now,
+            },
+        );
+    }
+
+    pub fn unban_ip(&mut self, ip: &str) -> bool {
+        let key = ip.trim().to_ascii_lowercase();
+        self.ip_bans.remove(&key).is_some()
+    }
+
+    pub fn is_ip_banned(&self, ip: &str) -> Option<&IpBanEntry> {
+        let key = ip.trim().to_ascii_lowercase();
+        self.ip_bans.get(&key)
+    }
+
+    pub fn list_ip_bans(&self) -> Vec<&IpBanEntry> {
+        let mut list: Vec<&IpBanEntry> = self.ip_bans.values().collect();
+        list.sort_by_key(|b| &b.ip);
+        list
+    }
+
     pub fn save_to_dir(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
         let path = dir.join("bans.txt");
@@ -734,42 +780,86 @@ impl BanManager {
                 entry.username, entry.banned_by, entry.created_at, entry.reason
             )?;
         }
-        file.flush()
+        file.flush()?;
+
+        let ip_path = dir.join("banned-ips.txt");
+        let mut ip_file = File::create(ip_path)?;
+
+        writeln!(ip_file, "# BlockGame Server IP Ban List")?;
+        writeln!(ip_file, "# Format: ip|banned_by|timestamp|reason")?;
+        for entry in self.ip_bans.values() {
+            writeln!(
+                ip_file,
+                "{}|{}|{}|{}",
+                entry.ip, entry.banned_by, entry.created_at, entry.reason
+            )?;
+        }
+        ip_file.flush()
     }
 
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
+        let mut mgr = Self::new();
         let path = dir.join("bans.txt");
-        if !path.exists() {
-            return Ok(Self::new());
+        if path.exists() {
+            let file = File::open(path)?;
+            let reader = BufReader::new(file);
+
+            for line_res in reader.lines() {
+                let line = line_res?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+
+                let parts: Vec<&str> = trimmed.splitn(4, '|').collect();
+                if parts.len() >= 4 {
+                    let username = parts[0].trim();
+                    let banned_by = parts[1].trim();
+                    let created_at: u64 = parts[2].trim().parse().unwrap_or(0);
+                    let reason = parts[3].trim();
+
+                    mgr.bans.insert(
+                        username.to_ascii_lowercase(),
+                        BanEntry {
+                            username: username.to_string(),
+                            banned_by: banned_by.to_string(),
+                            created_at,
+                            reason: reason.to_string(),
+                        },
+                    );
+                }
+            }
         }
 
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut mgr = Self::new();
+        let ip_path = dir.join("banned-ips.txt");
+        if ip_path.exists() {
+            let file = File::open(ip_path)?;
+            let reader = BufReader::new(file);
 
-        for line_res in reader.lines() {
-            let line = line_res?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
+            for line_res in reader.lines() {
+                let line = line_res?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
 
-            let parts: Vec<&str> = trimmed.splitn(4, '|').collect();
-            if parts.len() >= 4 {
-                let username = parts[0].trim();
-                let banned_by = parts[1].trim();
-                let created_at: u64 = parts[2].trim().parse().unwrap_or(0);
-                let reason = parts[3].trim();
+                let parts: Vec<&str> = trimmed.splitn(4, '|').collect();
+                if parts.len() >= 4 {
+                    let ip = parts[0].trim();
+                    let banned_by = parts[1].trim();
+                    let created_at: u64 = parts[2].trim().parse().unwrap_or(0);
+                    let reason = parts[3].trim();
 
-                mgr.bans.insert(
-                    username.to_ascii_lowercase(),
-                    BanEntry {
-                        username: username.to_string(),
-                        banned_by: banned_by.to_string(),
-                        created_at,
-                        reason: reason.to_string(),
-                    },
-                );
+                    mgr.ip_bans.insert(
+                        ip.to_ascii_lowercase(),
+                        IpBanEntry {
+                            ip: ip.to_string(),
+                            banned_by: banned_by.to_string(),
+                            created_at,
+                            reason: reason.to_string(),
+                        },
+                    );
+                }
             }
         }
 
@@ -901,6 +991,30 @@ permissions=
         let ban = loaded.is_banned("Griefer1").expect("Must be banned in loaded db");
         assert_eq!(ban.reason, "Spamming TNT");
         assert_eq!(ban.banned_by, "Admin");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ip_ban_manager_roundtrip() {
+        let temp_dir = std::env::temp_dir().join("blockgame_ip_ban_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let mut bm = BanManager::new();
+        bm.ban_ip("192.168.1.105", "DDoS attempt", "Console");
+        assert!(bm.is_ip_banned("192.168.1.105").is_some());
+        assert!(bm.is_ip_banned("192.168.1.106").is_none());
+
+        bm.save_to_dir(&temp_dir).unwrap();
+
+        let loaded = BanManager::load_from_dir(&temp_dir).unwrap();
+        let ban = loaded.is_ip_banned("192.168.1.105").expect("IP must be banned in loaded db");
+        assert_eq!(ban.reason, "DDoS attempt");
+        assert_eq!(ban.banned_by, "Console");
+
+        let mut loaded = loaded;
+        assert!(loaded.unban_ip("192.168.1.105"));
+        assert!(loaded.is_ip_banned("192.168.1.105").is_none());
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

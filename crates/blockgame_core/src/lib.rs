@@ -52,7 +52,7 @@ pub use net::{
     PlayerModelState, ServerPacket, DEFAULT_SERVER_PORT,
 };
 pub use permissions::{
-    permission_matches, BanEntry, BanManager, PermissionGroup, PermissionsManager,
+    permission_matches, BanEntry, BanManager, IpBanEntry, PermissionGroup, PermissionsManager,
     PlayerPermissions,
 };
 pub use physics::{PlayerPhysics, AABB};
