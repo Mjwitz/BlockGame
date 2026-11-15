@@ -1,0 +1,40 @@
+# BlockGame Dedicated Server Configuration
+# =============================================================
+# Lines starting with '#' are comments.
+# When starting 'blockgame_server', this file will be automatically
+# created as 'server.properties' if it does not already exist.
+# Command-line arguments (e.g. -p 25566) will override settings here.
+# =============================================================
+
+# --- Network Settings ---
+# The TCP port to listen on (default: 25565)
+server-port=25565
+
+# The network interface to bind to (0.0.0.0 for all interfaces)
+bind-address=0.0.0.0
+
+# --- World Settings ---
+# World name and folder name inside saves/
+world-name=Multiplayer World
+
+# World generation seed (number or text string)
+seed=1337
+
+# --- Discovery & Public Server Directory ---
+# Set to 'true' to list your server on the public discoverable server browser
+discoverable=false
+
+# Server name shown in the server browser (defaults to world-name)
+server-name=Multiplayer World
+
+# Server MOTD message shown in the server browser (supports '&' color codes)
+motd=&aA BlockGame Dedicated Server
+
+# Central directory server URL that tracks public servers
+directory-url=http://15.204.81.97:25569
+
+# Overridden public IP or domain name for discovery ('auto' detects peer IP)
+public-host=auto
+
+# Maximum reported player slots
+max-players=20

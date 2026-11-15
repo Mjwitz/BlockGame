@@ -6,27 +6,63 @@ BlockGame includes a headless dedicated multiplayer server (`blockgame_server`) 
 
 ### Linux
 ```bash
-./blockgame_server --port 25565 --world "MyWorld" --seed 1337
+./blockgame_server
 ```
 
 ### Windows
 ```powershell
-.\blockgame_server.exe --port 25565 --world "MyWorld" --seed 1337
+.\blockgame_server.exe
 ```
 
-*(Or from source with Cargo: `cargo run --release -p blockgame_server -- --port 25565 --world "MyWorld" --seed 1337`)*
+*(Or from source with Cargo: `cargo run --release -p blockgame_server`)*
 
-## CLI Options
+When the server starts without arguments, it automatically creates and loads **`server.properties`**. You can customize all settings inside this file once, so you don't need to specify command-line flags on every launch.
+
+## Configuration File (`server.properties`)
+
+The server reads `server.properties` from the current working directory. If it doesn't exist yet, a default template is generated on first launch:
+
+```properties
+# BlockGame Dedicated Server Configuration
+server-port=25565
+bind-address=0.0.0.0
+world-name=Multiplayer World
+seed=1337
+
+# Public Server Browser / Discovery
+discoverable=false
+server-name=Multiplayer World
+motd=&aA BlockGame Dedicated Server
+directory-url=http://15.204.81.97:25569
+public-host=auto
+max-players=20
+```
+
+To use a custom config file path (e.g. for multiple server instances):
+```bash
+./blockgame_server --config /path/to/my_server.properties
+```
+
+## CLI Options (Overrides)
+
+Any flags provided on the command line override settings defined in `server.properties`:
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
+| `-c, --config <FILE>` | Path to config file | `server.properties` |
 | `-p, --port <PORT>` | TCP port to listen on | `25565` |
 | `-w, --world <NAME>` | World name and save folder under `saves/` | `Multiplayer World` |
 | `-s, --seed <SEED>` | World generation seed (number or text string) | `1337` |
 | `-b, --bind <HOST>` | Bind address host | `0.0.0.0` |
 | `--discoverable` | Register this server on the central discoverable server directory | `false` |
+| `--no-discoverable` | Disable discovery registration (overrides config) | — |
+| `--server-name <NAME>` | Public server name displayed in browser | `world-name` |
+| `--motd <TEXT>` | Message of the day (supports & color codes) | `&aA BlockGame Dedicated Server` |
 | `--directory-url <URL>` | Central directory URL to announce to | `http://15.204.81.97:25569` |
+| `--public-host <HOST>` | Override public IP/hostname (`auto` detects peer IP) | `auto` |
+| `--max-players <N>` | Maximum reported player slots | `20` |
 | `-h, --help` | Print CLI help and console command summary | — |
+
 
 ## Discoverable Servers & Central Directory
 

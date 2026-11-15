@@ -6,3 +6,5 @@ Cargo.lock
 !crates/blockgame_render/assets/**
 *.log
 .*.pid
+server.properties
+!server.properties.example

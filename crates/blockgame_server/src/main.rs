@@ -1,3 +1,5 @@
+mod config;
+
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -10,10 +12,12 @@ use blockgame_core::{
         send_heartbeat, send_unregister, HeartbeatRequest, UnregisterRequest,
         DEFAULT_DIRECTORY_URL, DIRECTORY_HEARTBEAT_INTERVAL_SECS,
     },
-    net::{MultiplayerServer, DEFAULT_SERVER_PORT},
+    net::MultiplayerServer,
     save::{parse_or_hash_seed, sanitize_folder_name},
 };
 use blockgame_gen::TerrainGenerator;
+
+use config::{ServerConfig, DEFAULT_CONFIG_FILE};
 
 fn print_help() {
     println!(
@@ -23,17 +27,23 @@ USAGE:
     blockgame_server [OPTIONS]
 
 OPTIONS:
+    -c, --config <FILE>          Path to server.properties config file (default: server.properties)
     -p, --port <PORT>            Server port to listen on (default: 25565)
     -w, --world <NAME>           World name and save folder (default: 'Multiplayer World')
     -s, --seed <SEED>            World generation seed (default: 1337)
     -b, --bind <HOST>            Bind address host (default: 0.0.0.0)
         --discoverable           Register this server on the public directory list
+        --no-discoverable        Disable registration (overriding config setting)
         --server-name <NAME>     Public server name (default: world name)
         --motd <TEXT>            Public server MOTD, supports & color codes
         --directory-url <URL>    Central directory URL (default: {})
         --public-host <HOST>     Public IP/domain override (default: auto)
         --max-players <N>        Reported max player slots (default: 20)
     -h, --help                   Print help information
+
+CONFIGURATION FILE:
+    By default, the server reads and automatically creates 'server.properties'.
+    Any command-line flags provided will override values set in the config file.
 
 SERVER CONSOLE COMMANDS:
     kick <player> [reason]              Kick a player from the server
@@ -68,53 +78,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let port: u16 = arg_value(&args, "--port", Some("-p"))
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_SERVER_PORT);
+    // 1. Determine config file path and load/create it
+    let config_path = arg_value(&args, "--config", Some("-c"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_FILE));
 
-    let world_name = arg_value(&args, "--world", Some("-w"))
-        .unwrap_or_else(|| "Multiplayer World".to_string());
+    let mut config = ServerConfig::load_or_create(&config_path)?;
 
-    let seed: u32 = arg_value(&args, "--seed", Some("-s"))
-        .map(|s| parse_or_hash_seed(&s))
-        .unwrap_or(1337);
+    // 2. Command-line argument overrides
+    if let Some(p) = arg_value(&args, "--port", Some("-p")).and_then(|s| s.parse::<u16>().ok()) {
+        config.port = p;
+    }
+    if let Some(w) = arg_value(&args, "--world", Some("-w")) {
+        config.world_name = w;
+    }
+    if let Some(s) = arg_value(&args, "--seed", Some("-s")) {
+        config.seed = parse_or_hash_seed(&s);
+    }
+    if let Some(b) = arg_value(&args, "--bind", Some("-b")) {
+        config.bind_host = b;
+    }
+    if args.iter().any(|a| a == "--discoverable") {
+        config.discoverable = true;
+    } else if args.iter().any(|a| a == "--no-discoverable") {
+        config.discoverable = false;
+    }
+    if let Some(n) = arg_value(&args, "--server-name", None) {
+        config.server_name = n;
+    }
+    if let Some(m) = arg_value(&args, "--motd", None) {
+        config.motd = m;
+    }
+    if let Some(u) = arg_value(&args, "--directory-url", None) {
+        config.directory_url = u;
+    }
+    if let Some(h) = arg_value(&args, "--public-host", None) {
+        config.public_host = h;
+    }
+    if let Some(mp) = arg_value(&args, "--max-players", None).and_then(|s| s.parse::<usize>().ok()) {
+        config.max_players = mp.max(1);
+    }
 
-    let bind_host = arg_value(&args, "--bind", Some("-b"))
-        .unwrap_or_else(|| "0.0.0.0".to_string());
-
-    let discoverable = args.iter().any(|a| a == "--discoverable");
-    let server_name = arg_value(&args, "--server-name", None).unwrap_or_else(|| world_name.clone());
-    let motd = arg_value(&args, "--motd", None)
-        .unwrap_or_else(|| "&aA BlockGame Dedicated Server".to_string());
-    let directory_url = arg_value(&args, "--directory-url", None)
-        .unwrap_or_else(|| DEFAULT_DIRECTORY_URL.to_string());
-    let public_host = arg_value(&args, "--public-host", None)
-        .unwrap_or_else(|| "auto".to_string());
-    let max_players: usize = arg_value(&args, "--max-players", None)
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(20)
-        .max(1);
-
-    let bind_addr = format!("{}:{}", bind_host, port);
+    let bind_addr = format!("{}:{}", config.bind_host, config.port);
     let saves_root = PathBuf::from("saves");
-    let folder_name = sanitize_folder_name(&world_name);
+    let folder_name = sanitize_folder_name(&config.world_name);
 
-    let generator = Arc::new(TerrainGenerator::new(seed));
+    let generator = Arc::new(TerrainGenerator::new(config.seed));
     let gen_clone = generator.clone();
 
     log::info!(
         "Starting BlockGame Dedicated Multiplayer Server on {} (World: '{}', Seed: {})...",
         bind_addr,
-        world_name,
-        seed
+        config.world_name,
+        config.seed
     );
 
     let mut server = MultiplayerServer::start(
         &bind_addr,
         saves_root,
         folder_name,
-        world_name,
-        seed,
+        config.world_name.clone(),
+        config.seed,
         None,
         move |cpos| {
             let mut chunk = gen_clone.generate_chunk(cpos);
@@ -132,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = Arc::new(AtomicBool::new(true));
     let player_count_shared = Arc::new(AtomicUsize::new(server.online_player_count()));
 
-    let discovery_session = if discoverable {
+    let discovery_session = if config.discoverable {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -143,18 +167,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         log::info!(
             "Discoverable mode enabled: registering '{}' with directory {}",
-            server_name,
-            directory_url
+            config.server_name,
+            config.directory_url
         );
 
         let hb_running = running.clone();
         let hb_players = player_count_shared.clone();
-        let hb_dir_url = directory_url.clone();
+        let hb_dir_url = config.directory_url.clone();
         let hb_id = srv_id.clone();
         let hb_token = token.clone();
-        let hb_name = server_name.clone();
-        let hb_motd = motd.clone();
-        let hb_host = public_host.clone();
+        let hb_name = config.server_name.clone();
+        let hb_motd = config.motd.clone();
+        let hb_host = config.public_host.clone();
+        let hb_max_players = config.max_players;
 
         thread::Builder::new()
             .name("directory-heartbeat".to_string())
@@ -171,7 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             host: hb_host.clone(),
                             port: actual_port,
                             players: hb_players.load(Ordering::Relaxed),
-                            max_players,
+                            max_players: hb_max_players,
                             version: env!("CARGO_PKG_VERSION").to_string(),
                             voice_enabled: true,
                         };
@@ -192,7 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             })?;
 
-        Some((directory_url, srv_id, token))
+        Some((config.directory_url, srv_id, token))
     } else {
         None
     };
