@@ -1,0 +1,11 @@
+services:
+  blockgame-directory:
+    build:
+      context: .
+      dockerfile: Dockerfile.directory
+    container_name: blockgame_directory
+    restart: unless-stopped
+    ports:
+      - "25569:25569"
+    environment:
+      - RUST_LOG=info

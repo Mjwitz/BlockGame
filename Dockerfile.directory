@@ -1,0 +1,19 @@
+# Multi-stage build for BlockGame Central Directory Server
+FROM rust:1.80-bookworm AS builder
+
+WORKDIR /usr/src/blockgame
+COPY . .
+
+RUN cargo build --release -p blockgame_directory
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /usr/src/blockgame/target/release/blockgame_directory /app/blockgame_directory
+
+ENV RUST_LOG=info
+EXPOSE 25569
+
+ENTRYPOINT ["/app/blockgame_directory"]
+CMD ["--bind", "0.0.0.0", "--port", "25569"]

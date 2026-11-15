@@ -4,3 +4,5 @@
 Cargo.lock
 *.png
 !crates/blockgame_render/assets/**
+*.log
+.*.pid
