@@ -35,7 +35,30 @@
 
 | Input | Action |
 | :--- | :--- |
-| `T` | Open chat & slash command bar |
-| `Tab` | Hold to view online player list & ranks |
-| `Esc` | Close open inventory/UI or open Pause Menu |
+| `T` | Open chat & slash command bar (releases mouse cursor to interact with buttons) |
+| `Mouse Wheel` (in Chat) | Scroll up/down through past messages (stores up to 30 past chat messages) |
+| `Left Click` (in Chat) | Click interactive action buttons (e.g. `[Accept]`, `[Deny]`, `[Teleport]`) |
+| `Tab` | Hold to view online player list, latency, and group prefixes/ranks |
+| `Esc` | Close open inventory/UI or open Pause Menu (does not freeze game in multiplayer) |
 | `Y` | Advance time of day by 3 hours (singleplayer / local testing) |
+
+## Settings & Audio Configuration
+
+Access **Settings** from the Title Screen or Pause Menu to configure graphics, audio, voice chat, and controls:
+
+- **Audio Volume Sliders**:
+  - `Master Volume` — Overall master audio output volume (0% – 100%).
+  - `SFX Volume` — Block placement, breaking, bow firing, footsteps, and tool sounds.
+  - `Music Volume` — Ambient soundtrack and contextual exploration music.
+  - `Voice Volume` — Proximity voice chat incoming player volume.
+  - `Creature Volume` — Volume for all animal and monster ambient calls and hurt sounds.
+- **Proximity Voice Chat**:
+  - Select your active **Microphone Input Device** from the dropdown menu.
+  - Voice audio is spatialized in 3D using low-latency ADPCM compression.
+- **Display & Interface**:
+  - `UI Scale` — Adjust HUD and menu scaling (`0.75x`, `1.0x`, `1.25x`, `1.5x`).
+  - `FOV Slider` — Field of view adjustment (60° – 110°).
+  - `Render Distance` — Chunk view distance (4 – 16 chunks).
+- **Controls & Keybinds**:
+  - Fully rebindable keyboard keys supporting any keyboard key (numpad keys, punctuation, arrow/navigation keys, and function keys F1–F24).
+

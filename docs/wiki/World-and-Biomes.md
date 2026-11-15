@@ -27,3 +27,11 @@ Worlds are generated deterministically from a 32-bit seed using multi-octave 2D 
 - **Water & Buckets**: Flowing water inflow physics and Buckets for picking up and placing water.
 - **Gravity & Support**: Sand and Gravel fall when unsupported; attached blocks (torches, crops, flowers) break if their supporting block is removed.
 - **Modular World Saves**: Singleplayer and server worlds are stored under `saves/<world_name>/` with chunk regions, world metadata, and per-player data.
+
+## Chunk Streaming & Rendering Performance
+
+To maintain a fluid 60+ FPS while flying or running across the landscape, chunk generation and meshing are split asynchronously:
+- **Distance-Prioritized Streaming**: Chunks closest to the player and within the player's look-direction are meshed and loaded first.
+- **GPU Upload Budgeting**: Mesh vertex and index buffers are uploaded to the GPU with a per-frame transfer budget, completely eliminating frame stutters and lag spikes when entering new terrain.
+- **Granular World Locks**: Background worker threads read voxel data without stalling the main render thread.
+

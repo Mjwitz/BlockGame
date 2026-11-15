@@ -93,16 +93,43 @@ You can manage it without `systemd` using the provided manager script:
 # Option B: Run in a detachable tmux session
 ./scripts/manage_directory.sh tmux
 # (Detach with Ctrl+B then D, reattach with tmux attach -t blockgame-directory)
+
+# Option C: Docker / Docker Compose
+docker compose -f docker-compose.directory.yml up -d
 ```
+
+## Multiplayer World Behavior & Server Features
+
+### Real-Time World & Pause Menu
+In multiplayer mode, opening the in-game Pause Menu (`Esc`) does **not** pause the world or server. The game continues running around the player: you can still take damage from monsters, drown, fall, or be interacted with by other players while in the menu.
+
+### Server Console Chat & Command Logging
+The dedicated server console continuously streams all in-game activity:
+- Chat messages: `[CHAT] <PlayerName>: message text`
+- Commands issued: `[COMMAND] <PlayerName> issued: /command arguments`
+This makes server administration, moderation, and auditing easy directly from your server terminal or tmux pane.
+
+### IP Bans & Alt Account Protection (`banned-ips.txt`)
+To prevent griefers and banned players from simply reconnecting with an alternate username, admins can ban by IP:
+```text
+ban-ip <player|ip> [reason]
+unban-ip <ip>
+banlist ips
+```
+When an IP ban is issued, any online players connected from that IP address are immediately kicked, and their IP address is persisted to `banned-ips.txt`. Any future connection attempts from banned IPs are rejected during the TCP handshake before reaching the world.
+
+### Ungraceful Disconnect & Timeout Detection
+The server monitors client connection heartbeats and handles abrupt network drops (such as client crashes or internet outages). If a client fails to send a packet within **15 seconds** or triggers a TCP write error, the server automatically cleans up the player entity, releases the slot, and broadcasts a disconnect notice so "ghost players" are never left lingering on the server.
 
 ## Connecting Clients
 1. Launch `blockgame_client` (or `blockgame_client.exe`).
 2. Select **Multiplayer** from the title screen.
 3. You can either:
    - Enter a server address manually (e.g. `<server-ip>:25565`).
-   - Switch to the **Discoverable Servers** tab and click **Refresh** to join any public server.
+   - Switch to the **Discoverable Servers** tab and click **Refresh** to join any public server announced to the central directory.
 4. Make sure TCP port `25565` (for game traffic) and TCP port `25569` (for central directory, if hosting) are allowed in your firewall.
 
 ## Stopping the Server Safely
-Type `stop` in the server console (or press `Ctrl+C`) to unregister from the directory, save all chunks, player inventories, permissions, and bans cleanly before exiting.
+Type `stop` in the server console (or press `Ctrl+C`) to unregister from the directory, save all chunks, player inventories, permissions, homes, and bans cleanly before exiting.
+
 
