@@ -3089,7 +3089,24 @@ impl ApplicationHandler for BlockGameApp {
                     .ui_pipeline
                     .update_screen_size(&state.queue, screen_w, screen_h);
 
-                if state.screen == AppScreen::InGame {
+                let is_mp_active = state.mp_client.is_some();
+                let is_paused_screen = matches!(state.screen, AppScreen::Paused { .. });
+                let is_settings_from_pause =
+                    matches!(state.screen, AppScreen::Settings { return_to_pause: true });
+
+                // On multiplayer servers, the world never pauses: packet polling, physics,
+                // mob updates, and 3D rendering continue in the background while in Pause / Settings!
+                let should_simulate_world =
+                    state.screen == AppScreen::InGame || (is_mp_active && (is_paused_screen || is_settings_from_pause));
+
+                // If player took fatal damage while in pause or settings menu on a server, bring up death screen
+                if state.player_stats.is_dead
+                    && matches!(state.screen, AppScreen::Paused { .. } | AppScreen::Settings { .. })
+                {
+                    state.screen = AppScreen::InGame;
+                }
+
+                if should_simulate_world {
                     // Age local chat messages
                     for entry in &mut state.local_chat_messages {
                         entry.age += dt;
@@ -3806,8 +3823,8 @@ impl ApplicationHandler for BlockGameApp {
                         .pipeline
                         .update_camera(&state.queue, &state.camera_uniform);
 
-                    // 5. Perform Fast Voxel Traversal (DDA) raycast from player eye_pos
-                    {
+                    // 5. Perform Fast Voxel Traversal (DDA) raycast from player eye_pos (only in active gameplay)
+                    if state.screen == AppScreen::InGame {
                         let world_guard = state.world_manager.world().lock().unwrap();
                         let held_item = state.inventory.get(state.active_hotbar_slot).item_id;
                         let is_placeable = state
@@ -3857,6 +3874,9 @@ impl ApplicationHandler for BlockGameApp {
                             state.targeted_block = None;
                             state.wireframe_buffer = None;
                         }
+                    } else {
+                        state.targeted_block = None;
+                        state.wireframe_buffer = None;
                     }
 
                     // 5b. Process hold-to-break mining mechanics
@@ -4106,7 +4126,8 @@ impl ApplicationHandler for BlockGameApp {
                     }
 
                     // 7. Build 2D UI Overlay (HUD or Inventory/Crafting Screen)
-                    if state.inventory_open {
+                    if state.screen == AppScreen::InGame {
+                        if state.inventory_open {
                         // 1. Prepare JEI Item Index Catalog & Filter
                         let search_lower = state.jei_search_text.trim().to_lowercase();
                         let catalog: Vec<ItemId> = state
@@ -4380,6 +4401,52 @@ impl ApplicationHandler for BlockGameApp {
                                 &nearby_speakers,
                             );
                         }
+                    }
+                } else if let AppScreen::Paused { ref status_message } = state.screen {
+                        // In multiplayer pause menu: draw floating player nametags in 3D world
+                        let mut nametag_models = Vec::new();
+                        if let Some(client) = &state.mp_client {
+                            for rp in client.remote_players.values() {
+                                if rp.health > 0.0 {
+                                    nametag_models.push(rp.clone());
+                                }
+                            }
+                        }
+                        if !nametag_models.is_empty() {
+                            UiBuilder::draw_player_nametags(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                state.camera.build_view_projection_matrix(aspect),
+                                state.camera.position,
+                                &nametag_models,
+                            );
+                        }
+                        UiBuilder::build_pause_menu(
+                            &mut state.ui_mesh,
+                            screen_w,
+                            screen_h,
+                            ui_cursor,
+                            status_message.as_deref(),
+                        );
+                    } else if let AppScreen::Settings { .. } = state.screen {
+                        let ui_settings = state.settings_ui_state();
+                        let keybinds = state.settings.keybinds.labels_and_keys();
+                        let keybind_refs: Vec<(&str, &str)> = keybinds
+                            .iter()
+                            .map(|(a, k)| (*a, k.as_str()))
+                            .collect();
+                        UiBuilder::build_settings_screen(
+                            &mut state.ui_mesh,
+                            screen_w,
+                            screen_h,
+                            ui_settings,
+                            state.settings_tab,
+                            state.active_settings_slider,
+                            state.listening_keybind,
+                            &keybind_refs,
+                            ui_cursor,
+                        );
                     }
                 } else if let AppScreen::Paused { ref status_message } = state.screen {
                     // Game is paused: keep camera at player eye position without stepping simulation
@@ -4670,7 +4737,16 @@ impl ApplicationHandler for BlockGameApp {
                         players_to_render.push(rp.clone());
                     }
                 }
-                if state.third_person || state.screen != AppScreen::InGame {
+                let render_local_model = state.third_person
+                    || matches!(
+                        state.screen,
+                        AppScreen::Title
+                            | AppScreen::WorldSelect { .. }
+                            | AppScreen::CreateWorld { .. }
+                            | AppScreen::MultiplayerLobby { .. }
+                            | AppScreen::Settings { return_to_pause: false }
+                    );
+                if render_local_model {
                     players_to_render.push(state.current_local_player_model());
                 }
                 if !players_to_render.is_empty() {

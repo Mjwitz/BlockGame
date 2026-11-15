@@ -1144,6 +1144,12 @@ fn apply_command_output(
 
     for fb in output.feedback {
         if let Some(pid) = source_pid {
+            let sender_name = clients
+                .iter()
+                .find(|c| c.player_id == pid)
+                .map(|c| c.username.as_str())
+                .unwrap_or("Player");
+            log::info!("[Command Feedback -> {}] {}", sender_name, fb);
             direct_sends.push((
                 pid,
                 ServerPacket::ChatBroadcast {
@@ -1160,6 +1166,7 @@ fn apply_command_output(
     }
 
     for msg in output.broadcasts {
+        log::info!("[Broadcast] {}", msg);
         outgoing_broadcasts.push((
             None,
             ServerPacket::ChatBroadcast {
@@ -1560,6 +1567,7 @@ fn run_server_loop(
                                 ));
 
                                 // Broadcast join event & system chat message
+                                log::info!("Player '{}' (id {}) joined the game", clients[idx].username, pid);
                                 outgoing_broadcasts.push((
                                     Some(pid),
                                     ServerPacket::PlayerJoined {
@@ -1749,6 +1757,7 @@ fn run_server_loop(
                         target_player_id,
                         damage,
                     } if clients[idx].authenticated => {
+                        let attacker_name = clients[idx].username.clone();
                         if let Some(target) = clients
                             .iter_mut()
                             .find(|c| c.authenticated && c.player_id == target_player_id)
@@ -1758,6 +1767,20 @@ fn run_server_loop(
                                 target.model.hurt_timer = 0.45;
                                 target.saved_state.stats.health = target.model.health;
                                 let new_hp = target.model.health;
+                                log::info!(
+                                    "Player '{}' attacked '{}' for {:.1} damage (target HP: {:.1})",
+                                    attacker_name,
+                                    target.username,
+                                    damage,
+                                    new_hp
+                                );
+                                if new_hp <= 0.0 {
+                                    log::info!(
+                                        "Player '{}' was slain by '{}'",
+                                        target.username,
+                                        attacker_name
+                                    );
+                                }
                                 outgoing_broadcasts.push((
                                     None,
                                     ServerPacket::PlayerDamaged {
@@ -1774,6 +1797,7 @@ fn run_server_loop(
                         let trimmed = message.trim();
                         if !trimmed.is_empty() {
                             if trimmed.starts_with('/') {
+                                log::info!("[Command] <{}> {}", clients[idx].username, trimmed);
                                 let online_infos: Vec<OnlinePlayerInfo> = clients
                                     .iter()
                                     .filter(|c| c.authenticated)
@@ -1816,10 +1840,15 @@ fn run_server_loop(
                                 let message = if perms_manager
                                     .has_permission(&clients[idx].username, "blockgame.chat.color")
                                 {
-                                    raw_msg
+                                    raw_msg.clone()
                                 } else {
                                     crate::chat::escape_color_codes(&raw_msg)
                                 };
+                                if prefix.is_empty() {
+                                    log::info!("[Chat] <{}> {}", clients[idx].username, raw_msg);
+                                } else {
+                                    log::info!("[Chat] <{} {}> {}", prefix, clients[idx].username, raw_msg);
+                                }
                                 outgoing_broadcasts.push((
                                     None,
                                     ServerPacket::ChatBroadcast {
