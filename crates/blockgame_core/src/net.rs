@@ -1012,6 +1012,11 @@ impl PacketFramer {
 
 // --- Authoritative Multiplayer Server ---
 
+/// Inactivity timeout for authenticated multiplayer clients before disconnecting (15 seconds).
+pub const CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Inactivity timeout for new connections awaiting authentication (10 seconds).
+pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+
 struct ConnectedClient {
     stream: TcpStream,
     framer: PacketFramer,
@@ -1022,6 +1027,8 @@ struct ConnectedClient {
     model: PlayerModelState,
     saved_state: SavedPlayerState,
     is_sleeping: bool,
+    last_activity: Instant,
+    is_dead: bool,
 }
 
 /// Authoritative Multiplayer Server managing authentication, persistent user accounts,
@@ -1329,6 +1336,8 @@ fn run_server_loop(
                 model: PlayerModelState::new(pid, "", default_spawn, 0),
                 saved_state: SavedPlayerState::default(),
                 is_sleeping: false,
+                last_activity: Instant::now(),
+                is_dead: false,
             });
         }
 
@@ -1374,28 +1383,61 @@ fn run_server_loop(
         }
 
         // 3. Read & process incoming packets from all connected clients
-        // Snapshot currently authenticated usernames (lowercase) to prevent duplicate simultaneous logins
-        let active_usernames: Vec<(u32, String)> = clients
-            .iter()
-            .filter(|c| c.authenticated)
-            .map(|c| (c.player_id, c.username.to_ascii_lowercase()))
-            .collect();
-
+        let now = Instant::now();
         for idx in 0..clients.len() {
+            if clients[idx].is_dead {
+                disconnected_indices.push(idx);
+                continue;
+            }
+
+            let timeout_limit = if clients[idx].authenticated {
+                CLIENT_TIMEOUT
+            } else {
+                AUTH_TIMEOUT
+            };
+            if now.duration_since(clients[idx].last_activity) >= timeout_limit {
+                if clients[idx].authenticated {
+                    log::warn!(
+                        "Disconnecting player '{}' (id {}) due to network timeout ({:?} with no packets)",
+                        clients[idx].username,
+                        clients[idx].player_id,
+                        now.duration_since(clients[idx].last_activity)
+                    );
+                } else {
+                    log::warn!(
+                        "Disconnecting unauthenticated connection (id {}) due to timeout ({:?})",
+                        clients[idx].player_id,
+                        now.duration_since(clients[idx].last_activity)
+                    );
+                }
+                clients[idx].is_dead = true;
+                disconnected_indices.push(idx);
+                continue;
+            }
+
+            let prev_len = clients[idx].framer.buf.len();
             let alive = {
                 let c = &mut clients[idx];
                 c.framer.read_available(&mut c.stream).unwrap_or(false)
             };
             if !alive {
+                clients[idx].is_dead = true;
                 disconnected_indices.push(idx);
                 continue;
+            }
+            if clients[idx].framer.buf.len() > prev_len {
+                clients[idx].last_activity = now;
             }
 
             loop {
                 let frame = match clients[idx].framer.next_frame() {
-                    Ok(Some(f)) => f,
+                    Ok(Some(f)) => {
+                        clients[idx].last_activity = Instant::now();
+                        f
+                    }
                     Ok(None) => break,
                     Err(_) => {
+                        clients[idx].is_dead = true;
                         disconnected_indices.push(idx);
                         break;
                     }
@@ -1403,6 +1445,7 @@ fn run_server_loop(
                 let packet = match ClientPacket::decode(&frame) {
                     Ok(p) => p,
                     Err(_) => {
+                        clients[idx].is_dead = true;
                         disconnected_indices.push(idx);
                         break;
                     }
@@ -1416,9 +1459,12 @@ fn run_server_loop(
                         skin_id,
                     } => {
                         let canonical = username.trim().to_ascii_lowercase();
-                        let already_online = active_usernames
-                            .iter()
-                            .any(|(other_id, u)| *other_id != pid && *u == canonical);
+                        let already_online = clients.iter().any(|c| {
+                            c.player_id != pid
+                                && c.authenticated
+                                && !c.is_dead
+                                && c.username.to_ascii_lowercase() == canonical
+                        });
 
                         if already_online {
                             direct_sends.push((
@@ -1458,15 +1504,57 @@ fn run_server_loop(
                             continue;
                         }
 
-
                         match auth_db.authenticate_or_register(
                             &username,
                             &password_token,
                             skin_id,
                             default_spawn,
                         ) {
-                            Ok((account, token, is_new)) => {
+                            Err(err) => {
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::AuthResponse {
+                                        success: false,
+                                        player_id: 0,
+                                        session_token: [0u8; 16],
+                                        message: err,
+                                        seed: 0,
+                                        day_night_time: 0.25,
+                                        player_state: SavedPlayerState::default(),
+                                        skin_id: 0,
+                                    },
+                                ));
+                                continue;
+                            }
+                            Ok((mut account, token, is_new)) => {
                                 let mut player_state = account.player_state.clone();
+
+                                // If another session for this user is already connected (e.g. stale/ghost session
+                                // from dropped connection or dual login), kick the older session so the reconnecting
+                                // player can join immediately without waiting for server restart!
+                                for (other_idx, other_c) in clients.iter_mut().enumerate() {
+                                    if other_c.player_id != pid
+                                        && other_c.authenticated
+                                        && other_c.username.eq_ignore_ascii_case(&account.username)
+                                    {
+                                        log::info!(
+                                            "Player '{}' reconnected (new id {}). Replacing previous session (id {}).",
+                                            account.username,
+                                            pid,
+                                            other_c.player_id
+                                        );
+                                        player_state = other_c.saved_state.clone();
+                                        other_c.is_dead = true;
+                                        direct_sends.push((
+                                            other_c.player_id,
+                                            ServerPacket::Kick {
+                                                reason: "Logged in from another location.".to_string(),
+                                            },
+                                        ));
+                                        disconnected_indices.push(other_idx);
+                                    }
+                                }
+                                account.player_state = player_state.clone();
                                 if perms_manager.players.is_empty() {
                                     let _ = perms_manager.add_player_group(&account.username, "admin");
                                     let _ = perms_manager.save_to_dir(&world_dir);
@@ -1584,21 +1672,6 @@ fn run_server_loop(
                                             clients[idx].username
                                         ),
                                         is_system: true,
-                                    },
-                                ));
-                            }
-                            Err(err_msg) => {
-                                direct_sends.push((
-                                    pid,
-                                    ServerPacket::AuthResponse {
-                                        success: false,
-                                        player_id: 0,
-                                        session_token: [0u8; 16],
-                                        message: err_msg,
-                                        seed: 0,
-                                        day_night_time: 0.25,
-                                        player_state: SavedPlayerState::default(),
-                                        skin_id: 0,
                                     },
                                 ));
                             }
@@ -1924,6 +1997,7 @@ fn run_server_loop(
                         }
                     }
                     ClientPacket::Disconnect => {
+                        clients[idx].is_dead = true;
                         disconnected_indices.push(idx);
                         break;
                     }
@@ -1960,13 +2034,23 @@ fn run_server_loop(
         for (target_pid, pkt) in direct_sends {
             if let Ok(bytes) = pkt.encode() {
                 if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
-                    let _ = c.stream.write_all(&bytes);
+                    if let Err(e) = c.stream.write_all(&bytes) {
+                        if e.kind() != io::ErrorKind::WouldBlock {
+                            log::warn!("Write error to client {} ({}): {}", c.player_id, c.username, e);
+                            c.is_dead = true;
+                        }
+                    }
                     let _ = c.stream.flush();
                 }
             }
         }
 
         // Remove disconnected clients (in reverse order to preserve indices)
+        for (i, c) in clients.iter().enumerate() {
+            if c.is_dead {
+                disconnected_indices.push(i);
+            }
+        }
         disconnected_indices.sort_unstable();
         disconnected_indices.dedup();
         for &idx in disconnected_indices.iter().rev() {
@@ -2026,8 +2110,13 @@ fn run_server_loop(
         for (exclude_pid, pkt) in outgoing_broadcasts {
             if let Ok(bytes) = pkt.encode() {
                 for c in clients.iter_mut() {
-                    if c.authenticated && Some(c.player_id) != exclude_pid {
-                        let _ = c.stream.write_all(&bytes);
+                    if c.authenticated && Some(c.player_id) != exclude_pid && !c.is_dead {
+                        if let Err(e) = c.stream.write_all(&bytes) {
+                            if e.kind() != io::ErrorKind::WouldBlock {
+                                log::warn!("Broadcast write error to client {} ({}): {}", c.player_id, c.username, e);
+                                c.is_dead = true;
+                            }
+                        }
                     }
                 }
             }
@@ -2058,7 +2147,7 @@ fn run_server_loop(
 
             let all_players: Vec<PlayerModelState> = clients
                 .iter()
-                .filter(|c| c.authenticated)
+                .filter(|c| c.authenticated && !c.is_dead)
                 .map(|c| c.model.clone())
                 .collect();
 
@@ -2071,8 +2160,13 @@ fn run_server_loop(
                 };
                 if let Ok(bytes) = snap.encode() {
                     for c in clients.iter_mut() {
-                        if c.authenticated {
-                            let _ = c.stream.write_all(&bytes);
+                        if c.authenticated && !c.is_dead {
+                            if let Err(e) = c.stream.write_all(&bytes) {
+                                if e.kind() != io::ErrorKind::WouldBlock {
+                                    log::warn!("Snapshot write error to client {} ({}): {}", c.player_id, c.username, e);
+                                    c.is_dead = true;
+                                }
+                            }
                         }
                     }
                 }
@@ -2138,6 +2232,7 @@ pub struct MultiplayerClient {
     pub remote_players: HashMap<u32, PlayerModelState>,
     pub chat_history: Vec<ChatEntry>,
     pub connected: bool,
+    pub last_packet_time: Instant,
 }
 
 impl MultiplayerClient {
@@ -2229,6 +2324,7 @@ impl MultiplayerClient {
                     age: 0.0,
                 }],
                 connected: true,
+                last_packet_time: Instant::now(),
             };
             Ok((client, auth_resp))
         } else {
@@ -2242,8 +2338,10 @@ impl MultiplayerClient {
             return;
         }
         if let Ok(bytes) = packet.encode() {
-            if self.stream.write_all(&bytes).is_err() {
-                self.connected = false;
+            if let Err(e) = self.stream.write_all(&bytes) {
+                if e.kind() != io::ErrorKind::WouldBlock {
+                    self.connected = false;
+                }
             }
         }
     }
@@ -2252,8 +2350,13 @@ impl MultiplayerClient {
     pub fn poll_packets(&mut self) -> Vec<ServerPacket> {
         let mut received = Vec::new();
         if self.connected {
+            let prev_len = self.framer.buf.len();
             match self.framer.read_available(&mut self.stream) {
-                Ok(true) => {}
+                Ok(true) => {
+                    if self.framer.buf.len() > prev_len {
+                        self.last_packet_time = Instant::now();
+                    }
+                }
                 Ok(false) | Err(_) => {
                     self.connected = false;
                 }
@@ -2262,9 +2365,19 @@ impl MultiplayerClient {
 
         while let Ok(Some(frame)) = self.framer.next_frame() {
             if let Ok(pkt) = ServerPacket::decode(&frame) {
+                self.last_packet_time = Instant::now();
                 received.push(pkt);
             }
         }
+
+        if self.connected && self.last_packet_time.elapsed() >= CLIENT_TIMEOUT {
+            log::warn!(
+                "Multiplayer connection timed out (no packets received for {:?})",
+                self.last_packet_time.elapsed()
+            );
+            self.connected = false;
+        }
+
         received
     }
 
@@ -2950,6 +3063,67 @@ mod tests {
         p1.disconnect();
         p2.disconnect();
         p3.disconnect();
+        server.shutdown();
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_ungraceful_disconnect_removal_and_reconnect() {
+        let temp_root = std::env::temp_dir().join("blockgame_net_ungraceful_dc_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).unwrap();
+
+        let mut server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "dc_test_world".to_string(),
+            "Disconnect Test World".to_string(),
+            12345,
+            None,
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server");
+
+        let addr_str = server.local_addr().to_string();
+
+        // 1. Player connects and authenticates
+        let (mut client, _) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "UngracefulUser", "pass123", 0)
+                .expect("Initial connection failed");
+
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(server.online_player_count(), 1, "Player should be counted as online");
+
+        // 2. Ungraceful disconnect: drop the client socket without sending ClientPacket::Disconnect
+        // Set connected = false so drop() doesn't send ClientPacket::Disconnect
+        client.connected = false;
+        drop(client);
+
+        // 3. Within 1.5s, the server tick should attempt a write or detect EOF,
+        // marking the client as dead and removing them from online_count without requiring a server restart.
+        let start = Instant::now();
+        let mut cleaned_up = false;
+        while start.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(50));
+            if server.online_player_count() == 0 {
+                cleaned_up = true;
+                break;
+            }
+        }
+        assert!(
+            cleaned_up,
+            "Server must remove ungracefully disconnected player without restarting, but online_player_count remained {}",
+            server.online_player_count()
+        );
+
+        // 4. The player can now immediately reconnect without getting 'User is already logged in'
+        let (mut client2, _) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "UngracefulUser", "pass123", 0)
+                .expect("Player must be able to reconnect after ungraceful disconnect");
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(server.online_player_count(), 1);
+
+        client2.disconnect();
         server.shutdown();
         let _ = std::fs::remove_dir_all(&temp_root);
     }
