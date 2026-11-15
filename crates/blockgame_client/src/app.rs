@@ -156,6 +156,7 @@ pub struct AppState {
     pub underwater_sound_timer: f32,
     pub audio: crate::audio::AudioManager,
     pub music_scheduler: crate::audio::MusicScheduler,
+    pub creature_sound_timer: f32,
     pub voice_capture: crate::voice::VoiceCaptureManager,
     pub ptt_down: bool,
     pub voice_transmitting: bool,
@@ -244,6 +245,7 @@ impl AppState {
             self.settings.music_volume,
         );
         self.audio.set_voice_volume(self.settings.voice_volume);
+        self.audio.set_creature_volume(self.settings.creature_volume);
         let desired_fs = if self.settings.fullscreen {
             Some(winit::window::Fullscreen::Borderless(None))
         } else {
@@ -320,6 +322,7 @@ impl AppState {
             ui_scale: self.settings.ui_scale,
             voice_mode: self.settings.voice_mode,
             voice_volume: self.settings.voice_volume,
+            creature_volume: self.settings.creature_volume,
             voice_input_device: self.settings.voice_input_device.clone(),
         }
     }
@@ -355,6 +358,9 @@ impl AppState {
             }
             6 => {
                 self.settings.voice_volume = t;
+            }
+            7 => {
+                self.settings.creature_volume = t;
             }
             _ => {}
         }
@@ -992,6 +998,7 @@ impl ApplicationHandler for BlockGameApp {
             settings.music_volume,
         );
         audio.set_voice_volume(settings.voice_volume);
+        audio.set_creature_volume(settings.creature_volume);
         let music_scheduler = crate::audio::MusicScheduler::new(audio.music_track_count());
         let voice_capture = crate::voice::VoiceCaptureManager::new();
 
@@ -1096,6 +1103,7 @@ impl ApplicationHandler for BlockGameApp {
             underwater_sound_timer: 0.0,
             audio,
             music_scheduler,
+            creature_sound_timer: 4.0,
             mouse_left_down: false,
             breaking_voxel: None,
             break_progress: 0.0,
@@ -1493,7 +1501,7 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 if !handled && state.settings_tab == 0 {
-                                    for idx in 0..7 {
+                                    for idx in 0..8 {
                                         let r = UiBuilder::settings_slider_rect(
                                             screen_w, screen_h, idx,
                                         );
@@ -2051,13 +2059,32 @@ impl ApplicationHandler for BlockGameApp {
                                     3.5,
                                     attack_damage,
                                 );
-                                let hit_entity = hit_monster
-                                    || state.world_manager.attack_animal(
+                                let hit_animal = if hit_monster.is_none() {
+                                    state.world_manager.attack_animal(
                                         state.player.eye_position(),
                                         state.camera.forward(),
                                         3.5,
                                         attack_damage,
+                                    )
+                                } else {
+                                    None
+                                };
+                                if let Some((mkind, mpos)) = hit_monster {
+                                    state.audio.play_monster_hurt(
+                                        mkind,
+                                        mpos,
+                                        state.player.position,
+                                        state.camera.yaw,
                                     );
+                                } else if let Some((akind, apos)) = hit_animal {
+                                    state.audio.play_animal_hurt(
+                                        akind,
+                                        apos,
+                                        state.player.position,
+                                        state.camera.yaw,
+                                    );
+                                }
+                                let hit_entity = hit_monster.is_some() || hit_animal.is_some();
                                 if hit_entity {
                                     state.mouse_left_down = false;
                                     state.breaking_voxel = None;
@@ -3178,7 +3205,15 @@ impl ApplicationHandler for BlockGameApp {
                     .as_secs_f32()
                     .min(0.1);
                 state.last_frame_time = now;
-                state.music_scheduler.update(dt, &mut state.audio);
+                let is_underground = state.player.position.y < 55.0;
+                let is_sprinting_day = state.sprinting && state.day_night.sun_intensity() > 0.2 && state.player.position.y >= 55.0;
+                let is_mining = state.breaking_voxel.is_some();
+                let music_ctx = crate::audio::MusicContext {
+                    is_underground,
+                    is_sprinting_day,
+                    is_mining,
+                };
+                state.music_scheduler.update(dt, &mut state.audio, music_ctx);
 
                 let (screen_w, screen_h, ui_cursor) = state.ui_metrics();
                 let aspect = screen_w / screen_h;
@@ -3852,11 +3887,52 @@ impl ApplicationHandler for BlockGameApp {
                         if state
                             .player_stats
                             .take_damage(total_hostile_dmg * armor_mult)
-                            && state
+                        {
+                            state.audio.play_hurt();
+                            if state
                                 .armor
                                 .damage_armor(total_hostile_dmg, &state.item_registry)
-                        {
-                            state.audio.play_tool_break();
+                            {
+                                state.audio.play_tool_break();
+                            }
+                        }
+                    }
+
+                    // Periodic ambient sounds for nearby animals and monsters
+                    state.creature_sound_timer -= dt;
+                    if state.creature_sound_timer <= 0.0 {
+                        state.creature_sound_timer = 4.0 + 4.0 * state.music_scheduler.random_f32();
+                        let ppos = state.player.position;
+                        let mut candidates = Vec::new();
+                        for animal in &state.world_manager.animals {
+                            if !animal.dead && animal.position.distance_squared(ppos) <= 24.0 * 24.0 {
+                                candidates.push((true, animal.kind as usize, animal.position));
+                            }
+                        }
+                        for monster in &state.world_manager.monsters {
+                            if !monster.dead && monster.position.distance_squared(ppos) <= 24.0 * 24.0 {
+                                candidates.push((false, monster.kind as usize, monster.position));
+                            }
+                        }
+                        if !candidates.is_empty() {
+                            let pick_idx = (state.music_scheduler.random_f32() * candidates.len() as f32) as usize % candidates.len();
+                            let (is_animal, kind_idx, pos) = candidates[pick_idx];
+                            if is_animal {
+                                let kind = match kind_idx {
+                                    0 => blockgame_core::animal::AnimalKind::Cow,
+                                    1 => blockgame_core::animal::AnimalKind::Pig,
+                                    2 => blockgame_core::animal::AnimalKind::Chicken,
+                                    _ => blockgame_core::animal::AnimalKind::Sheep,
+                                };
+                                state.audio.play_animal_ambient(kind, pos, ppos, state.camera.yaw);
+                            } else {
+                                let kind = match kind_idx {
+                                    0 => blockgame_core::monster::MonsterKind::Zombie,
+                                    1 => blockgame_core::monster::MonsterKind::Skeleton,
+                                    _ => blockgame_core::monster::MonsterKind::Spider,
+                                };
+                                state.audio.play_monster_ambient(kind, pos, ppos, state.camera.yaw);
+                            }
                         }
                     }
                     state

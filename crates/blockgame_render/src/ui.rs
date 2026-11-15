@@ -291,6 +291,7 @@ pub struct SettingsUiState {
     pub master_volume: f32,
     pub sfx_volume: f32,
     pub music_volume: f32,
+    pub creature_volume: f32,
     pub invert_y: bool,
     pub fullscreen: bool,
     pub vsync: bool,
@@ -4785,7 +4786,7 @@ impl UiBuilder {
         }
 
         if settings_tab == 0 {
-            let sliders: [(String, f32); 7] = [
+            let sliders: [(String, f32); 8] = [
                 (
                     format!("Render Distance: {} chunks", settings.render_distance),
                     ((settings.render_distance - 2) as f32 / 10.0).clamp(0.0, 1.0),
@@ -4813,6 +4814,10 @@ impl UiBuilder {
                 (
                     format!("Voice Volume: {:.0}%", settings.voice_volume * 100.0),
                     settings.voice_volume.clamp(0.0, 1.0),
+                ),
+                (
+                    format!("Creature Volume: {:.0}%", settings.creature_volume * 100.0),
+                    settings.creature_volume.clamp(0.0, 1.0),
                 ),
             ];
 

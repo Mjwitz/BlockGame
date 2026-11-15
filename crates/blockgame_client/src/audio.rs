@@ -130,6 +130,16 @@ pub fn calculate_spatial_audio(
     (atten, pan)
 }
 
+/// Category of a sound voice for targeted volume control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundCategory {
+    Master,
+    Sfx,
+    Music,
+    Voice,
+    Creature,
+}
+
 /// Represents an active sound voice currently being rendered by the mixer.
 struct ActiveVoice {
     samples: Arc<Vec<f32>>,
@@ -137,7 +147,7 @@ struct ActiveVoice {
     pitch: f32,
     volume_l: f32,
     volume_r: f32,
-    is_music: bool,
+    category: SoundCategory,
     fade: f32,
     target_fade: f32,
     fade_speed: f32,
@@ -159,6 +169,7 @@ pub struct AudioMixer {
     pub master_volume: f32,
     pub sfx_volume: f32,
     pub music_volume: f32,
+    pub creature_volume: f32,
     pub voice_volume: f32,
 }
 
@@ -170,6 +181,7 @@ impl AudioMixer {
             master_volume: 0.8,
             sfx_volume: 0.9,
             music_volume: 0.65,
+            creature_volume: 0.85,
             voice_volume: 1.0,
         }
     }
@@ -215,7 +227,7 @@ impl AudioMixer {
         pitch: f32,
         volume_l: f32,
         volume_r: f32,
-        is_music: bool,
+        category: SoundCategory,
         fade_in_sec: f32,
     ) {
         let (fade, target_fade, fade_speed) = if fade_in_sec > 0.0 {
@@ -230,7 +242,7 @@ impl AudioMixer {
             pitch: pitch.clamp(0.2, 4.0),
             volume_l,
             volume_r,
-            is_music,
+            category,
             fade,
             target_fade,
             fade_speed,
@@ -240,7 +252,7 @@ impl AudioMixer {
     /// Stops any playing music tracks with a fade-out.
     pub fn stop_music(&mut self, fade_out_sec: f32) {
         for voice in &mut self.voices {
-            if voice.is_music {
+            if voice.category == SoundCategory::Music {
                 voice.target_fade = 0.0;
                 voice.fade_speed = if fade_out_sec > 0.0 {
                     1.0 / fade_out_sec
@@ -255,7 +267,7 @@ impl AudioMixer {
     pub fn is_music_playing(&self) -> bool {
         self.voices
             .iter()
-            .any(|v| v.is_music && (v.fade > 0.001 || v.target_fade > 0.001))
+            .any(|v| v.category == SoundCategory::Music && (v.fade > 0.001 || v.target_fade > 0.001))
     }
 
     /// Mixes active voices into an interleaved stereo output buffer.
@@ -291,10 +303,10 @@ impl AudioMixer {
                 let frac = voice.cursor - idx0 as f32;
                 let sample = voice.samples[idx0] * (1.0 - frac) + voice.samples[idx1] * frac;
 
-                let category_vol = if voice.is_music {
-                    self.music_volume
-                } else {
-                    self.sfx_volume
+                let category_vol = match voice.category {
+                    SoundCategory::Music => self.music_volume,
+                    SoundCategory::Creature => self.creature_volume,
+                    _ => self.sfx_volume,
                 };
                 let effective_vol = self.master_volume * category_vol * voice.fade;
 
@@ -537,94 +549,300 @@ pub mod sound_generator {
         samples
     }
 
-    /// Procedurally generates calm, peaceful C418-style ambient music tracks.
+    fn add_note(
+        buffer: &mut [f32],
+        start_sec: f32,
+        freq: f32,
+        dur_sec: f32,
+        amp: f32,
+        instrument: u8,
+    ) {
+        let start_sample = (start_sec * SAMPLE_RATE) as usize;
+        let num_samples = (dur_sec * SAMPLE_RATE) as usize;
+        let buf_len = buffer.len();
+
+        for n in 0..num_samples {
+            let idx = start_sample + n;
+            if idx >= buf_len {
+                break;
+            }
+            let t = n as f32 / SAMPLE_RATE;
+            let sample = match instrument {
+                // 0: Felt Piano (warm fundamental with exponential decay)
+                0 => {
+                    let env = (-t * 0.85).exp();
+                    let f1 = (2.0 * PI * freq * t).sin();
+                    let f2 = 0.35 * (2.0 * PI * freq * 2.0 * t).sin() * (-t * 1.8).exp();
+                    let f3 = 0.15 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 2.5).exp();
+                    (f1 + f2 + f3) * env
+                }
+                // 1: Plucked Acoustic Guitar / Lute (fast attack, bright string harmonics)
+                1 => {
+                    let env = (-t * 3.4).exp();
+                    let f1 = (2.0 * PI * freq * t).sin();
+                    let f2 = 0.40 * (2.0 * PI * freq * 2.0 * t).sin() * (-t * 3.0).exp();
+                    let f3 = 0.20 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 4.5).exp();
+                    (f1 + f2 + f3) * env
+                }
+                // 2: Crystal Chime / Mineral Bell (cavernous reverberation, crystalline inharmonicity)
+                2 => {
+                    let env = (-t * 0.95).exp();
+                    let f1 = (2.0 * PI * freq * t).sin();
+                    let f2 = 0.45 * (2.0 * PI * (freq * 2.756) * t).sin() * (-t * 1.4).exp();
+                    let f3 = 0.25 * (2.0 * PI * (freq * 5.404) * t).sin() * (-t * 2.2).exp();
+                    (f1 + f2 + f3) * env
+                }
+                // 3: Woodwind / Flute (gentle breath attack, expressive 5.5Hz vibrato)
+                3 => {
+                    let vib = 1.0 + 0.018 * (2.0 * PI * 5.5 * t).sin();
+                    let phase = 2.0 * PI * freq * vib * t;
+                    let env = (PI * (t / dur_sec).clamp(0.0, 1.0)).sin().powf(0.65);
+                    (phase.sin() + 0.25 * (phase * 2.0).sin()) * env
+                }
+                // 4: Warm Bass (deep round low-end with soft pluck)
+                4 => {
+                    let env = (-t * 2.1).exp();
+                    let f1 = (2.0 * PI * freq * t).sin();
+                    let f2 = 0.30 * (2.0 * PI * freq * 2.0 * t).sin();
+                    (f1 + f2) * env
+                }
+                // 5: Celesta / Star Bell (twinkling high bell tone)
+                _ => {
+                    let env = (-t * 1.6).exp();
+                    let f1 = (2.0 * PI * freq * t).sin();
+                    let f2 = 0.35 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 2.5).exp();
+                    (f1 + f2) * env
+                }
+            };
+            buffer[idx] += amp * sample;
+        }
+    }
+
+    /// Procedurally generates ambient music tracks (tracks 0..6).
     ///
-    /// Built using nostalgic solo piano chords and warm analog synth pads.
+    /// - Tracks 0..2: Peaceful, nostalgic solo felt piano and warm analog pads (~24s).
+    /// - Track 3: "Adventuring / Overland Wanderer" (~150s / 2.5 min) - Lively acoustic guitar arpeggios,
+    ///   walking bass, woodwind flute lead, and buoyant exploration rhythm.
+    /// - Track 4: "Echoes of the Deep / Subterranean Mining" (~150s / 2.5 min) - Cavernous sub-bass drones,
+    ///   reverberant crystalline mineral bell chimes, and eerie atmospheric pad sweeps.
+    /// - Track 5: "Starlight Vista / Dusk Reflection" (~150s / 2.5 min) - Celestial twilight landscapes,
+    ///   lush evolving ambient synth pads, and sparkling celesta bell motifs.
     pub fn generate_ambient_music(track_index: usize) -> Vec<f32> {
-        let duration = 24.0; // 24 seconds ambient movement
+        let is_extended = track_index >= 3;
+        let duration = if is_extended { 150.0 } else { 24.0 };
         let num_samples = (duration * SAMPLE_RATE) as usize;
         let mut samples = vec![0.0_f32; num_samples];
 
-        // Harmonic progressions (frequencies in Hz):
-        // Track 0: Peaceful C major / A minor felt piano arpeggios
-        // Track 1: Nostalgic D major / F# minor dreamy meditation
-        // Track 2: Spacious, minimalist pentatonic stillness
-        let notes_schedule: Vec<(f32, f32, f32)> = match track_index % 3 {
-            0 => vec![
-                (0.0, 261.63, 0.45),  // C4
-                (1.5, 329.63, 0.40),  // E4
-                (3.0, 392.00, 0.42),  // G4
-                (4.5, 523.25, 0.38),  // C5
-                (7.0, 220.00, 0.45),  // A3
-                (8.5, 261.63, 0.40),  // C4
-                (10.0, 329.63, 0.42), // E4
-                (12.0, 174.61, 0.45), // F3
-                (13.5, 261.63, 0.38), // C4
-                (15.0, 349.23, 0.40), // F4
-                (17.5, 196.00, 0.45), // G3
-                (19.0, 246.94, 0.38), // B3
-                (20.5, 293.66, 0.40), // D4
-            ],
-            1 => vec![
-                (0.0, 293.66, 0.45),  // D4
-                (1.8, 369.99, 0.40),  // F#4
-                (3.6, 440.00, 0.42),  // A4
-                (6.5, 185.00, 0.45),  // F#3
-                (8.3, 220.00, 0.38),  // A3
-                (10.1, 277.18, 0.40), // C#4
-                (13.0, 196.00, 0.45), // G3
-                (14.8, 246.94, 0.40), // B3
-                (16.6, 293.66, 0.42), // D4
-                (19.5, 220.00, 0.42), // A3
-                (21.0, 277.18, 0.38), // C#4
-            ],
-            _ => vec![
-                (0.0, 196.00, 0.45),  // G3
-                (2.2, 293.66, 0.40),  // D4
-                (4.4, 329.63, 0.42),  // E4
-                (7.5, 261.63, 0.45),  // C4
-                (9.7, 392.00, 0.38),  // G4
-                (13.0, 220.00, 0.45), // A3
-                (15.2, 329.63, 0.40), // E4
-                (18.5, 196.00, 0.45), // G3
-                (20.7, 261.63, 0.40), // C4
-            ],
-        };
+        match track_index {
+            // Track 3: Adventuring / Overland Wanderer (150s, 108 BPM)
+            3 => {
+                let beat = 60.0 / 108.0; // 0.5555s
+                let bar = beat * 4.0;    // 2.2222s
+                let total_bars = (duration / bar).floor() as usize;
 
-        // Render piano notes with exponential decay and gentle harmonic overtone
-        for &(start_time, freq, amplitude) in &notes_schedule {
-            let start_sample = (start_time * SAMPLE_RATE) as usize;
-            let note_len = (4.5 * SAMPLE_RATE) as usize;
-            for n in 0..note_len {
-                let idx = start_sample + n;
-                if idx >= num_samples {
-                    break;
+                // Chord progression: G -> D -> Em -> C -> G -> Bm -> C -> D
+                let chords = [
+                    // (root_bass, [notes], flute_melody_note)
+                    (98.00, [196.00, 246.94, 293.66, 392.00], 392.00),  // G3 (G, B, D, G)
+                    (73.42, [146.83, 185.00, 220.00, 293.66], 440.00),  // D3 (D, F#, A, D)
+                    (82.41, [164.81, 196.00, 246.94, 329.63], 493.88),  // Em (E, G, B, E)
+                    (65.41, [130.81, 164.81, 196.00, 261.63], 523.25),  // C3 (C, E, G, C)
+                    (98.00, [196.00, 246.94, 293.66, 392.00], 587.33),  // G3
+                    (61.74, [123.47, 146.83, 185.00, 246.94], 493.88),  // Bm (B, D, F#, B)
+                    (65.41, [130.81, 164.81, 196.00, 261.63], 440.00),  // C3
+                    (73.42, [146.83, 185.00, 220.00, 293.66], 392.00),  // D3
+                ];
+
+                for b in 0..total_bars {
+                    let bar_start = b as f32 * bar;
+                    let chord_idx = b % chords.len();
+                    let (bass_f, arp_notes, flute_f) = chords[chord_idx];
+
+                    // Walking acoustic bass
+                    add_note(&mut samples, bar_start, bass_f, 1.8, 0.38, 4);
+                    add_note(&mut samples, bar_start + beat * 2.0, bass_f * 1.5, 1.4, 0.30, 4);
+
+                    // Plucked acoustic guitar arpeggios (8th notes)
+                    for step in 0..8 {
+                        let note_time = bar_start + step as f32 * (beat * 0.5);
+                        let note_f = arp_notes[step % arp_notes.len()];
+                        add_note(&mut samples, note_time, note_f, 1.2, 0.22, 1);
+                    }
+
+                    // Flute melody phrases in thematic sections (bars 4..16, 20..32, etc.)
+                    let phrase_pos = b % 16;
+                    if (4..12).contains(&phrase_pos) || (20..28).contains(&phrase_pos) {
+                        let mel_f = if step_even(b) { flute_f } else { flute_f * 1.122 };
+                        add_note(&mut samples, bar_start + beat * 0.5, mel_f, bar * 0.85, 0.28, 3);
+                    }
                 }
-                let t = n as f32 / SAMPLE_RATE;
-                let envelope = (-t * 0.85).exp();
-                let fundamental = (2.0 * PI * freq * t).sin();
-                let overtone = 0.35 * (2.0 * PI * freq * 2.0 * t).sin() * (-t * 1.8).exp();
-                let warmth = 0.15 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 2.5).exp();
-                samples[idx] += amplitude * envelope * (fundamental + overtone + warmth);
+
+                // Underlying warm acoustic ambiance pad
+                for i in 0..num_samples {
+                    let t = i as f32 / SAMPLE_RATE;
+                    let pad_env = (PI * t / duration).sin().clamp(0.0, 1.0);
+                    let pad = 0.12 * pad_env * ((2.0 * PI * 98.0 * t).sin() + 0.3 * (2.0 * PI * 146.83 * t).sin());
+                    samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
+                }
+            }
+
+            // Track 4: Echoes of the Deep / Subterranean Mining (150s, 64 BPM)
+            4 => {
+                let beat = 60.0 / 64.0; // 0.9375s
+                let bar = beat * 4.0;   // 3.75s
+                let total_bars = (duration / bar).floor() as usize;
+
+                // Minor cavern progression: Dm -> Bb -> Gm -> Am
+                let chords = [
+                    (73.42, [587.33, 880.00, 1174.66, 1760.00]), // Dm
+                    (58.27, [466.16, 698.46, 932.33, 1396.91]),  // Bb
+                    (49.00, [392.00, 587.33, 783.99, 1174.66]),  // Gm
+                    (55.00, [440.00, 659.25, 880.00, 1318.51]),  // Am
+                ];
+
+                // Continuous subterranean sub-bass drone (45Hz - 55Hz undulating)
+                for i in 0..num_samples {
+                    let t = i as f32 / SAMPLE_RATE;
+                    let drone_env = (PI * t / duration).sin().clamp(0.0, 1.0);
+                    let sub = 0.18 * drone_env * ((2.0 * PI * 48.0 * t).sin() + 0.35 * (2.0 * PI * 55.0 * t).sin());
+                    let cavern_swell = 0.08 * (2.0 * PI * 0.04 * t).sin() * (2.0 * PI * 110.0 * t).sin();
+                    samples[i] += sub + cavern_swell;
+                }
+
+                for b in 0..total_bars {
+                    let bar_start = b as f32 * bar;
+                    let (root, chimes) = chords[b % chords.len()];
+
+                    // Cavernous bass root resonance
+                    add_note(&mut samples, bar_start, root, bar * 0.9, 0.32, 4);
+
+                    // Mineral crystal bell strikes (chimes reflecting off cave walls)
+                    let chime_time1 = bar_start + beat * 1.0;
+                    let chime_time2 = bar_start + beat * 2.5;
+                    add_note(&mut samples, chime_time1, chimes[(b * 2) % chimes.len()], 4.5, 0.25, 2);
+                    add_note(&mut samples, chime_time2, chimes[(b * 2 + 1) % chimes.len()], 4.0, 0.22, 2);
+                }
+
+                // Final clamp
+                for s in &mut samples {
+                    *s = s.clamp(-1.0, 1.0);
+                }
+            }
+
+            // Track 5: Starlight Vista / Dusk Reflection (150s, 72 BPM)
+            5 => {
+                let beat = 60.0 / 72.0; // 0.8333s
+                let bar = beat * 4.0;   // 3.3333s
+                let total_bars = (duration / bar).floor() as usize;
+
+                // Fmaj7 -> Cmaj9 -> Am7 -> Gsus4
+                let progression = [
+                    (87.31, [349.23, 440.00, 523.25, 659.25]), // Fmaj7
+                    (65.41, [261.63, 329.63, 392.00, 493.88]), // Cmaj9
+                    (55.00, [220.00, 261.63, 329.63, 392.00]), // Am7
+                    (98.00, [196.00, 261.63, 293.66, 392.00]), // Gsus4
+                ];
+
+                for b in 0..total_bars {
+                    let bar_start = b as f32 * bar;
+                    let (bass, chord_notes) = progression[b % progression.len()];
+
+                    // Warm electric piano / bass foundation
+                    add_note(&mut samples, bar_start, bass, bar * 0.95, 0.30, 4);
+                    for &note_f in &chord_notes {
+                        add_note(&mut samples, bar_start + 0.1, note_f, bar * 0.8, 0.16, 0);
+                    }
+
+                    // Twinkling celestial star bells (pentatonic motifs)
+                    let star_f1 = chord_notes[(b + 1) % chord_notes.len()] * 2.0;
+                    let star_f2 = chord_notes[(b + 2) % chord_notes.len()] * 2.0;
+                    add_note(&mut samples, bar_start + beat * 1.5, star_f1, 2.5, 0.20, 5);
+                    add_note(&mut samples, bar_start + beat * 3.0, star_f2, 2.8, 0.18, 5);
+                }
+
+                // Evolving celestial synth pad swell
+                for i in 0..num_samples {
+                    let t = i as f32 / SAMPLE_RATE;
+                    let pad_env = (PI * t / duration).sin().clamp(0.0, 1.0);
+                    let pad = 0.14
+                        * pad_env
+                        * ((2.0 * PI * 130.81 * t).sin()
+                            + 0.3 * (2.0 * PI * 196.0 * t).sin()
+                            + 0.2 * (2.0 * PI * 261.63 * t).sin());
+                    samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
+                }
+            }
+
+            // Tracks 0..2: Peaceful C418-style Felt Piano & Pads (24s)
+            _ => {
+                let notes_schedule: Vec<(f32, f32, f32)> = match track_index % 3 {
+                    0 => vec![
+                        (0.0, 261.63, 0.45),  // C4
+                        (1.5, 329.63, 0.40),  // E4
+                        (3.0, 392.00, 0.42),  // G4
+                        (4.5, 523.25, 0.38),  // C5
+                        (7.0, 220.00, 0.45),  // A3
+                        (8.5, 261.63, 0.40),  // C4
+                        (10.0, 329.63, 0.42), // E4
+                        (12.0, 174.61, 0.45), // F3
+                        (13.5, 261.63, 0.38), // C4
+                        (15.0, 349.23, 0.40), // F4
+                        (17.5, 196.00, 0.45), // G3
+                        (19.0, 246.94, 0.38), // B3
+                        (20.5, 293.66, 0.40), // D4
+                    ],
+                    1 => vec![
+                        (0.0, 293.66, 0.45),  // D4
+                        (1.8, 369.99, 0.40),  // F#4
+                        (3.6, 440.00, 0.42),  // A4
+                        (6.5, 185.00, 0.45),  // F#3
+                        (8.3, 220.00, 0.38),  // A3
+                        (10.1, 277.18, 0.40), // C#4
+                        (13.0, 196.00, 0.45), // G3
+                        (14.8, 246.94, 0.40), // B3
+                        (16.6, 293.66, 0.42), // D4
+                        (19.5, 220.00, 0.42), // A3
+                        (21.0, 277.18, 0.38), // C#4
+                    ],
+                    _ => vec![
+                        (0.0, 196.00, 0.45),  // G3
+                        (2.2, 293.66, 0.40),  // D4
+                        (4.4, 329.63, 0.42),  // E4
+                        (7.5, 261.63, 0.45),  // C4
+                        (9.7, 392.00, 0.38),  // G4
+                        (13.0, 220.00, 0.45), // A3
+                        (15.2, 329.63, 0.40), // E4
+                        (18.5, 196.00, 0.45), // G3
+                        (20.7, 261.63, 0.40), // C4
+                    ],
+                };
+
+                for &(start_time, freq, amplitude) in &notes_schedule {
+                    add_note(&mut samples, start_time, freq, 4.5, amplitude, 0);
+                }
+
+                let pad_root = match track_index % 3 {
+                    0 => 65.41,  // C2
+                    1 => 73.42,  // D2
+                    _ => 98.00,  // G2
+                };
+                for i in 0..num_samples {
+                    let t = i as f32 / SAMPLE_RATE;
+                    let pad_envelope = (PI * t / duration).sin().clamp(0.0, 1.0);
+                    let pad = 0.18
+                        * pad_envelope
+                        * ((2.0 * PI * pad_root * t).sin() + 0.3 * (2.0 * PI * (pad_root * 1.5) * t).sin());
+                    samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
+                }
             }
         }
 
-        // Layer warm analog synth bass pad underneath
-        let pad_root = match track_index % 3 {
-            0 => 65.41,  // C2
-            1 => 73.42,  // D2
-            _ => 98.00,  // G2
-        };
-        for i in 0..num_samples {
-            let t = i as f32 / SAMPLE_RATE;
-            let pad_envelope = (PI * t / duration).sin().clamp(0.0, 1.0);
-            let pad = 0.18
-                * pad_envelope
-                * ((2.0 * PI * pad_root * t).sin() + 0.3 * (2.0 * PI * (pad_root * 1.5) * t).sin());
-            samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
-        }
-
         samples
+    }
+
+    #[inline]
+    fn step_even(n: usize) -> bool {
+        n % 2 == 0
     }
 
     /// Synthesizes short, crisp block hitting/chipping audio effects for mining progress.
@@ -677,27 +895,368 @@ pub mod sound_generator {
         samples
     }
 
-    /// Synthesizes visceral player damage / impact sound ("oof"grunt + flesh impact).
+    /// Synthesizes realistic, visceral human damage audio (sudden flesh impact + vocal "OOF / UGH" grunt).
     pub fn generate_hurt(variant: usize) -> Vec<f32> {
         let mut rng = 424242 + (variant as u64 * 99991);
-        let duration = 0.18;
+        let duration = 0.32;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        // Vocal fundamental and formant frequencies based on variant
+        let (f0_start, f0_end, f1, f2) = if variant == 0 {
+            (155.0, 80.0, 480.0, 920.0) // Deep guttural "OOF" grunt
+        } else {
+            (175.0, 90.0, 560.0, 1150.0) // Sharp breath-expelled "UGH" grunt
+        };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+
+            // 1. Initial blunt force flesh & bone impact transient (0 - 25ms)
+            let impact_noise = lcg_random(&mut rng) * (-progress * 42.0).exp();
+            let impact_sub = (2.0 * PI * (90.0 - progress * 40.0) * t).sin() * (-progress * 26.0).exp();
+            let impact_snap = (2.0 * PI * 850.0 * t).sin() * (-progress * 50.0).exp();
+            let impact = 0.45 * impact_noise + 0.35 * impact_sub + 0.20 * impact_snap;
+
+            // 2. Vocal reaction: Vocal fold glottal excitation compressed by chest trauma
+            let pitch = (f0_start + (f0_end - f0_start) * progress.powf(0.8)).max(50.0);
+            let phase = 2.0 * PI * pitch * t;
+            let glottal = phase.sin() + 0.5 * (phase * 2.0).sin() + 0.25 * (phase * 3.0).sin();
+
+            // Throat / vocal tract formant resonance filters
+            let formant1 = (2.0 * PI * f1 * t).sin();
+            let formant2 = (2.0 * PI * f2 * t).sin();
+            let vocal_body = glottal * (0.55 * formant1 + 0.45 * formant2);
+
+            // Breath expulsion / vocal fry roughness
+            let breath = lcg_random(&mut rng) * 0.3 * (1.0 + (progress * PI).sin());
+
+            // Vocal envelope: immediate attack (5ms), peaking at 20ms, trailing off naturally
+            let vocal_env = if t < 0.02 {
+                t / 0.02
+            } else {
+                (-(progress - 0.0625).max(0.0) * 11.0).exp()
+            };
+
+            let grunt = (0.75 * vocal_body + 0.25 * breath) * vocal_env;
+            let sample = 0.42 * impact + 0.70 * grunt;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+
+        samples
+    }
+
+    /// Synthesizes bovine moo sound (warm, deep vocal harmonics with slow swell).
+    pub fn generate_cow_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 10101 + variant as u64 * 31337;
+        let duration = 0.90;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 135.0 } else { 148.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = base_f + 18.0 * (PI * progress).sin() - 15.0 * progress;
+            let phase = 2.0 * PI * freq * t;
+            let h1 = phase.sin();
+            let h2 = 0.45 * (phase * 2.0).sin();
+            let h3 = 0.25 * (phase * 3.0).sin();
+            let h4 = 0.12 * (phase * 4.0).sin();
+            let breath = 0.06 * lcg_random(&mut rng);
+            let env = (PI * progress).sin().powf(0.85);
+            let sample = (h1 + h2 + h3 + h4 + breath) * env * 0.75;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes bovine hurt grunt / strained moo.
+    pub fn generate_cow_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 20202 + variant as u64 * 41414;
+        let duration = 0.35;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 210.0 } else { 235.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = (base_f - progress * 90.0).max(80.0);
+            let phase = 2.0 * PI * freq * t;
+            let vocal = phase.sin() + 0.4 * (phase * 2.0).sin() + 0.2 * (phase * 3.0).sin();
+            let rasp = 0.25 * lcg_random(&mut rng);
+            let env = (-progress * 7.5).exp();
+            let sample = (0.75 * vocal + 0.25 * rasp) * env * 0.85;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes pig oink / snort with throat flutter.
+    pub fn generate_pig_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 30303 + variant as u64 * 51515;
+        let duration = 0.28;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 230.0 } else { 260.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = (base_f - progress * 70.0).max(100.0);
+            let flutter = 0.5 + 0.5 * (2.0 * PI * 26.0 * t).sin();
+            let tone = (2.0 * PI * freq * t).sin() * flutter;
+            let snort = lcg_random(&mut rng) * (-progress * 12.0).exp();
+            let env = (PI * progress).sin().powf(0.7);
+            let sample = (0.65 * tone + 0.35 * snort) * env * 0.8;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes high-pitched pig squeal of distress.
+    pub fn generate_pig_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 40404 + variant as u64 * 61616;
+        let duration = 0.38;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let start_f = if variant == 0 { 880.0 } else { 960.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = (start_f - progress * 280.0).max(350.0);
+            let vibrato = 1.0 + 0.12 * (2.0 * PI * 34.0 * t).sin();
+            let phase = 2.0 * PI * freq * vibrato * t;
+            let tone = phase.sin() + 0.3 * (phase * 2.0).sin();
+            let grit = 0.18 * lcg_random(&mut rng);
+            let env = (-progress * 6.0).exp();
+            let sample = (0.82 * tone + 0.18 * grit) * env * 0.9;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes chicken staccato clucks with beak clicks.
+    pub fn generate_chicken_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 50505 + variant as u64 * 71717;
+        let duration = 0.22;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let t1 = t;
+            let t2 = t - 0.10;
+            let pulse1 = if (0.0..0.08).contains(&t1) {
+                let p = t1 / 0.08;
+                (2.0 * PI * 440.0 * t1).sin() * (PI * p).sin()
+            } else { 0.0 };
+            let pulse2 = if (0.0..0.08).contains(&t2) {
+                let p = t2 / 0.08;
+                (2.0 * PI * 380.0 * t2).sin() * (PI * p).sin()
+            } else { 0.0 };
+            let click = lcg_random(&mut rng) * 0.15 * ((-t1 * 60.0).exp() + (-t2.max(0.0) * 60.0).exp());
+            let sample = (pulse1 + pulse2 + click) * 0.75;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes fluttering chicken distress squawk.
+    pub fn generate_chicken_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 60606 + variant as u64 * 81818;
+        let duration = 0.26;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 640.0 } else { 720.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = base_f + 120.0 * (2.0 * PI * 42.0 * t).sin();
+            let flutter = (2.0 * PI * freq * t).sin();
+            let flap = lcg_random(&mut rng) * (-progress * 15.0).exp();
+            let env = (-progress * 8.0).exp();
+            let sample = (0.65 * flutter + 0.35 * flap) * env * 0.85;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes sheep "Baaaa" with vocal vibrato flutter.
+    pub fn generate_sheep_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 70707 + variant as u64 * 91919;
+        let duration = 0.75;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 215.0 } else { 240.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let tremolo = 0.75 + 0.25 * (2.0 * PI * 12.0 * t).sin();
+            let freq = base_f + 8.0 * (2.0 * PI * 12.0 * t).sin();
+            let phase = 2.0 * PI * freq * t;
+            let vocal = phase.sin() + 0.45 * (phase * 2.0).sin() + 0.35 * (phase * 3.0).sin();
+            let breath = 0.1 * lcg_random(&mut rng);
+            let env = (PI * progress).sin().powf(0.8);
+            let sample = (vocal * tremolo + breath) * env * 0.75;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes short strained sheep hurt grunt.
+    pub fn generate_sheep_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 80808 + variant as u64 * 13131;
+        let duration = 0.30;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 290.0 } else { 330.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = (base_f - progress * 100.0).max(120.0);
+            let phase = 2.0 * PI * freq * t;
+            let vocal = phase.sin() + 0.4 * (phase * 2.0).sin();
+            let rasp = 0.25 * lcg_random(&mut rng);
+            let env = (-progress * 9.0).exp();
+            let sample = (0.75 * vocal + 0.25 * rasp) * env * 0.85;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes low guttural zombie moan / groan.
+    pub fn generate_zombie_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 90909 + variant as u64 * 24242;
+        let duration = 0.95;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 68.0 } else { 75.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let gargle = 0.6 + 0.4 * (2.0 * PI * 16.0 * t).sin();
+            let freq = base_f - 10.0 * progress + 4.0 * (2.0 * PI * 5.0 * t).sin();
+            let phase = 2.0 * PI * freq * t;
+            let groan = (phase.sin() + 0.5 * (phase * 2.0).sin() + 0.3 * (phase * 3.0).sin()) * gargle;
+            let rasp = 0.20 * lcg_random(&mut rng);
+            let env = (PI * progress).sin().powf(0.85);
+            let sample = (0.80 * groan + 0.20 * rasp) * env * 0.80;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes aggressive zombie hurt snarl.
+    pub fn generate_zombie_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 112233 + variant as u64 * 35353;
+        let duration = 0.36;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let base_f = if variant == 0 { 95.0 } else { 110.0 };
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let freq = (base_f - progress * 35.0).max(50.0);
+            let growl = (2.0 * PI * freq * t).sin() * (0.5 + 0.5 * (2.0 * PI * 28.0 * t).sin());
+            let snarl_noise = lcg_random(&mut rng) * (-progress * 9.0).exp();
+            let env = (-progress * 7.5).exp();
+            let sample = (0.55 * growl + 0.45 * snarl_noise) * env * 0.90;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes skeleton dry bone rattle / clattering clicks.
+    pub fn generate_skeleton_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 334455 + variant as u64 * 46464;
+        let duration = 0.36;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let click1 = if (0.0..0.04).contains(&t) {
+                let dt = t;
+                (2.0 * PI * 1800.0 * dt).sin() * (-dt * 120.0).exp()
+            } else { 0.0 };
+            let click2 = if (0.08..0.13).contains(&t) {
+                let dt = t - 0.08;
+                (2.0 * PI * 1450.0 * dt).sin() * (-dt * 110.0).exp()
+            } else { 0.0 };
+            let click3 = if (0.18..0.24).contains(&t) {
+                let dt = t - 0.18;
+                (2.0 * PI * 2200.0 * dt).sin() * (-dt * 130.0).exp()
+            } else { 0.0 };
+            let clatter = lcg_random(&mut rng) * 0.12 * (-t * 18.0).exp();
+            let sample = (0.75 * (click1 + click2 + click3) + 0.25 * clatter) * 0.85;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes sharp skeleton bone fracture snap.
+    pub fn generate_skeleton_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 556677 + variant as u64 * 57575;
+        let duration = 0.28;
         let num_samples = (duration * SAMPLE_RATE) as usize;
         let mut samples = Vec::with_capacity(num_samples);
 
         for i in 0..num_samples {
             let t = i as f32 / SAMPLE_RATE;
             let progress = t / duration;
-
-            let freq = (180.0 - progress * 80.0).max(60.0);
-            let oof = (2.0 * PI * freq * t).sin() * (-progress * 16.0).exp();
-            let formant = (2.0 * PI * freq * 2.3 * t).sin() * (-progress * 22.0).exp();
-            let impact = lcg_random(&mut rng) * (-progress * 35.0).exp();
-            let sub = (2.0 * PI * 85.0 * t).sin() * (-progress * 20.0).exp();
-
-            let sample = 0.45 * oof + 0.25 * formant + 0.20 * impact + 0.10 * sub;
+            let crack = (2.0 * PI * 2600.0 * t).sin() * (-progress * 55.0).exp();
+            let hollow_wood = (2.0 * PI * 580.0 * t).sin() * (-progress * 35.0).exp();
+            let snap = lcg_random(&mut rng) * (-progress * 45.0).exp();
+            let sample = (0.45 * crack + 0.35 * hollow_wood + 0.20 * snap) * 0.90;
             samples.push(sample.clamp(-1.0, 1.0));
         }
+        samples
+    }
 
+    /// Synthesizes spider chitinous skitter / soft hiss with mandible clicks.
+    pub fn generate_spider_ambient(variant: usize) -> Vec<f32> {
+        let mut rng = 778899 + variant as u64 * 68686;
+        let duration = 0.44;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let click_mod = 0.6 + 0.4 * (2.0 * PI * 32.0 * t).sin();
+            let hiss = lcg_random(&mut rng) * (-progress * 8.0).exp() * click_mod;
+            let mandible = (2.0 * PI * 1100.0 * t).sin() * (0.5 + 0.5 * (2.0 * PI * 32.0 * t).sin()) * (-progress * 12.0).exp();
+            let sample = (0.65 * hiss + 0.35 * mandible) * 0.70;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes sharp spider screech / aggressive attack hiss.
+    pub fn generate_spider_hurt(variant: usize) -> Vec<f32> {
+        let mut rng = 990011 + variant as u64 * 79797;
+        let duration = 0.32;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let progress = t / duration;
+            let sweep_f = 1750.0 - progress * 700.0;
+            let screech = (2.0 * PI * sweep_f * t).sin() * (-progress * 10.0).exp();
+            let harsh_noise = lcg_random(&mut rng) * (-progress * 14.0).exp();
+            let sample = (0.55 * screech + 0.45 * harsh_noise) * 0.85;
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
         samples
     }
 
@@ -804,6 +1363,10 @@ pub struct AudioManager {
     water_swims: Vec<Arc<Vec<f32>>>,
     underwater_bubbles: Vec<Arc<Vec<f32>>>,
     tool_breaks: Vec<Arc<Vec<f32>>>,
+    animal_ambient: HashMap<(blockgame_core::animal::AnimalKind, usize), Arc<Vec<f32>>>,
+    animal_hurt: HashMap<(blockgame_core::animal::AnimalKind, usize), Arc<Vec<f32>>>,
+    monster_ambient: HashMap<(blockgame_core::monster::MonsterKind, usize), Arc<Vec<f32>>>,
+    monster_hurt: HashMap<(blockgame_core::monster::MonsterKind, usize), Arc<Vec<f32>>>,
     music_tracks: Vec<Arc<Vec<f32>>>,
     rng_state: u64,
 }
@@ -815,6 +1378,13 @@ impl AudioManager {
             m.master_volume = master.clamp(0.0, 1.0);
             m.sfx_volume = sfx.clamp(0.0, 1.0);
             m.music_volume = music.clamp(0.0, 1.0);
+        }
+    }
+
+    /// Updates creature / mob sound volume (`0.0..=1.0`).
+    pub fn set_creature_volume(&self, creature: f32) {
+        if let Ok(mut m) = self.mixer.lock() {
+            m.creature_volume = creature.clamp(0.0, 1.0);
         }
     }
 
@@ -898,6 +1468,10 @@ impl AudioManager {
             water_swims: Vec::new(),
             underwater_bubbles: Vec::new(),
             tool_breaks: Vec::new(),
+            animal_ambient: HashMap::new(),
+            animal_hurt: HashMap::new(),
+            monster_ambient: HashMap::new(),
+            monster_hurt: HashMap::new(),
             music_tracks: Vec::new(),
             rng_state: 888888888,
         };
@@ -1071,8 +1645,8 @@ impl AudioManager {
             self.tool_breaks.push(Arc::new(buffer));
         }
 
-        // 10. Ambient Music Tracks (3 calm compositions)
-        for track_idx in 0..3 {
+        // 10. Ambient Music Tracks (6 tracks: 3 calm ambient + 3 multi-minute thematic tracks)
+        for track_idx in 0..6 {
             let file_name = format!("ambient_track_{}.wav", track_idx + 1);
             let file_path = assets_dir.join(&file_name);
 
@@ -1086,8 +1660,101 @@ impl AudioManager {
             self.music_tracks.push(Arc::new(buffer));
         }
 
+        // 11. Animal Sounds (Cow, Pig, Chicken, Sheep - ambient & hurt)
+        let animal_kinds = [
+            blockgame_core::animal::AnimalKind::Cow,
+            blockgame_core::animal::AnimalKind::Pig,
+            blockgame_core::animal::AnimalKind::Chicken,
+            blockgame_core::animal::AnimalKind::Sheep,
+        ];
+        for &kind in &animal_kinds {
+            for variant in 0..2 {
+                let amb_name = format!("animal_{:?}_ambient_{}.wav", kind, variant).to_lowercase();
+                let amb_path = assets_dir.join(&amb_name);
+                let amb_buffer = if has_assets && amb_path.exists() {
+                    Self::load_audio_file(&amb_path).unwrap_or_else(|| match kind {
+                        blockgame_core::animal::AnimalKind::Cow => sound_generator::generate_cow_ambient(variant),
+                        blockgame_core::animal::AnimalKind::Pig => sound_generator::generate_pig_ambient(variant),
+                        blockgame_core::animal::AnimalKind::Chicken => sound_generator::generate_chicken_ambient(variant),
+                        blockgame_core::animal::AnimalKind::Sheep => sound_generator::generate_sheep_ambient(variant),
+                    })
+                } else {
+                    match kind {
+                        blockgame_core::animal::AnimalKind::Cow => sound_generator::generate_cow_ambient(variant),
+                        blockgame_core::animal::AnimalKind::Pig => sound_generator::generate_pig_ambient(variant),
+                        blockgame_core::animal::AnimalKind::Chicken => sound_generator::generate_chicken_ambient(variant),
+                        blockgame_core::animal::AnimalKind::Sheep => sound_generator::generate_sheep_ambient(variant),
+                    }
+                };
+                self.animal_ambient.insert((kind, variant), Arc::new(amb_buffer));
+
+                let hurt_name = format!("animal_{:?}_hurt_{}.wav", kind, variant).to_lowercase();
+                let hurt_path = assets_dir.join(&hurt_name);
+                let hurt_buffer = if has_assets && hurt_path.exists() {
+                    Self::load_audio_file(&hurt_path).unwrap_or_else(|| match kind {
+                        blockgame_core::animal::AnimalKind::Cow => sound_generator::generate_cow_hurt(variant),
+                        blockgame_core::animal::AnimalKind::Pig => sound_generator::generate_pig_hurt(variant),
+                        blockgame_core::animal::AnimalKind::Chicken => sound_generator::generate_chicken_hurt(variant),
+                        blockgame_core::animal::AnimalKind::Sheep => sound_generator::generate_sheep_hurt(variant),
+                    })
+                } else {
+                    match kind {
+                        blockgame_core::animal::AnimalKind::Cow => sound_generator::generate_cow_hurt(variant),
+                        blockgame_core::animal::AnimalKind::Pig => sound_generator::generate_pig_hurt(variant),
+                        blockgame_core::animal::AnimalKind::Chicken => sound_generator::generate_chicken_hurt(variant),
+                        blockgame_core::animal::AnimalKind::Sheep => sound_generator::generate_sheep_hurt(variant),
+                    }
+                };
+                self.animal_hurt.insert((kind, variant), Arc::new(hurt_buffer));
+            }
+        }
+
+        // 12. Monster Sounds (Zombie, Skeleton, Spider - ambient & hurt)
+        let monster_kinds = [
+            blockgame_core::monster::MonsterKind::Zombie,
+            blockgame_core::monster::MonsterKind::Skeleton,
+            blockgame_core::monster::MonsterKind::Spider,
+        ];
+        for &kind in &monster_kinds {
+            for variant in 0..2 {
+                let amb_name = format!("monster_{:?}_ambient_{}.wav", kind, variant).to_lowercase();
+                let amb_path = assets_dir.join(&amb_name);
+                let amb_buffer = if has_assets && amb_path.exists() {
+                    Self::load_audio_file(&amb_path).unwrap_or_else(|| match kind {
+                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_ambient(variant),
+                        blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_ambient(variant),
+                        blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_ambient(variant),
+                    })
+                } else {
+                    match kind {
+                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_ambient(variant),
+                        blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_ambient(variant),
+                        blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_ambient(variant),
+                    }
+                };
+                self.monster_ambient.insert((kind, variant), Arc::new(amb_buffer));
+
+                let hurt_name = format!("monster_{:?}_hurt_{}.wav", kind, variant).to_lowercase();
+                let hurt_path = assets_dir.join(&hurt_name);
+                let hurt_buffer = if has_assets && hurt_path.exists() {
+                    Self::load_audio_file(&hurt_path).unwrap_or_else(|| match kind {
+                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_hurt(variant),
+                        blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_hurt(variant),
+                        blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_hurt(variant),
+                    })
+                } else {
+                    match kind {
+                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_hurt(variant),
+                        blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_hurt(variant),
+                        blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_hurt(variant),
+                    }
+                };
+                self.monster_hurt.insert((kind, variant), Arc::new(hurt_buffer));
+            }
+        }
+
         println!(
-            "[Audio] Initialized {} footstep, {} hit, {} break, {} place, {} hurt, {} splash, {} swim, {} bubble, {} tool break, and {} music tracks.",
+            "[Audio] Initialized {} footstep, {} hit, {} break, {} place, {} hurt, {} splash, {} swim, {} bubble, {} tool break, {} animal, {} monster, and {} music tracks.",
             self.footsteps.len(),
             self.hits.len(),
             self.breaks.len(),
@@ -1097,6 +1764,8 @@ impl AudioManager {
             self.water_swims.len(),
             self.underwater_bubbles.len(),
             self.tool_breaks.len(),
+            self.animal_ambient.len() + self.animal_hurt.len(),
+            self.monster_ambient.len() + self.monster_hurt.len(),
             self.music_tracks.len()
         );
     }
@@ -1150,7 +1819,7 @@ impl AudioManager {
                 let vol_r = ((1.0 + pan) * 0.5) * base_vol;
 
                 if let Ok(mut mixer) = self.mixer.lock() {
-                    mixer.play_voice(samples, pitch, vol_l, vol_r, false, 0.0);
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Sfx, 0.0);
                 }
             }
         }
@@ -1178,7 +1847,7 @@ impl AudioManager {
                 let vol_r = ((1.0 + pan) * 0.5) * base_vol;
 
                 if let Ok(mut mixer) = self.mixer.lock() {
-                    mixer.play_voice(samples, pitch, vol_l, vol_r, false, 0.0);
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Sfx, 0.0);
                 }
             }
         }
@@ -1195,7 +1864,7 @@ impl AudioManager {
 
             // Footsteps are centered on the listener (pan = 0.0)
             if let Ok(mut mixer) = self.mixer.lock() {
-                mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+                mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
             }
         }
     }
@@ -1222,7 +1891,7 @@ impl AudioManager {
                 let vol_r = ((1.0 + pan) * 0.5) * base_vol;
 
                 if let Ok(mut mixer) = self.mixer.lock() {
-                    mixer.play_voice(samples, pitch, vol_l, vol_r, false, 0.0);
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Sfx, 0.0);
                 }
             }
         }
@@ -1240,7 +1909,7 @@ impl AudioManager {
         let vol = 0.85 + 0.15 * self.random_f32();
 
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
         }
     }
 
@@ -1256,7 +1925,7 @@ impl AudioManager {
         let vol = volume_scale * (0.85 + 0.15 * self.random_f32());
 
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
         }
     }
 
@@ -1272,7 +1941,7 @@ impl AudioManager {
         let vol = volume_scale * (0.85 + 0.15 * self.random_f32());
 
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
         }
     }
 
@@ -1288,7 +1957,7 @@ impl AudioManager {
         let vol = 0.40 * (0.85 + 0.15 * self.random_f32());
 
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
         }
     }
 
@@ -1304,7 +1973,105 @@ impl AudioManager {
         let vol = 0.90 + 0.15 * self.random_f32();
 
         if let Ok(mut mixer) = self.mixer.lock() {
-            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, false, 0.0);
+            mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
+        }
+    }
+
+    /// Triggers a 3D spatial ambient animal sound (moo, oink, cluck, baa).
+    pub fn play_animal_ambient(
+        &mut self,
+        kind: blockgame_core::animal::AnimalKind,
+        pos: Vec3,
+        listener_pos: Vec3,
+        listener_yaw: f32,
+    ) {
+        let variant = (self.random_f32() * 2.0).floor() as usize % 2;
+        if let Some(samples) = self.animal_ambient.get(&(kind, variant)).cloned() {
+            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 24.0);
+            if atten > 0.001 {
+                let pitch = 0.92 + 0.16 * self.random_f32();
+                let vol_var = 0.90 + 0.15 * self.random_f32();
+                let base_vol = atten * vol_var * 0.95;
+                let vol_l = ((1.0 - pan) * 0.5) * base_vol;
+                let vol_r = ((1.0 + pan) * 0.5) * base_vol;
+
+                if let Ok(mut mixer) = self.mixer.lock() {
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Creature, 0.0);
+                }
+            }
+        }
+    }
+
+    /// Triggers a 3D spatial animal hurt sound effect.
+    pub fn play_animal_hurt(
+        &mut self,
+        kind: blockgame_core::animal::AnimalKind,
+        pos: Vec3,
+        listener_pos: Vec3,
+        listener_yaw: f32,
+    ) {
+        let variant = (self.random_f32() * 2.0).floor() as usize % 2;
+        if let Some(samples) = self.animal_hurt.get(&(kind, variant)).cloned() {
+            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 28.0);
+            if atten > 0.001 {
+                let pitch = 0.95 + 0.15 * self.random_f32();
+                let base_vol = atten * 1.0;
+                let vol_l = ((1.0 - pan) * 0.5) * base_vol;
+                let vol_r = ((1.0 + pan) * 0.5) * base_vol;
+
+                if let Ok(mut mixer) = self.mixer.lock() {
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Creature, 0.0);
+                }
+            }
+        }
+    }
+
+    /// Triggers a 3D spatial ambient monster sound (zombie groan, skeleton rattle, spider hiss).
+    pub fn play_monster_ambient(
+        &mut self,
+        kind: blockgame_core::monster::MonsterKind,
+        pos: Vec3,
+        listener_pos: Vec3,
+        listener_yaw: f32,
+    ) {
+        let variant = (self.random_f32() * 2.0).floor() as usize % 2;
+        if let Some(samples) = self.monster_ambient.get(&(kind, variant)).cloned() {
+            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 26.0);
+            if atten > 0.001 {
+                let pitch = 0.92 + 0.16 * self.random_f32();
+                let vol_var = 0.90 + 0.15 * self.random_f32();
+                let base_vol = atten * vol_var * 0.95;
+                let vol_l = ((1.0 - pan) * 0.5) * base_vol;
+                let vol_r = ((1.0 + pan) * 0.5) * base_vol;
+
+                if let Ok(mut mixer) = self.mixer.lock() {
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Creature, 0.0);
+                }
+            }
+        }
+    }
+
+    /// Triggers a 3D spatial monster hurt sound effect.
+    pub fn play_monster_hurt(
+        &mut self,
+        kind: blockgame_core::monster::MonsterKind,
+        pos: Vec3,
+        listener_pos: Vec3,
+        listener_yaw: f32,
+    ) {
+        let variant = (self.random_f32() * 2.0).floor() as usize % 2;
+        if let Some(samples) = self.monster_hurt.get(&(kind, variant)).cloned() {
+            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 28.0);
+            if atten > 0.001 {
+                let pitch = 0.95 + 0.15 * self.random_f32();
+                let base_vol = atten * 1.0;
+                let vol_l = ((1.0 - pan) * 0.5) * base_vol;
+                let vol_r = ((1.0 + pan) * 0.5) * base_vol;
+
+                if let Ok(mut mixer) = self.mixer.lock() {
+                    mixer.play_voice(samples, pitch, vol_l, vol_r, SoundCategory::Creature, 0.0);
+                }
+            }
         }
     }
 
@@ -1314,7 +2081,7 @@ impl AudioManager {
             let samples = self.music_tracks[track_idx].clone();
             if let Ok(mut mixer) = self.mixer.lock() {
                 mixer.stop_music(1.5);
-                mixer.play_voice(samples, 1.0, 0.5, 0.5, true, fade_in_sec);
+                mixer.play_voice(samples, 1.0, 0.5, 0.5, SoundCategory::Music, fade_in_sec);
             }
         }
     }
@@ -1341,12 +2108,21 @@ impl AudioManager {
     }
 }
 
+/// Contextual environmental state for dynamic music selection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MusicContext {
+    pub is_underground: bool,
+    pub is_sprinting_day: bool,
+    pub is_mining: bool,
+}
+
 /// Intermittent Background Music Scheduler.
 ///
 /// Features:
 /// - Plays ambient music sporadically rather than looping continuously.
 /// - Enforces silence cooldowns between 3 and 8 minutes between tracks.
 /// - Guarantees non-repeating track selections across sessions.
+/// - Supports contextual selection (e.g. adventuring on surface by day, underground mining).
 /// - Handles smooth volume fading.
 pub struct MusicScheduler {
     cooldown_timer: f32,
@@ -1369,7 +2145,7 @@ impl MusicScheduler {
         }
     }
 
-    fn random_f32(&mut self) -> f32 {
+    pub fn random_f32(&mut self) -> f32 {
         self.rng_state = self
             .rng_state
             .wrapping_mul(6364136223846793005)
@@ -1385,7 +2161,7 @@ impl MusicScheduler {
     }
 
     /// Selects the next track ensuring it doesn't immediately repeat the previous track.
-    fn select_next_track(&mut self) -> usize {
+    pub fn select_next_track(&mut self) -> usize {
         if self.total_tracks <= 1 {
             return 0;
         }
@@ -1402,8 +2178,29 @@ impl MusicScheduler {
         candidate
     }
 
-    /// Updates the music scheduler each frame.
-    pub fn update(&mut self, dt: f32, audio: &mut AudioManager) {
+    /// Selects the next track taking player environment into account (adventuring, underground mining, or ambient).
+    pub fn select_next_track_contextual(&mut self, ctx: MusicContext) -> usize {
+        if self.total_tracks <= 1 {
+            return 0;
+        }
+
+        if ctx.is_sprinting_day && self.total_tracks > 3 {
+            // Prioritize Adventuring track (track 3)
+            if self.last_played_track != Some(3) {
+                return 3;
+            }
+        } else if ctx.is_underground && ctx.is_mining && self.total_tracks > 4 {
+            // Prioritize Subterranean Mining track (track 4)
+            if self.last_played_track != Some(4) {
+                return 4;
+            }
+        }
+
+        self.select_next_track()
+    }
+
+    /// Updates the music scheduler each frame with environmental context.
+    pub fn update(&mut self, dt: f32, audio: &mut AudioManager, ctx: MusicContext) {
         if self.total_tracks == 0 {
             self.total_tracks = audio.music_track_count();
             if self.total_tracks == 0 {
@@ -1425,11 +2222,23 @@ impl MusicScheduler {
         } else {
             // In silence cooldown period
             self.cooldown_timer -= dt;
-            if self.cooldown_timer <= 0.0 {
-                let track = self.select_next_track();
+
+            // Contextual music trigger: When exploring/sprinting across surface by day or mining underground,
+            // accelerate cooldown if nearing readiness (<= 35s remaining).
+            let context_event = (ctx.is_sprinting_day || (ctx.is_underground && ctx.is_mining))
+                && self.cooldown_timer <= 35.0;
+
+            if self.cooldown_timer <= 0.0 || context_event {
+                let track = self.select_next_track_contextual(ctx);
                 self.last_played_track = Some(track);
                 self.is_playing = true;
-                println!("[MusicScheduler] Starting ambient track #{} with 2.5s fade-in.", track + 1);
+                let track_desc = match track {
+                    3 => "Adventuring (Overland Wanderer)",
+                    4 => "Echoes of the Deep (Subterranean Mining)",
+                    5 => "Starlight Vista (Dusk Reflection)",
+                    _ => "Calm Ambient",
+                };
+                println!("[MusicScheduler] Starting track #{} [{}] with 2.5s fade-in.", track + 1, track_desc);
                 audio.play_music(track, 2.5);
             }
         }
@@ -1474,9 +2283,9 @@ mod tests {
 
     #[test]
     fn test_music_scheduler_non_repeating() {
-        let mut scheduler = MusicScheduler::new(3);
+        let mut scheduler = MusicScheduler::new(6);
         let mut prev = None;
-        for _ in 0..15 {
+        for _ in 0..25 {
             let next = scheduler.select_next_track();
             if let Some(p) = prev {
                 assert_ne!(next, p, "Next track should not repeat previous track immediately");
@@ -1484,6 +2293,26 @@ mod tests {
             prev = Some(next);
             scheduler.last_played_track = Some(next);
         }
+    }
+
+    #[test]
+    fn test_music_scheduler_contextual() {
+        let mut scheduler = MusicScheduler::new(6);
+        let day_ctx = MusicContext {
+            is_underground: false,
+            is_sprinting_day: true,
+            is_mining: false,
+        };
+        let track = scheduler.select_next_track_contextual(day_ctx);
+        assert_eq!(track, 3, "Day sprinting should select Track 3 (Adventuring)");
+
+        let mining_ctx = MusicContext {
+            is_underground: true,
+            is_sprinting_day: false,
+            is_mining: true,
+        };
+        let track2 = scheduler.select_next_track_contextual(mining_ctx);
+        assert_eq!(track2, 4, "Underground mining should select Track 4 (Subterranean Mining)");
     }
 
     #[test]
@@ -1498,5 +2327,31 @@ mod tests {
         assert!(!swim.is_empty());
         let bubble = sound_generator::generate_underwater_bubble(0);
         assert!(!bubble.is_empty());
+
+        // Animal sounds
+        assert!(!sound_generator::generate_cow_ambient(0).is_empty());
+        assert!(!sound_generator::generate_cow_hurt(0).is_empty());
+        assert!(!sound_generator::generate_pig_ambient(0).is_empty());
+        assert!(!sound_generator::generate_pig_hurt(0).is_empty());
+        assert!(!sound_generator::generate_chicken_ambient(0).is_empty());
+        assert!(!sound_generator::generate_chicken_hurt(0).is_empty());
+        assert!(!sound_generator::generate_sheep_ambient(0).is_empty());
+        assert!(!sound_generator::generate_sheep_hurt(0).is_empty());
+
+        // Monster sounds
+        assert!(!sound_generator::generate_zombie_ambient(0).is_empty());
+        assert!(!sound_generator::generate_zombie_hurt(0).is_empty());
+        assert!(!sound_generator::generate_skeleton_ambient(0).is_empty());
+        assert!(!sound_generator::generate_skeleton_hurt(0).is_empty());
+        assert!(!sound_generator::generate_spider_ambient(0).is_empty());
+        assert!(!sound_generator::generate_spider_hurt(0).is_empty());
+
+        // New music tracks
+        let trk3 = sound_generator::generate_ambient_music(3);
+        assert_eq!(trk3.len(), (150.0 * 44100.0) as usize);
+        let trk4 = sound_generator::generate_ambient_music(4);
+        assert_eq!(trk4.len(), (150.0 * 44100.0) as usize);
+        let trk5 = sound_generator::generate_ambient_music(5);
+        assert_eq!(trk5.len(), (150.0 * 44100.0) as usize);
     }
 }

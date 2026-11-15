@@ -1435,7 +1435,7 @@ impl WorldManager {
         ray_dir: Vec3,
         reach: f32,
         damage: f32,
-    ) -> bool {
+    ) -> Option<(blockgame_core::animal::AnimalKind, Vec3)> {
         let mut closest_dist = reach;
         let mut hit_idx = None;
 
@@ -1455,9 +1455,9 @@ impl WorldManager {
         if let Some(idx) = hit_idx {
             let knockback = ray_dir.normalize_or_zero();
             self.animals[idx].take_damage(damage, knockback);
-            true
+            Some((self.animals[idx].kind, self.animals[idx].position))
         } else {
-            false
+            None
         }
     }
 
@@ -1479,7 +1479,7 @@ impl WorldManager {
         ray_dir: Vec3,
         reach: f32,
         damage: f32,
-    ) -> bool {
+    ) -> Option<(blockgame_core::monster::MonsterKind, Vec3)> {
         let mut closest_dist = reach;
         let mut hit_idx = None;
 
@@ -1499,9 +1499,9 @@ impl WorldManager {
         if let Some(idx) = hit_idx {
             let knockback = ray_dir.normalize_or_zero();
             self.monsters[idx].take_damage(damage, knockback);
-            true
+            Some((self.monsters[idx].kind, self.monsters[idx].position))
         } else {
-            false
+            None
         }
     }
 

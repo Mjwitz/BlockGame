@@ -169,6 +169,8 @@ pub struct GameSettings {
     pub sfx_volume: f32,
     /// Background music volume (`0.0..=1.0`).
     pub music_volume: f32,
+    /// Creature / mob sounds volume (`0.0..=1.0`).
+    pub creature_volume: f32,
     /// Invert vertical mouse look axis.
     pub invert_y: bool,
     /// Borderless fullscreen window mode.
@@ -202,6 +204,7 @@ impl Default for GameSettings {
             master_volume: 0.8,
             sfx_volume: 0.9,
             music_volume: 0.65,
+            creature_volume: 0.85,
             invert_y: false,
             fullscreen: false,
             vsync: true,
@@ -259,6 +262,7 @@ impl GameSettings {
         self.master_volume = self.master_volume.clamp(0.0, 1.0);
         self.sfx_volume = self.sfx_volume.clamp(0.0, 1.0);
         self.music_volume = self.music_volume.clamp(0.0, 1.0);
+        self.creature_volume = self.creature_volume.clamp(0.0, 1.0);
         self.voice_volume = self.voice_volume.clamp(0.0, 1.0);
         if self.voice_mode > 2 {
             self.voice_mode = 1;
@@ -334,6 +338,13 @@ impl GameSettings {
                     if let Ok(v) = val.parse::<f32>() {
                         if v.is_finite() {
                             settings.music_volume = v;
+                        }
+                    }
+                }
+                "creature_volume" => {
+                    if let Ok(v) = val.parse::<f32>() {
+                        if v.is_finite() {
+                            settings.creature_volume = v;
                         }
                     }
                 }
@@ -475,6 +486,7 @@ impl GameSettings {
              master_volume={:.2}\n\
              sfx_volume={:.2}\n\
              music_volume={:.2}\n\
+             creature_volume={:.2}\n\
              voice_volume={:.2}\n\
              voice_mode={}\n\
              voice_input_device={}\n\
@@ -504,6 +516,7 @@ impl GameSettings {
             self.master_volume,
             self.sfx_volume,
             self.music_volume,
+            self.creature_volume,
             self.voice_volume,
             self.voice_mode,
             safe_mic,
@@ -552,6 +565,7 @@ mod tests {
             master_volume: 1.5,
             sfx_volume: -0.2,
             music_volume: 0.45,
+            creature_volume: 0.85,
             invert_y: true,
             fullscreen: true,
             vsync: false,
@@ -570,6 +584,7 @@ mod tests {
         assert_eq!(s.mouse_sensitivity, GameSettings::MIN_SENSITIVITY);
         assert_eq!(s.master_volume, 1.0);
         assert_eq!(s.sfx_volume, 0.0);
+        assert_eq!(s.creature_volume, 0.85);
 
         let temp_path = std::env::temp_dir().join("blockgame_test_settings.cfg");
         s.save(&temp_path);
@@ -582,6 +597,7 @@ mod tests {
         assert!((loaded.master_volume - s.master_volume).abs() < 0.02);
         assert!((loaded.sfx_volume - s.sfx_volume).abs() < 0.02);
         assert!((loaded.music_volume - s.music_volume).abs() < 0.02);
+        assert!((loaded.creature_volume - s.creature_volume).abs() < 0.02);
         assert_eq!(loaded.invert_y, s.invert_y);
         assert_eq!(loaded.fullscreen, s.fullscreen);
         assert_eq!(loaded.vsync, s.vsync);
