@@ -31,6 +31,7 @@ pub struct WorldManager {
     loaded_chunks_set: HashSet<ChunkPos>,
     queued_generation: HashSet<ChunkPos>,
     queued_meshing: HashSet<ChunkPos>,
+    has_pending_chunks: bool,
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     mesh_rx: Receiver<(ChunkPos, ChunkMesh)>,
@@ -69,6 +70,7 @@ impl WorldManager {
             loaded_chunks_set: HashSet::new(),
             queued_generation: HashSet::new(),
             queued_meshing: HashSet::new(),
+            has_pending_chunks: true,
             gpu_chunks: HashMap::new(),
             gpu_water_chunks: HashMap::new(),
             mesh_rx,
@@ -120,6 +122,7 @@ impl WorldManager {
     /// Updates the active chunk render distance (`2..=12`).
     pub fn set_render_distance(&mut self, render_distance: i32) {
         self.render_distance = render_distance.clamp(2, 12);
+        self.has_pending_chunks = true;
     }
 
     /// around `center_pos`.
@@ -210,6 +213,7 @@ impl WorldManager {
         }
 
         self.last_player_chunk = center_chunk;
+        self.has_pending_chunks = false;
 
         log::info!(
             "Area ready: {} chunks loaded, {} visible faces rendered",
@@ -383,16 +387,25 @@ impl WorldManager {
 
     /// Periodic update called every frame: streams chunks and uploads completed background meshes.
     pub fn update(&mut self, player_pos: Vec3, device: &wgpu::Device, pipeline: &VoxelPipeline) {
-        // 1. Ingest background mesh results (all completed meshes uploaded)
+        // 1. Ingest background mesh results with a per-frame upload budget.
+        // Uploading too many GPU buffers in a single frame causes GPU driver stalls and noticeable frame drops.
+        const MAX_GPU_UPLOADS_PER_FRAME: usize = 4;
+        let mut uploaded = 0;
         let mut completed_surface_chunks = Vec::new();
-        while let Ok((pos, mesh)) = self.mesh_rx.try_recv() {
-            self.queued_meshing.remove(&pos);
-            self.queued_generation.remove(&pos);
-            self.loaded_chunks_set.insert(pos);
-            if pos.0.y == 0 {
-                completed_surface_chunks.push((pos.0.x, pos.0.z));
+        while uploaded < MAX_GPU_UPLOADS_PER_FRAME {
+            match self.mesh_rx.try_recv() {
+                Ok((pos, mesh)) => {
+                    self.queued_meshing.remove(&pos);
+                    self.queued_generation.remove(&pos);
+                    self.loaded_chunks_set.insert(pos);
+                    if pos.0.y == 0 {
+                        completed_surface_chunks.push((pos.0.x, pos.0.z));
+                    }
+                    self.store_mesh(pos, &mesh, device, pipeline);
+                    uploaded += 1;
+                }
+                Err(_) => break,
             }
-            self.store_mesh(pos, &mesh, device, pipeline);
         }
 
         if !completed_surface_chunks.is_empty() {
@@ -411,17 +424,22 @@ impl WorldManager {
         ));
 
         let player_chunk_changed = current_chunk != self.last_player_chunk;
+        if player_chunk_changed {
+            self.last_player_chunk = current_chunk;
+            self.has_pending_chunks = true;
+        }
+
         let pcx = current_chunk.0.x;
+        let pcy = current_chunk.0.y;
         let pcz = current_chunk.0.z;
         let r = self.render_distance;
 
-        // 3. Scan render distance only when player enters a new chunk or there is pending generation/meshing
-        if player_chunk_changed
-            || !self.queued_generation.is_empty()
-            || !self.queued_meshing.is_empty()
-        {
-            self.last_player_chunk = current_chunk;
+        // 3. Scan render distance when player crosses a chunk boundary or there are pending chunks.
+        // Keep in-flight generation + meshing bounded so CPU thread pool is never overwhelmed.
+        const MAX_IN_FLIGHT: usize = 12;
+        let in_flight = self.queued_generation.len() + self.queued_meshing.len();
 
+        if self.has_pending_chunks && in_flight < MAX_IN_FLIGHT {
             let mut to_generate = Vec::new();
             let mut to_mesh = Vec::new();
 
@@ -437,10 +455,8 @@ impl WorldManager {
                                     && !self.queued_generation.contains(&pos)
                                 {
                                     if world_guard.has_chunk(pos) {
-                                        self.queued_meshing.insert(pos);
                                         to_mesh.push(pos);
                                     } else {
-                                        self.queued_generation.insert(pos);
                                         to_generate.push(pos);
                                     }
                                 }
@@ -450,15 +466,49 @@ impl WorldManager {
                 }
             }
 
+            // Prioritize chunks closest to player first
+            to_generate.sort_by_key(|pos| {
+                let dx = pos.0.x - pcx;
+                let dz = pos.0.z - pcz;
+                let dy = pos.0.y - pcy;
+                dx * dx + dz * dz + dy * dy
+            });
+            to_mesh.sort_by_key(|pos| {
+                let dx = pos.0.x - pcx;
+                let dz = pos.0.z - pcz;
+                let dy = pos.0.y - pcy;
+                dx * dx + dz * dz + dy * dy
+            });
+
+            let total_missing = to_generate.len() + to_mesh.len();
+            let remaining_capacity = MAX_IN_FLIGHT.saturating_sub(in_flight);
+            let gen_count = to_generate.len().min(remaining_capacity);
+            let mesh_count = to_mesh.len().min(remaining_capacity.saturating_sub(gen_count));
+
+            let batch_gen: Vec<ChunkPos> = to_generate.into_iter().take(gen_count).collect();
+            let batch_mesh: Vec<ChunkPos> = to_mesh.into_iter().take(mesh_count).collect();
+
+            for &pos in &batch_gen {
+                self.queued_generation.insert(pos);
+            }
+            for &pos in &batch_mesh {
+                self.queued_meshing.insert(pos);
+            }
+
+            let total_taken = batch_gen.len() + batch_mesh.len();
+            if total_taken >= total_missing {
+                self.has_pending_chunks = false;
+            }
+
             // 4. Dispatch terrain generation + meshing asynchronously
-            if !to_generate.is_empty() {
+            if !batch_gen.is_empty() {
                 let generator = self.generator.clone();
                 let world_arc = self.world.clone();
                 let registry = self.registry.clone();
                 let tx = self.mesh_tx.clone();
 
                 rayon::spawn(move || {
-                    let new_chunks: Vec<Chunk> = to_generate
+                    let new_chunks: Vec<Chunk> = batch_gen
                         .par_iter()
                         .map(|&pos| {
                             let mut chunk = generator.generate_chunk(pos);
@@ -467,20 +517,31 @@ impl WorldManager {
                         })
                         .collect();
 
-                    let mut world = world_arc.lock().unwrap();
-                    for chunk in new_chunks {
-                        world.insert_chunk(chunk);
+                    // Insert generated chunks in a quick, isolated lock scope
+                    {
+                        let mut world = world_arc.lock().unwrap();
+                        for chunk in new_chunks {
+                            world.insert_chunk(chunk);
+                        }
                     }
 
+                    // Mesh each chunk individually, releasing the world lock between chunks
+                    // so the main thread (physics, raycasting, input) is never blocked!
                     let mesher = ChunkMesher::new(&registry);
-                    for &pos in &to_generate {
-                        if let Some(chunk) = world.get_chunk(pos) {
-                            let origin = pos.to_world_origin();
-                            let sources = world.get_light_sources_near(origin, 15);
-                            let mesh =
-                                mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
+                    for &pos in &batch_gen {
+                        let mesh_opt = {
+                            let world = world_arc.lock().unwrap();
+                            if let Some(chunk) = world.get_chunk(pos) {
+                                let origin = pos.to_world_origin();
+                                let sources = world.get_light_sources_near(origin, 15);
+                                Some(mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
                                     world.get_block(origin + IVec3::new(lx, ly, lz))
-                                });
+                                }))
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(mesh) = mesh_opt {
                             let _ = tx.send((pos, mesh));
                         }
                     }
@@ -488,22 +549,27 @@ impl WorldManager {
             }
 
             // 5. Dispatch meshing for already-generated chunks needing GPU buffers
-            if !to_mesh.is_empty() {
+            if !batch_mesh.is_empty() {
                 let world_arc = self.world.clone();
                 let registry = self.registry.clone();
                 let tx = self.mesh_tx.clone();
 
                 rayon::spawn(move || {
-                    let world = world_arc.lock().unwrap();
                     let mesher = ChunkMesher::new(&registry);
-                    for pos in to_mesh {
-                        if let Some(chunk) = world.get_chunk(pos) {
-                            let origin = pos.to_world_origin();
-                            let sources = world.get_light_sources_near(origin, 15);
-                            let mesh =
-                                mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
+                    for pos in batch_mesh {
+                        let mesh_opt = {
+                            let world = world_arc.lock().unwrap();
+                            if let Some(chunk) = world.get_chunk(pos) {
+                                let origin = pos.to_world_origin();
+                                let sources = world.get_light_sources_near(origin, 15);
+                                Some(mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
                                     world.get_block(origin + IVec3::new(lx, ly, lz))
-                                });
+                                }))
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(mesh) = mesh_opt {
                             let _ = tx.send((pos, mesh));
                         }
                     }
@@ -2411,6 +2477,20 @@ mod tests {
         assert_eq!(wm_loaded.planted_crops, vec![(crop_pos, 7.5)]);
         assert_eq!(wm_loaded.item_drops.len(), 1);
         assert_eq!(wm_loaded.item_drops[0].item.item_id, ItemId::APPLE);
+    }
+
+    #[test]
+    fn test_world_manager_chunk_streaming_budget_and_pending_flags() {
+        let registry = Arc::new(BlockRegistry::default());
+        let mut wm = WorldManager::new(4242, 2, registry);
+        assert!(wm.has_pending_chunks, "New WorldManager should have pending chunks");
+
+        wm.has_pending_chunks = false;
+        wm.set_render_distance(4);
+        assert!(wm.has_pending_chunks, "Setting render distance must flag pending chunks");
+
+        assert!(wm.queued_generation.is_empty());
+        assert!(wm.queued_meshing.is_empty());
     }
 }
 
