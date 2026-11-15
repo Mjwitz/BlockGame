@@ -8,6 +8,7 @@ pub mod crafting;
 pub mod direction;
 pub mod directory;
 pub mod entity;
+pub mod fishing;
 pub mod item;
 pub mod lighting;
 pub mod monster;
@@ -41,6 +42,11 @@ pub use command::{
 pub use crafting::{CraftingGrid, CraftingManager, Recipe};
 pub use direction::Direction;
 pub use entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus};
+pub use fishing::{
+    roll_fish_species, roll_treasure_loot, FishBehavior, FishSpecies, FishingLineKind,
+    FishingLureKind, FishingMinigameState, FishingRodKind, FishingTackleStats, MinigameStatus,
+    ALL_FISH_SPECIES,
+};
 pub use item::{FoodDef, Inventory, ItemDef, ItemId, ItemRegistry, ItemSlot};
 pub use lighting::{calculate_chunk_lighting, ChunkLightMap, LightValue};
 pub use monster::{

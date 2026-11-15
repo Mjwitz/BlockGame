@@ -182,6 +182,34 @@ impl ItemId {
     pub const DIAMOND_LEGGINGS: Self = Self(172);
     pub const DIAMOND_BOOTS: Self = Self(173);
 
+    // Fishing Rods, Lines, Lures, Bait, Fish & Crafted Dishes
+    pub const WOODEN_FISHING_ROD: Self = Self(174);
+    pub const COPPER_FISHING_ROD: Self = Self(175);
+    pub const IRON_FISHING_ROD: Self = Self(176);
+    pub const DIAMOND_FISHING_ROD: Self = Self(177);
+    pub const BRAIDED_LINE: Self = Self(178);
+    pub const FLUOROCARBON_LINE: Self = Self(179);
+    pub const TITANIUM_LINE: Self = Self(180);
+    pub const CORK_BOBBER: Self = Self(181);
+    pub const SPINNER_LURE: Self = Self(182);
+    pub const BARBED_HOOK: Self = Self(183);
+    pub const TREASURE_LURE: Self = Self(184);
+    pub const FISHING_BAIT: Self = Self(185);
+    pub const RAW_CARP: Self = Self(186);
+    pub const RAW_SARDINE: Self = Self(187);
+    pub const RAW_PERCH: Self = Self(188);
+    pub const RAW_TROUT: Self = Self(189);
+    pub const RAW_BASS: Self = Self(190);
+    pub const RAW_SALMON: Self = Self(191);
+    pub const RAW_CATFISH: Self = Self(192);
+    pub const PUFFERFISH: Self = Self(193);
+    pub const RAW_TUNA: Self = Self(194);
+    pub const GOLDEN_KOI: Self = Self(195);
+    pub const COOKED_FISH: Self = Self(196);
+    pub const COOKED_SALMON: Self = Self(197);
+    pub const SUSHI_ROLL: Self = Self(198);
+    pub const FISH_STEW: Self = Self(199);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
@@ -2122,6 +2150,115 @@ impl ItemRegistry {
                 icon_tile,
             });
             self.register_armor(id, slot, defense);
+        }
+
+        // Fishing Rods (tiles 384..=387)
+        let rod_defs = [
+            (ItemId::WOODEN_FISHING_ROD, "blockgame:wooden_fishing_rod", "Wooden Fishing Rod", 64, 384),
+            (ItemId::COPPER_FISHING_ROD, "blockgame:copper_fishing_rod", "Copper Fishing Rod", 150, 385),
+            (ItemId::IRON_FISHING_ROD, "blockgame:iron_fishing_rod", "Iron Fishing Rod", 280, 386),
+            (ItemId::DIAMOND_FISHING_ROD, "blockgame:diamond_fishing_rod", "Diamond Fishing Rod", 650, 387),
+        ];
+        for (id, name, display_name, dur, icon_tile) in rod_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
+                durability: Some(dur),
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Fishing Lines (tiles 388..=390)
+        let line_defs = [
+            (ItemId::BRAIDED_LINE, "blockgame:braided_line", "Braided Fishing Line", 50, 388),
+            (ItemId::FLUOROCARBON_LINE, "blockgame:fluorocarbon_line", "Fluorocarbon Line", 75, 389),
+            (ItemId::TITANIUM_LINE, "blockgame:titanium_line", "Titanium-Weave Line", 120, 390),
+        ];
+        for (id, name, display_name, dur, icon_tile) in line_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
+                durability: Some(dur),
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Fishing Lures (tiles 391..=394)
+        let lure_defs = [
+            (ItemId::CORK_BOBBER, "blockgame:cork_bobber", "Cork Bobber Lure", 40, 391),
+            (ItemId::SPINNER_LURE, "blockgame:spinner_lure", "Copper Spinner Lure", 45, 392),
+            (ItemId::BARBED_HOOK, "blockgame:barbed_hook", "Barbed Hook Lure", 50, 393),
+            (ItemId::TREASURE_LURE, "blockgame:treasure_lure", "Gold Treasure Magnet", 40, 394),
+        ];
+        for (id, name, display_name, dur, icon_tile) in lure_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
+                durability: Some(dur),
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Fishing Bait (tile 395)
+        self.register(ItemDef {
+            id: ItemId::FISHING_BAIT,
+            name: "blockgame:fishing_bait",
+            display_name: "Fishing Bait",
+            max_stack: 64,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 395,
+        });
+
+        // Raw Fish & Edible/Crafted Fish Foods (tiles 396..=409)
+        let fish_food_defs = [
+            (ItemId::RAW_CARP, "blockgame:raw_carp", "Raw Carp", 396, Some((2, 1.2))),
+            (ItemId::RAW_SARDINE, "blockgame:raw_sardine", "Raw Sardine", 397, Some((2, 1.0))),
+            (ItemId::RAW_PERCH, "blockgame:raw_perch", "Raw Perch", 398, Some((2, 1.2))),
+            (ItemId::RAW_TROUT, "blockgame:raw_trout", "Raw Rainbow Trout", 399, Some((3, 1.8))),
+            (ItemId::RAW_BASS, "blockgame:raw_bass", "Raw Bass", 400, Some((3, 1.8))),
+            (ItemId::RAW_SALMON, "blockgame:raw_salmon", "Raw Salmon", 401, Some((3, 2.0))),
+            (ItemId::RAW_CATFISH, "blockgame:raw_catfish", "Raw Catfish", 402, Some((3, 2.0))),
+            (ItemId::PUFFERFISH, "blockgame:pufferfish", "Pufferfish", 403, Some((1, 0.4))),
+            (ItemId::RAW_TUNA, "blockgame:raw_tuna", "Raw Bluefin Tuna", 404, Some((4, 2.4))),
+            (ItemId::GOLDEN_KOI, "blockgame:golden_koi", "Golden Koi", 405, Some((5, 4.0))),
+            (ItemId::COOKED_FISH, "blockgame:cooked_fish", "Cooked Fish Fillet", 406, Some((6, 7.2))),
+            (ItemId::COOKED_SALMON, "blockgame:cooked_salmon", "Cooked Salmon", 407, Some((8, 11.2))),
+            (ItemId::SUSHI_ROLL, "blockgame:sushi_roll", "Sushi Roll", 408, Some((7, 9.6))),
+            (ItemId::FISH_STEW, "blockgame:fish_stew", "Fisherman's Stew", 409, Some((10, 14.0))),
+        ];
+        for (id, name, display_name, icon_tile, food) in fish_food_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 64,
+                placeable_block: None,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+            if let Some((fp, sat)) = food {
+                self.register_food(id, FoodDef::new(fp, sat));
+            }
         }
     }
 }

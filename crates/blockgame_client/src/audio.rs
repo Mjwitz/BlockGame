@@ -1348,6 +1348,87 @@ pub mod sound_generator {
 
         samples
     }
+
+    /// Synthesizes a brisk fishing rod cast whoosh.
+    pub fn generate_fishing_cast() -> Vec<f32> {
+        let mut rng = 44556677u64;
+        let duration = 0.24;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let p = t / duration;
+            let env = (p * std::f32::consts::PI).sin().powf(0.8);
+            let swish = lcg_random(&mut rng) * 0.45;
+            let whip = (2.0 * PI * (280.0 + 750.0 * p) * t).sin() * 0.35;
+            samples.push(((swish + whip) * env).clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes a crisp water plop / splash when the bobber lands or fish escapes.
+    pub fn generate_fishing_splash() -> Vec<f32> {
+        let mut rng = 88990011u64;
+        let duration = 0.36;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let p = t / duration;
+            let plop = (2.0 * PI * (220.0 + 480.0 * p) * t).sin() * (-p * 16.0).exp() * 0.55;
+            let splash = lcg_random(&mut rng) * (-p * 9.0).exp() * 0.50;
+            samples.push((plop + splash).clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes an urgent double-chime fish bite "!" alert.
+    pub fn generate_fishing_bite() -> Vec<f32> {
+        let duration = 0.28;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let note1 = if t < 0.14 {
+                (2.0 * PI * 987.77 * t).sin() * (-t * 20.0).exp()
+            } else {
+                0.0
+            };
+            let note2 = if t >= 0.10 {
+                let dt = t - 0.10;
+                (2.0 * PI * 1318.51 * dt).sin() * (-dt * 18.0).exp()
+            } else {
+                0.0
+            };
+            samples.push(((note1 + note2) * 0.65).clamp(-1.0, 1.0));
+        }
+        samples
+    }
+
+    /// Synthesizes a joyful rising 3-note fanfare when catching a fish.
+    pub fn generate_fishing_catch() -> Vec<f32> {
+        let duration = 0.55;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        let notes = [(0.0, 523.25), (0.11, 659.25), (0.22, 783.99), (0.33, 1046.50)];
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let mut sum = 0.0;
+            for &(start, freq) in &notes {
+                if t >= start {
+                    let dt = t - start;
+                    let env = (1.0 - (-dt * 60.0).exp()) * (-dt * 8.0).exp();
+                    sum += ((2.0 * PI * freq * dt).sin() * 0.7 + (2.0 * PI * freq * 2.0 * dt).sin() * 0.2) * env;
+                }
+            }
+            samples.push((sum * 0.55).clamp(-1.0, 1.0));
+        }
+        samples
+    }
 }
 
 /// Global audio manager orchestrating 3D spatial playback, materials, and mixer device.
@@ -1363,6 +1444,10 @@ pub struct AudioManager {
     water_swims: Vec<Arc<Vec<f32>>>,
     underwater_bubbles: Vec<Arc<Vec<f32>>>,
     tool_breaks: Vec<Arc<Vec<f32>>>,
+    fishing_cast: Arc<Vec<f32>>,
+    fishing_splash: Arc<Vec<f32>>,
+    fishing_bite: Arc<Vec<f32>>,
+    fishing_catch: Arc<Vec<f32>>,
     animal_ambient: HashMap<(blockgame_core::animal::AnimalKind, usize), Arc<Vec<f32>>>,
     animal_hurt: HashMap<(blockgame_core::animal::AnimalKind, usize), Arc<Vec<f32>>>,
     monster_ambient: HashMap<(blockgame_core::monster::MonsterKind, usize), Arc<Vec<f32>>>,
@@ -1468,6 +1553,10 @@ impl AudioManager {
             water_swims: Vec::new(),
             underwater_bubbles: Vec::new(),
             tool_breaks: Vec::new(),
+            fishing_cast: Arc::new(sound_generator::generate_fishing_cast()),
+            fishing_splash: Arc::new(sound_generator::generate_fishing_splash()),
+            fishing_bite: Arc::new(sound_generator::generate_fishing_bite()),
+            fishing_catch: Arc::new(sound_generator::generate_fishing_catch()),
             animal_ambient: HashMap::new(),
             animal_hurt: HashMap::new(),
             monster_ambient: HashMap::new(),
@@ -1974,6 +2063,40 @@ impl AudioManager {
 
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.play_voice(samples, pitch, vol * 0.5, vol * 0.5, SoundCategory::Sfx, 0.0);
+        }
+    }
+
+    /// Plays the fishing rod cast whoosh sound.
+    pub fn play_fishing_cast(&mut self) {
+        let samples = self.fishing_cast.clone();
+        let pitch = 0.94 + 0.12 * self.random_f32();
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, 0.45, 0.45, SoundCategory::Sfx, 0.0);
+        }
+    }
+
+    /// Plays a water splash sound when the bobber lands or fish escapes.
+    pub fn play_fishing_splash(&mut self) {
+        let samples = self.fishing_splash.clone();
+        let pitch = 0.92 + 0.16 * self.random_f32();
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, 0.48, 0.48, SoundCategory::Sfx, 0.0);
+        }
+    }
+
+    /// Plays the urgent "!" alert chime when a fish bites.
+    pub fn play_fishing_bite(&mut self) {
+        let samples = self.fishing_bite.clone();
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, 1.0, 0.55, 0.55, SoundCategory::Sfx, 0.0);
+        }
+    }
+
+    /// Plays the celebratory fanfare when catching a fish.
+    pub fn play_fishing_catch(&mut self) {
+        let samples = self.fishing_catch.clone();
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, 1.0, 0.55, 0.55, SoundCategory::Sfx, 0.0);
         }
     }
 

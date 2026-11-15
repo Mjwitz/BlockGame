@@ -88,8 +88,11 @@ impl TextureAtlas {
         // Paint 4 distinct 3D Player Character Skins at tiles 272..287 (4 tiles per skin: HeadFront, HeadSide, Torso, Legs)
         paint_player_skin_tiles(&mut atlas);
 
-        // Paint decorative block & item tiles (288..332)
+        // Paint decorative block & item tiles (288..377)
         paint_decorative_tiles(&mut atlas);
+
+        // Paint fishing rods, lines, lures, bait, fish, and crafted dishes (384..=409)
+        paint_fishing_tiles(&mut atlas);
 
         atlas
     }
@@ -1493,6 +1496,315 @@ fn paint_tulip_pixel(px: u32, py: u32, petal_rgb: [u8; 3]) -> Option<Rgba<u8>> {
         return Some(Rgba([74, 158, 58, 255]));
     }
     None
+}
+
+fn paint_fishing_tiles(atlas: &mut TextureAtlas) {
+    // 384..=387: Fishing Rods (Wooden, Copper, Iron, Diamond)
+    let rod_colors = [
+        ([165, 115, 65], [110, 72, 38], [210, 210, 210]),  // Wooden
+        ([215, 125, 75], [155, 80, 45], [235, 195, 130]),  // Copper
+        ([200, 208, 218], [135, 142, 155], [220, 235, 245]), // Iron
+        ([85, 225, 215], [40, 165, 155], [250, 225, 95]),  // Diamond
+    ];
+    for (idx, (main_c, dark_c, reel_c)) in rod_colors.iter().enumerate() {
+        atlas.paint_tile(384 + idx as u16, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            // Diagonal rod shaft from bottom-left (4,27) to top-right (25,5)
+            let dx = x - 4;
+            let dy = 27 - y;
+            if dx >= 0 && dx <= 21 && (dx - dy).abs() <= 1 && y >= 5 && y <= 27 {
+                if (dx - dy) == 1 {
+                    return Rgba([dark_c[0], dark_c[1], dark_c[2], 255]);
+                }
+                return Rgba([main_c[0], main_c[1], main_c[2], 255]);
+            }
+            // Handle grip at bottom-left
+            if x >= 3 && x <= 8 && y >= 23 && y <= 28 && (x + y - 31).abs() <= 2 {
+                return Rgba([75, 48, 28, 255]);
+            }
+            // Reel near handle
+            if (x - 10).abs() <= 2 && (y - 22).abs() <= 2 {
+                return Rgba([reel_c[0], reel_c[1], reel_c[2], 255]);
+            }
+            // Hanging fishing line from tip (25,5) down to hook at (25,21)
+            if x == 25 && y >= 6 && y <= 19 {
+                return Rgba([225, 238, 250, 220]);
+            }
+            // Red/white mini bobber at bottom of line
+            if (x - 25).abs() <= 1 && y >= 20 && y <= 22 {
+                return if y == 20 {
+                    Rgba([235, 55, 55, 255])
+                } else {
+                    Rgba([245, 245, 245, 255])
+                };
+            }
+            Rgba([0, 0, 0, 0])
+        });
+    }
+
+    // 388..=390: Fishing Lines (Braided, Fluorocarbon, Titanium)
+    let line_colors = [
+        ([70, 175, 85], [40, 115, 50]),   // Braided green
+        ([95, 195, 245], [55, 135, 195]), // Fluorocarbon blue
+        ([205, 215, 228], [130, 140, 155]), // Titanium silver
+    ];
+    for (idx, (c1, c2)) in line_colors.iter().enumerate() {
+        atlas.paint_tile(388 + idx as u16, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            // Spool flanges top & bottom
+            if x >= 7 && x <= 24 && (y == 7 || y == 8 || y == 23 || y == 24) {
+                return Rgba([130, 92, 54, 255]);
+            }
+            // Wound line core
+            if x >= 9 && x <= 22 && y >= 9 && y <= 22 {
+                return if (x + y) % 2 == 0 {
+                    Rgba([c1[0], c1[1], c1[2], 255])
+                } else {
+                    Rgba([c2[0], c2[1], c2[2], 255])
+                };
+            }
+            // Loose line tail
+            if x >= 23 && x <= 27 && y == 14 + (x - 23) / 2 {
+                return Rgba([c1[0], c1[1], c1[2], 255]);
+            }
+            Rgba([0, 0, 0, 0])
+        });
+    }
+
+    // 391: Cork Bobber Lure
+    atlas.paint_tile(391, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        let dist2 = x * x + y * y;
+        if dist2 <= 64 {
+            if y < 0 {
+                Rgba([230, 52, 48, 255])
+            } else {
+                Rgba([242, 238, 225, 255])
+            }
+        } else if (x == 0 && y >= -12 && y <= -8) || (x == 0 && y >= 9 && y <= 12) {
+            Rgba([160, 120, 70, 255])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 392: Copper Spinner Lure
+    atlas.paint_tile(392, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        if (x - 16).abs() <= 4 && y >= 7 && y <= 17 && (x - 16).abs() + (y - 12).abs() / 2 <= 4 {
+            return Rgba([235, 145, 85, 255]);
+        }
+        if x == 16 && y >= 17 && y <= 24 {
+            return Rgba([180, 185, 195, 255]);
+        }
+        if y >= 22 && y <= 26 && (x == 14 || x == 18) {
+            return Rgba([230, 75, 55, 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 393: Barbed Hook Lure
+    atlas.paint_tile(393, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Eyelets & shaft
+        if (x - 18).abs() <= 1 && y >= 6 && y <= 20 {
+            return Rgba([195, 202, 212, 255]);
+        }
+        // Bottom J-curve
+        if y >= 20 && y <= 24 && x >= 11 && x <= 18 && (y == 23 || y == 24 || x == 11 || x == 12) {
+            return Rgba([195, 202, 212, 255]);
+        }
+        // Barb point
+        if x >= 11 && x <= 14 && y >= 16 && y <= 20 && (x - 11 == 20 - y || x == 11) {
+            return Rgba([230, 236, 245, 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 394: Gold Treasure Magnet
+    atlas.paint_tile(394, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        // Horseshoe magnet shape
+        if y >= -8 && y <= 8 && (x.abs() >= 5 && x.abs() <= 9) {
+            return if y >= 4 {
+                Rgba([220, 228, 238, 255])
+            } else {
+                Rgba([245, 205, 55, 255])
+            };
+        }
+        if y >= -11 && y <= -7 && x.abs() <= 9 {
+            return Rgba([245, 205, 55, 255]);
+        }
+        // Diamond sparkle in center
+        if x.abs() + y.abs() <= 3 {
+            return Rgba([85, 235, 225, 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 395: Fishing Bait
+    atlas.paint_tile(395, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Wiggly pink/brown worm bait
+        let curve = ((y - 16) as f32 * 0.35).sin() * 3.5;
+        if y >= 7 && y <= 25 && ((x as f32) - (16.0 + curve)).abs() <= 2.3 {
+            return if y % 3 == 0 {
+                Rgba([195, 105, 115, 255])
+            } else {
+                Rgba([230, 140, 150, 255])
+            };
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 396..=405: 10 Distinct Fish Sprites
+    let fish_palettes: [([u8; 3], [u8; 3], [u8; 3]); 10] = [
+        ([178, 138, 86], [220, 192, 138], [140, 96, 52]),  // 396: Carp (warm bronze/gold)
+        ([150, 185, 220], [220, 232, 245], [95, 130, 175]), // 397: Sardine (silver-blue)
+        ([125, 165, 85], [225, 210, 135], [205, 95, 55]),   // 398: Perch (olive & orange fins)
+        ([135, 175, 155], [235, 145, 155], [85, 120, 105]), // 399: Trout (rainbow stripe)
+        ([75, 135, 70], [185, 215, 165], [50, 95, 48]),     // 400: Bass (largemouth green)
+        ([195, 105, 95], [235, 165, 145], [105, 145, 135]), // 401: Salmon (pink-red & teal)
+        ([95, 98, 112], [165, 168, 175], [65, 68, 82]),     // 402: Catfish (slate grey)
+        ([235, 205, 95], [248, 242, 210], [175, 140, 45]),  // 403: Pufferfish (spiky yellow)
+        ([55, 95, 165], [205, 222, 245], [235, 195, 65]),   // 404: Tuna (deep ocean blue)
+        ([250, 205, 45], [255, 245, 165], [230, 85, 35]),   // 405: Golden Koi (gold & crimson)
+    ];
+
+    for (idx, (body_c, belly_c, fin_c)) in fish_palettes.iter().enumerate() {
+        let is_puffer = idx == 7;
+        atlas.paint_tile(396 + idx as u16, |px, py| {
+            let x = px as i32 - 16;
+            let y = py as i32 - 16;
+            if is_puffer {
+                // Round spiky pufferfish
+                let r2 = x * x + y * y;
+                if r2 <= 56 {
+                    if x == 4 && y == -2 {
+                        return Rgba([20, 20, 25, 255]);
+                    }
+                    if y > 2 {
+                        return Rgba([belly_c[0], belly_c[1], belly_c[2], 255]);
+                    }
+                    return Rgba([body_c[0], body_c[1], body_c[2], 255]);
+                }
+                if r2 <= 85 && (x.abs() == y.abs() || x == 0 || y == 0) {
+                    return Rgba([fin_c[0], fin_c[1], fin_c[2], 255]);
+                }
+                return Rgba([0, 0, 0, 0]);
+            }
+
+            // Standard sleek fish silhouette facing right
+            // Body ellipse centered at (1, 0), rx=9, ry=5
+            let bx = (x - 1) as f32 / 9.0;
+            let by = y as f32 / 5.2;
+            if bx * bx + by * by <= 1.0 {
+                // Eye
+                if (x - 6).abs() <= 1 && (y + 1).abs() <= 1 {
+                    return if x == 6 && y == -1 {
+                        Rgba([15, 15, 20, 255])
+                    } else {
+                        Rgba([245, 245, 245, 255])
+                    };
+                }
+                // Belly vs back
+                if y >= 1 {
+                    return Rgba([belly_c[0], belly_c[1], belly_c[2], 255]);
+                }
+                return Rgba([body_c[0], body_c[1], body_c[2], 255]);
+            }
+            // Tail fin on left (-12..-8)
+            if x >= -12 && x <= -7 && y.abs() <= (-7 - x) + 1 {
+                return Rgba([fin_c[0], fin_c[1], fin_c[2], 255]);
+            }
+            // Dorsal fin on top
+            if x >= -3 && x <= 3 && y >= -8 && y <= -5 && (x + 3) >= (-5 - y) {
+                return Rgba([fin_c[0], fin_c[1], fin_c[2], 255]);
+            }
+            Rgba([0, 0, 0, 0])
+        });
+    }
+
+    // 406: Cooked Fish Fillet
+    atlas.paint_tile(406, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        let bx = x as f32 / 10.0;
+        let by = y as f32 / 5.5;
+        if bx * bx + by * by <= 1.0 {
+            if (x + y) % 5 == 0 {
+                Rgba([135, 78, 35, 255]) // Grill marks
+            } else {
+                Rgba([218, 158, 92, 255])
+            }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 407: Cooked Salmon
+    atlas.paint_tile(407, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        let bx = x as f32 / 10.0;
+        let by = y as f32 / 5.5;
+        if bx * bx + by * by <= 1.0 {
+            if (x - y) % 5 == 0 {
+                Rgba([165, 72, 45, 255])
+            } else {
+                Rgba([242, 138, 102, 255])
+            }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 408: Sushi Roll
+    atlas.paint_tile(408, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        let r2 = x * x + y * y;
+        if r2 <= 64 {
+            if r2 <= 12 {
+                Rgba([240, 115, 95, 255]) // Salmon center
+            } else if r2 <= 42 {
+                Rgba([245, 244, 238, 255]) // Rice ring
+            } else {
+                Rgba([38, 68, 42, 255]) // Seaweed nori wrap
+            }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 409: Fisherman's Stew
+    atlas.paint_tile(409, |px, py| {
+        let x = px as i32 - 16;
+        let y = py as i32 - 16;
+        // Wooden bowl bottom
+        if y >= 0 && y <= 9 && x.abs() <= 11 - (y / 2) {
+            return Rgba([145, 92, 48, 255]);
+        }
+        // Creamy broth top
+        if y >= -3 && y <= 1 && x.abs() <= 10 {
+            if (x * x + y * y) % 7 == 0 {
+                return Rgba([235, 135, 95, 255]); // Fish chunks
+            }
+            return Rgba([235, 195, 125, 255]);
+        }
+        // Rising steam
+        if y >= -10 && y <= -5 && (x == -3 || x == 3) {
+            return Rgba([235, 240, 245, 175]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
 }
 
 #[cfg(test)]

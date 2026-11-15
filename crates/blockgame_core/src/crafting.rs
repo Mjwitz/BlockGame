@@ -1952,6 +1952,217 @@ impl CraftingManager {
                 output: ItemSlot::new(b_id, 1),
             });
         }
+
+        // --- Fishing Rods ---
+        // Wooden Fishing Rod: diagonal sticks + 2 strings hanging on right
+        self.register(Recipe::Shaped {
+            name: "Wooden Fishing Rod",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None,
+                None,
+                Some(ItemId::STICK),
+                None,
+                Some(ItemId::STICK),
+                Some(ItemId::STRING),
+                Some(ItemId::STICK),
+                None,
+                Some(ItemId::STRING),
+            ],
+            output: ItemSlot::new(ItemId::WOODEN_FISHING_ROD, 1),
+        });
+        // Copper Fishing Rod: Copper Ingot tip + Sticks + Strings
+        self.register(Recipe::Shaped {
+            name: "Copper Fishing Rod",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None,
+                None,
+                Some(ItemId::COPPER_INGOT),
+                None,
+                Some(ItemId::STICK),
+                Some(ItemId::STRING),
+                Some(ItemId::COPPER_INGOT),
+                None,
+                Some(ItemId::STRING),
+            ],
+            output: ItemSlot::new(ItemId::COPPER_FISHING_ROD, 1),
+        });
+        // Iron Fishing Rod: Iron Ingots + Stick + Strings
+        self.register(Recipe::Shaped {
+            name: "Iron Fishing Rod",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None,
+                None,
+                Some(ItemId::IRON_INGOT),
+                None,
+                Some(ItemId::IRON_INGOT),
+                Some(ItemId::STRING),
+                Some(ItemId::STICK),
+                None,
+                Some(ItemId::STRING),
+            ],
+            output: ItemSlot::new(ItemId::IRON_FISHING_ROD, 1),
+        });
+        // Diamond Fishing Rod: Diamond tip + Gold/Iron + Stick + Strings
+        self.register(Recipe::Shaped {
+            name: "Diamond Fishing Rod",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None,
+                None,
+                Some(ItemId::DIAMOND),
+                None,
+                Some(ItemId::DIAMOND),
+                Some(ItemId::STRING),
+                Some(ItemId::GOLD_INGOT),
+                None,
+                Some(ItemId::STRING),
+            ],
+            output: ItemSlot::new(ItemId::DIAMOND_FISHING_ROD, 1),
+        });
+
+        // --- Fishing Lines ---
+        self.register(Recipe::Shaped {
+            name: "Braided Fishing Line",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::STRING),
+                Some(ItemId::STRING),
+                Some(ItemId::STRING),
+            ],
+            output: ItemSlot::new(ItemId::BRAIDED_LINE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Fluorocarbon Line",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::STRING),
+                Some(ItemId::GLASS),
+                Some(ItemId::COPPER_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::FLUOROCARBON_LINE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Titanium-Weave Line",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT),
+                Some(ItemId::STRING),
+                Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::TITANIUM_LINE, 1),
+        });
+
+        // --- Fishing Lures ---
+        self.register(Recipe::Shaped {
+            name: "Cork Bobber Lure",
+            width: 1,
+            height: 2,
+            pattern: vec![Some(ItemId::PLANKS), Some(ItemId::STICK)],
+            output: ItemSlot::new(ItemId::CORK_BOBBER, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Copper Spinner Lure",
+            width: 2,
+            height: 1,
+            pattern: vec![Some(ItemId::COPPER_INGOT), Some(ItemId::FEATHER)],
+            output: ItemSlot::new(ItemId::SPINNER_LURE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Barbed Hook Lure",
+            width: 2,
+            height: 1,
+            pattern: vec![Some(ItemId::IRON_INGOT), Some(ItemId::BONE)],
+            output: ItemSlot::new(ItemId::BARBED_HOOK, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Gold Treasure Magnet",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::GOLD_INGOT),
+                Some(ItemId::DIAMOND),
+                Some(ItemId::GOLD_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::TREASURE_LURE, 1),
+        });
+
+        // --- Fishing Bait ---
+        self.register(Recipe::Shapeless {
+            name: "Fishing Bait (from Sardine)",
+            inputs: vec![ItemId::RAW_SARDINE],
+            output: ItemSlot::new(ItemId::FISHING_BAIT, 4),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Fishing Bait (from Flesh & Seeds)",
+            inputs: vec![ItemId::ROTTEN_FLESH, ItemId::WHEAT_SEEDS],
+            output: ItemSlot::new(ItemId::FISHING_BAIT, 4),
+        });
+
+        // --- Fish Culinary & Utility Crafting ---
+        self.register(Recipe::Shapeless {
+            name: "Sushi Roll (Salmon)",
+            inputs: vec![ItemId::RAW_SALMON, ItemId::SEAGRASS],
+            output: ItemSlot::new(ItemId::SUSHI_ROLL, 2),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Sushi Roll (Tuna)",
+            inputs: vec![ItemId::RAW_TUNA, ItemId::SEAGRASS],
+            output: ItemSlot::new(ItemId::SUSHI_ROLL, 2),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Fisherman's Stew (Carp)",
+            inputs: vec![ItemId::RAW_CARP, ItemId::WHEAT, ItemId::APPLE],
+            output: ItemSlot::new(ItemId::FISH_STEW, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Fisherman's Stew (Trout)",
+            inputs: vec![ItemId::RAW_TROUT, ItemId::WHEAT, ItemId::MELON_SLICE],
+            output: ItemSlot::new(ItemId::FISH_STEW, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Fisherman's Stew (Bass)",
+            inputs: vec![ItemId::RAW_BASS, ItemId::WHEAT, ItemId::APPLE],
+            output: ItemSlot::new(ItemId::FISH_STEW, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Sea Lantern (from Pufferfish)",
+            inputs: vec![ItemId::PUFFERFISH, ItemId::TORCH, ItemId::GLASS],
+            output: ItemSlot::new(ItemId::SEA_LANTERN, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Sea Lantern (from Golden Koi)",
+            inputs: vec![ItemId::GOLDEN_KOI, ItemId::TORCH, ItemId::GLASS],
+            output: ItemSlot::new(ItemId::SEA_LANTERN, 2),
+        });
+
+        // --- Fish Smelting (for JEI display) ---
+        for (name, input, output) in [
+            ("Cooked Fish (Carp)", ItemId::RAW_CARP, ItemId::COOKED_FISH),
+            ("Cooked Fish (Sardine)", ItemId::RAW_SARDINE, ItemId::COOKED_FISH),
+            ("Cooked Fish (Perch)", ItemId::RAW_PERCH, ItemId::COOKED_FISH),
+            ("Cooked Fish (Trout)", ItemId::RAW_TROUT, ItemId::COOKED_FISH),
+            ("Cooked Fish (Bass)", ItemId::RAW_BASS, ItemId::COOKED_FISH),
+            ("Cooked Fish (Catfish)", ItemId::RAW_CATFISH, ItemId::COOKED_FISH),
+            ("Cooked Salmon", ItemId::RAW_SALMON, ItemId::COOKED_SALMON),
+            ("Cooked Salmon (Tuna)", ItemId::RAW_TUNA, ItemId::COOKED_SALMON),
+            ("Cooked Salmon (Golden Koi)", ItemId::GOLDEN_KOI, ItemId::COOKED_SALMON),
+        ] {
+            self.register(Recipe::Smelting {
+                name,
+                input,
+                output: ItemSlot::new(output, 1),
+            });
+        }
     }
 }
 
@@ -1968,6 +2179,13 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
         ItemId::RAW_BEEF => Some(ItemId::COOKED_STEAK),
         ItemId::RAW_PORKCHOP => Some(ItemId::COOKED_PORKCHOP),
         ItemId::RAW_CHICKEN => Some(ItemId::COOKED_CHICKEN),
+        ItemId::RAW_CARP
+        | ItemId::RAW_SARDINE
+        | ItemId::RAW_PERCH
+        | ItemId::RAW_TROUT
+        | ItemId::RAW_BASS
+        | ItemId::RAW_CATFISH => Some(ItemId::COOKED_FISH),
+        ItemId::RAW_SALMON | ItemId::RAW_TUNA | ItemId::GOLDEN_KOI => Some(ItemId::COOKED_SALMON),
         _ => None,
     }
 }
@@ -2240,10 +2458,10 @@ mod tests {
         assert_eq!(plank_recipes.len(), 1);
         assert_eq!(plank_recipes[0].output.count, 4);
 
-        // 4. Recipes using Wheat as ingredient
+        // 4. Recipes using Wheat as ingredient (Bread + 3 Fisherman's Stew variants)
         let wheat_uses = cm.get_recipes_using_input(ItemId::WHEAT);
-        assert_eq!(wheat_uses.len(), 1);
-        assert_eq!(wheat_uses[0].output.item_id, ItemId::BREAD);
+        assert_eq!(wheat_uses.len(), 4);
+        assert!(wheat_uses.iter().any(|r| r.output.item_id == ItemId::BREAD));
 
         // 5. Smelting category recognition
         let iron_ingot_recipes = cm.get_recipes_for_output(ItemId::IRON_INGOT);

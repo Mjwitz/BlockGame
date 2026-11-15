@@ -2713,6 +2713,65 @@ pub fn build_arrows_mesh(arrows: &[blockgame_core::monster::ArrowProjectile]) ->
     mesh
 }
 
+/// Builds a 3D mesh for a cast fishing bobber (red/white float) and a segmented fishing line
+/// connecting `rod_tip` to `bobber_pos`.
+pub fn build_fishing_bobber_mesh(
+    rod_tip: glam::Vec3,
+    bobber_pos: glam::Vec3,
+    is_biting: bool,
+) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+    let bobber_uvs = get_animal_uvs(391); // Cork bobber tile
+    let line_uvs = get_animal_uvs(389);   // Pale blue/white line tile
+
+    // Bobber body (white bottom + red top, slightly larger / dipped when biting)
+    let scale = if is_biting { 1.15 } else { 1.0 };
+    add_animal_box(
+        &mut mesh,
+        [-0.09 * scale, -0.09 * scale, -0.09 * scale],
+        [0.09 * scale, 0.09 * scale, 0.09 * scale],
+        &bobber_uvs,
+        None,
+        1.0,
+        [1.0, 0.4],
+        bobber_pos,
+        1.0,
+        0.0,
+    );
+
+    // Segmented catenary fishing line from rod_tip to bobber_pos
+    let segments = 10;
+    let delta = bobber_pos - rod_tip;
+    let total_len = delta.length();
+    if total_len > 0.1 {
+        let mut prev = rod_tip;
+        for i in 1..=segments {
+            let t = i as f32 / segments as f32;
+            let sag = if is_biting { 0.05 } else { 0.35 } * (t * (1.0 - t) * 4.0);
+            let curr = rod_tip + delta * t - glam::Vec3::new(0.0, sag, 0.0);
+            let mid = (prev + curr) * 0.5;
+            let seg = curr - prev;
+            let seg_len = seg.length().max(0.02);
+            let yaw = seg.x.atan2(seg.z);
+            add_animal_box(
+                &mut mesh,
+                [-0.008, -0.008, -seg_len * 0.52],
+                [0.008, 0.008, seg_len * 0.52],
+                &line_uvs,
+                None,
+                1.0,
+                [1.0, 0.2],
+                mid,
+                yaw.cos(),
+                yaw.sin(),
+            );
+            prev = curr;
+        }
+    }
+
+    mesh
+}
+
 /// Builds dynamic 3D meshes for active falling gravity blocks (Sand, Red Sand, Gravel).
 pub fn build_falling_blocks_mesh(
     falling_blocks: &[FallingBlock],

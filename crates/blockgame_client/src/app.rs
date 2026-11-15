@@ -69,6 +69,33 @@ pub enum AppScreen {
     },
 }
 
+#[derive(Debug, Clone)]
+pub enum FishingSession {
+    Idle,
+    Waiting {
+        bobber_pos: Vec3,
+        bobber_vel: Vec3,
+        landed: bool,
+        wait_timer: f32,
+        is_ocean: bool,
+        rod_slot: usize,
+        tackle: blockgame_core::FishingTackleStats,
+    },
+    Biting {
+        bobber_pos: Vec3,
+        bite_timer: f32,
+        species: blockgame_core::FishSpecies,
+        rod_slot: usize,
+        tackle: blockgame_core::FishingTackleStats,
+    },
+    Minigame {
+        bobber_pos: Vec3,
+        game: blockgame_core::FishingMinigameState,
+        rod_slot: usize,
+        tackle: blockgame_core::FishingTackleStats,
+    },
+}
+
 pub struct AppState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -170,9 +197,12 @@ pub struct AppState {
     >,
     // Hold-to-break mining state
     pub mouse_left_down: bool,
+    pub mouse_right_down: bool,
     pub breaking_voxel: Option<IVec3>,
     pub break_progress: f32,
     pub cracking_buffer: Option<(wgpu::Buffer, u32)>,
+    pub fishing_state: FishingSession,
+    pub fishing_rng: u64,
     // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
@@ -1105,9 +1135,12 @@ impl ApplicationHandler for BlockGameApp {
             music_scheduler,
             creature_sound_timer: 4.0,
             mouse_left_down: false,
+            mouse_right_down: false,
             breaking_voxel: None,
             break_progress: 0.0,
             cracking_buffer: None,
+            fishing_state: FishingSession::Idle,
+            fishing_rng: 0x517cc1b727220a95,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
@@ -1954,6 +1987,9 @@ impl ApplicationHandler for BlockGameApp {
 
                 match button {
                     MouseButton::Left => {
+                        if matches!(state.fishing_state, FishingSession::Minigame { .. }) {
+                            return;
+                        }
                         if pressed {
                             state.punch_timer = 0.25; // Trigger punch animation
                             let held_slot = state.inventory.get(state.active_hotbar_slot);
@@ -2111,7 +2147,13 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
                     }
-                    MouseButton::Right if pressed => {
+                    MouseButton::Right => {
+                        state.mouse_right_down = pressed;
+                        if !pressed
+                            || matches!(state.fishing_state, FishingSession::Minigame { .. })
+                        {
+                            return;
+                        }
                         // 1. Check if targeting an interactive block (e.g. Furnace, Chest, or Crafting Table)
                         if let Some(hit) = state.targeted_block {
                             let block_id = {
@@ -2348,6 +2390,70 @@ impl ApplicationHandler for BlockGameApp {
                                 let spawn_pos = state.player.eye_position() + dir * 0.45;
                                 state.world_manager.spawn_player_arrow(spawn_pos, dir * 28.0, 6.0);
                                 state.punch_timer = 0.15;
+                            }
+                            return;
+                        }
+
+                        // 1b-2. Fishing Rod Casting / Reeling / Hooking
+                        if let Some(rod_kind) =
+                            blockgame_core::FishingRodKind::from_item(held_slot.item_id)
+                        {
+                            match state.fishing_state.clone() {
+                                FishingSession::Idle => {
+                                    let mut tackle = blockgame_core::FishingTackleStats::from_inventory(
+                                        rod_kind,
+                                        &state.inventory,
+                                    );
+                                    if let Some(b_idx) = tackle.bait_slot {
+                                        let mut b_slot = state.inventory.get(b_idx);
+                                        b_slot.take(1);
+                                        state.inventory.set(b_idx, b_slot);
+                                    } else {
+                                        tackle.bait_count = 0;
+                                    }
+                                    let dir = state.camera.forward().normalize_or_zero();
+                                    let start_pos = state.player.eye_position() + dir * 0.6;
+                                    let vel = dir * 13.5 + Vec3::new(0.0, 2.8, 0.0);
+                                    let wait_time = (2.2
+                                        + blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                            * 4.5)
+                                        / tackle.bite_speed_mult;
+                                    state.fishing_state = FishingSession::Waiting {
+                                        bobber_pos: start_pos,
+                                        bobber_vel: vel,
+                                        landed: false,
+                                        wait_timer: wait_time.max(0.8),
+                                        is_ocean: false,
+                                        rod_slot: state.active_hotbar_slot,
+                                        tackle,
+                                    };
+                                    state.audio.play_fishing_cast();
+                                    state.punch_timer = 0.18;
+                                }
+                                FishingSession::Waiting { .. } => {
+                                    state.fishing_state = FishingSession::Idle;
+                                    state.audio.play_fishing_cast();
+                                    state.punch_timer = 0.12;
+                                }
+                                FishingSession::Biting {
+                                    bobber_pos,
+                                    species,
+                                    rod_slot,
+                                    tackle,
+                                    ..
+                                } => {
+                                    let game =
+                                        blockgame_core::FishingMinigameState::new(species, &tackle);
+                                    state.fishing_state = FishingSession::Minigame {
+                                        bobber_pos,
+                                        game,
+                                        rod_slot,
+                                        tackle,
+                                    };
+                                    state.audio.play_fishing_splash();
+                                    state.punch_timer = 0.15;
+                                }
+                                FishingSession::Minigame { .. } => {}
                             }
                             return;
                         }
@@ -3935,6 +4041,234 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
                     }
+
+                    // Update active fishing session (bobber flight, bite timer, and Stardew minigame)
+                    let held_is_rod = blockgame_core::FishingRodKind::from_item(
+                        state.inventory.get(state.active_hotbar_slot).item_id,
+                    )
+                    .is_some();
+                    if !held_is_rod && !matches!(state.fishing_state, FishingSession::Idle) {
+                        state.fishing_state = FishingSession::Idle;
+                    } else {
+                        let player_pos = state.player.position;
+                        match &mut state.fishing_state {
+                            FishingSession::Idle => {}
+                            FishingSession::Waiting {
+                                bobber_pos,
+                                bobber_vel,
+                                landed,
+                                wait_timer,
+                                is_ocean,
+                                ..
+                            } => {
+                                if bobber_pos.distance(player_pos) > 26.0 {
+                                    state.fishing_state = FishingSession::Idle;
+                                } else if !*landed {
+                                    bobber_vel.y -= 16.0 * dt;
+                                    *bobber_pos += *bobber_vel * dt;
+                                    let voxel = IVec3::new(
+                                        bobber_pos.x.floor() as i32,
+                                        bobber_pos.y.floor() as i32,
+                                        bobber_pos.z.floor() as i32,
+                                    );
+                                    let (hit_water, hit_solid, deep_water) = {
+                                        let w = state.world_manager.world().lock().unwrap();
+                                        let b = w.get_block(voxel);
+                                        let is_w = b.is_water();
+                                        let is_s = state.registry.is_solid(b);
+                                        let mut depth = 0;
+                                        if is_w {
+                                            for d in 1..=5 {
+                                                if w.get_block(voxel - IVec3::new(0, d, 0)).is_water() {
+                                                    depth += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        (is_w, is_s, depth >= 3)
+                                    };
+                                    if hit_water {
+                                        *landed = true;
+                                        *bobber_vel = Vec3::ZERO;
+                                        bobber_pos.y = voxel.y as f32 + 0.85;
+                                        *is_ocean = deep_water;
+                                        state.audio.play_fishing_splash();
+                                    } else if hit_solid || bobber_pos.y < 0.0 {
+                                        state.fishing_state = FishingSession::Idle;
+                                    }
+                                } else {
+                                    *wait_timer -= dt;
+                                    if *wait_timer <= 0.0 {
+                                        let bpos = *bobber_pos;
+                                        let ocean = *is_ocean;
+                                        let is_night = blockgame_core::net::is_night_ticks(
+                                            state.day_night.time,
+                                        );
+                                        if let FishingSession::Waiting {
+                                            rod_slot,
+                                            tackle,
+                                            ..
+                                        } = state.fishing_state.clone()
+                                        {
+                                            let species = blockgame_core::roll_fish_species(
+                                                &mut state.fishing_rng,
+                                                ocean,
+                                                is_night,
+                                                &tackle,
+                                            );
+                                            state.audio.play_fishing_bite();
+                                            state.fishing_state = FishingSession::Biting {
+                                                bobber_pos: bpos,
+                                                bite_timer: 1.85,
+                                                species,
+                                                rod_slot,
+                                                tackle,
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                            FishingSession::Biting { bite_timer, .. } => {
+                                *bite_timer -= dt;
+                                if *bite_timer <= 0.0 {
+                                    state.audio.play_fishing_splash();
+                                    state.fishing_state = FishingSession::Idle;
+                                }
+                            }
+                            FishingSession::Minigame { .. } => {
+                                let holding = state.mouse_left_down
+                                    || state.mouse_right_down
+                                    || state.jumping;
+                                let mut outcome = None;
+                                if let FishingSession::Minigame { game, .. } =
+                                    &mut state.fishing_state
+                                {
+                                    let status = game.step(dt, holding, &mut state.fishing_rng);
+                                    if status != blockgame_core::MinigameStatus::Active {
+                                        outcome = Some((status, game.species, game.perfect));
+                                    }
+                                }
+                                if let Some((status, species, perfect)) = outcome {
+                                    if let FishingSession::Minigame {
+                                        rod_slot,
+                                        tackle,
+                                        ..
+                                    } = state.fishing_state.clone()
+                                    {
+                                        state.fishing_state = FishingSession::Idle;
+                                        if status == blockgame_core::MinigameStatus::Caught {
+                                            state.audio.play_fishing_catch();
+
+                                            // Damage rod, line, and lure by 1 durability
+                                            let mut rslot = state.inventory.get(rod_slot);
+                                            if let Some(def) = state.item_registry.get(rslot.item_id) {
+                                                if let Some(max_d) = def.durability {
+                                                    if rslot.damage_tool(1, max_d) {
+                                                        state.audio.play_tool_break();
+                                                    }
+                                                    state.inventory.set(rod_slot, rslot);
+                                                }
+                                            }
+                                            if let Some(lidx) = tackle.line_slot {
+                                                let mut lslot = state.inventory.get(lidx);
+                                                if let Some(def) = state.item_registry.get(lslot.item_id) {
+                                                    if let Some(max_d) = def.durability {
+                                                        if lslot.damage_tool(1, max_d) {
+                                                            state.audio.play_tool_break();
+                                                        }
+                                                        state.inventory.set(lidx, lslot);
+                                                    }
+                                                }
+                                            }
+                                            if let Some(uidx) = tackle.lure_slot {
+                                                let mut uslot = state.inventory.get(uidx);
+                                                if let Some(def) = state.item_registry.get(uslot.item_id) {
+                                                    if let Some(max_d) = def.durability {
+                                                        if uslot.damage_tool(1, max_d) {
+                                                            state.audio.play_tool_break();
+                                                        }
+                                                        state.inventory.set(uidx, uslot);
+                                                    }
+                                                }
+                                            }
+
+                                            // Award caught fish
+                                            let fish_item = ItemSlot::new(species.item_id, 1);
+                                            if let Some(left) = state
+                                                .inventory
+                                                .add_item(fish_item, &state.item_registry)
+                                            {
+                                                state.spawn_drop_synced(
+                                                    state.player.position,
+                                                    Vec3::new(0.0, 2.0, 0.0),
+                                                    left,
+                                                );
+                                            }
+
+                                            let mut msg = if perfect {
+                                                format!("Perfect catch! Caught {}!", species.name)
+                                            } else {
+                                                format!("Caught {}!", species.name)
+                                            };
+
+                                            // Roll optional bonus treasure chest/loot
+                                            if blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                < tackle.treasure_chance
+                                            {
+                                                let treasure = blockgame_core::roll_treasure_loot(
+                                                    &mut state.fishing_rng,
+                                                );
+                                                let t_name = state
+                                                    .item_registry
+                                                    .get(treasure.item_id)
+                                                    .map(|d| d.display_name)
+                                                    .unwrap_or("Treasure");
+                                                msg.push_str(&format!(
+                                                    " + Bonus Treasure: {}x {}!",
+                                                    treasure.count, t_name
+                                                ));
+                                                if let Some(left) = state
+                                                    .inventory
+                                                    .add_item(treasure, &state.item_registry)
+                                                {
+                                                    state.spawn_drop_synced(
+                                                        state.player.position,
+                                                        Vec3::new(0.0, 2.0, 0.0),
+                                                        left,
+                                                    );
+                                                }
+                                            }
+
+                                            state.local_chat_messages.push(
+                                                blockgame_core::net::ChatEntry {
+                                                    sender: "Fishing".to_string(),
+                                                    prefix: String::new(),
+                                                    message: msg,
+                                                    is_system: true,
+                                                    age: 0.0,
+                                                },
+                                            );
+                                        } else {
+                                            state.audio.play_fishing_splash();
+                                            state.local_chat_messages.push(
+                                                blockgame_core::net::ChatEntry {
+                                                    sender: "Fishing".to_string(),
+                                                    prefix: String::new(),
+                                                    message: format!(
+                                                        "The {} got away...",
+                                                        species.name
+                                                    ),
+                                                    is_system: true,
+                                                    age: 0.0,
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     state
                         .world_manager
                         .update_crops(dt, &state.device, &state.pipeline);
@@ -4463,6 +4797,67 @@ impl ApplicationHandler for BlockGameApp {
                             state.armor.total_defense(&state.item_registry),
                         );
 
+                        match &state.fishing_state {
+                            FishingSession::Idle => {}
+                            FishingSession::Waiting { tackle, .. } => {
+                                let mut summary = tackle.rod.display_name().to_string();
+                                if let Some(l) = tackle.line {
+                                    summary.push_str(&format!(" + {}", l.display_name()));
+                                }
+                                if let Some(u) = tackle.lure {
+                                    summary.push_str(&format!(" + {}", u.display_name()));
+                                }
+                                if tackle.bait_count > 0 {
+                                    summary.push_str(&format!(" | Bait: {}", tackle.bait_count));
+                                }
+                                UiBuilder::build_fishing_hud(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    &blockgame_render::FishingHudState {
+                                        phase: blockgame_render::FishingHudPhase::Waiting,
+                                        tackle_summary: summary,
+                                    },
+                                );
+                            }
+                            FishingSession::Biting { .. } => {
+                                UiBuilder::build_fishing_hud(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    &blockgame_render::FishingHudState {
+                                        phase: blockgame_render::FishingHudPhase::Biting,
+                                        tackle_summary: String::new(),
+                                    },
+                                );
+                            }
+                            FishingSession::Minigame { game, .. } => {
+                                let fish_tile = state
+                                    .item_registry
+                                    .get(game.species.item_id)
+                                    .map(|d| d.icon_tile as u16)
+                                    .unwrap_or(396);
+                                UiBuilder::build_fishing_hud(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    &blockgame_render::FishingHudState {
+                                        phase: blockgame_render::FishingHudPhase::Minigame {
+                                            bar_pos: game.bar_pos,
+                                            bar_height: game.bar_height,
+                                            fish_pos: game.fish_pos,
+                                            progress: game.progress,
+                                            fish_in_bar: game.fish_in_bar,
+                                            fish_tile,
+                                            fish_name: game.species.name.to_string(),
+                                            is_rare: game.species.is_rare,
+                                        },
+                                        tackle_summary: String::new(),
+                                    },
+                                );
+                            }
+                        }
+
                         if state.settings.show_debug_hud {
                             let pos = state.player.position;
                             let (cpos, _, _, _) =
@@ -4861,15 +5256,44 @@ impl ApplicationHandler for BlockGameApp {
                     state.monster_dynamic_mesh.clear();
                 }
 
-                // Upload dynamic 3D Arrows mesh
-                if !state.world_manager.arrows.is_empty() {
-                    let arrows_mesh =
+                // Upload dynamic 3D Arrows + Fishing Bobber & Line mesh
+                let bobber_info = match &state.fishing_state {
+                    FishingSession::Waiting { bobber_pos, landed, .. } => {
+                        let y_off = if *landed { (state.total_time * 3.5).sin() * 0.04 } else { 0.0 };
+                        Some((*bobber_pos + Vec3::new(0.0, y_off, 0.0), false))
+                    }
+                    FishingSession::Biting { bobber_pos, .. } => {
+                        let y_off = (state.total_time * 24.0).sin() * 0.12 - 0.08;
+                        Some((*bobber_pos + Vec3::new(0.0, y_off, 0.0), true))
+                    }
+                    FishingSession::Minigame { bobber_pos, .. } => {
+                        let y_off = (state.total_time * 14.0).sin() * 0.08;
+                        Some((*bobber_pos + Vec3::new(0.0, y_off, 0.0), true))
+                    }
+                    FishingSession::Idle => None,
+                };
+                if !state.world_manager.arrows.is_empty() || bobber_info.is_some() {
+                    let mut combined =
                         blockgame_render::build_arrows_mesh(&state.world_manager.arrows);
+                    if let Some((bpos, is_biting)) = bobber_info {
+                        let right = state.camera.forward().cross(Vec3::Y).normalize_or_zero();
+                        let rod_tip = state.camera.position
+                            + state.camera.forward() * 0.85
+                            + right * 0.35
+                            - Vec3::new(0.0, 0.12, 0.0);
+                        let bobber_mesh =
+                            blockgame_render::build_fishing_bobber_mesh(rod_tip, bpos, is_biting);
+                        let base = combined.vertices.len() as u32;
+                        combined.vertices.extend(bobber_mesh.vertices);
+                        combined
+                            .indices
+                            .extend(bobber_mesh.indices.into_iter().map(|i| i + base));
+                    }
                     state.arrow_dynamic_mesh.update(
                         &state.device,
                         &state.queue,
-                        &arrows_mesh.vertices,
-                        &arrows_mesh.indices,
+                        &combined.vertices,
+                        &combined.indices,
                     );
                 } else {
                     state.arrow_dynamic_mesh.clear();

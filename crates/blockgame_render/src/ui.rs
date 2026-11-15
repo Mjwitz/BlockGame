@@ -6009,6 +6009,233 @@ impl UiBuilder {
             by += 20.0;
         }
     }
+
+    /// Renders the Stardew Valley-style fishing HUD overlay (cast status, bite alert, or minigame).
+    pub fn build_fishing_hud(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        state: &FishingHudState,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(241);
+
+        match &state.phase {
+            FishingHudPhase::Waiting => {
+                let msg = format!(
+                    "Fishing ({}) - Waiting for bite... [Right-Click to reel]",
+                    state.tackle_summary
+                );
+                let tw = Self::string_width(&msg, 8.0, 1.0) + 18.0;
+                let bx = (screen_w - tw) * 0.5;
+                let by = screen_h * 0.72;
+                mesh.add_quad(bx, by, tw, 24.0, white_uv, [0.04, 0.08, 0.14, 0.72]);
+                Self::draw_string(
+                    mesh,
+                    bx + 9.0,
+                    by + 6.0,
+                    &msg,
+                    8.0,
+                    11.5,
+                    1.0,
+                    [0.85, 0.94, 1.0, 0.95],
+                );
+            }
+            FishingHudPhase::Biting => {
+                let msg = "! BITE !  Right-Click to Hook!";
+                let tw = Self::string_width(msg, 12.0, 1.0) + 28.0;
+                let bx = (screen_w - tw) * 0.5;
+                let by = screen_h * 0.36;
+                mesh.add_quad(bx - 2.0, by - 2.0, tw + 4.0, 34.0, white_uv, [0.95, 0.72, 0.12, 0.95]);
+                mesh.add_quad(bx, by, tw, 30.0, white_uv, [0.14, 0.08, 0.02, 0.90]);
+                Self::draw_string(
+                    mesh,
+                    bx + 14.0,
+                    by + 7.5,
+                    msg,
+                    12.0,
+                    15.5,
+                    1.0,
+                    [1.0, 0.92, 0.30, 1.0],
+                );
+            }
+            FishingHudPhase::Minigame {
+                bar_pos,
+                bar_height,
+                fish_pos,
+                progress,
+                fish_in_bar,
+                fish_tile,
+                fish_name,
+                is_rare,
+            } => {
+                // Stardew-style vertical column on right-center of screen
+                let track_h = (screen_h * 0.46).clamp(240.0, 360.0);
+                let track_w = 34.0;
+                let prog_w = 14.0;
+                let panel_w = track_w + prog_w + 30.0;
+                let panel_h = track_h + 62.0;
+                let px = (screen_w * 0.5 + 150.0).min(screen_w - panel_w - 20.0);
+                let py = (screen_h - panel_h) * 0.5;
+
+                // Outer wooden frame
+                mesh.add_quad(px, py, panel_w, panel_h, white_uv, [0.36, 0.22, 0.12, 0.95]);
+                mesh.add_quad(
+                    px + 3.0,
+                    py + 3.0,
+                    panel_w - 6.0,
+                    panel_h - 6.0,
+                    white_uv,
+                    [0.14, 0.10, 0.08, 0.92],
+                );
+
+                // Water track background (0 = bottom, 1 = top)
+                let tx = px + 11.0;
+                let ty = py + 28.0;
+                mesh.add_quad(tx, ty, track_w, track_h, white_uv, [0.06, 0.22, 0.42, 0.96]);
+                mesh.add_quad(
+                    tx + 2.0,
+                    ty + 2.0,
+                    track_w - 4.0,
+                    track_h - 4.0,
+                    white_uv,
+                    [0.08, 0.32, 0.58, 0.96],
+                );
+
+                // Green catch bar (bar_pos is bottom edge in 0..=1)
+                let bh_px = (*bar_height * track_h).max(20.0);
+                let bar_bottom_y = ty + track_h - (*bar_pos * track_h);
+                let bar_top_y = (bar_bottom_y - bh_px).max(ty);
+                let bar_color = if *fish_in_bar {
+                    [0.24, 0.95, 0.36, 0.92]
+                } else {
+                    [0.18, 0.72, 0.28, 0.78]
+                };
+                mesh.add_quad(
+                    tx + 3.0,
+                    bar_top_y,
+                    track_w - 6.0,
+                    (bar_bottom_y - bar_top_y).max(4.0),
+                    white_uv,
+                    bar_color,
+                );
+                // Bright inner highlight on catch bar
+                mesh.add_quad(
+                    tx + 5.0,
+                    bar_top_y + 2.0,
+                    track_w - 10.0,
+                    ((bar_bottom_y - bar_top_y) - 4.0).max(2.0),
+                    white_uv,
+                    if *fish_in_bar {
+                        [0.52, 1.0, 0.62, 0.65]
+                    } else {
+                        [0.35, 0.85, 0.45, 0.45]
+                    },
+                );
+
+                // Fish sprite positioned at fish_pos (0 = bottom, 1 = top)
+                let fish_size = 24.0;
+                let fish_cy = ty + track_h - (*fish_pos * track_h);
+                let fish_y = (fish_cy - fish_size * 0.5).clamp(ty + 2.0, ty + track_h - fish_size - 2.0);
+                let fish_uv = TextureAtlas::get_uv_bounds(*fish_tile);
+                mesh.add_quad(
+                    tx + (track_w - fish_size) * 0.5,
+                    fish_y,
+                    fish_size,
+                    fish_size,
+                    fish_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                if *is_rare {
+                    // Small golden crown/pip next to rare fish
+                    mesh.add_quad(
+                        tx + track_w - 8.0,
+                        fish_y,
+                        6.0,
+                        6.0,
+                        white_uv,
+                        [1.0, 0.85, 0.15, 1.0],
+                    );
+                }
+
+                // Vertical catch progress meter on right side of track
+                let mx = tx + track_w + 8.0;
+                mesh.add_quad(mx, ty, prog_w, track_h, white_uv, [0.06, 0.06, 0.08, 0.95]);
+                let fill_h = (progress.clamp(0.0, 1.0) * (track_h - 4.0)).max(2.0);
+                let p_color = if *progress > 0.65 {
+                    [0.25, 0.94, 0.35, 1.0]
+                } else if *progress > 0.30 {
+                    [0.96, 0.82, 0.18, 1.0]
+                } else {
+                    [0.94, 0.25, 0.20, 1.0]
+                };
+                mesh.add_quad(
+                    mx + 2.0,
+                    ty + track_h - 2.0 - fill_h,
+                    prog_w - 4.0,
+                    fill_h,
+                    white_uv,
+                    p_color,
+                );
+
+                // Header & footer labels
+                let title = if *is_rare {
+                    format!("* {} *", fish_name)
+                } else {
+                    "REELING!".to_string()
+                };
+                let tw = Self::string_width(&title, 7.5, 1.0);
+                Self::draw_string(
+                    mesh,
+                    px + (panel_w - tw) * 0.5,
+                    py + 9.0,
+                    &title,
+                    7.5,
+                    11.0,
+                    1.0,
+                    if *is_rare {
+                        [1.0, 0.88, 0.25, 1.0]
+                    } else {
+                        [0.92, 0.96, 1.0, 1.0]
+                    },
+                );
+
+                let hint = "Hold CLICK/SPACE";
+                let hw = Self::string_width(hint, 6.0, 1.0);
+                Self::draw_string(
+                    mesh,
+                    px + (panel_w - hw) * 0.5,
+                    py + panel_h - 24.0,
+                    hint,
+                    6.0,
+                    9.0,
+                    1.0,
+                    [0.85, 0.92, 0.80, 0.95],
+                );
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum FishingHudPhase {
+    Waiting,
+    Biting,
+    Minigame {
+        bar_pos: f32,
+        bar_height: f32,
+        fish_pos: f32,
+        progress: f32,
+        fish_in_bar: bool,
+        fish_tile: u16,
+        fish_name: String,
+        is_rare: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct FishingHudState {
+    pub phase: FishingHudPhase,
+    pub tackle_summary: String,
 }
 
 #[cfg(test)]
