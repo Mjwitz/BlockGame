@@ -200,9 +200,27 @@ impl PlayerPhysics {
         world: &World,
         registry: &BlockRegistry,
     ) -> f32 {
+        self.update_with_modifiers(dt, wish_dir, sprinting, jumping, world, registry, 1.0, 1.0)
+    }
+
+    /// Updates player physics with skill modifiers for movement speed and jump height.
+    /// Returns any fall damage incurred upon landing.
+    pub fn update_with_modifiers(
+        &mut self,
+        dt: f32,
+        wish_dir: Vec3,
+        sprinting: bool,
+        jumping: bool,
+        world: &World,
+        registry: &BlockRegistry,
+        move_speed_mult: f32,
+        jump_mult: f32,
+    ) -> f32 {
+        let speed_mult = move_speed_mult.clamp(0.5, 2.5);
+        let jump_mult = jump_mult.clamp(0.5, 2.0);
         if self.flying {
             // Free flight mode
-            let speed = if sprinting { 30.0 } else { 15.0 };
+            let speed = (if sprinting { 30.0 } else { 15.0 }) * speed_mult;
             self.position += wish_dir * speed * dt;
             self.velocity = Vec3::ZERO;
             self.on_ground = false;
@@ -227,11 +245,11 @@ impl PlayerPhysics {
 
             // Swimming upward
             if jumping {
-                self.velocity.y = 4.0;
+                self.velocity.y = 4.0 * jump_mult;
             }
 
             // Water horizontal movement
-            let target_speed = if sprinting { 3.8 } else { 2.4 };
+            let target_speed = (if sprinting { 3.8 } else { 2.4 }) * speed_mult;
             let target_vel = wish_dir * target_speed;
             let accel = 8.0;
             self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
@@ -243,13 +261,13 @@ impl PlayerPhysics {
 
             // Ground jumping
             if self.on_ground && jumping {
-                self.velocity.y = 8.5; // Jump velocity
+                self.velocity.y = 8.5 * jump_mult; // Jump velocity
                 self.on_ground = false;
                 self.fall_distance = 0.0;
             }
 
             // Horizontal movement & acceleration
-            let target_speed = if sprinting { 6.0 } else { 4.3 };
+            let target_speed = (if sprinting { 6.0 } else { 4.3 }) * speed_mult;
             let target_vel = wish_dir * target_speed;
 
             let accel = if self.on_ground { 15.0 } else { 3.0 };

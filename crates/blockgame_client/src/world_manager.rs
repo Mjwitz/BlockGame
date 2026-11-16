@@ -897,6 +897,103 @@ impl WorldManager {
         Some(broken_block)
     }
 
+    /// Woodcutting Lv 250+ Tree Feller: fells up to `max_logs` connected log blocks above/adjacent to `root_pos`.
+    pub fn fell_connected_logs(
+        &mut self,
+        root_pos: IVec3,
+        max_logs: usize,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> Vec<(IVec3, BlockId)> {
+        use std::collections::{HashSet, VecDeque};
+        if max_logs == 0 {
+            return Vec::new();
+        }
+
+        let mut felled = Vec::new();
+        let mut chunks_to_rebuild = Vec::new();
+        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+            let mut world = self.world.lock().unwrap();
+            let mut visited: HashSet<IVec3> = HashSet::new();
+            let mut queue: VecDeque<IVec3> = VecDeque::new();
+            visited.insert(root_pos);
+            queue.push_back(root_pos);
+
+            while let Some(cur) = queue.pop_front() {
+                if felled.len() >= max_logs {
+                    break;
+                }
+                for dy in 0..=1 {
+                    for dz in -1..=1 {
+                        for dx in -1..=1 {
+                            if dx == 0 && dy == 0 && dz == 0 {
+                                continue;
+                            }
+                            let npos = cur + IVec3::new(dx, dy, dz);
+                            if !visited.insert(npos) {
+                                continue;
+                            }
+                            let bid = world.get_block(npos);
+                            if bid.is_log() {
+                                world.set_block(npos, BlockId::AIR);
+                                Self::add_chunk_and_neighbors(npos, &mut chunks_to_rebuild);
+                                felled.push((npos, bid));
+                                queue.push_back(npos);
+                                if felled.len() >= max_logs {
+                                    break;
+                                }
+                            }
+                        }
+                        if felled.len() >= max_logs {
+                            break;
+                        }
+                    }
+                    if felled.len() >= max_logs {
+                        break;
+                    }
+                }
+            }
+
+            if felled.is_empty() {
+                return felled;
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+            let mesher = ChunkMesher::new(&self.registry);
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world.get_chunk(cpos).map(|chunk| {
+                        let origin = cpos.to_world_origin();
+                        let sources = world.get_light_sources_near(origin, 15);
+                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
+                            world.get_block(origin + IVec3::new(x, y, z))
+                        });
+                        (cpos, mesh)
+                    })
+                })
+                .collect()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+
+        if let Some(&(last_pos, _)) = felled.last() {
+            let world = self.world.lock().unwrap();
+            let decaying = find_decaying_leaves_around_pos(last_pos, 5, |p| world.get_block(p));
+            for (i, lp) in decaying.into_iter().enumerate() {
+                if !self.decaying_leaves.iter().any(|(p, _)| *p == lp) {
+                    let delay = 0.1 + (i as f32 * 0.05);
+                    self.decaying_leaves.push((lp, delay));
+                }
+            }
+        }
+
+        felled
+    }
+
     /// Spawns a floating item drop at the given world position
     pub fn spawn_item_drop(&mut self, pos: Vec3, item: ItemSlot) {
         if !item.is_empty() {
@@ -1473,13 +1570,14 @@ impl WorldManager {
     }
 
     /// Performs raycast attack against closest monster within reach.
+    /// Returns `(kind, position, killed)` on hit.
     pub fn attack_monster(
         &mut self,
         ray_origin: Vec3,
         ray_dir: Vec3,
         reach: f32,
         damage: f32,
-    ) -> Option<(blockgame_core::monster::MonsterKind, Vec3)> {
+    ) -> Option<(blockgame_core::monster::MonsterKind, Vec3, bool)> {
         let mut closest_dist = reach;
         let mut hit_idx = None;
 
@@ -1499,7 +1597,11 @@ impl WorldManager {
         if let Some(idx) = hit_idx {
             let knockback = ray_dir.normalize_or_zero();
             self.monsters[idx].take_damage(damage, knockback);
-            Some((self.monsters[idx].kind, self.monsters[idx].position))
+            Some((
+                self.monsters[idx].kind,
+                self.monsters[idx].position,
+                self.monsters[idx].dead,
+            ))
         } else {
             None
         }
@@ -1606,14 +1708,17 @@ impl WorldManager {
     }
 
     /// Updates all active arrow projectiles and applies hits to monsters, animals, or the player.
+    /// Returns `(player_damage_taken, monster_hits, monster_kills)`.
     pub fn update_arrows(
         &mut self,
         dt: f32,
         player_pos: Vec3,
         player_half_width: f32,
         player_height: f32,
-    ) -> f32 {
+    ) -> (f32, usize, usize) {
         let mut total_player_damage = 0.0;
+        let mut monster_hits = 0;
+        let mut monster_kills = 0;
         let player_box = AABB::from_player(player_pos, player_half_width, player_height);
         let world_guard = self.world.lock().unwrap();
 
@@ -1639,6 +1744,10 @@ impl WorldManager {
                         && p.z <= b.max.z + 0.15
                     {
                         monster.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
+                        monster_hits += 1;
+                        if monster.dead {
+                            monster_kills += 1;
+                        }
                         arrow.dead = true;
                         hit = true;
                         break;
@@ -1679,7 +1788,7 @@ impl WorldManager {
         }
 
         self.arrows.retain(|a| !a.dead);
-        total_player_damage
+        (total_player_damage, monster_hits, monster_kills)
     }
 
     /// Tills Grass or Dirt into Farmland using a Hoe.
@@ -2458,6 +2567,7 @@ mod tests {
             active_hotbar_slot: 2,
             rank: "default".to_string(),
             homes: std::collections::HashMap::new(),
+            skills: blockgame_core::PlayerSkills::new(),
         };
 
         let save_data = wm.capture_save_data(meta, player_state);

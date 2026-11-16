@@ -110,6 +110,30 @@ pub struct CommandOutput {
     pub del_home: Option<(u32, String)>,
     /// GameMode updates: `(player_id, new_mode)`.
     pub gamemode_updates: Vec<(u32, crate::player::GameMode)>,
+    /// Skill inspection or modification actions: handled by the server loop.
+    pub skill_actions: Vec<SkillCommandAction>,
+}
+
+/// Skill inspection or administrative adjustment produced by `/skills`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillCommandAction {
+    View {
+        requester_pid: u32,
+        skill: Option<crate::skills::SkillKind>,
+    },
+    Set {
+        target_pid: u32,
+        skill: crate::skills::SkillKind,
+        level: u16,
+    },
+    AddXp {
+        target_pid: u32,
+        skill: crate::skills::SkillKind,
+        amount: u64,
+    },
+    Reset {
+        target_pid: u32,
+    },
 }
 
 impl CommandOutput {
@@ -1261,6 +1285,164 @@ pub fn execute_command(
             }
         }
 
+        // --- 15b. SKILLS COMMAND ---
+        "skills" | "skill" => {
+            if args.is_empty() {
+                if !check_perm("blockgame.command.skills") {
+                    return CommandOutput::error("You do not have permission: blockgame.command.skills");
+                }
+                let Some(pid) = source.player_id() else {
+                    return CommandOutput::error(
+                        "Console usage: /skills <set|addxp|reset> <player> ...",
+                    );
+                };
+                out.skill_actions.push(SkillCommandAction::View {
+                    requester_pid: pid,
+                    skill: None,
+                });
+            } else if let Some(skill) = crate::skills::SkillKind::parse(args[0]) {
+                if !check_perm("blockgame.command.skills") {
+                    return CommandOutput::error("You do not have permission: blockgame.command.skills");
+                }
+                let Some(pid) = source.player_id() else {
+                    return CommandOutput::error(
+                        "Console usage: /skills <set|addxp|reset> <player> ...",
+                    );
+                };
+                out.skill_actions.push(SkillCommandAction::View {
+                    requester_pid: pid,
+                    skill: Some(skill),
+                });
+            } else {
+                match args[0].to_ascii_lowercase().as_str() {
+                    "set" => {
+                        if !check_perm("blockgame.command.skills.admin") {
+                            return CommandOutput::error(
+                                "You do not have permission: blockgame.command.skills.admin",
+                            );
+                        }
+                        if args.len() < 4 {
+                            return CommandOutput::error(
+                                "Usage: /skills set <player> <skill> <level>",
+                            );
+                        }
+                        let target_name = args[1];
+                        let Some(target) = online_players
+                            .iter()
+                            .find(|p| p.username.eq_ignore_ascii_case(target_name))
+                        else {
+                            return CommandOutput::error(format!(
+                                "Player '{}' is not online.",
+                                target_name
+                            ));
+                        };
+                        let Some(skill) = crate::skills::SkillKind::parse(args[2]) else {
+                            return CommandOutput::error(format!(
+                                "Unknown skill '{}'. Valid: combat, woodcutting, mining, fishing, digging, farming, agility",
+                                args[2]
+                            ));
+                        };
+                        let Ok(level) = args[3].parse::<u16>() else {
+                            return CommandOutput::error(format!(
+                                "Invalid level '{}'. Must be 1..={}.",
+                                args[3],
+                                crate::skills::MAX_SKILL_LEVEL
+                            ));
+                        };
+                        let clamped = level.clamp(1, crate::skills::MAX_SKILL_LEVEL);
+                        out.skill_actions.push(SkillCommandAction::Set {
+                            target_pid: target.player_id,
+                            skill,
+                            level: clamped,
+                        });
+                        out.feedback.push(format!(
+                            "Set {}'s {} level to {}.",
+                            target.username,
+                            skill.name(),
+                            clamped
+                        ));
+                    }
+                    "addxp" | "xp" => {
+                        if !check_perm("blockgame.command.skills.admin") {
+                            return CommandOutput::error(
+                                "You do not have permission: blockgame.command.skills.admin",
+                            );
+                        }
+                        if args.len() < 4 {
+                            return CommandOutput::error(
+                                "Usage: /skills addxp <player> <skill> <amount>",
+                            );
+                        }
+                        let target_name = args[1];
+                        let Some(target) = online_players
+                            .iter()
+                            .find(|p| p.username.eq_ignore_ascii_case(target_name))
+                        else {
+                            return CommandOutput::error(format!(
+                                "Player '{}' is not online.",
+                                target_name
+                            ));
+                        };
+                        let Some(skill) = crate::skills::SkillKind::parse(args[2]) else {
+                            return CommandOutput::error(format!(
+                                "Unknown skill '{}'. Valid: combat, woodcutting, mining, fishing, digging, farming, agility",
+                                args[2]
+                            ));
+                        };
+                        let Ok(amount) = args[3].parse::<u64>() else {
+                            return CommandOutput::error("XP amount must be a positive integer.");
+                        };
+                        if amount == 0 {
+                            return CommandOutput::error("XP amount must be greater than 0.");
+                        }
+                        out.skill_actions.push(SkillCommandAction::AddXp {
+                            target_pid: target.player_id,
+                            skill,
+                            amount,
+                        });
+                        out.feedback.push(format!(
+                            "Granted {} {} XP to {}.",
+                            amount,
+                            skill.name(),
+                            target.username
+                        ));
+                    }
+                    "reset" => {
+                        if !check_perm("blockgame.command.skills.admin") {
+                            return CommandOutput::error(
+                                "You do not have permission: blockgame.command.skills.admin",
+                            );
+                        }
+                        if args.len() < 2 {
+                            return CommandOutput::error("Usage: /skills reset <player>");
+                        }
+                        let target_name = args[1];
+                        let Some(target) = online_players
+                            .iter()
+                            .find(|p| p.username.eq_ignore_ascii_case(target_name))
+                        else {
+                            return CommandOutput::error(format!(
+                                "Player '{}' is not online.",
+                                target_name
+                            ));
+                        };
+                        out.skill_actions.push(SkillCommandAction::Reset {
+                            target_pid: target.player_id,
+                        });
+                        out.feedback.push(format!(
+                            "Reset all skills for {} to level 1.",
+                            target.username
+                        ));
+                    }
+                    _ => {
+                        return CommandOutput::error(
+                            "Usage: /skills [skill] or /skills <set|addxp|reset> <player> ...",
+                        );
+                    }
+                }
+            }
+        }
+
         // --- 16. HELP COMMAND ---
         "help" | "?" => {
             out.feedback.push("Available Commands:".to_string());
@@ -1296,6 +1478,12 @@ pub fn execute_command(
                 out.feedback.push("  /tpa <player> - Request teleport to player".to_string());
                 out.feedback.push("  /tpaccept - Accept incoming teleport request".to_string());
                 out.feedback.push("  /tpdeny - Deny incoming teleport request".to_string());
+            }
+            if check_perm("blockgame.command.skills") {
+                out.feedback.push("  /skills [skill] - View your MMO skill levels & milestones".to_string());
+            }
+            if check_perm("blockgame.command.skills.admin") {
+                out.feedback.push("  /skills <set|addxp|reset> <player> ... - Manage player skills".to_string());
             }
             if check_perm("blockgame.command.give") {
                 out.feedback.push("  /give <player> <item> [amount] - Give items to player".to_string());
@@ -1857,7 +2045,7 @@ mod tests {
         assert!(res.feedback[0].contains("Unbanned IP '10.0.0.1'"));
 
         // 5. Console runs /ban-ip directly with raw IP address
-        let res = exec(
+        let _res = exec(
             &CommandSource::Console,
             "/ban-ip 192.168.1.55 Proxy botting",
             &online,
@@ -1927,5 +2115,136 @@ mod tests {
         );
         assert!(res.gamemode_updates.is_empty());
         assert!(res.feedback[0].contains("Unknown game mode"));
+    }
+
+    #[test]
+    fn test_skills_command() {
+        let mut perms = PermissionsManager::new();
+        let _ = perms.add_player_group("Alice", "admin");
+        let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let registry = ItemRegistry::new();
+        let spawn = Vec3::new(0.0, 65.0, 0.0);
+        let online = vec![
+            OnlinePlayerInfo::new(1, "Alice", Vec3::ZERO, 0.0, 0.0).with_ip("127.0.0.1"),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::ZERO, 0.0, 0.0).with_ip("127.0.0.2"),
+        ];
+
+        // 1. Default player Bob can view all skills (/skills) and a specific skill (/skills mining)
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 2,
+                username: "Bob".to_string(),
+            },
+            "/skills",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(
+            res.skill_actions,
+            vec![SkillCommandAction::View {
+                requester_pid: 2,
+                skill: None,
+            }]
+        );
+
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 2,
+                username: "Bob".to_string(),
+            },
+            "/skill mining",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(
+            res.skill_actions,
+            vec![SkillCommandAction::View {
+                requester_pid: 2,
+                skill: Some(crate::skills::SkillKind::Mining),
+            }]
+        );
+
+        // 2. Non-admin Bob cannot set skills
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 2,
+                username: "Bob".to_string(),
+            },
+            "/skills set Alice mining 250",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.skill_actions.is_empty());
+        assert!(res.feedback[0].contains("do not have permission"));
+
+        // 3. Admin Alice can set, addxp, and reset skills (with level clamp to 1000)
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/skills set Bob mining 2500",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(
+            res.skill_actions,
+            vec![SkillCommandAction::Set {
+                target_pid: 2,
+                skill: crate::skills::SkillKind::Mining,
+                level: crate::skills::MAX_SKILL_LEVEL,
+            }]
+        );
+
+        let res = exec(
+            &CommandSource::Console,
+            "/skills addxp Bob combat 500",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(
+            res.skill_actions,
+            vec![SkillCommandAction::AddXp {
+                target_pid: 2,
+                skill: crate::skills::SkillKind::Combat,
+                amount: 500,
+            }]
+        );
+
+        let res = exec(
+            &CommandSource::Console,
+            "/skills reset Bob",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(
+            res.skill_actions,
+            vec![SkillCommandAction::Reset { target_pid: 2 }]
+        );
     }
 }

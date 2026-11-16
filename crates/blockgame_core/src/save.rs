@@ -66,6 +66,7 @@ pub struct SavedPlayerState {
     pub active_hotbar_slot: usize,
     pub rank: String,
     pub homes: HashMap<String, (Vec3, f32, f32)>,
+    pub skills: crate::skills::PlayerSkills,
 }
 
 impl Default for SavedPlayerState {
@@ -80,6 +81,7 @@ impl Default for SavedPlayerState {
             active_hotbar_slot: 0,
             rank: "default".to_string(),
             homes: HashMap::new(),
+            skills: crate::skills::PlayerSkills::new(),
         }
     }
 }
@@ -382,6 +384,10 @@ pub fn save_player_data(
         write_f32(&mut w, *pitch)?;
     }
     write_u8(&mut w, player.stats.game_mode as u8)?;
+    for entry in &player.skills.entries {
+        write_u16(&mut w, entry.level)?;
+        write_u64(&mut w, entry.xp)?;
+    }
 
     w.flush()?;
     Ok(file_path)
@@ -449,6 +455,7 @@ pub fn load_player_data(
     }
 
     let mut homes = HashMap::new();
+    let mut skills = crate::skills::PlayerSkills::new();
     if version >= 2 {
         if let Ok(home_count) = read_u32(&mut r) {
             for _ in 0..home_count {
@@ -465,6 +472,16 @@ pub fn load_player_data(
         if let Ok(gm) = read_u8(&mut r) {
             stats.game_mode = crate::player::GameMode::from_u8(gm);
         }
+        for i in 0..crate::skills::SKILL_COUNT {
+            if let (Ok(lvl), Ok(xp)) = (read_u16(&mut r), read_u64(&mut r)) {
+                skills.entries[i] = crate::skills::SkillProgress {
+                    level: lvl.clamp(1, crate::skills::MAX_SKILL_LEVEL),
+                    xp,
+                };
+            } else {
+                break;
+            }
+        }
     }
 
     Ok(Some(SavedPlayerState {
@@ -477,6 +494,7 @@ pub fn load_player_data(
         active_hotbar_slot,
         rank: if rank.is_empty() { "default".to_string() } else { rank },
         homes,
+        skills,
     }))
 }
 
@@ -1027,6 +1045,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 active_hotbar_slot,
                 rank: "default".to_string(),
                 homes: HashMap::new(),
+                skills: crate::skills::PlayerSkills::new(),
             })
         } else {
             None
@@ -1848,6 +1867,7 @@ mod tests {
                 active_hotbar_slot: 0,
                 rank: "default".to_string(),
                 homes: std::collections::HashMap::new(),
+                skills: crate::skills::PlayerSkills::new(),
             },
             modified_chunks: HashMap::new(),
             chest_containers: HashMap::new(),
@@ -1872,6 +1892,51 @@ mod tests {
             load_world_from_dir(&temp_root, "creative_test").expect("load_world_from_dir");
         assert_eq!(loaded.metadata.game_mode, crate::GameMode::Creative);
         assert_eq!(loaded.player.stats.game_mode, crate::GameMode::Creative);
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_skills_save_load_roundtrip_and_truncation_fallback() {
+        let mut temp_root = std::env::temp_dir();
+        temp_root.push(format!("blockgame_skills_save_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let mut skills = crate::skills::PlayerSkills::new();
+        skills.set_level(crate::skills::SkillKind::Mining, 250);
+        skills.add_xp(crate::skills::SkillKind::Fishing, 1450);
+        skills.set_level(crate::skills::SkillKind::Agility, 1000);
+
+        let mut meta = WorldMetadata::new("Skills World", 9001);
+        meta.folder_name = "skills_world".to_string();
+        let mut player = SavedPlayerState::default();
+        player.skills = skills.clone();
+        let mut save = WorldSaveData::new(meta, player.clone());
+        let world_dir = save_world_to_dir(&temp_root, &mut save).expect("save_world_to_dir");
+
+        // 1. Singleplayer level.dat roundtrip preserves all skill levels & XP
+        let loaded = load_world_from_dir(&temp_root, "skills_world").expect("load_world_from_dir");
+        assert_eq!(loaded.player.skills, skills);
+
+        // 2. Per-player .dat roundtrip preserves all skill levels & XP
+        save_player_data(&world_dir, "Skiller", &player).expect("save_player_data");
+        let loaded_p = load_player_data(&world_dir, "Skiller")
+            .expect("load_player_data")
+            .expect("player exists");
+        assert_eq!(loaded_p.skills, skills);
+
+        // 3. Truncating trailing skill bytes (simulating older player.dat save) still loads cleanly at Lv 1
+        let p_path = world_dir.join("players").join("skiller.dat");
+        let bytes = fs::read(&p_path).unwrap();
+        let trailing_skill_bytes = crate::skills::SKILL_COUNT * (2 + 8);
+        assert!(bytes.len() > trailing_skill_bytes);
+        fs::write(&p_path, &bytes[..bytes.len() - trailing_skill_bytes]).unwrap();
+
+        let loaded_old = load_player_data(&world_dir, "Skiller")
+            .expect("old player.dat without skills suffix must still load")
+            .expect("player exists");
+        assert_eq!(loaded_old.skills, crate::skills::PlayerSkills::new());
 
         let _ = fs::remove_dir_all(&temp_root);
     }

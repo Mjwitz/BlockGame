@@ -4718,7 +4718,7 @@ impl UiBuilder {
         ]
     }
 
-    /// Returns the keybind button rectangle `[x, y, w, h]` for keybind index `0..13`.
+    /// Returns the keybind button rectangle `[x, y, w, h]` for keybind index `0..14`.
     pub fn settings_keybind_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let col_w = 270.0;
         let gap_x = 24.0;
@@ -6250,6 +6250,476 @@ impl UiBuilder {
                     [0.85, 0.92, 0.80, 0.95],
                 );
             }
+        }
+    }
+
+    fn draw_wrapped_string(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        max_w: f32,
+        text: &str,
+        char_w: f32,
+        char_h: f32,
+        spacing: f32,
+        line_step: f32,
+        color: [f32; 4],
+    ) -> f32 {
+        let mut cur_y = y;
+        let mut line = String::new();
+        for word in text.split_whitespace() {
+            let cand = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{} {}", line, word)
+            };
+            if !line.is_empty() && Self::string_width(&cand, char_w, spacing) > max_w {
+                Self::draw_string(mesh, x, cur_y, &line, char_w, char_h, spacing, color);
+                cur_y += line_step;
+                line = word.to_string();
+            } else {
+                line = cand;
+            }
+        }
+        if !line.is_empty() {
+            Self::draw_string(mesh, x, cur_y, &line, char_w, char_h, spacing, color);
+            cur_y += line_step;
+        }
+        cur_y
+    }
+
+    /// Returns `(skill_row_rects, close_button_rect, panel_rect)` for the Skills modal screen.
+    pub fn skills_screen_rects(
+        screen_w: f32,
+        screen_h: f32,
+    ) -> ([[f32; 4]; blockgame_core::skills::SKILL_COUNT], [f32; 4], [f32; 4]) {
+        let panel_w = (screen_w - 40.0).clamp(540.0, 840.0);
+        let panel_h = (screen_h - 40.0).clamp(430.0, 540.0);
+        let px = (screen_w - panel_w) * 0.5;
+        let py = (screen_h - panel_h) * 0.5;
+
+        let list_x = px + 14.0;
+        let list_w = 270.0_f32.min(panel_w * 0.36);
+        let content_y = py + 52.0;
+        let content_h = panel_h - 66.0;
+        let gap = 6.0;
+        let n = blockgame_core::skills::SKILL_COUNT;
+        let row_h = ((content_h - gap * (n as f32 - 1.0)) / n as f32).max(36.0);
+
+        let mut rows = [[0.0; 4]; blockgame_core::skills::SKILL_COUNT];
+        for (i, rect) in rows.iter_mut().enumerate() {
+            *rect = [list_x, content_y + i as f32 * (row_h + gap), list_w, row_h];
+        }
+
+        let close_rect = [px + panel_w - 92.0, py + 11.0, 78.0, 26.0];
+        let panel_rect = [px, py, panel_w, panel_h];
+        (rows, close_rect, panel_rect)
+    }
+
+    fn skill_accent_color(skill: blockgame_core::skills::SkillKind) -> [f32; 4] {
+        use blockgame_core::skills::SkillKind;
+        match skill {
+            SkillKind::Combat => [0.92, 0.34, 0.34, 1.0],
+            SkillKind::Woodcutting => [0.40, 0.80, 0.36, 1.0],
+            SkillKind::Mining => [0.48, 0.72, 0.96, 1.0],
+            SkillKind::Fishing => [0.28, 0.82, 0.92, 1.0],
+            SkillKind::Digging => [0.85, 0.68, 0.38, 1.0],
+            SkillKind::Farming => [0.68, 0.90, 0.32, 1.0],
+            SkillKind::Agility => [0.94, 0.74, 0.25, 1.0],
+        }
+    }
+
+    /// Builds the interactive MMO Skills & Milestones screen (`KeyK` default).
+    pub fn build_skills_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        skills: &blockgame_core::skills::PlayerSkills,
+        selected_idx: usize,
+        cursor_pos: [f32; 2],
+    ) {
+        use blockgame_core::skills::{PlayerSkills, SkillKind, MAX_SKILL_LEVEL, SKILL_COUNT};
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Backdrop
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.04, 0.05, 0.08, 0.80],
+        );
+
+        let (row_rects, close_rect, panel) = Self::skills_screen_rects(screen_w, screen_h);
+        let [px, py, pw, ph] = panel;
+        let selected_idx = selected_idx.min(SKILL_COUNT - 1);
+
+        // Main panel frame
+        mesh.add_quad(px, py, pw, ph, white_uv, [0.42, 0.48, 0.58, 0.95]);
+        mesh.add_quad(
+            px + 2.0,
+            py + 2.0,
+            pw - 4.0,
+            ph - 4.0,
+            white_uv,
+            [0.09, 0.11, 0.15, 0.97],
+        );
+        // Header strip
+        mesh.add_quad(
+            px + 2.0,
+            py + 2.0,
+            pw - 4.0,
+            42.0,
+            white_uv,
+            [0.14, 0.17, 0.23, 0.98],
+        );
+
+        Self::draw_string(
+            mesh,
+            px + 16.0,
+            py + 13.0,
+            "MMO Skills",
+            12.0,
+            17.0,
+            1.2,
+            [1.0, 0.92, 0.45, 1.0],
+        );
+
+        let total_str = format!(
+            "Total Lv: {} / {}",
+            skills.total_level(),
+            SKILL_COUNT as u32 * MAX_SKILL_LEVEL as u32
+        );
+        let tsw = Self::string_width(&total_str, 8.5, 1.0);
+        Self::draw_string(
+            mesh,
+            close_rect[0] - tsw - 18.0,
+            py + 17.0,
+            &total_str,
+            8.5,
+            12.0,
+            1.0,
+            [0.82, 0.88, 0.95, 1.0],
+        );
+
+        Self::draw_menu_button(
+            mesh,
+            close_rect[0],
+            close_rect[1],
+            close_rect[2],
+            close_rect[3],
+            "Close",
+            cursor_pos,
+            true,
+        );
+
+        // Left skill list
+        for (i, skill) in SkillKind::ALL.iter().enumerate() {
+            let r = row_rects[i];
+            let prog = skills.get(*skill);
+            let is_selected = i == selected_idx;
+            let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
+            let accent = Self::skill_accent_color(*skill);
+
+            let border = if is_selected {
+                accent
+            } else if hovered {
+                [0.72, 0.76, 0.84, 0.95]
+            } else {
+                [0.26, 0.30, 0.38, 0.9]
+            };
+            let bg = if is_selected {
+                [0.17, 0.21, 0.28, 0.98]
+            } else {
+                [0.12, 0.14, 0.19, 0.92]
+            };
+
+            mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+            mesh.add_quad(r[0] + 2.0, r[1] + 2.0, r[2] - 4.0, r[3] - 4.0, white_uv, bg);
+            // Left accent pip
+            mesh.add_quad(r[0] + 2.0, r[1] + 2.0, 4.0, r[3] - 4.0, white_uv, accent);
+
+            Self::draw_string(
+                mesh,
+                r[0] + 12.0,
+                r[1] + 7.0,
+                skill.name(),
+                8.5,
+                12.0,
+                1.0,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+
+            let lvl_str = format!("Lv {}", prog.level);
+            let lsw = Self::string_width(&lvl_str, 8.5, 1.0);
+            Self::draw_string(
+                mesh,
+                r[0] + r[2] - lsw - 10.0,
+                r[1] + 7.0,
+                &lvl_str,
+                8.5,
+                12.0,
+                1.0,
+                accent,
+            );
+
+            // XP progress bar
+            let bar_x = r[0] + 12.0;
+            let bar_w = r[2] - 22.0;
+            let bar_y = r[1] + r[3] * 0.52;
+            let bar_h = 6.0;
+            mesh.add_quad(bar_x, bar_y, bar_w, bar_h, white_uv, [0.05, 0.06, 0.08, 0.95]);
+            let needed = PlayerSkills::xp_for_next_level(prog.level);
+            let frac = if prog.level >= MAX_SKILL_LEVEL || needed == 0 {
+                1.0
+            } else {
+                (prog.xp as f32 / needed as f32).clamp(0.0, 1.0)
+            };
+            if frac > 0.0 {
+                mesh.add_quad(bar_x, bar_y, (bar_w * frac).max(2.0), bar_h, white_uv, accent);
+            }
+
+            let xp_str = if prog.level >= MAX_SKILL_LEVEL {
+                "MAX LEVEL (1000)".to_string()
+            } else {
+                format!("XP: {} / {}", prog.xp, needed)
+            };
+            Self::draw_string(
+                mesh,
+                bar_x,
+                bar_y + 10.0,
+                &xp_str,
+                6.2,
+                8.5,
+                0.8,
+                [0.72, 0.78, 0.86, 0.95],
+            );
+        }
+
+        // Right detail pane
+        let detail_x = row_rects[0][0] + row_rects[0][2] + 14.0;
+        let detail_y = row_rects[0][1];
+        let detail_w = (px + pw - 14.0) - detail_x;
+        let detail_h = ph - 66.0;
+        let selected_skill = SkillKind::from_index(selected_idx).unwrap_or(SkillKind::Combat);
+        let prog = skills.get(selected_skill);
+        let accent = Self::skill_accent_color(selected_skill);
+
+        mesh.add_quad(
+            detail_x,
+            detail_y,
+            detail_w,
+            detail_h,
+            white_uv,
+            [0.24, 0.28, 0.36, 0.95],
+        );
+        mesh.add_quad(
+            detail_x + 2.0,
+            detail_y + 2.0,
+            detail_w - 4.0,
+            detail_h - 4.0,
+            white_uv,
+            [0.11, 0.13, 0.18, 0.96],
+        );
+
+        let pad_x = detail_x + 12.0;
+        let inner_w = detail_w - 24.0;
+        let mut cy = detail_y + 10.0;
+
+        Self::draw_string(
+            mesh,
+            pad_x,
+            cy,
+            selected_skill.name(),
+            12.0,
+            16.0,
+            1.2,
+            accent,
+        );
+        let badge = format!("Level {} / {}", prog.level, MAX_SKILL_LEVEL);
+        let bw = Self::string_width(&badge, 9.0, 1.0);
+        Self::draw_string(
+            mesh,
+            detail_x + detail_w - bw - 12.0,
+            cy + 2.0,
+            &badge,
+            9.0,
+            12.5,
+            1.0,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        cy += 22.0;
+
+        cy = Self::draw_wrapped_string(
+            mesh,
+            pad_x,
+            cy,
+            inner_w,
+            selected_skill.description(),
+            6.8,
+            9.5,
+            0.8,
+            12.0,
+            [0.78, 0.83, 0.90, 1.0],
+        );
+        cy += 2.0;
+
+        let perk_line = format!("Active Perks: {}", skills.perks_summary(selected_skill));
+        cy = Self::draw_wrapped_string(
+            mesh,
+            pad_x,
+            cy,
+            inner_w,
+            &perk_line,
+            7.0,
+            10.0,
+            0.8,
+            13.0,
+            [0.50, 0.96, 0.65, 1.0],
+        );
+        cy += 6.0;
+
+        Self::draw_string(
+            mesh,
+            pad_x,
+            cy,
+            "Milestones:",
+            8.0,
+            11.0,
+            1.0,
+            [0.98, 0.86, 0.42, 1.0],
+        );
+        cy += 15.0;
+
+        let milestones = selected_skill.milestones();
+        let avail_h = (detail_y + detail_h - 10.0 - cy).max(140.0);
+        let m_gap = 4.0;
+        let m_h = ((avail_h - m_gap * (milestones.len() as f32 - 1.0)) / milestones.len() as f32)
+            .max(24.0);
+
+        for (idx, m) in milestones.iter().enumerate() {
+            let unlocked = prog.level >= m.level;
+            let my = cy + idx as f32 * (m_h + m_gap);
+            let m_border = if unlocked {
+                [0.88, 0.74, 0.28, 0.95]
+            } else {
+                [0.24, 0.27, 0.34, 0.85]
+            };
+            let m_bg = if unlocked {
+                [0.16, 0.22, 0.16, 0.95]
+            } else {
+                [0.09, 0.10, 0.14, 0.92]
+            };
+            mesh.add_quad(pad_x, my, inner_w, m_h, white_uv, m_border);
+            mesh.add_quad(
+                pad_x + 1.5,
+                my + 1.5,
+                inner_w - 3.0,
+                m_h - 3.0,
+                white_uv,
+                m_bg,
+            );
+
+            let title_text = format!("Lv {}: {}", m.level, m.name);
+            let status_text = if unlocked { "UNLOCKED" } else { "LOCKED" };
+            let st_w = Self::string_width(status_text, 6.5, 0.8);
+            Self::draw_string(
+                mesh,
+                pad_x + 7.0,
+                my + 4.0,
+                &title_text,
+                7.2,
+                10.0,
+                0.8,
+                if unlocked {
+                    [1.0, 0.92, 0.48, 1.0]
+                } else {
+                    [0.64, 0.68, 0.76, 1.0]
+                },
+            );
+            Self::draw_string(
+                mesh,
+                pad_x + inner_w - st_w - 7.0,
+                my + 4.0,
+                status_text,
+                6.5,
+                9.0,
+                0.8,
+                if unlocked {
+                    [0.36, 0.95, 0.48, 1.0]
+                } else {
+                    [0.50, 0.54, 0.62, 0.9]
+                },
+            );
+            Self::draw_string(
+                mesh,
+                pad_x + 7.0,
+                my + 17.0,
+                m.description,
+                6.4,
+                8.8,
+                0.7,
+                if unlocked {
+                    [0.86, 0.94, 0.86, 1.0]
+                } else {
+                    [0.54, 0.58, 0.66, 0.95]
+                },
+            );
+        }
+    }
+
+    /// Draws an animated HUD toast banner when a skill levels up or unlocks a milestone.
+    pub fn draw_skill_levelup_banner(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        title: &str,
+        subtitle: &str,
+        alpha: f32,
+    ) {
+        let a = alpha.clamp(0.0, 1.0);
+        if a <= 0.01 {
+            return;
+        }
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let tw = Self::string_width(title, 9.5, 1.0);
+        let sw = Self::string_width(subtitle, 7.2, 0.8);
+        let box_w = tw.max(sw).max(240.0) + 32.0;
+        let box_h = if subtitle.is_empty() { 34.0 } else { 52.0 };
+        let bx = (screen_w - box_w) * 0.5;
+        let by = 42.0;
+
+        mesh.add_quad(bx, by, box_w, box_h, white_uv, [0.95, 0.80, 0.25, 0.92 * a]);
+        mesh.add_quad(
+            bx + 2.0,
+            by + 2.0,
+            box_w - 4.0,
+            box_h - 4.0,
+            white_uv,
+            [0.08, 0.12, 0.16, 0.90 * a],
+        );
+        Self::draw_string(
+            mesh,
+            bx + (box_w - tw) * 0.5,
+            by + 9.0,
+            title,
+            9.5,
+            13.0,
+            1.0,
+            [1.0, 0.92, 0.42, a],
+        );
+        if !subtitle.is_empty() {
+            Self::draw_string(
+                mesh,
+                bx + (box_w - sw) * 0.5,
+                by + 28.0,
+                subtitle,
+                7.2,
+                10.0,
+                0.8,
+                [0.52, 0.96, 0.65, a],
+            );
         }
     }
 }

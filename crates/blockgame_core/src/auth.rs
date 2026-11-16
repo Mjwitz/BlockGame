@@ -430,6 +430,7 @@ impl AuthDatabase {
                     active_hotbar_slot: 0,
                     rank: "default".to_string(),
                     homes: std::collections::HashMap::new(),
+                    skills: crate::skills::PlayerSkills::new(),
                 }
             } else {
                 // Legacy world: fallback to player state saved in users.dat
@@ -443,6 +444,7 @@ impl AuthDatabase {
                     active_hotbar_slot,
                     rank: "default".to_string(),
                     homes: std::collections::HashMap::new(),
+                    skills: crate::skills::PlayerSkills::new(),
                 }
             };
 

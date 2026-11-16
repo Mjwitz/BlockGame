@@ -164,6 +164,7 @@ impl PermissionsManager {
                     "blockgame.command.spawn".to_string(),
                     "blockgame.command.home".to_string(),
                     "blockgame.command.tpa".to_string(),
+                    "blockgame.command.skills".to_string(),
                 ],
             ),
         );

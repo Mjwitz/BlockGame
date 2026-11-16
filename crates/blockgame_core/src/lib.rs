@@ -18,6 +18,7 @@ pub mod physics;
 pub mod player;
 pub mod raycast;
 pub mod save;
+pub mod skills;
 pub mod tool;
 pub mod voice;
 pub mod world;
@@ -69,6 +70,10 @@ pub use save::{
     load_world_from_dir, load_world_metadata, parse_or_hash_seed, sanitize_folder_name,
     save_player_data, save_world_to_dir, unique_world_folder_name, SavedPlayerState, WorldMetadata,
     WorldSaveData,
+};
+pub use skills::{
+    break_speed_skill_for_block, skill_xp_for_broken_block, PlayerSkills, SkillKind,
+    SkillLevelUp, SkillMilestone, SkillProgress, MAX_SKILL_LEVEL,
 };
 pub use tool::{ToolTier, ToolType};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};

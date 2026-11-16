@@ -14,6 +14,9 @@ use blockgame_core::{
         delete_saved_world, list_saved_worlds, load_world_from_dir, parse_or_hash_seed,
         save_world_to_dir, unique_world_folder_name, SavedPlayerState, WorldMetadata,
     },
+    skills::{
+        break_speed_skill_for_block, skill_xp_for_broken_block, PlayerSkills, SkillKind,
+    },
     tool::ToolTier,
 };
 use blockgame_render::{
@@ -205,6 +208,13 @@ pub struct AppState {
     pub cracking_buffer: Option<(wgpu::Buffer, u32)>,
     pub fishing_state: FishingSession,
     pub fishing_rng: u64,
+    // MMO Skills System
+    pub player_skills: PlayerSkills,
+    pub skills_open: bool,
+    pub selected_skill_idx: usize,
+    pub skill_toast: Option<(String, String, f32)>,
+    pub skills_dirty: bool,
+    pub agility_xp_timer: f32,
     // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
@@ -454,10 +464,61 @@ impl AppState {
             walk_anim: self.walk_distance,
             swing_anim,
             hurt_timer: 0.0,
-            is_sneaking: self.shift_down && !self.inventory_open && !self.player.flying,
+            is_sneaking: self.shift_down && !self.inventory_open && !self.skills_open && !self.player.flying,
             skin_id: self.local_skin_id,
             health: self.player_stats.health,
             max_health: self.player_stats.max_health,
+        }
+    }
+
+    /// Grants XP to an MMO skill (unless in Creative mode), triggers level-up toast/audio, and marks dirty for MP sync.
+    pub fn grant_skill_xp(&mut self, skill: SkillKind, amount: u64) {
+        if amount == 0 || self.player_stats.game_mode.is_creative() {
+            return;
+        }
+        let lvlup = self.player_skills.add_xp(skill, amount);
+        self.skills_dirty = true;
+        if let Some(lu) = lvlup {
+            self.audio.play_fishing_catch();
+            let title = format!("{} Level {}!", lu.skill.name(), lu.new_level);
+            let subtitle = if let Some(first_ms) = lu.unlocked_milestones.first() {
+                format!("Milestone Unlocked: {}!", first_ms.name)
+            } else {
+                self.player_skills.perks_summary(lu.skill)
+            };
+            self.skill_toast = Some((title, subtitle, 4.5));
+            for m in &lu.unlocked_milestones {
+                let msg = format!(
+                    "[Skills] {} Lv {} Milestone Unlocked - {}: {}",
+                    lu.skill.name(),
+                    m.level,
+                    m.name,
+                    m.description
+                );
+                if let Some(client) = &mut self.mp_client {
+                    client.chat_history.push(blockgame_core::net::ChatEntry {
+                        sender: "Skills".to_string(),
+                        prefix: String::new(),
+                        message: msg,
+                        is_system: true,
+                        age: 0.0,
+                    });
+                    if client.chat_history.len() > 100 {
+                        client.chat_history.remove(0);
+                    }
+                } else {
+                    self.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                        sender: "Skills".to_string(),
+                        prefix: String::new(),
+                        message: msg,
+                        is_system: true,
+                        age: 0.0,
+                    });
+                    if self.local_chat_messages.len() > 100 {
+                        self.local_chat_messages.remove(0);
+                    }
+                }
+            }
         }
     }
 
@@ -466,6 +527,7 @@ impl AppState {
         let inv = self.inventory.clone();
         let hotbar = self.active_hotbar_slot;
         let stats = self.player_stats.clone();
+        let skills = self.player_skills.clone();
         if let Some(mut client) = self.mp_client.take() {
             client.send(&blockgame_core::net::ClientPacket::PlayerStateUpdate {
                 position: model.position,
@@ -483,6 +545,7 @@ impl AppState {
                 active_hotbar_slot: hotbar,
                 stats,
             });
+            client.send(&blockgame_core::net::ClientPacket::SkillsSync { skills });
             client.disconnect();
             std::thread::sleep(std::time::Duration::from_millis(30));
         }
@@ -494,6 +557,9 @@ impl AppState {
         self.chat_scroll = 0;
         self.chat_hitboxes.clear();
         self.tab_held = false;
+        self.skills_open = false;
+        self.skill_toast = None;
+        self.skills_dirty = false;
     }
 
     pub fn join_multiplayer_server(
@@ -533,6 +599,12 @@ impl AppState {
         self.player = PlayerPhysics::new(initial_state.position);
         self.player.velocity = initial_state.velocity;
         self.player_stats = initial_state.stats;
+        self.player_skills = initial_state.skills;
+        self.skills_open = false;
+        self.selected_skill_idx = 0;
+        self.skill_toast = None;
+        self.skills_dirty = false;
+        self.agility_xp_timer = 0.0;
         self.death_handled = self.player_stats.is_dead;
         self.inventory = initial_state.inventory;
         self.active_hotbar_slot = initial_state.active_hotbar_slot.min(8);
@@ -643,6 +715,7 @@ impl AppState {
             let inv = self.inventory.clone();
             let hotbar = self.active_hotbar_slot;
             let stats = self.player_stats.clone();
+            let skills = self.player_skills.clone();
             if let Some(client) = &mut self.mp_client {
                 client.send(&blockgame_core::net::ClientPacket::PlayerStateUpdate {
                     position: model.position,
@@ -660,7 +733,9 @@ impl AppState {
                     active_hotbar_slot: hotbar,
                     stats,
                 });
+                client.send(&blockgame_core::net::ClientPacket::SkillsSync { skills });
             }
+            self.skills_dirty = false;
             return true;
         }
         let Some(mut meta) = self.active_world_metadata.clone() else {
@@ -679,6 +754,7 @@ impl AppState {
             active_hotbar_slot: self.active_hotbar_slot,
             rank: "default".to_string(),
             homes: self.player_homes.clone(),
+            skills: self.player_skills.clone(),
         };
 
         let mut save_data = self.world_manager.capture_save_data(meta, player_state);
@@ -739,6 +815,12 @@ impl AppState {
         self.player = PlayerPhysics::new(Vec3::new(0.5, spawn_y, 0.5));
         self.player_stats = PlayerStats::new();
         self.player_stats.game_mode = game_mode;
+        self.player_skills = PlayerSkills::new();
+        self.skills_open = false;
+        self.selected_skill_idx = 0;
+        self.skill_toast = None;
+        self.skills_dirty = false;
+        self.agility_xp_timer = 0.0;
         self.death_handled = false;
         self.inventory = Inventory::starter_inventory();
         self.active_hotbar_slot = 0;
@@ -799,6 +881,12 @@ impl AppState {
         self.player = PlayerPhysics::new(save_data.player.position);
         self.player.velocity = save_data.player.velocity;
         self.player_stats = save_data.player.stats;
+        self.player_skills = save_data.player.skills;
+        self.skills_open = false;
+        self.selected_skill_idx = 0;
+        self.skill_toast = None;
+        self.skills_dirty = false;
+        self.agility_xp_timer = 0.0;
         self.death_handled = self.player_stats.is_dead;
         self.inventory = save_data.player.inventory;
         self.active_hotbar_slot = save_data.player.active_hotbar_slot.min(8);
@@ -1152,6 +1240,12 @@ impl ApplicationHandler for BlockGameApp {
             cracking_buffer: None,
             fishing_state: FishingSession::Idle,
             fishing_rng: 0x517cc1b727220a95,
+            player_skills: PlayerSkills::new(),
+            skills_open: false,
+            selected_skill_idx: 0,
+            skill_toast: None,
+            skills_dirty: false,
+            agility_xp_timer: 0.0,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
@@ -1228,6 +1322,9 @@ impl ApplicationHandler for BlockGameApp {
                     } else if scroll < 0.0 {
                         state.chat_scroll = state.chat_scroll.saturating_sub(1);
                     }
+                    return;
+                }
+                if state.skills_open || state.inventory_open {
                     return;
                 }
                 if scroll > 0.0 {
@@ -1891,6 +1988,38 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
 
+                if state.skills_open {
+                    if pressed && button == MouseButton::Left {
+                        let (screen_w, screen_h, ui_cpos) = state.ui_metrics();
+                        let (row_rects, close_rect, _) =
+                            UiBuilder::skills_screen_rects(screen_w, screen_h);
+                        if UiBuilder::is_rect_hovered(
+                            ui_cpos,
+                            close_rect[0],
+                            close_rect[1],
+                            close_rect[2],
+                            close_rect[3],
+                        ) {
+                            state.skills_open = false;
+                            if !state.inventory_open && !state.chat_open && !state.player_stats.is_dead {
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
+                        } else {
+                            for (idx, r) in row_rects.iter().enumerate() {
+                                if UiBuilder::is_rect_hovered(ui_cpos, r[0], r[1], r[2], r[3]) {
+                                    state.selected_skill_idx = idx;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if state.inventory_open {
                     if pressed {
                         let is_right = button == MouseButton::Right;
@@ -2028,7 +2157,7 @@ impl ApplicationHandler for BlockGameApp {
                         if pressed {
                             state.punch_timer = 0.25; // Trigger punch animation
                             let held_slot = state.inventory.get(state.active_hotbar_slot);
-                            let attack_damage =
+                            let base_attack_damage =
                                 if let Some(def) = state.item_registry.get(held_slot.item_id) {
                                     match (def.tool_type, def.tool_tier) {
                                         (Some(blockgame_core::tool::ToolType::Sword), Some(tier)) => match tier {
@@ -2068,6 +2197,15 @@ impl ApplicationHandler for BlockGameApp {
                                 } else {
                                     1.0
                                 };
+                            let crit_roll =
+                                blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                    < state.player_skills.combat_crit_chance();
+                            let mut attack_damage = base_attack_damage
+                                * state.player_skills.combat_damage_multiplier()
+                                + state.player_skills.combat_flat_bonus();
+                            if crit_roll {
+                                attack_damage *= 1.5;
+                            }
 
                             // Check PvP hit against remote multiplayer players within 3.5 blocks
                             let mut hit_remote_player = None;
@@ -2102,6 +2240,7 @@ impl ApplicationHandler for BlockGameApp {
                                     );
                                 }
                                 state.audio.play_hurt();
+                                state.grant_skill_xp(SkillKind::Combat, 15);
                                 state.mouse_left_down = false;
                                 state.breaking_voxel = None;
                                 state.break_progress = 0.0;
@@ -2137,18 +2276,27 @@ impl ApplicationHandler for BlockGameApp {
                                         state.player.eye_position(),
                                         state.camera.forward(),
                                         3.5,
-                                        attack_damage,
+                                        base_attack_damage,
                                     )
                                 } else {
                                     None
                                 };
-                                if let Some((mkind, mpos)) = hit_monster {
+                                if let Some((mkind, mpos, killed)) = hit_monster {
                                     state.audio.play_monster_hurt(
                                         mkind,
                                         mpos,
                                         state.player.position,
                                         state.camera.yaw,
                                     );
+                                    let xp = if killed { 37 } else { 12 };
+                                    state.grant_skill_xp(SkillKind::Combat, xp);
+                                    if killed && !state.player_stats.is_dead {
+                                        let ls = state.player_skills.combat_lifesteal_on_kill();
+                                        if ls > 0.0 {
+                                            state.player_stats.health = (state.player_stats.health + ls)
+                                                .min(state.player_stats.max_health);
+                                        }
+                                    }
                                 } else if let Some((akind, apos)) = hit_animal {
                                     state.audio.play_animal_hurt(
                                         akind,
@@ -2410,10 +2558,23 @@ impl ApplicationHandler for BlockGameApp {
                                     break;
                                 }
                             }
+                            let crit_roll =
+                                blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                    < state.player_skills.combat_crit_chance();
+                            let mut bow_damage = 6.0
+                                * state.player_skills.combat_damage_multiplier()
+                                + state.player_skills.combat_flat_bonus();
+                            if crit_roll {
+                                bow_damage *= 1.5;
+                            }
                             if state.player_stats.game_mode.is_creative() {
                                 let dir = state.camera.forward().normalize_or_zero();
                                 let spawn_pos = state.player.eye_position() + dir * 0.45;
-                                state.world_manager.spawn_player_arrow(spawn_pos, dir * 28.0, 6.0);
+                                state.world_manager.spawn_player_arrow(
+                                    spawn_pos,
+                                    dir * 28.0,
+                                    bow_damage,
+                                );
                                 state.punch_timer = 0.15;
                             } else if let Some(idx) = arrow_slot_idx {
                                 let mut arrow_slot = state.inventory.get(idx);
@@ -2432,7 +2593,11 @@ impl ApplicationHandler for BlockGameApp {
 
                                 let dir = state.camera.forward().normalize_or_zero();
                                 let spawn_pos = state.player.eye_position() + dir * 0.45;
-                                state.world_manager.spawn_player_arrow(spawn_pos, dir * 28.0, 6.0);
+                                state.world_manager.spawn_player_arrow(
+                                    spawn_pos,
+                                    dir * 28.0,
+                                    bow_damage,
+                                );
                                 state.punch_timer = 0.15;
                             }
                             return;
@@ -2448,6 +2613,14 @@ impl ApplicationHandler for BlockGameApp {
                                         rod_kind,
                                         &state.inventory,
                                     );
+                                    tackle.bite_speed_mult *=
+                                        state.player_skills.fishing_bite_speed_mult();
+                                    tackle.bar_height = (tackle.bar_height
+                                        + state.player_skills.fishing_bar_height_bonus())
+                                    .clamp(0.20, 0.58);
+                                    tackle.treasure_chance = (tackle.treasure_chance
+                                        + state.player_skills.fishing_treasure_chance_bonus())
+                                    .clamp(0.0, 0.75);
                                     if let Some(b_idx) = tackle.bait_slot {
                                         if !state.player_stats.game_mode.is_creative() {
                                             let mut b_slot = state.inventory.get(b_idx);
@@ -2525,6 +2698,7 @@ impl ApplicationHandler for BlockGameApp {
                                 let mut slot = state.inventory.get(state.active_hotbar_slot);
                                 slot.take(1);
                                 state.inventory.set(state.active_hotbar_slot, slot);
+                                state.grant_skill_xp(SkillKind::Farming, 18);
                                 state.punch_timer = 0.15;
                                 return;
                             }
@@ -2558,6 +2732,7 @@ impl ApplicationHandler for BlockGameApp {
                                                         },
                                                     );
                                                 }
+                                                state.grant_skill_xp(SkillKind::Farming, 6);
                                                 state.punch_timer = 0.2;
                                                 let mut held =
                                                     state.inventory.get(state.active_hotbar_slot);
@@ -2616,6 +2791,7 @@ impl ApplicationHandler for BlockGameApp {
                                         );
                                         state.world_manager.plant_crop(hit.place_voxel);
                                         state.inventory.slots[state.active_hotbar_slot].take(1);
+                                        state.grant_skill_xp(SkillKind::Farming, 5);
                                         state.punch_timer = 0.2;
                                         return;
                                     }
@@ -2626,7 +2802,19 @@ impl ApplicationHandler for BlockGameApp {
                         // 4. Check if holding food and hungry or hurt (eat food!)
                         if !held_slot.is_empty() {
                             if let Some(food) = state.item_registry.get_food(held_slot.item_id) {
-                                if state.player_stats.eat(food.food_points, food.saturation) {
+                                let food_mult = state.player_skills.farming_food_multiplier();
+                                let scaled_food = ((food.food_points as f32) * food_mult)
+                                    .round()
+                                    .max(food.food_points as f32)
+                                    as u16;
+                                let scaled_sat = food.saturation * food_mult;
+                                if state.player_stats.eat(scaled_food, scaled_sat) {
+                                    let bonus_heal = ((food_mult - 1.0) * 4.0).max(0.0);
+                                    if bonus_heal > 0.0 && !state.player_stats.is_dead {
+                                        state.player_stats.health = (state.player_stats.health
+                                            + bonus_heal)
+                                            .min(state.player_stats.max_health);
+                                    }
                                     state.inventory.slots[state.active_hotbar_slot].take(1);
                                     state.punch_timer = 0.2; // Eating bite animation
                                     return;
@@ -3031,7 +3219,7 @@ impl ApplicationHandler for BlockGameApp {
                             state.chat_open = false;
                             state.chat_input.clear();
                             state.chat_scroll = 0;
-                            if !state.inventory_open && !state.player_stats.is_dead {
+                            if !state.inventory_open && !state.skills_open && !state.player_stats.is_dead {
                                 state.mouse_captured = true;
                                 let _ = state
                                     .window
@@ -3045,6 +3233,69 @@ impl ApplicationHandler for BlockGameApp {
                                     client.send(&blockgame_core::net::ClientPacket::Chat {
                                         message: msg,
                                     });
+                                } else if msg.eq_ignore_ascii_case("/skills")
+                                    || msg.eq_ignore_ascii_case("/skill")
+                                    || msg.to_ascii_lowercase().starts_with("/skills ")
+                                    || msg.to_ascii_lowercase().starts_with("/skill ")
+                                {
+                                    let parts: Vec<&str> = msg.split_whitespace().collect();
+                                    let push_sys = |state: &mut AppState, text: String| {
+                                        state.local_chat_messages.push(
+                                            blockgame_core::net::ChatEntry {
+                                                sender: "Skills".to_string(),
+                                                prefix: String::new(),
+                                                message: text,
+                                                is_system: true,
+                                                age: 0.0,
+                                            },
+                                        );
+                                        if state.local_chat_messages.len() > 100 {
+                                            state.local_chat_messages.remove(0);
+                                        }
+                                    };
+                                    if parts.len() >= 2 {
+                                        if let Some(sk) = SkillKind::parse(parts[1]) {
+                                            let p = state.player_skills.get(sk);
+                                            let need = PlayerSkills::xp_for_next_level(p.level);
+                                            push_sys(
+                                                state,
+                                                format!(
+                                                    "{} Lv {} (XP {}/{}) - {}",
+                                                    sk.name(),
+                                                    p.level,
+                                                    p.xp,
+                                                    need,
+                                                    state.player_skills.perks_summary(sk)
+                                                ),
+                                            );
+                                        } else {
+                                            push_sys(
+                                                state,
+                                                "Unknown skill. Press K to open the Skills menu."
+                                                    .to_string(),
+                                            );
+                                        }
+                                    } else {
+                                        push_sys(
+                                            state,
+                                            format!(
+                                                "Skills Summary (Total Lv {} | Press K for full menu):",
+                                                state.player_skills.total_level()
+                                            ),
+                                        );
+                                        for sk in SkillKind::ALL {
+                                            let p = state.player_skills.get(sk);
+                                            push_sys(
+                                                state,
+                                                format!(
+                                                    "  {} Lv {} ({})",
+                                                    sk.name(),
+                                                    p.level,
+                                                    state.player_skills.perks_summary(sk)
+                                                ),
+                                            );
+                                        }
+                                    }
                                 } else {
                                     let sender = if state.local_username.is_empty() {
                                         "Player".to_string()
@@ -3068,7 +3319,7 @@ impl ApplicationHandler for BlockGameApp {
                             state.chat_open = false;
                             state.chat_input.clear();
                             state.chat_scroll = 0;
-                            if !state.inventory_open && !state.player_stats.is_dead {
+                            if !state.inventory_open && !state.skills_open && !state.player_stats.is_dead {
                                 state.mouse_captured = true;
                                 let _ = state
                                     .window
@@ -3157,24 +3408,28 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 let kb = state.settings.keybinds.clone();
-                if key == kb.player_list && !state.inventory_open {
+                let modal_open = state.inventory_open || state.skills_open;
+                if key == kb.player_list && !modal_open {
                     state.tab_held = pressed;
-                } else if key == kb.push_to_talk && !state.inventory_open {
+                } else if key == kb.push_to_talk && !modal_open {
                     state.ptt_down = pressed;
-                } else if key == kb.debug_hud && pressed && !state.inventory_open {
+                } else if key == kb.debug_hud && pressed && !modal_open {
                     state.settings.show_debug_hud = !state.settings.show_debug_hud;
                     state.settings.save(std::path::Path::new("settings.cfg"));
-                } else if key == kb.third_person && pressed && !state.inventory_open {
+                } else if key == kb.third_person && pressed && !modal_open {
                     state.third_person = !state.third_person;
-                } else if key == kb.forward {
+                } else if key == kb.forward && !state.skills_open {
                     state.moving_forward = pressed;
-                } else if key == kb.backward {
+                } else if key == kb.backward && !state.skills_open {
                     state.moving_backward = pressed;
-                } else if key == kb.left {
+                } else if key == kb.left && !state.skills_open {
                     state.moving_left = pressed;
-                } else if key == kb.right {
+                } else if key == kb.right && !state.skills_open {
                     state.moving_right = pressed;
-                } else if key == kb.jump {
+                } else if key == kb.jump && !state.skills_open {
+                    if pressed && !state.jumping && state.player.on_ground && !state.player.flying && !state.player_stats.game_mode.is_creative() {
+                        state.grant_skill_xp(SkillKind::Agility, 3);
+                    }
                     if pressed && !state.jumping && state.player_stats.game_mode.is_creative() {
                         if state.total_time - state.last_jump_tap_time <= 0.30 {
                             state.player.toggle_flight();
@@ -3184,14 +3439,39 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
                     state.jumping = pressed;
-                } else if key == kb.sprint {
+                } else if key == kb.sprint && !state.skills_open {
                     state.sprinting = pressed;
-                } else if key == kb.flight && pressed {
+                } else if key == kb.flight && pressed && !state.skills_open {
                     if state.player_stats.game_mode.is_creative() || state.player.flying {
                         state.player.toggle_flight();
                         log::info!("Flying mode: {}", state.player.flying);
                     }
-                } else if key == kb.inventory && pressed {
+                } else if key == kb.skills && pressed && !state.inventory_open {
+                    state.mouse_left_down = false;
+                    state.break_progress = 0.0;
+                    state.breaking_voxel = None;
+                    state.cracking_buffer = None;
+                    state.skills_open = !state.skills_open;
+                    if state.skills_open {
+                        state.moving_forward = false;
+                        state.moving_backward = false;
+                        state.moving_left = false;
+                        state.moving_right = false;
+                        state.jumping = false;
+                        state.sprinting = false;
+                        state.mouse_captured = false;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                        state.window.set_cursor_visible(true);
+                    } else {
+                        state.mouse_captured = true;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        state.window.set_cursor_visible(false);
+                    }
+                } else if key == kb.inventory && pressed && !state.skills_open {
                     state.mouse_left_down = false;
                     state.break_progress = 0.0;
                     state.breaking_voxel = None;
@@ -3244,7 +3524,7 @@ impl ApplicationHandler for BlockGameApp {
                             .set_cursor_grab(winit::window::CursorGrabMode::None);
                         state.window.set_cursor_visible(true);
                     }
-                } else if (key == kb.chat || key == KeyCode::Slash) && pressed && !state.inventory_open {
+                } else if (key == kb.chat || key == KeyCode::Slash) && pressed && !modal_open {
                     state.moving_forward = false;
                     state.moving_backward = false;
                     state.moving_left = false;
@@ -3297,7 +3577,14 @@ impl ApplicationHandler for BlockGameApp {
                             state.cracking_buffer = None;
                             state.active_chest_pos = None;
                             state.active_furnace_pos = None;
-                            if state.inventory_open {
+                            if state.skills_open {
+                                state.skills_open = false;
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            } else if state.inventory_open {
                                 let grid_items: Vec<_> =
                                     state.crafting_grid.slots.drain(..).collect();
                                 for slot in grid_items {
@@ -3349,20 +3636,20 @@ impl ApplicationHandler for BlockGameApp {
                                 state.window.set_cursor_visible(true);
                             }
                         }
-                        KeyCode::KeyY if pressed && !state.inventory_open => {
+                        KeyCode::KeyY if pressed && !modal_open => {
                             state.day_night.time =
                                 (state.day_night.time + 3000.0).rem_euclid(24000.0);
                             log::info!("Time of day advanced to: {:.1} ticks", state.day_night.time);
                         }
-                        KeyCode::Digit1 if pressed => state.active_hotbar_slot = 0,
-                        KeyCode::Digit2 if pressed => state.active_hotbar_slot = 1,
-                        KeyCode::Digit3 if pressed => state.active_hotbar_slot = 2,
-                        KeyCode::Digit4 if pressed => state.active_hotbar_slot = 3,
-                        KeyCode::Digit5 if pressed => state.active_hotbar_slot = 4,
-                        KeyCode::Digit6 if pressed => state.active_hotbar_slot = 5,
-                        KeyCode::Digit7 if pressed => state.active_hotbar_slot = 6,
-                        KeyCode::Digit8 if pressed => state.active_hotbar_slot = 7,
-                        KeyCode::Digit9 if pressed => state.active_hotbar_slot = 8,
+                        KeyCode::Digit1 if pressed && !state.skills_open => state.active_hotbar_slot = 0,
+                        KeyCode::Digit2 if pressed && !state.skills_open => state.active_hotbar_slot = 1,
+                        KeyCode::Digit3 if pressed && !state.skills_open => state.active_hotbar_slot = 2,
+                        KeyCode::Digit4 if pressed && !state.skills_open => state.active_hotbar_slot = 3,
+                        KeyCode::Digit5 if pressed && !state.skills_open => state.active_hotbar_slot = 4,
+                        KeyCode::Digit6 if pressed && !state.skills_open => state.active_hotbar_slot = 5,
+                        KeyCode::Digit7 if pressed && !state.skills_open => state.active_hotbar_slot = 6,
+                        KeyCode::Digit8 if pressed && !state.skills_open => state.active_hotbar_slot = 7,
+                        KeyCode::Digit9 if pressed && !state.skills_open => state.active_hotbar_slot = 8,
                         _ => {}
                     }
                 }
@@ -3677,6 +3964,10 @@ impl ApplicationHandler for BlockGameApp {
                                         state.local_chat_messages.remove(0);
                                     }
                                 }
+                                blockgame_core::net::ServerPacket::SkillsUpdate { skills } => {
+                                    state.player_skills = skills;
+                                    state.skills_dirty = false;
+                                }
                                 blockgame_core::net::ServerPacket::VoiceBroadcast {
                                     sender_id,
                                     seq,
@@ -3724,6 +4015,13 @@ impl ApplicationHandler for BlockGameApp {
                         *t -= dt;
                         *t > 0.0
                     });
+
+                    if let Some((_, _, ref mut timer)) = state.skill_toast {
+                        *timer -= dt;
+                    }
+                    if state.skill_toast.as_ref().map(|(_, _, t)| *t <= 0.0).unwrap_or(false) {
+                        state.skill_toast = None;
+                    }
 
                     if let Some(reason) = kick_reason {
                         state.disconnect_multiplayer();
@@ -3787,16 +4085,20 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
 
-                    // 2. Step player physics against voxel world
+                    // 2. Step player physics against voxel world (with Agility skill speed & jump modifiers)
+                    let agi_speed = state.player_skills.agility_speed_multiplier();
+                    let agi_jump = state.player_skills.agility_jump_multiplier();
                     let fall_damage = {
                         let world_guard = state.world_manager.world().lock().unwrap();
-                        state.player.update(
+                        state.player.update_with_modifiers(
                             dt,
                             wish_dir,
                             state.sprinting,
                             state.jumping,
                             &world_guard,
                             &self.registry,
+                            agi_speed,
+                            agi_jump,
                         )
                     };
 
@@ -3837,10 +4139,18 @@ impl ApplicationHandler for BlockGameApp {
                     let prev_health = state.player_stats.health;
                     let armor_mult = state.armor.damage_multiplier(&state.item_registry);
                     if fall_damage > 0.0 && !state.player_stats.is_dead {
-                        if state.player_stats.take_damage(fall_damage * armor_mult)
-                            && state.armor.damage_armor(fall_damage, &state.item_registry)
-                        {
-                            state.audio.play_tool_break();
+                        let fall_mult = state.player_skills.agility_fall_damage_multiplier();
+                        if state.player_stats.take_damage(fall_damage * armor_mult * fall_mult) {
+                            if state
+                                .armor
+                                .damage_armor(fall_damage * fall_mult, &state.item_registry)
+                            {
+                                state.audio.play_tool_break();
+                            }
+                            state.grant_skill_xp(
+                                SkillKind::Agility,
+                                ((fall_damage * 4.0) as u64).max(5),
+                            );
                         }
                     }
                     if is_touching_cactus {
@@ -3862,6 +4172,13 @@ impl ApplicationHandler for BlockGameApp {
                         .sqrt();
                     if is_moving && horiz_speed > 0.1 && !state.player_stats.is_dead {
                         state.walk_distance += dt * (if state.sprinting { 8.5 } else { 5.5 });
+                        if (state.sprinting || is_in_water) && !state.player.flying {
+                            state.agility_xp_timer += dt;
+                            if state.agility_xp_timer >= 0.8 {
+                                state.agility_xp_timer -= 0.8;
+                                state.grant_skill_xp(SkillKind::Agility, 4);
+                            }
+                        }
                         if state.player.on_ground || is_in_water {
                             if state.player.on_ground {
                                 state
@@ -3909,6 +4226,7 @@ impl ApplicationHandler for BlockGameApp {
                         if !state.death_handled {
                             state.death_handled = true;
                             state.inventory_open = false;
+                            state.skills_open = false;
                             state.mouse_left_down = false;
                             state.break_progress = 0.0;
                             state.breaking_voxel = None;
@@ -3980,6 +4298,12 @@ impl ApplicationHandler for BlockGameApp {
                             let inv = state.inventory.clone();
                             let hotbar = state.active_hotbar_slot;
                             let stats = state.player_stats.clone();
+                            let skills_to_sync = if state.skills_dirty {
+                                state.skills_dirty = false;
+                                Some(state.player_skills.clone())
+                            } else {
+                                None
+                            };
                             if let Some(client) = &mut state.mp_client {
                                 client.send(
                                     &blockgame_core::net::ClientPacket::PlayerStateUpdate {
@@ -4001,6 +4325,11 @@ impl ApplicationHandler for BlockGameApp {
                                         stats,
                                     },
                                 );
+                                if let Some(skills) = skills_to_sync {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::SkillsSync { skills },
+                                    );
+                                }
                             }
                         }
                     }
@@ -4060,26 +4389,41 @@ impl ApplicationHandler for BlockGameApp {
                             state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
                         }
                     }
-                    let arrow_dmg = state.world_manager.update_arrows(
+                    let (arrow_dmg, arrow_hits, arrow_kills) = state.world_manager.update_arrows(
                         dt,
                         state.player.position,
                         state.player.half_width,
                         state.player.height,
                     );
+                    if arrow_hits > 0 {
+                        state.grant_skill_xp(
+                            SkillKind::Combat,
+                            (arrow_hits as u64) * 10 + (arrow_kills as u64) * 25,
+                        );
+                        if arrow_kills > 0 && !state.player_stats.is_dead {
+                            let ls = state.player_skills.combat_lifesteal_on_kill()
+                                * (arrow_kills as f32);
+                            if ls > 0.0 {
+                                state.player_stats.health = (state.player_stats.health + ls)
+                                    .min(state.player_stats.max_health);
+                            }
+                        }
+                    }
                     let total_hostile_dmg = monster_dmg + arrow_dmg;
                     if total_hostile_dmg > 0.0
                         && !state.player_stats.is_dead
                         && !state.player.flying
                     {
                         let armor_mult = state.armor.damage_multiplier(&state.item_registry);
+                        let combat_red = 1.0 - state.player_skills.combat_damage_reduction();
                         if state
                             .player_stats
-                            .take_damage(total_hostile_dmg * armor_mult)
+                            .take_damage(total_hostile_dmg * armor_mult * combat_red)
                         {
                             state.audio.play_hurt();
                             if state
                                 .armor
-                                .damage_armor(total_hostile_dmg, &state.item_registry)
+                                .damage_armor(total_hostile_dmg * combat_red, &state.item_registry)
                             {
                                 state.audio.play_tool_break();
                             }
@@ -4275,8 +4619,12 @@ impl ApplicationHandler for BlockGameApp {
                                                 }
                                             }
 
-                                            // Award caught fish
-                                            let fish_item = ItemSlot::new(species.item_id, 1);
+                                            // Award caught fish (+ Fishing Double Catch skill roll)
+                                            let double_catch =
+                                                blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                    < state.player_skills.fishing_double_catch_chance();
+                                            let fish_count = if double_catch { 2 } else { 1 };
+                                            let fish_item = ItemSlot::new(species.item_id, fish_count);
                                             if let Some(left) = state
                                                 .inventory
                                                 .add_item(fish_item, &state.item_registry)
@@ -4293,11 +4641,16 @@ impl ApplicationHandler for BlockGameApp {
                                             } else {
                                                 format!("Caught {}!", species.name)
                                             };
+                                            if double_catch {
+                                                msg.push_str(" (x2 Double Catch!)");
+                                            }
 
                                             // Roll optional bonus treasure chest/loot
+                                            let mut got_treasure = false;
                                             if blockgame_core::fishing::next_f32(&mut state.fishing_rng)
                                                 < tackle.treasure_chance
                                             {
+                                                got_treasure = true;
                                                 let treasure = blockgame_core::roll_treasure_loot(
                                                     &mut state.fishing_rng,
                                                 );
@@ -4321,6 +4674,15 @@ impl ApplicationHandler for BlockGameApp {
                                                     );
                                                 }
                                             }
+
+                                            let mut fish_xp = 20 + (species.difficulty * 0.8) as u64;
+                                            if perfect {
+                                                fish_xp = (fish_xp * 135) / 100;
+                                            }
+                                            if got_treasure {
+                                                fish_xp += 25;
+                                            }
+                                            state.grant_skill_xp(SkillKind::Fishing, fish_xp);
 
                                             state.local_chat_messages.push(
                                                 blockgame_core::net::ChatEntry {
@@ -4372,7 +4734,11 @@ impl ApplicationHandler for BlockGameApp {
 
                     // 4. Update Camera position (First-Person or F5 Third-Person) and atmosphere uniform
                     let eye_pos = state.player.eye_position()
-                        - if state.shift_down && !state.inventory_open && !state.player.flying {
+                        - if state.shift_down
+                            && !state.inventory_open
+                            && !state.skills_open
+                            && !state.player.flying
+                        {
                             Vec3::new(0.0, 0.18, 0.0)
                         } else {
                             Vec3::ZERO
@@ -4477,6 +4843,7 @@ impl ApplicationHandler for BlockGameApp {
                     if state.mouse_left_down
                         && state.mouse_captured
                         && !state.inventory_open
+                        && !state.skills_open
                         && !state.player_stats.is_dead
                     {
                         if state.punch_timer <= 0.05 {
@@ -4511,11 +4878,28 @@ impl ApplicationHandler for BlockGameApp {
                                         (None, ToolTier::None)
                                     };
 
-                                let break_time = self.registry.get_break_time(
+                                let base_break_time = self.registry.get_break_time(
                                     block_at_voxel,
                                     held_tool_type,
                                     held_tool_tier,
                                 );
+                                let skill_speed = match break_speed_skill_for_block(block_at_voxel) {
+                                    Some(SkillKind::Mining) => {
+                                        state.player_skills.mining_speed_multiplier()
+                                    }
+                                    Some(SkillKind::Woodcutting) => {
+                                        state.player_skills.woodcutting_speed_multiplier()
+                                    }
+                                    Some(SkillKind::Digging) => {
+                                        state.player_skills.digging_speed_multiplier()
+                                    }
+                                    _ => 1.0,
+                                };
+                                let break_time = if base_break_time.is_finite() {
+                                    base_break_time / skill_speed.max(1.0)
+                                } else {
+                                    base_break_time
+                                };
                                 if break_time.is_infinite() && !is_creative {
                                     state.break_progress = 0.0;
                                     state.cracking_buffer = None;
@@ -4581,6 +4965,11 @@ impl ApplicationHandler for BlockGameApp {
                                             );
                                             if !is_creative {
                                                 state.player_stats.add_exhaustion(0.025);
+                                                if let Some((sk, xp)) =
+                                                    skill_xp_for_broken_block(broken)
+                                                {
+                                                    state.grant_skill_xp(sk, xp);
+                                                }
                                                 let mut held =
                                                     state.inventory.get(state.active_hotbar_slot);
                                                 if let Some(def) =
@@ -4604,12 +4993,12 @@ impl ApplicationHandler for BlockGameApp {
                                                         );
                                                     }
                                                 }
+                                                let drop_pos = target_voxel.as_vec3()
+                                                    + Vec3::new(0.5, 0.5, 0.5);
                                                 if let Some((drop_item, drop_count)) = self
                                                     .registry
                                                     .get_drop(broken, held_tool_type, held_tool_tier)
                                                 {
-                                                    let drop_pos = target_voxel.as_vec3()
-                                                        + Vec3::new(0.5, 0.5, 0.5);
                                                     let drop_slot =
                                                         ItemSlot::new(drop_item, drop_count);
                                                     state.spawn_drop_synced(
@@ -4617,20 +5006,197 @@ impl ApplicationHandler for BlockGameApp {
                                                         Vec3::new(0.0, 2.5, 0.0),
                                                         drop_slot,
                                                     );
+
+                                                    match break_speed_skill_for_block(broken) {
+                                                        Some(SkillKind::Mining) => {
+                                                            if blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                                < state.player_skills.mining_bonus_drop_chance()
+                                                            {
+                                                                state.spawn_drop_synced(
+                                                                    drop_pos,
+                                                                    Vec3::new(0.3, 2.4, 0.2),
+                                                                    ItemSlot::new(drop_item, drop_count),
+                                                                );
+                                                            }
+                                                            let is_ore = matches!(
+                                                                broken,
+                                                                BlockId::COAL_ORE
+                                                                    | BlockId::COPPER_ORE
+                                                                    | BlockId::IRON_ORE
+                                                                    | BlockId::GOLD_ORE
+                                                                    | BlockId::DIAMOND_ORE
+                                                            );
+                                                            if is_ore
+                                                                && blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                                    < state.player_skills.mining_triple_ore_chance()
+                                                            {
+                                                                state.spawn_drop_synced(
+                                                                    drop_pos,
+                                                                    Vec3::new(-0.3, 2.6, -0.2),
+                                                                    ItemSlot::new(drop_item, drop_count),
+                                                                );
+                                                            }
+                                                        }
+                                                        Some(SkillKind::Woodcutting) => {
+                                                            if blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                                < state.player_skills.woodcutting_bonus_drop_chance()
+                                                            {
+                                                                state.spawn_drop_synced(
+                                                                    drop_pos,
+                                                                    Vec3::new(0.3, 2.4, 0.2),
+                                                                    ItemSlot::new(drop_item, drop_count),
+                                                                );
+                                                            }
+                                                        }
+                                                        Some(SkillKind::Digging) => {
+                                                            if blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                                < state.player_skills.digging_double_drop_chance()
+                                                            {
+                                                                state.spawn_drop_synced(
+                                                                    drop_pos,
+                                                                    Vec3::new(0.3, 2.4, 0.2),
+                                                                    ItemSlot::new(drop_item, drop_count),
+                                                                );
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
                                                 }
-                                                // 15% chance to drop Apple from Leaves
-                                                if broken == BlockId::LEAVES {
+
+                                                // Digging Treasure Seeker / Relic Hunter buried finds
+                                                if break_speed_skill_for_block(broken)
+                                                    == Some(SkillKind::Digging)
+                                                    && blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                        < state.player_skills.digging_treasure_chance()
+                                                {
+                                                    let d_lvl = state
+                                                        .player_skills
+                                                        .level(SkillKind::Digging);
+                                                    let r = blockgame_core::fishing::next_f32(
+                                                        &mut state.fishing_rng,
+                                                    );
+                                                    let treasure_id = if d_lvl >= 750 && r > 0.88 {
+                                                        ItemId::DIAMOND
+                                                    } else if d_lvl >= 750 && r > 0.74 {
+                                                        ItemId::GOLD_INGOT
+                                                    } else if d_lvl >= 250 && r > 0.56 {
+                                                        ItemId::RAW_IRON
+                                                    } else if d_lvl >= 250 && r > 0.42 {
+                                                        ItemId::APPLE
+                                                    } else if r > 0.28 {
+                                                        ItemId::STRING
+                                                    } else if r > 0.14 {
+                                                        ItemId::CLAY
+                                                    } else {
+                                                        ItemId::COAL
+                                                    };
+                                                    state.spawn_drop_synced(
+                                                        drop_pos,
+                                                        Vec3::new(0.0, 2.8, 0.0),
+                                                        ItemSlot::new(treasure_id, 1),
+                                                    );
+                                                }
+
+                                                // Woodcutting Lv 250+ Tree Feller (with Axe, not sneaking)
+                                                if broken.is_log()
+                                                    && held_tool_type
+                                                        == Some(blockgame_core::tool::ToolType::Axe)
+                                                    && !state.shift_down
+                                                {
+                                                    let max_logs =
+                                                        state.player_skills.tree_feller_max_logs();
+                                                    if max_logs > 0 {
+                                                        let felled = state
+                                                            .world_manager
+                                                            .fell_connected_logs(
+                                                                target_voxel,
+                                                                max_logs,
+                                                                &state.device,
+                                                                &state.pipeline,
+                                                            );
+                                                        let felled_count = felled.len() as u64;
+                                                        for (fpos, fblock) in felled {
+                                                            if let Some(client) =
+                                                                &mut state.mp_client
+                                                            {
+                                                                client.send(
+                                                                    &blockgame_core::net::ClientPacket::BlockChange {
+                                                                        pos: fpos,
+                                                                        block_id: BlockId::AIR,
+                                                                    },
+                                                                );
+                                                            }
+                                                            let fdrop_pos = fpos.as_vec3()
+                                                                + Vec3::new(0.5, 0.5, 0.5);
+                                                            if let Some((di, dc)) = self
+                                                                .registry
+                                                                .get_drop(
+                                                                    fblock,
+                                                                    held_tool_type,
+                                                                    held_tool_tier,
+                                                                )
+                                                            {
+                                                                state.spawn_drop_synced(
+                                                                    fdrop_pos,
+                                                                    Vec3::new(0.0, 2.0, 0.0),
+                                                                    ItemSlot::new(di, dc),
+                                                                );
+                                                                if blockgame_core::fishing::next_f32(
+                                                                    &mut state.fishing_rng,
+                                                                ) < state
+                                                                    .player_skills
+                                                                    .woodcutting_bonus_drop_chance()
+                                                                {
+                                                                    state.spawn_drop_synced(
+                                                                        fdrop_pos,
+                                                                        Vec3::new(0.2, 2.2, 0.2),
+                                                                        ItemSlot::new(di, dc),
+                                                                    );
+                                                                }
+                                                            }
+                                                        }
+                                                        if felled_count > 0 {
+                                                            state.grant_skill_xp(
+                                                                SkillKind::Woodcutting,
+                                                                felled_count * 16,
+                                                            );
+                                                        }
+                                                    }
+                                                }
+
+                                                // 15% chance to drop Apple from Leaves + Leaf Blower skill bonus
+                                                if broken.is_leaves() {
                                                     let hash = (target_voxel.x.wrapping_mul(73856093)
                                                         ^ target_voxel.y.wrapping_mul(19349663)
                                                         ^ target_voxel.z.wrapping_mul(83492791))
                                                         % 100;
                                                     if hash.abs() < 15 {
                                                         state.spawn_drop_synced(
-                                                            target_voxel.as_vec3()
-                                                                + Vec3::new(0.5, 0.5, 0.5),
+                                                            drop_pos,
                                                             Vec3::new(0.0, 2.0, 0.0),
                                                             ItemSlot::new(ItemId::APPLE, 1),
                                                         );
+                                                    }
+                                                    if state
+                                                        .player_skills
+                                                        .woodcutting_leaf_bonus_unlocked()
+                                                    {
+                                                        let r = blockgame_core::fishing::next_f32(
+                                                            &mut state.fishing_rng,
+                                                        );
+                                                        if r < 0.10 {
+                                                            state.spawn_drop_synced(
+                                                                drop_pos,
+                                                                Vec3::new(0.1, 2.2, -0.1),
+                                                                ItemSlot::new(ItemId::APPLE, 1),
+                                                            );
+                                                        } else if r < 0.22 {
+                                                            state.spawn_drop_synced(
+                                                                drop_pos,
+                                                                Vec3::new(-0.1, 2.2, 0.1),
+                                                                ItemSlot::new(ItemId::STICK, 1),
+                                                            );
+                                                        }
                                                     }
                                                 }
                                                 // 12% chance to drop Wheat Seeds from Grass
@@ -4641,25 +5207,64 @@ impl ApplicationHandler for BlockGameApp {
                                                         % 100;
                                                     if hash.abs() < 12 {
                                                         state.spawn_drop_synced(
-                                                            target_voxel.as_vec3()
-                                                                + Vec3::new(0.5, 0.5, 0.5),
+                                                            drop_pos,
                                                             Vec3::new(0.0, 2.0, 0.0),
                                                             ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
                                                         );
                                                     }
                                                 }
-                                                // Ripe Wheat Crop drops additional 1..2 seeds
+                                                // Ripe Wheat Crop drops additional 1..2 seeds + Farming perks & Auto-Replant
                                                 if broken == BlockId::WHEAT_3 {
                                                     let hash = (target_voxel.x.wrapping_mul(1234567)
                                                         ^ target_voxel.z.wrapping_mul(7654321))
                                                         % 2;
                                                     let seed_count = (hash.abs() + 1) as u16;
                                                     state.spawn_drop_synced(
-                                                        target_voxel.as_vec3()
-                                                            + Vec3::new(0.5, 0.5, 0.5),
+                                                        drop_pos,
                                                         Vec3::new(0.0, 2.0, 0.0),
                                                         ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
                                                     );
+                                                    if blockgame_core::fishing::next_f32(
+                                                        &mut state.fishing_rng,
+                                                    ) < state
+                                                        .player_skills
+                                                        .farming_bonus_crop_chance()
+                                                    {
+                                                        state.spawn_drop_synced(
+                                                            drop_pos,
+                                                            Vec3::new(0.2, 2.3, 0.2),
+                                                            ItemSlot::new(ItemId::WHEAT, 1),
+                                                        );
+                                                        state.spawn_drop_synced(
+                                                            drop_pos,
+                                                            Vec3::new(-0.2, 2.3, -0.2),
+                                                            ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
+                                                        );
+                                                    }
+                                                    if state.player_skills.farming_auto_replant() {
+                                                        let replanted = state.world_manager.place_block(
+                                                            target_voxel,
+                                                            BlockId::WHEAT_0,
+                                                            &state.player.aabb(),
+                                                            &state.device,
+                                                            &state.pipeline,
+                                                        );
+                                                        if replanted {
+                                                            state
+                                                                .world_manager
+                                                                .plant_crop(target_voxel);
+                                                            if let Some(client) =
+                                                                &mut state.mp_client
+                                                            {
+                                                                client.send(
+                                                                    &blockgame_core::net::ClientPacket::BlockChange {
+                                                                        pos: target_voxel,
+                                                                        block_id: BlockId::WHEAT_0,
+                                                                    },
+                                                                );
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -4728,9 +5333,18 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
 
-                    // 7. Build 2D UI Overlay (HUD or Inventory/Crafting Screen)
+                    // 7. Build 2D UI Overlay (HUD, Skills Screen, or Inventory/Crafting Screen)
                     if state.screen == AppScreen::InGame {
-                        if state.inventory_open {
+                        if state.skills_open {
+                            UiBuilder::build_skills_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &state.player_skills,
+                                state.selected_skill_idx,
+                                ui_cursor,
+                            );
+                        } else if state.inventory_open {
                         // 1. Prepare JEI Item Index Catalog & Filter
                         let search_lower = state.jei_search_text.trim().to_lowercase();
                         let catalog: Vec<ItemId> = state
@@ -5065,6 +5679,16 @@ impl ApplicationHandler for BlockGameApp {
                                 state.voice_transmitting,
                                 &ptt_name,
                                 &nearby_speakers,
+                            );
+                        }
+                        if let Some((ref title, ref subtitle, timer)) = state.skill_toast {
+                            let alpha = (timer / 0.8).clamp(0.0, 1.0);
+                            UiBuilder::draw_skill_levelup_banner(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                title,
+                                subtitle,
+                                alpha,
                             );
                         }
                     }

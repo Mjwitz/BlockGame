@@ -17,7 +17,10 @@ use crate::{
     auth::{derive_client_password_token, validate_username, AuthDatabase},
     block::BlockId,
     chunk::ChunkPos,
-    command::{execute_command, CommandOutput, CommandSource, OnlinePlayerInfo, PendingTpaRequest},
+    command::{
+        execute_command, CommandOutput, CommandSource, OnlinePlayerInfo, PendingTpaRequest,
+        SkillCommandAction,
+    },
     entity::{next_local_drop_id, ItemDrop},
     item::{Inventory, ItemId, ItemRegistry, ItemSlot},
     permissions::{BanManager, PermissionsManager},
@@ -26,6 +29,7 @@ use crate::{
         encode_chunk_rle, load_world_from_dir, save_world_to_dir, SavedPlayerState, WorldMetadata,
         WorldSaveData,
     },
+    skills::{PlayerSkills, SKILL_COUNT},
     world::{world_to_chunk_coords, FurnaceState, World},
 };
 
@@ -148,6 +152,9 @@ pub enum ClientPacket {
         seq: u32,
         data: Vec<u8>,
     },
+    SkillsSync {
+        skills: PlayerSkills,
+    },
 }
 
 /// Maximum distance (in blocks) at which proximity voice chat is relayed and audible.
@@ -246,6 +253,9 @@ pub enum ServerPacket {
     },
     GameModeUpdate {
         game_mode: crate::player::GameMode,
+    },
+    SkillsUpdate {
+        skills: PlayerSkills,
     },
 }
 
@@ -371,6 +381,10 @@ impl ClientPacket {
                 write_u32(&mut payload, *seq)?;
                 write_u16(&mut payload, data.len().min(2048) as u16)?;
                 payload.extend_from_slice(&data[..data.len().min(2048)]);
+            }
+            Self::SkillsSync { skills } => {
+                write_u8(&mut payload, 14)?;
+                write_player_skills(&mut payload, skills)?;
             }
         }
         wrap_frame(&payload)
@@ -509,6 +523,10 @@ impl ClientPacket {
                 let mut data = vec![0u8; len];
                 r.read_exact(&mut data)?;
                 Ok(Self::VoiceFrame { seq, data })
+            }
+            14 => {
+                let skills = read_player_skills(&mut r)?;
+                Ok(Self::SkillsSync { skills })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -715,6 +733,10 @@ impl ServerPacket {
             Self::GameModeUpdate { game_mode } => {
                 write_u8(&mut payload, 17)?;
                 write_u8(&mut payload, *game_mode as u8)?;
+            }
+            Self::SkillsUpdate { skills } => {
+                write_u8(&mut payload, 18)?;
+                write_player_skills(&mut payload, skills)?;
             }
         }
 
@@ -953,6 +975,10 @@ impl ServerPacket {
             17 => {
                 let gm = crate::player::GameMode::from_u8(read_u8(&mut r)?);
                 Ok(Self::GameModeUpdate { game_mode: gm })
+            }
+            18 => {
+                let skills = read_player_skills(&mut r)?;
+                Ok(Self::SkillsUpdate { skills })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1275,6 +1301,155 @@ fn apply_command_output(
             let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
         }
         direct_sends.push((target_pid, ServerPacket::GameModeUpdate { game_mode: new_mode }));
+    }
+
+    for action in output.skill_actions {
+        match action {
+            SkillCommandAction::View {
+                requester_pid,
+                skill,
+            } => {
+                if let Some(c) = clients.iter().find(|c| c.player_id == requester_pid) {
+                    let skills = &c.saved_state.skills;
+                    let mut lines = Vec::new();
+                    if let Some(sk) = skill {
+                        let prog = skills.get(sk);
+                        let next = PlayerSkills::xp_for_next_level(prog.level);
+                        lines.push(format!(
+                            "[Skills] {} Lv {}/{} (XP: {}/{})",
+                            sk.name(),
+                            prog.level,
+                            crate::skills::MAX_SKILL_LEVEL,
+                            prog.xp,
+                            next
+                        ));
+                        lines.push(format!("  Perks: {}", skills.perks_summary(sk)));
+                        for m in sk.milestones() {
+                            let tag = if prog.level >= m.level { "[Unlocked]" } else { "[Locked]" };
+                            lines.push(format!(
+                                "  {} Lv {}: {} - {}",
+                                tag, m.level, m.name, m.description
+                            ));
+                        }
+                    } else {
+                        lines.push(format!(
+                            "[Skills] Total Level: {} (Press K to open Skills UI)",
+                            skills.total_level()
+                        ));
+                        for sk in crate::skills::SkillKind::ALL {
+                            let prog = skills.get(sk);
+                            let next = PlayerSkills::xp_for_next_level(prog.level);
+                            lines.push(format!(
+                                "  {}: Lv {}/{} ({}/{} XP) - {}",
+                                sk.name(),
+                                prog.level,
+                                crate::skills::MAX_SKILL_LEVEL,
+                                prog.xp,
+                                next,
+                                skills.perks_summary(sk)
+                            ));
+                        }
+                    }
+                    for line in lines {
+                        direct_sends.push((
+                            requester_pid,
+                            ServerPacket::ChatBroadcast {
+                                sender: "Server".to_string(),
+                                prefix: String::new(),
+                                message: line,
+                                is_system: true,
+                            },
+                        ));
+                    }
+                }
+            }
+            SkillCommandAction::Set {
+                target_pid,
+                skill,
+                level,
+            } => {
+                if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+                    c.saved_state.skills.set_level(skill, level);
+                    let updated = c.saved_state.skills.clone();
+                    auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+                    let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+                    let _ = auth_db.save_to_dir(world_dir);
+                    direct_sends.push((target_pid, ServerPacket::SkillsUpdate { skills: updated }));
+                    direct_sends.push((
+                        target_pid,
+                        ServerPacket::ChatBroadcast {
+                            sender: "Server".to_string(),
+                            prefix: String::new(),
+                            message: format!(
+                                "[Skills] Your {} level was set to {}.",
+                                skill.name(),
+                                level
+                            ),
+                            is_system: true,
+                        },
+                    ));
+                }
+            }
+            SkillCommandAction::AddXp {
+                target_pid,
+                skill,
+                amount,
+            } => {
+                if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+                    let lvl_up = c.saved_state.skills.add_xp(skill, amount);
+                    let updated = c.saved_state.skills.clone();
+                    auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+                    let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+                    let _ = auth_db.save_to_dir(world_dir);
+                    direct_sends.push((target_pid, ServerPacket::SkillsUpdate { skills: updated }));
+                    let mut msg = format!(
+                        "[Skills] Gained {} {} XP (now Lv {}).",
+                        amount,
+                        skill.name(),
+                        c.saved_state.skills.level(skill)
+                    );
+                    if let Some(up) = lvl_up {
+                        if !up.unlocked_milestones.is_empty() {
+                            let names: Vec<String> = up
+                                .unlocked_milestones
+                                .iter()
+                                .map(|m| format!("Lv {} {}", m.level, m.name))
+                                .collect();
+                            msg.push_str(&format!(" Unlocked: {}", names.join(", ")));
+                        }
+                    }
+                    direct_sends.push((
+                        target_pid,
+                        ServerPacket::ChatBroadcast {
+                            sender: "Server".to_string(),
+                            prefix: String::new(),
+                            message: msg,
+                            is_system: true,
+                        },
+                    ));
+                }
+            }
+            SkillCommandAction::Reset { target_pid } => {
+                if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+                    c.saved_state.skills = PlayerSkills::new();
+                    let updated = c.saved_state.skills.clone();
+                    auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+                    let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+                    let _ = auth_db.save_to_dir(world_dir);
+                    direct_sends.push((target_pid, ServerPacket::SkillsUpdate { skills: updated }));
+                    direct_sends.push((
+                        target_pid,
+                        ServerPacket::ChatBroadcast {
+                            sender: "Server".to_string(),
+                            prefix: String::new(),
+                            message: "[Skills] All your skills have been reset to level 1."
+                                .to_string(),
+                            is_system: true,
+                        },
+                    ));
+                }
+            }
+        }
     }
 
     for (target_name, new_rank) in output.rank_updates {
@@ -1921,13 +2096,28 @@ fn run_server_loop(
                         active_hotbar_slot,
                         stats,
                     } if clients[idx].authenticated => {
+                        let preserved_gm = clients[idx].saved_state.stats.game_mode;
                         clients[idx].saved_state.inventory = inventory;
                         clients[idx].saved_state.active_hotbar_slot = active_hotbar_slot;
                         clients[idx].saved_state.stats = stats;
+                        clients[idx].saved_state.stats.game_mode = preserved_gm;
                         auth_db.update_player_state(
                             &clients[idx].username,
                             clients[idx].model.skin_id,
                             clients[idx].saved_state.clone(),
+                        );
+                    }
+                    ClientPacket::SkillsSync { skills } if clients[idx].authenticated => {
+                        clients[idx].saved_state.skills = skills;
+                        auth_db.update_player_state(
+                            &clients[idx].username,
+                            clients[idx].model.skin_id,
+                            clients[idx].saved_state.clone(),
+                        );
+                        let _ = crate::save::save_player_data(
+                            &world_dir,
+                            &clients[idx].username,
+                            &clients[idx].saved_state,
                         );
                     }
                     ClientPacket::AttackPlayer {
@@ -2678,6 +2868,28 @@ fn read_player_model<R: Read>(r: &mut R) -> io::Result<PlayerModelState> {
     })
 }
 
+fn write_player_skills<W: Write>(w: &mut W, s: &PlayerSkills) -> io::Result<()> {
+    write_u8(w, SKILL_COUNT as u8)?;
+    for entry in &s.entries {
+        write_u16(w, entry.level)?;
+        write_u64(w, entry.xp)?;
+    }
+    Ok(())
+}
+
+fn read_player_skills<R: Read>(r: &mut R) -> io::Result<PlayerSkills> {
+    let count = read_u8(r)? as usize;
+    let mut skills = PlayerSkills::new();
+    for i in 0..count {
+        let lvl = read_u16(r)?.clamp(1, crate::skills::MAX_SKILL_LEVEL);
+        let xp = read_u64(r)?;
+        if i < SKILL_COUNT {
+            skills.entries[i] = crate::skills::SkillProgress { level: lvl, xp };
+        }
+    }
+    Ok(skills)
+}
+
 fn write_saved_player_state<W: Write>(w: &mut W, p: &SavedPlayerState) -> io::Result<()> {
     write_vec3(w, p.position)?;
     write_vec3(w, p.velocity)?;
@@ -2706,6 +2918,7 @@ fn write_saved_player_state<W: Write>(w: &mut W, p: &SavedPlayerState) -> io::Re
         write_f32(w, *pitch)?;
     }
     write_u8(w, p.stats.game_mode as u8)?;
+    write_player_skills(w, &p.skills)?;
     Ok(())
 }
 
@@ -2755,6 +2968,8 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
         stats.game_mode = crate::GameMode::from_u8(gm);
     }
 
+    let skills = read_player_skills(r).unwrap_or_default();
+
     Ok(SavedPlayerState {
         position,
         velocity,
@@ -2765,6 +2980,7 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
         active_hotbar_slot,
         rank: if rank.is_empty() { "default".to_string() } else { rank },
         homes,
+        skills,
     })
 }
 
@@ -3301,6 +3517,88 @@ mod tests {
                 .expect("Player must be able to reconnect after ungraceful disconnect");
         thread::sleep(Duration::from_millis(100));
         assert_eq!(server.online_player_count(), 1);
+
+        client2.disconnect();
+        server.shutdown();
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_skills_packet_roundtrip_and_server_sync() {
+        let mut custom_skills = crate::skills::PlayerSkills::new();
+        custom_skills.set_level(crate::skills::SkillKind::Mining, 125);
+        custom_skills.add_xp(crate::skills::SkillKind::Combat, 750);
+
+        let cpkt = ClientPacket::SkillsSync {
+            skills: custom_skills.clone(),
+        };
+        let framed = cpkt.encode().unwrap();
+        let cdecoded = ClientPacket::decode(&framed[8..]).unwrap();
+        assert_eq!(cpkt, cdecoded);
+
+        let spkt = ServerPacket::SkillsUpdate {
+            skills: custom_skills.clone(),
+        };
+        let sframed = spkt.encode().unwrap();
+        let sdecoded = ServerPacket::decode(&sframed[8..]).unwrap();
+        assert_eq!(spkt, sdecoded);
+
+        // Full server roundtrip: client syncs skills, server persists per-server and handles /skills set
+        let temp_root = std::env::temp_dir().join("blockgame_net_skills_sync_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).unwrap();
+
+        let mut server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "skills_sync_world".to_string(),
+            "Skills Sync World".to_string(),
+            7777,
+            None,
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Server should start");
+
+        let addr_str = server.local_addr().to_string();
+        let (mut client, auth) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "Skiller", "pw123", 0)
+                .expect("Client should authenticate");
+        if let ServerPacket::AuthResponse { player_state, .. } = auth {
+            assert_eq!(player_state.skills.level(crate::skills::SkillKind::Mining), 1);
+        } else {
+            panic!("Expected AuthResponse");
+        }
+
+        // Send skill progress from client
+        client.send(&ClientPacket::SkillsSync {
+            skills: custom_skills.clone(),
+        });
+        thread::sleep(Duration::from_millis(120));
+
+        // Server executes `/skills set Skiller farming 300` -> pushes SkillsUpdate packet
+        server.execute_command("skills set Skiller farming 300");
+        thread::sleep(Duration::from_millis(120));
+        let pkts = client.poll_packets();
+        let updated = pkts.iter().rev().find_map(|p| match p {
+            ServerPacket::SkillsUpdate { skills } => Some(skills.clone()),
+            _ => None,
+        });
+        let updated = updated.expect("Expected ServerPacket::SkillsUpdate after /skills set");
+        assert_eq!(updated.level(crate::skills::SkillKind::Mining), 125);
+        assert_eq!(updated.level(crate::skills::SkillKind::Farming), 300);
+
+        // Reconnect and confirm server remembers both synced Mining 125 and admin-set Farming 300
+        client.disconnect();
+        thread::sleep(Duration::from_millis(120));
+        let (mut client2, auth2) =
+            MultiplayerClient::connect_and_authenticate(&addr_str, "Skiller", "pw123", 0)
+                .expect("Client should reconnect");
+        if let ServerPacket::AuthResponse { player_state, .. } = auth2 {
+            assert_eq!(player_state.skills.level(crate::skills::SkillKind::Mining), 125);
+            assert_eq!(player_state.skills.level(crate::skills::SkillKind::Farming), 300);
+        } else {
+            panic!("Expected AuthResponse on reconnect");
+        }
 
         client2.disconnect();
         server.shutdown();
