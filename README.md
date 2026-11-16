@@ -8,16 +8,19 @@ A procedural voxel sandbox survival game inspired by Minecraft, written in **Rus
 
 ## Features
 
-- **Voxel Engine & Lighting**: $16 \times 16 \times 16$ chunked world with hidden-face culling, greedy meshing, vertex ambient occlusion, and BFS flood-fill sunlight/blocklight propagation (including sky light passing through leaves).
-- **16 Procedural Biomes**: Plains, Forest, Desert, Mountains, Snowy Tundra, Swamp, Savanna, Ocean, Jungle, Badlands, Beach, River, Taiga, Mushroom Fields, Dark Forest, and Coral Reef — each with distinct terrain, vegetation, and atmospheric fog.
+- **Voxel Engine & Lighting**: $16 \times 16 \times 16$ chunked world with hidden-face culling, greedy meshing, translucent ice/water rendering, vertex ambient occlusion, and BFS flood-fill sunlight/blocklight propagation (including sky light passing through leaves).
+- **20 Procedural Biomes**: Plains, Flower Meadow, Forest, Birch Forest, Dark Forest, Taiga, Snowy Tundra, Glacier, Mountains, Desert, Red Desert, Badlands, Savanna, Jungle, Swamp, Beach, Stony Shore, River, Ocean, and Coral Reef — with macro-cell minimum biome sizing, relief contrast, and atmospheric fog.
+- **MMO Skills & Leveling (1–1000)**: Per-world/server progression across 7 skills (**Combat**, **Woodcutting**, **Mining**, **Fishing**, **Digging**, **Farming**, **Agility**) with gradual scaling perks and major milestone unlocks (`K` menu / `/skills`).
+- **Fishing & Tackle**: Craftable Wooden, Copper, Iron, and Diamond Fishing Rods with upgradeable lines, lures, and bait, an interactive timing minigame, and 10 fish species plus treasure catches.
 - **Day/Night Cycle & Beds**: Dynamic skybox with moving sun and moon, dusk-to-dawn monster spawning, and 2-block-long beds to skip the night (requires $\ge 50\%$ of players sleeping in multiplayer).
-- **Survival, Crafting & Smelting**:
-  - Health, hunger, fall damage, drowning, and underwater visual effects.
+- **Survival, Creative Mode, Crafting & Smelting**:
+  - Health, hunger, fall damage, drowning, and underwater visual effects, plus **Creative Mode** (world creation toggle or `/gamemode`).
   - 2x2 inventory crafting, 3x3 Crafting Table, Furnace smelting, Chests, and an integrated JEI-style recipe/usage browser (`R` / `U` on hovered items).
   - Tool durability across Wood, Stone, Iron, Gold, and Diamond tiers, plus 16-piece Armor sets (Leather, Iron, Gold, Diamond) and Bow & Arrow combat.
 - **Passive & Hostile Mobs**:
   - **Passive Animals**: Cows, Pigs, Chickens, and Sheep (shearing/wool drops, plus Wheat breeding with baby scaling, heart particles, and a 5-minute cooldown).
   - **Hostile Monsters**: Zombies, Skeletons (ranged bow AI), and Spiders with light-gated spawning and animated 3D flame visuals when burning in sunlight.
+- **Custom Stereo Soundtrack & Spatial Audio**: Embedded stereo MP3 soundtrack with contextual triggers (adventuring, mining, and anytime background tracks) alongside 3D spatial SFX and proximity voice chat.
 - **Multiplayer & Dedicated Server**: TCP client/server architecture (`blockgame_server`) with modular world saves, player accounts, groups/ranks, permissions, and server console/in-game slash commands.
 
 ---

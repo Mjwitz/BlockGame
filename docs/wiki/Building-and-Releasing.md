@@ -8,8 +8,8 @@ BlockGame uses GitHub Actions ([`.github/workflows/release.yml`](https://github.
 Push a version tag starting with `v` to trigger the workflow and publish a GitHub Release with downloadable archives:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Once the workflow completes, the release will contain:

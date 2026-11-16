@@ -19,6 +19,8 @@ Commands can be run from the **dedicated server console** (without a leading `/`
 | `tp <player> <x> <y> <z>` | Teleport `<player>` to specific coordinates | `blockgame.command.tp` |
 | `tphere <player>` | Teleport `<player>` to your current position | `blockgame.command.tphere` |
 | `give <player> <item> [amount]` | Give an item by ID or name (e.g. `diamond`, `iron_pickaxe`) | `blockgame.command.give` |
+| `gamemode <survival\|creative\|0\|1> [player]` | Switch game mode (`gm` alias supported) | `blockgame.command.gamemode` |
+| `skills [skill]` / `skills <set\|addxp\|reset> <player> ...` | View your skill levels/milestones or administer player skills | `blockgame.command.skills` / `blockgame.command.skills.admin` |
 | `rank <player> [rank]` | View or set a player's rank (e.g. `member`, `moderator`, `admin`) | `blockgame.command.rank` |
 | `resetplayer <player>` | Reset a player's saved world data & inventory | `blockgame.command.resetplayer` |
 | `setspawn` | Set world spawn coordinates to your current position | `blockgame.command.setspawn` |

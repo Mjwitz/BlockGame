@@ -17,14 +17,15 @@
 | :--- | :--- |
 | `Left Click` (hold) | Mine / break targeted block |
 | `Left Click` (tap) | Melee attack mobs or players |
-| `Right Click` | Place block, interact with Chest / Crafting Table / Furnace / Bed, eat food, use Bucket, shoot Bow, or feed Wheat to animals |
+| `Right Click` | Place block, interact with Chest / Crafting Table / Furnace / Bed, eat food, use Bucket, cast/hook Fishing Rod, shoot Bow, or feed Wheat to animals |
 | `1` – `9` or `Mouse Wheel` | Select active hotbar slot |
 
-## Inventory, Crafting & Recipe Browser
+## Inventory, Skills & Recipe Browser
 
 | Input | Action |
 | :--- | :--- |
 | `E` | Open / close 2x2 inventory & crafting screen (also shows Armor slots and JEI-style recipe sidebar) |
+| `K` | Open / close the **Skills & Milestones** menu (view levels 1–1000, perks, and milestone unlocks) |
 | `Left Click` (in UI) | Pick up / place full item stack |
 | `Right Click` (in UI) | Pick up half stack / place single item |
 | `Shift + Left Click` | Quick-transfer stack between inventory, hotbar, chests, or furnaces |
