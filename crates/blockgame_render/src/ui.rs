@@ -1996,134 +1996,149 @@ impl UiBuilder {
             }
         }
 
-        // 4. Player Health Hearts (10 hearts immediately above the left hotbar)
+        // 4. Player Health Hearts, Armor, Hunger, and Oxygen (Survival only)
         let icon_size = 18.0;
         let icon_spacing = 17.0;
         let bars_y = start_y - 24.0;
 
-        let heart_bg_uv = TextureAtlas::get_uv_bounds(Self::HEART_CONTAINER_TILE);
-        let heart_full_uv = TextureAtlas::get_uv_bounds(Self::HEART_FULL_TILE);
-        let heart_half_uv = TextureAtlas::get_uv_bounds(Self::HEART_HALF_TILE);
-
-        for i in 0..10 {
-            let hx = start_x + (i as f32) * icon_spacing;
-            // Always draw heart container background
-            mesh.add_quad(
-                hx,
-                bars_y,
-                icon_size,
-                icon_size,
-                heart_bg_uv,
-                [1.0, 1.0, 1.0, 1.0],
+        if stats.game_mode.is_creative() {
+            let mode_label = "Creative Mode";
+            let label_w = Self::string_width(mode_label, 9.0, 1.0);
+            Self::draw_string(
+                mesh,
+                (screen_w - label_w) * 0.5,
+                start_y - 18.0,
+                mode_label,
+                9.0,
+                12.0,
+                1.0,
+                [0.78, 0.92, 1.0, 0.92],
             );
+        } else {
+            let heart_bg_uv = TextureAtlas::get_uv_bounds(Self::HEART_CONTAINER_TILE);
+            let heart_full_uv = TextureAtlas::get_uv_bounds(Self::HEART_FULL_TILE);
+            let heart_half_uv = TextureAtlas::get_uv_bounds(Self::HEART_HALF_TILE);
 
-            let hp_val = (i as f32 + 1.0) * 2.0;
-            if stats.health >= hp_val {
-                mesh.add_quad(
-                    hx,
-                    bars_y,
-                    icon_size,
-                    icon_size,
-                    heart_full_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
-            } else if stats.health >= hp_val - 1.0 {
-                mesh.add_quad(
-                    hx,
-                    bars_y,
-                    icon_size,
-                    icon_size,
-                    heart_half_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
-            }
-        }
-
-        // 4b. Armor Points Bar (10 chestplate icons above health hearts when armor > 0)
-        if armor_points > 0 {
-            let armor_y = bars_y - icon_size - 4.0;
-            let armor_uv = TextureAtlas::get_uv_bounds(Self::ARMOR_ICON_TILE);
-            for i in 0..10u8 {
-                let ax = start_x + (i as f32) * icon_spacing;
-                let threshold = (i + 1) * 2;
-                let tint = if armor_points >= threshold {
-                    [1.0, 1.0, 1.0, 1.0]
-                } else if armor_points >= threshold - 1 {
-                    [0.65, 0.70, 0.78, 0.9]
-                } else {
-                    [0.2, 0.2, 0.25, 0.55]
-                };
-                mesh.add_quad(ax, armor_y, icon_size, icon_size, armor_uv, tint);
-            }
-        }
-
-        // 5. Player Hunger Drumsticks (10 drumsticks immediately above the right hotbar)
-        let hunger_bg_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_CONTAINER_TILE);
-        let hunger_full_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_FULL_TILE);
-        let hunger_half_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_HALF_TILE);
-
-        let hotbar_right = start_x + total_w;
-        for i in 0..10 {
-            let dx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
-            // Always draw drumstick container background
-            mesh.add_quad(
-                dx,
-                bars_y,
-                icon_size,
-                icon_size,
-                hunger_bg_uv,
-                [1.0, 1.0, 1.0, 1.0],
-            );
-
-            let hunger_val = (i as f32 + 1.0) * 2.0;
-            if stats.hunger >= hunger_val {
-                mesh.add_quad(
-                    dx,
-                    bars_y,
-                    icon_size,
-                    icon_size,
-                    hunger_full_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
-            } else if stats.hunger >= hunger_val - 1.0 {
-                mesh.add_quad(
-                    dx,
-                    bars_y,
-                    icon_size,
-                    icon_size,
-                    hunger_half_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
-            }
-        }
-
-        // 6. Oxygen / Breath Bubbles (10 bubbles directly above hunger bar when submerged or recovering breath)
-        if (stats.is_submerged || stats.breath < stats.max_breath) && !stats.is_dead {
-            let bubble_full_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_FULL_TILE);
-            let bubble_pop_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_POP_TILE);
-            let bubbles_y = bars_y - 20.0;
-
-            let bubbles_remaining = ((stats.breath / stats.max_breath) * 10.0).ceil() as i32;
             for i in 0..10 {
-                let bx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
-                if i < bubbles_remaining {
+                let hx = start_x + (i as f32) * icon_spacing;
+                // Always draw heart container background
+                mesh.add_quad(
+                    hx,
+                    bars_y,
+                    icon_size,
+                    icon_size,
+                    heart_bg_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+
+                let hp_val = (i as f32 + 1.0) * 2.0;
+                if stats.health >= hp_val {
                     mesh.add_quad(
-                        bx,
-                        bubbles_y,
+                        hx,
+                        bars_y,
                         icon_size,
                         icon_size,
-                        bubble_full_uv,
+                        heart_full_uv,
                         [1.0, 1.0, 1.0, 1.0],
                     );
-                } else if i == bubbles_remaining && stats.drown_timer > 0.0 {
+                } else if stats.health >= hp_val - 1.0 {
                     mesh.add_quad(
-                        bx,
-                        bubbles_y,
+                        hx,
+                        bars_y,
                         icon_size,
                         icon_size,
-                        bubble_pop_uv,
+                        heart_half_uv,
                         [1.0, 1.0, 1.0, 1.0],
                     );
+                }
+            }
+
+            // 4b. Armor Points Bar (10 chestplate icons above health hearts when armor > 0)
+            if armor_points > 0 {
+                let armor_y = bars_y - icon_size - 4.0;
+                let armor_uv = TextureAtlas::get_uv_bounds(Self::ARMOR_ICON_TILE);
+                for i in 0..10u8 {
+                    let ax = start_x + (i as f32) * icon_spacing;
+                    let threshold = (i + 1) * 2;
+                    let tint = if armor_points >= threshold {
+                        [1.0, 1.0, 1.0, 1.0]
+                    } else if armor_points >= threshold - 1 {
+                        [0.65, 0.70, 0.78, 0.9]
+                    } else {
+                        [0.2, 0.2, 0.25, 0.55]
+                    };
+                    mesh.add_quad(ax, armor_y, icon_size, icon_size, armor_uv, tint);
+                }
+            }
+
+            // 5. Player Hunger Drumsticks (10 drumsticks immediately above the right hotbar)
+            let hunger_bg_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_CONTAINER_TILE);
+            let hunger_full_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_FULL_TILE);
+            let hunger_half_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_HALF_TILE);
+
+            let hotbar_right = start_x + total_w;
+            for i in 0..10 {
+                let dx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
+                // Always draw drumstick container background
+                mesh.add_quad(
+                    dx,
+                    bars_y,
+                    icon_size,
+                    icon_size,
+                    hunger_bg_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+
+                let hunger_val = (i as f32 + 1.0) * 2.0;
+                if stats.hunger >= hunger_val {
+                    mesh.add_quad(
+                        dx,
+                        bars_y,
+                        icon_size,
+                        icon_size,
+                        hunger_full_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                } else if stats.hunger >= hunger_val - 1.0 {
+                    mesh.add_quad(
+                        dx,
+                        bars_y,
+                        icon_size,
+                        icon_size,
+                        hunger_half_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                }
+            }
+
+            // 6. Oxygen / Breath Bubbles (10 bubbles directly above hunger bar when submerged or recovering breath)
+            if (stats.is_submerged || stats.breath < stats.max_breath) && !stats.is_dead {
+                let bubble_full_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_FULL_TILE);
+                let bubble_pop_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_POP_TILE);
+                let bubbles_y = bars_y - 20.0;
+
+                let bubbles_remaining = ((stats.breath / stats.max_breath) * 10.0).ceil() as i32;
+                for i in 0..10 {
+                    let bx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
+                    if i < bubbles_remaining {
+                        mesh.add_quad(
+                            bx,
+                            bubbles_y,
+                            icon_size,
+                            icon_size,
+                            bubble_full_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+                    } else if i == bubbles_remaining && stats.drown_timer > 0.0 {
+                        mesh.add_quad(
+                            bx,
+                            bubbles_y,
+                            icon_size,
+                            icon_size,
+                            bubble_pop_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+                    }
                 }
             }
         }
@@ -4352,13 +4367,13 @@ impl UiBuilder {
         let box_w = 420.0;
         let box_h = 42.0;
         let box_x = (screen_w - box_w) * 0.5;
-        let name_y = screen_h * 0.30;
+        let name_y = screen_h * 0.27;
         let seed_y = name_y + 95.0;
 
         let btn_w = 202.0;
         let btn_h = 42.0;
         let gap = 16.0;
-        let btn_y = seed_y + 90.0;
+        let btn_y = seed_y + 132.0;
         let create_x = (screen_w - (btn_w * 2.0 + gap)) * 0.5;
         let cancel_x = create_x + btn_w + gap;
 
@@ -4370,6 +4385,15 @@ impl UiBuilder {
         )
     }
 
+    /// Returns the Game Mode toggle button rectangle on the Create New World screen.
+    pub fn create_world_gamemode_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
+        let box_w = 420.0;
+        let box_x = (screen_w - box_w) * 0.5;
+        let name_y = screen_h * 0.27;
+        let seed_y = name_y + 95.0;
+        [box_x, seed_y + 66.0, box_w, 40.0]
+    }
+
     /// Builds the Create New World screen.
     /// `focused_field`: `0` = World Name input, `1` = World Seed input.
     pub fn build_create_world_screen(
@@ -4379,6 +4403,7 @@ impl UiBuilder {
         name_input: &str,
         seed_input: &str,
         focused_field: usize,
+        game_mode: blockgame_core::GameMode,
         cursor_pos: [f32; 2],
     ) {
         mesh.clear();
@@ -4409,6 +4434,7 @@ impl UiBuilder {
 
         let (name_rect, seed_rect, create_rect, cancel_rect) =
             Self::create_world_layout(screen_w, screen_h);
+        let gamemode_rect = Self::create_world_gamemode_rect(screen_w, screen_h);
 
         Self::draw_text_input_box(
             mesh,
@@ -4453,6 +4479,18 @@ impl UiBuilder {
             "Leave blank for a random seed",
             focused_field == 1,
             cursor_pos,
+        );
+
+        let mode_label = format!("Game Mode: {}", game_mode.display_name());
+        Self::draw_menu_button(
+            mesh,
+            gamemode_rect[0],
+            gamemode_rect[1],
+            gamemode_rect[2],
+            gamemode_rect[3],
+            &mode_label,
+            cursor_pos,
+            true,
         );
 
         Self::draw_menu_button(
@@ -6637,6 +6675,7 @@ mod tests {
             "My New World",
             "12345",
             0,
+            blockgame_core::GameMode::Survival,
             [640.0, 360.0],
         );
         assert!(mesh.indices.len() > 0);

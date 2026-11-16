@@ -51,6 +51,7 @@ pub enum AppScreen {
         name_input: String,
         seed_input: String,
         focused_field: usize,
+        game_mode: blockgame_core::GameMode,
     },
     Settings {
         return_to_pause: bool,
@@ -200,6 +201,7 @@ pub struct AppState {
     pub mouse_right_down: bool,
     pub breaking_voxel: Option<IVec3>,
     pub break_progress: f32,
+    pub creative_break_cooldown: f32,
     pub cracking_buffer: Option<(wgpu::Buffer, u32)>,
     pub fishing_state: FishingSession,
     pub fishing_rng: u64,
@@ -209,6 +211,7 @@ pub struct AppState {
     moving_left: bool,
     moving_right: bool,
     jumping: bool,
+    last_jump_tap_time: f32,
     sprinting: bool,
     mouse_captured: bool,
     last_frame_time: Instant,
@@ -696,7 +699,12 @@ impl AppState {
         }
     }
 
-    pub fn create_and_start_world(&mut self, name_input: &str, seed_input: &str) {
+    pub fn create_and_start_world(
+        &mut self,
+        name_input: &str,
+        seed_input: &str,
+        game_mode: blockgame_core::GameMode,
+    ) {
         let display_name = if name_input.trim().is_empty() {
             "New World".to_string()
         } else {
@@ -707,6 +715,7 @@ impl AppState {
 
         let mut meta = WorldMetadata::new(&display_name, seed);
         meta.folder_name = folder_name;
+        meta.game_mode = game_mode;
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
@@ -729,6 +738,7 @@ impl AppState {
         self.world_manager = world_manager;
         self.player = PlayerPhysics::new(Vec3::new(0.5, spawn_y, 0.5));
         self.player_stats = PlayerStats::new();
+        self.player_stats.game_mode = game_mode;
         self.death_handled = false;
         self.inventory = Inventory::starter_inventory();
         self.active_hotbar_slot = 0;
@@ -1138,6 +1148,7 @@ impl ApplicationHandler for BlockGameApp {
             mouse_right_down: false,
             breaking_voxel: None,
             break_progress: 0.0,
+            creative_break_cooldown: 0.0,
             cracking_buffer: None,
             fishing_state: FishingSession::Idle,
             fishing_rng: 0x517cc1b727220a95,
@@ -1146,6 +1157,7 @@ impl ApplicationHandler for BlockGameApp {
             moving_left: false,
             moving_right: false,
             jumping: false,
+            last_jump_tap_time: -10.0,
             sprinting: false,
             mouse_captured: false,
             last_frame_time: Instant::now(),
@@ -1350,6 +1362,7 @@ impl ApplicationHandler for BlockGameApp {
                                         name_input: "New World".to_string(),
                                         seed_input: String::new(),
                                         focused_field: 0,
+                                        game_mode: blockgame_core::GameMode::Survival,
                                     };
                                 } else if has_sel
                                     && UiBuilder::is_rect_hovered(
@@ -1389,9 +1402,11 @@ impl ApplicationHandler for BlockGameApp {
                                 name_input,
                                 seed_input,
                                 focused_field,
+                                game_mode,
                             } => {
                                 let (name_r, seed_r, create_r, cancel_r) =
                                     UiBuilder::create_world_layout(screen_w, screen_h);
+                                let mode_r = UiBuilder::create_world_gamemode_rect(screen_w, screen_h);
                                 if UiBuilder::is_rect_hovered(
                                     cpos,
                                     name_r[0],
@@ -1403,6 +1418,7 @@ impl ApplicationHandler for BlockGameApp {
                                         name_input,
                                         seed_input,
                                         focused_field: 0,
+                                        game_mode,
                                     };
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
@@ -1415,6 +1431,25 @@ impl ApplicationHandler for BlockGameApp {
                                         name_input,
                                         seed_input,
                                         focused_field: 1,
+                                        game_mode,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    mode_r[0],
+                                    mode_r[1],
+                                    mode_r[2],
+                                    mode_r[3],
+                                ) {
+                                    let next_mode = if game_mode.is_creative() {
+                                        blockgame_core::GameMode::Survival
+                                    } else {
+                                        blockgame_core::GameMode::Creative
+                                    };
+                                    state.screen = AppScreen::CreateWorld {
+                                        name_input,
+                                        seed_input,
+                                        focused_field,
+                                        game_mode: next_mode,
                                     };
                                 } else if !name_input.trim().is_empty()
                                     && UiBuilder::is_rect_hovered(
@@ -1425,7 +1460,7 @@ impl ApplicationHandler for BlockGameApp {
                                         create_r[3],
                                     )
                                 {
-                                    state.create_and_start_world(&name_input, &seed_input);
+                                    state.create_and_start_world(&name_input, &seed_input, game_mode);
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
                                     cancel_r[0],
@@ -2072,20 +2107,22 @@ impl ApplicationHandler for BlockGameApp {
                                 state.break_progress = 0.0;
                                 state.cracking_buffer = None;
 
-                                let mut held = state.inventory.get(state.active_hotbar_slot);
-                                if let Some(def) = state.item_registry.get(held.item_id) {
-                                    if let Some(max_dur) = def.durability {
-                                        let dmg = if def.tool_type
-                                            == Some(blockgame_core::tool::ToolType::Sword)
-                                        {
-                                            1
-                                        } else {
-                                            2
-                                        };
-                                        if held.damage_tool(dmg, max_dur) {
-                                            state.audio.play_tool_break();
+                                if !state.player_stats.game_mode.is_creative() {
+                                    let mut held = state.inventory.get(state.active_hotbar_slot);
+                                    if let Some(def) = state.item_registry.get(held.item_id) {
+                                        if let Some(max_dur) = def.durability {
+                                            let dmg = if def.tool_type
+                                                == Some(blockgame_core::tool::ToolType::Sword)
+                                            {
+                                                1
+                                            } else {
+                                                2
+                                            };
+                                            if held.damage_tool(dmg, max_dur) {
+                                                state.audio.play_tool_break();
+                                            }
+                                            state.inventory.set(state.active_hotbar_slot, held);
                                         }
-                                        state.inventory.set(state.active_hotbar_slot, held);
                                     }
                                 }
                             } else {
@@ -2127,20 +2164,22 @@ impl ApplicationHandler for BlockGameApp {
                                     state.break_progress = 0.0;
                                     state.cracking_buffer = None;
 
-                                    let mut held = state.inventory.get(state.active_hotbar_slot);
-                                    if let Some(def) = state.item_registry.get(held.item_id) {
-                                        if let Some(max_dur) = def.durability {
-                                            let dmg = if def.tool_type
-                                                == Some(blockgame_core::tool::ToolType::Sword)
-                                            {
-                                                1
-                                            } else {
-                                                2
-                                            };
-                                            if held.damage_tool(dmg, max_dur) {
-                                                state.audio.play_tool_break();
+                                    if !state.player_stats.game_mode.is_creative() {
+                                        let mut held = state.inventory.get(state.active_hotbar_slot);
+                                        if let Some(def) = state.item_registry.get(held.item_id) {
+                                            if let Some(max_dur) = def.durability {
+                                                let dmg = if def.tool_type
+                                                    == Some(blockgame_core::tool::ToolType::Sword)
+                                                {
+                                                    1
+                                                } else {
+                                                    2
+                                                };
+                                                if held.damage_tool(dmg, max_dur) {
+                                                    state.audio.play_tool_break();
+                                                }
+                                                state.inventory.set(state.active_hotbar_slot, held);
                                             }
-                                            state.inventory.set(state.active_hotbar_slot, held);
                                         }
                                     }
                                 }
@@ -2371,7 +2410,12 @@ impl ApplicationHandler for BlockGameApp {
                                     break;
                                 }
                             }
-                            if let Some(idx) = arrow_slot_idx {
+                            if state.player_stats.game_mode.is_creative() {
+                                let dir = state.camera.forward().normalize_or_zero();
+                                let spawn_pos = state.player.eye_position() + dir * 0.45;
+                                state.world_manager.spawn_player_arrow(spawn_pos, dir * 28.0, 6.0);
+                                state.punch_timer = 0.15;
+                            } else if let Some(idx) = arrow_slot_idx {
                                 let mut arrow_slot = state.inventory.get(idx);
                                 arrow_slot.take(1);
                                 state.inventory.set(idx, arrow_slot);
@@ -2405,9 +2449,11 @@ impl ApplicationHandler for BlockGameApp {
                                         &state.inventory,
                                     );
                                     if let Some(b_idx) = tackle.bait_slot {
-                                        let mut b_slot = state.inventory.get(b_idx);
-                                        b_slot.take(1);
-                                        state.inventory.set(b_idx, b_slot);
+                                        if !state.player_stats.game_mode.is_creative() {
+                                            let mut b_slot = state.inventory.get(b_idx);
+                                            b_slot.take(1);
+                                            state.inventory.set(b_idx, b_slot);
+                                        }
                                     } else {
                                         tackle.bait_count = 0;
                                     }
@@ -2741,7 +2787,10 @@ impl ApplicationHandler for BlockGameApp {
                                                 state.camera.position,
                                                 state.camera.yaw,
                                             );
-                                            state.inventory.slots[state.active_hotbar_slot].take(1);
+                                            if !state.player_stats.game_mode.is_creative() {
+                                                state.inventory.slots[state.active_hotbar_slot]
+                                                    .take(1);
+                                            }
                                         }
                                     }
                                 }
@@ -2773,6 +2822,7 @@ impl ApplicationHandler for BlockGameApp {
                             mut name_input,
                             mut seed_input,
                             mut focused_field,
+                            game_mode,
                         } => {
                             if key == KeyCode::Tab {
                                 focused_field = (focused_field + 1) % 2;
@@ -2780,6 +2830,7 @@ impl ApplicationHandler for BlockGameApp {
                                     name_input,
                                     seed_input,
                                     focused_field,
+                                    game_mode,
                                 };
                             } else if key == KeyCode::Escape {
                                 state.refresh_saved_worlds();
@@ -2793,7 +2844,7 @@ impl ApplicationHandler for BlockGameApp {
                                 };
                             } else if key == KeyCode::Enter {
                                 if !name_input.trim().is_empty() {
-                                    state.create_and_start_world(&name_input, &seed_input);
+                                    state.create_and_start_world(&name_input, &seed_input, game_mode);
                                 }
                             } else if key == KeyCode::Backspace {
                                 if focused_field == 0 {
@@ -2805,6 +2856,7 @@ impl ApplicationHandler for BlockGameApp {
                                     name_input,
                                     seed_input,
                                     focused_field,
+                                    game_mode,
                                 };
                             } else if let Some(t) = text {
                                 for ch in t.chars() {
@@ -2820,6 +2872,7 @@ impl ApplicationHandler for BlockGameApp {
                                     name_input,
                                     seed_input,
                                     focused_field,
+                                    game_mode,
                                 };
                             }
                         }
@@ -3122,12 +3175,22 @@ impl ApplicationHandler for BlockGameApp {
                 } else if key == kb.right {
                     state.moving_right = pressed;
                 } else if key == kb.jump {
+                    if pressed && !state.jumping && state.player_stats.game_mode.is_creative() {
+                        if state.total_time - state.last_jump_tap_time <= 0.30 {
+                            state.player.toggle_flight();
+                            state.last_jump_tap_time = -10.0;
+                        } else {
+                            state.last_jump_tap_time = state.total_time;
+                        }
+                    }
                     state.jumping = pressed;
                 } else if key == kb.sprint {
                     state.sprinting = pressed;
                 } else if key == kb.flight && pressed {
-                    state.player.toggle_flight();
-                    log::info!("Flying mode: {}", state.player.flying);
+                    if state.player_stats.game_mode.is_creative() || state.player.flying {
+                        state.player.toggle_flight();
+                        log::info!("Flying mode: {}", state.player.flying);
+                    }
                 } else if key == kb.inventory && pressed {
                     state.mouse_left_down = false;
                     state.break_progress = 0.0;
@@ -3593,6 +3656,25 @@ impl ApplicationHandler for BlockGameApp {
                                                 stats,
                                             },
                                         );
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::GameModeUpdate { game_mode } => {
+                                    state.player_stats.game_mode = game_mode;
+                                    if !game_mode.is_creative() && state.player.flying {
+                                        state.player.flying = false;
+                                    }
+                                    state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                                        sender: String::new(),
+                                        prefix: String::new(),
+                                        message: format!(
+                                            "Your game mode has been updated to {}.",
+                                            game_mode.display_name()
+                                        ),
+                                        is_system: true,
+                                        age: 0.0,
+                                    });
+                                    if state.local_chat_messages.len() > 100 {
+                                        state.local_chat_messages.remove(0);
                                     }
                                 }
                                 blockgame_core::net::ServerPacket::VoiceBroadcast {
@@ -4387,6 +4469,11 @@ impl ApplicationHandler for BlockGameApp {
                     }
 
                     // 5b. Process hold-to-break mining mechanics
+                    state.creative_break_cooldown = (state.creative_break_cooldown - dt).max(0.0);
+                    let is_creative = state.player_stats.game_mode.is_creative();
+                    if !state.mouse_left_down {
+                        state.creative_break_cooldown = 0.0;
+                    }
                     if state.mouse_left_down
                         && state.mouse_captured
                         && !state.inventory_open
@@ -4429,21 +4516,28 @@ impl ApplicationHandler for BlockGameApp {
                                     held_tool_type,
                                     held_tool_tier,
                                 );
-                                if break_time.is_infinite() {
+                                if break_time.is_infinite() && !is_creative {
                                     state.break_progress = 0.0;
                                     state.cracking_buffer = None;
                                     state.break_hit_timer = 0.0;
                                 } else {
-                                    state.break_progress += dt / break_time;
-                                    state.break_hit_timer += dt;
-                                    if state.break_hit_timer >= 0.25 {
-                                        state.break_hit_timer = 0.0;
-                                        state.audio.play_block_hit(
-                                            block_at_voxel,
-                                            target_voxel.as_vec3() + Vec3::splat(0.5),
-                                            state.camera.position,
-                                            state.camera.yaw,
-                                        );
+                                    if is_creative {
+                                        if state.creative_break_cooldown <= 0.0 {
+                                            state.break_progress = 1.0;
+                                            state.creative_break_cooldown = 0.20;
+                                        }
+                                    } else {
+                                        state.break_progress += dt / break_time;
+                                        state.break_hit_timer += dt;
+                                        if state.break_hit_timer >= 0.25 {
+                                            state.break_hit_timer = 0.0;
+                                            state.audio.play_block_hit(
+                                                block_at_voxel,
+                                                target_voxel.as_vec3() + Vec3::splat(0.5),
+                                                state.camera.position,
+                                                state.camera.yaw,
+                                            );
+                                        }
                                     }
                                     if state.break_progress >= 1.0 {
                                         // Block break completed!
@@ -4485,93 +4579,95 @@ impl ApplicationHandler for BlockGameApp {
                                                 state.camera.position,
                                                 state.camera.yaw,
                                             );
-                                            state.player_stats.add_exhaustion(0.025);
-                                            let mut held =
-                                                state.inventory.get(state.active_hotbar_slot);
-                                            if let Some(def) =
-                                                state.item_registry.get(held.item_id)
-                                            {
-                                                if let Some(max_dur) = def.durability {
-                                                    let dmg = if def.tool_type
-                                                        == Some(
-                                                            blockgame_core::tool::ToolType::Sword,
-                                                        ) {
-                                                        2
-                                                    } else {
-                                                        1
-                                                    };
-                                                    if held.damage_tool(dmg, max_dur) {
-                                                        state.audio.play_tool_break();
+                                            if !is_creative {
+                                                state.player_stats.add_exhaustion(0.025);
+                                                let mut held =
+                                                    state.inventory.get(state.active_hotbar_slot);
+                                                if let Some(def) =
+                                                    state.item_registry.get(held.item_id)
+                                                {
+                                                    if let Some(max_dur) = def.durability {
+                                                        let dmg = if def.tool_type
+                                                            == Some(
+                                                                blockgame_core::tool::ToolType::Sword,
+                                                            ) {
+                                                            2
+                                                        } else {
+                                                            1
+                                                        };
+                                                        if held.damage_tool(dmg, max_dur) {
+                                                            state.audio.play_tool_break();
+                                                        }
+                                                        state.inventory.set(
+                                                            state.active_hotbar_slot,
+                                                            held,
+                                                        );
                                                     }
-                                                    state.inventory.set(
-                                                        state.active_hotbar_slot,
-                                                        held,
+                                                }
+                                                if let Some((drop_item, drop_count)) = self
+                                                    .registry
+                                                    .get_drop(broken, held_tool_type, held_tool_tier)
+                                                {
+                                                    let drop_pos = target_voxel.as_vec3()
+                                                        + Vec3::new(0.5, 0.5, 0.5);
+                                                    let drop_slot =
+                                                        ItemSlot::new(drop_item, drop_count);
+                                                    state.spawn_drop_synced(
+                                                        drop_pos,
+                                                        Vec3::new(0.0, 2.5, 0.0),
+                                                        drop_slot,
                                                     );
                                                 }
-                                            }
-                                            if let Some((drop_item, drop_count)) = self
-                                                .registry
-                                                .get_drop(broken, held_tool_type, held_tool_tier)
-                                            {
-                                                let drop_pos = target_voxel.as_vec3()
-                                                    + Vec3::new(0.5, 0.5, 0.5);
-                                                let drop_slot =
-                                                    ItemSlot::new(drop_item, drop_count);
-                                                state.spawn_drop_synced(
-                                                    drop_pos,
-                                                    Vec3::new(0.0, 2.5, 0.0),
-                                                    drop_slot,
-                                                );
-                                            }
-                                            // 15% chance to drop Apple from Leaves
-                                            if broken == BlockId::LEAVES {
-                                                let hash = (target_voxel.x.wrapping_mul(73856093)
-                                                    ^ target_voxel.y.wrapping_mul(19349663)
-                                                    ^ target_voxel.z.wrapping_mul(83492791))
-                                                    % 100;
-                                                if hash.abs() < 15 {
+                                                // 15% chance to drop Apple from Leaves
+                                                if broken == BlockId::LEAVES {
+                                                    let hash = (target_voxel.x.wrapping_mul(73856093)
+                                                        ^ target_voxel.y.wrapping_mul(19349663)
+                                                        ^ target_voxel.z.wrapping_mul(83492791))
+                                                        % 100;
+                                                    if hash.abs() < 15 {
+                                                        state.spawn_drop_synced(
+                                                            target_voxel.as_vec3()
+                                                                + Vec3::new(0.5, 0.5, 0.5),
+                                                            Vec3::new(0.0, 2.0, 0.0),
+                                                            ItemSlot::new(ItemId::APPLE, 1),
+                                                        );
+                                                    }
+                                                }
+                                                // 12% chance to drop Wheat Seeds from Grass
+                                                if broken == BlockId::GRASS {
+                                                    let hash = (target_voxel.x.wrapping_mul(87654321)
+                                                        ^ target_voxel.y.wrapping_mul(23456789)
+                                                        ^ target_voxel.z.wrapping_mul(98765432))
+                                                        % 100;
+                                                    if hash.abs() < 12 {
+                                                        state.spawn_drop_synced(
+                                                            target_voxel.as_vec3()
+                                                                + Vec3::new(0.5, 0.5, 0.5),
+                                                            Vec3::new(0.0, 2.0, 0.0),
+                                                            ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
+                                                        );
+                                                    }
+                                                }
+                                                // Ripe Wheat Crop drops additional 1..2 seeds
+                                                if broken == BlockId::WHEAT_3 {
+                                                    let hash = (target_voxel.x.wrapping_mul(1234567)
+                                                        ^ target_voxel.z.wrapping_mul(7654321))
+                                                        % 2;
+                                                    let seed_count = (hash.abs() + 1) as u16;
                                                     state.spawn_drop_synced(
                                                         target_voxel.as_vec3()
                                                             + Vec3::new(0.5, 0.5, 0.5),
                                                         Vec3::new(0.0, 2.0, 0.0),
-                                                        ItemSlot::new(ItemId::APPLE, 1),
+                                                        ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
                                                     );
                                                 }
-                                            }
-                                            // 12% chance to drop Wheat Seeds from Grass
-                                            if broken == BlockId::GRASS {
-                                                let hash = (target_voxel.x.wrapping_mul(87654321)
-                                                    ^ target_voxel.y.wrapping_mul(23456789)
-                                                    ^ target_voxel.z.wrapping_mul(98765432))
-                                                    % 100;
-                                                if hash.abs() < 12 {
-                                                    state.spawn_drop_synced(
-                                                        target_voxel.as_vec3()
-                                                            + Vec3::new(0.5, 0.5, 0.5),
-                                                        Vec3::new(0.0, 2.0, 0.0),
-                                                        ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
-                                                    );
-                                                }
-                                            }
-                                            // Ripe Wheat Crop drops additional 1..2 seeds
-                                            if broken == BlockId::WHEAT_3 {
-                                                let hash = (target_voxel.x.wrapping_mul(1234567)
-                                                    ^ target_voxel.z.wrapping_mul(7654321))
-                                                    % 2;
-                                                let seed_count = (hash.abs() + 1) as u16;
-                                                state.spawn_drop_synced(
-                                                    target_voxel.as_vec3()
-                                                        + Vec3::new(0.5, 0.5, 0.5),
-                                                    Vec3::new(0.0, 2.0, 0.0),
-                                                    ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
-                                                );
                                             }
                                         }
                                         state.breaking_voxel = None;
                                         state.break_progress = 0.0;
                                         state.cracking_buffer = None;
                                         state.break_hit_timer = 0.0;
-                                    } else {
+                                    } else if !is_creative {
                                         let stage =
                                             ((state.break_progress * 10.0).floor() as usize).min(9);
                                         let (crack_buf, count) =
@@ -5143,6 +5239,7 @@ impl ApplicationHandler for BlockGameApp {
                             name_input,
                             seed_input,
                             focused_field,
+                            game_mode,
                         } => {
                             UiBuilder::build_create_world_screen(
                                 &mut state.ui_mesh,
@@ -5151,6 +5248,7 @@ impl ApplicationHandler for BlockGameApp {
                                 name_input,
                                 seed_input,
                                 *focused_field,
+                                *game_mode,
                                 ui_cursor,
                             );
                         }
@@ -6358,11 +6456,24 @@ fn handle_jei_panel_click(state: &mut AppState, is_right_click: bool) -> bool {
             if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
                 if slot_idx < catalog.len() {
                     let clicked_id = catalog[slot_idx];
-                    state.jei_recipe_modal = Some(JeiRecipeModalState {
-                        target_item: clicked_id,
-                        is_usage_mode: is_right_click,
-                        recipe_index: 0,
-                    });
+                    if state.player_stats.game_mode.is_creative() && !is_right_click {
+                        let max_stack = state
+                            .item_registry
+                            .get(clicked_id)
+                            .map(|d| d.max_stack)
+                            .unwrap_or(64);
+                        if state.cursor_held.is_empty() || state.cursor_held.item_id != clicked_id {
+                            state.cursor_held = ItemSlot::new(clicked_id, max_stack);
+                        } else {
+                            state.cursor_held = ItemSlot::EMPTY;
+                        }
+                    } else {
+                        state.jei_recipe_modal = Some(JeiRecipeModalState {
+                            target_item: clicked_id,
+                            is_usage_mode: is_right_click,
+                            recipe_index: 0,
+                        });
+                    }
                 }
                 return true;
             }

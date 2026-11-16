@@ -34,6 +34,7 @@ pub struct WorldMetadata {
     pub last_played: u64,
     pub total_time: f32,
     pub day_night_time: f32,
+    pub game_mode: crate::player::GameMode,
 }
 
 impl WorldMetadata {
@@ -48,6 +49,7 @@ impl WorldMetadata {
             last_played: now,
             total_time: 0.0,
             day_night_time: 0.25, // Morning start
+            game_mode: crate::player::GameMode::Survival,
         }
     }
 }
@@ -313,6 +315,9 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
     let last_played = read_u64(&mut r)?;
     let total_time = read_f32(&mut r)?;
     let day_night_time = read_f32(&mut r)?;
+    let game_mode = read_u8(&mut r)
+        .map(crate::player::GameMode::from_u8)
+        .unwrap_or(crate::player::GameMode::Survival);
 
     Ok(WorldMetadata {
         name,
@@ -321,6 +326,7 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
         last_played,
         total_time,
         day_night_time,
+        game_mode,
     })
 }
 
@@ -375,6 +381,7 @@ pub fn save_player_data(
         write_f32(&mut w, *yaw)?;
         write_f32(&mut w, *pitch)?;
     }
+    write_u8(&mut w, player.stats.game_mode as u8)?;
 
     w.flush()?;
     Ok(file_path)
@@ -454,6 +461,9 @@ pub fn load_player_data(
                     homes.insert(name, (pos, yaw, pitch));
                 }
             }
+        }
+        if let Ok(gm) = read_u8(&mut r) {
+            stats.game_mode = crate::player::GameMode::from_u8(gm);
         }
     }
 
@@ -900,6 +910,7 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
         write_u64(&mut w, data.metadata.last_played)?;
         write_f32(&mut w, data.metadata.total_time)?;
         write_f32(&mut w, data.metadata.day_night_time)?;
+        write_u8(&mut w, data.metadata.game_mode as u8)?;
 
         w.flush()?;
     }
@@ -971,6 +982,13 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         let last_played = read_u64(&mut r)?;
         let total_time = read_f32(&mut r)?;
         let day_night_time = read_f32(&mut r)?;
+        let game_mode = if version >= 3 {
+            read_u8(&mut r)
+                .map(crate::player::GameMode::from_u8)
+                .unwrap_or(crate::player::GameMode::Survival)
+        } else {
+            crate::player::GameMode::Survival
+        };
 
         let legacy_player = if version < 3 {
             // Version 1 and 2 had inline player state in level.dat
@@ -1026,6 +1044,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 last_played,
                 total_time,
                 day_night_time,
+                game_mode,
             },
             legacy_player,
         )
@@ -1799,6 +1818,60 @@ mod tests {
         assert_eq!(loaded.item_drops.len(), 1);
         assert_eq!(loaded.item_drops[0].item.item_id, ItemId::STICK);
         assert_eq!(loaded.item_drops[0].item.durability, 0);
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_game_mode_save_load_roundtrip() {
+        let mut temp_root = std::env::temp_dir();
+        temp_root.push(format!("blockgame_gm_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let mut meta = WorldMetadata::new("Creative Test", 42);
+        meta.folder_name = "creative_test".to_string();
+        meta.game_mode = crate::GameMode::Creative;
+
+        let mut stats = PlayerStats::new();
+        stats.game_mode = crate::GameMode::Creative;
+
+        let mut save = WorldSaveData {
+            metadata: meta,
+            player: SavedPlayerState {
+                position: Vec3::new(0.5, 65.0, 0.5),
+                velocity: Vec3::ZERO,
+                yaw: 0.0,
+                pitch: 0.0,
+                stats,
+                inventory: Inventory::default(),
+                active_hotbar_slot: 0,
+                rank: "default".to_string(),
+                homes: std::collections::HashMap::new(),
+            },
+            modified_chunks: HashMap::new(),
+            chest_containers: HashMap::new(),
+            furnaces: HashMap::new(),
+            item_drops: Vec::new(),
+            falling_blocks: Vec::new(),
+            animals: Vec::new(),
+            next_animal_id: 1,
+            animal_spawned_columns: HashSet::new(),
+            planted_crops: Vec::new(),
+            active_farmland: Vec::new(),
+            growing_cacti: Vec::new(),
+            decaying_leaves: Vec::new(),
+        };
+
+        save_world_to_dir(&temp_root, &mut save).expect("save_world_to_dir should succeed");
+        let loaded_meta =
+            load_world_metadata(&temp_root.join("creative_test")).expect("load_world_metadata");
+        assert_eq!(loaded_meta.game_mode, crate::GameMode::Creative);
+
+        let loaded =
+            load_world_from_dir(&temp_root, "creative_test").expect("load_world_from_dir");
+        assert_eq!(loaded.metadata.game_mode, crate::GameMode::Creative);
+        assert_eq!(loaded.player.stats.game_mode, crate::GameMode::Creative);
 
         let _ = fs::remove_dir_all(&temp_root);
     }

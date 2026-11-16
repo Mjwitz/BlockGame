@@ -1,3 +1,44 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GameMode {
+    Survival = 0,
+    Creative = 1,
+}
+
+impl Default for GameMode {
+    fn default() -> Self {
+        Self::Survival
+    }
+}
+
+impl GameMode {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Creative,
+            _ => Self::Survival,
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "survival" | "s" | "0" => Some(Self::Survival),
+            "creative" | "c" | "1" => Some(Self::Creative),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Survival => "Survival",
+            Self::Creative => "Creative",
+        }
+    }
+
+    #[inline]
+    pub fn is_creative(&self) -> bool {
+        matches!(self, Self::Creative)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerStats {
     pub health: f32,
@@ -16,6 +57,7 @@ pub struct PlayerStats {
     pub max_breath: f32,
     pub drown_timer: f32,
     pub is_submerged: bool,
+    pub game_mode: GameMode,
 }
 
 impl Default for PlayerStats {
@@ -47,17 +89,20 @@ impl PlayerStats {
             max_breath: Self::MAX_BREATH,
             drown_timer: 0.0,
             is_submerged: false,
+            game_mode: GameMode::Survival,
         }
     }
 
     pub fn reset(&mut self) {
+        let gm = self.game_mode;
         *self = Self::new();
+        self.game_mode = gm;
     }
 
     /// Deals damage to player with invulnerability frames and damage flash.
-    /// Returns true if damage was applied, false if player is dead or invulnerable.
+    /// Returns true if damage was applied, false if player is dead, creative, or invulnerable.
     pub fn take_damage(&mut self, amount: f32) -> bool {
-        if self.is_dead || self.invulnerability > 0.0 || amount <= 0.0 {
+        if self.game_mode.is_creative() || self.is_dead || self.invulnerability > 0.0 || amount <= 0.0 {
             return false;
         }
         self.health = (self.health - amount).max(0.0);
@@ -72,7 +117,7 @@ impl PlayerStats {
 
     /// Force damage (e.g. void damage) bypassing invulnerability.
     pub fn take_damage_force(&mut self, amount: f32) -> bool {
-        if self.is_dead || amount <= 0.0 {
+        if self.game_mode.is_creative() || self.is_dead || amount <= 0.0 {
             return false;
         }
         self.health = (self.health - amount).max(0.0);
@@ -123,6 +168,16 @@ impl PlayerStats {
         }
         if self.invulnerability > 0.0 {
             self.invulnerability = (self.invulnerability - dt).max(0.0);
+        }
+
+        if self.game_mode.is_creative() {
+            self.is_submerged = is_submerged;
+            self.health = self.max_health;
+            self.hunger = self.max_hunger;
+            self.breath = self.max_breath;
+            self.drown_timer = 0.0;
+            self.void_timer = 0.0;
+            return;
         }
 
         // 1. Void Damage: below y = -25.0

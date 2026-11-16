@@ -244,6 +244,9 @@ pub enum ServerPacket {
         position: Vec3,
         data: Vec<u8>,
     },
+    GameModeUpdate {
+        game_mode: crate::player::GameMode,
+    },
 }
 
 
@@ -709,6 +712,10 @@ impl ServerPacket {
                 write_u16(&mut payload, data.len().min(2048) as u16)?;
                 payload.extend_from_slice(&data[..data.len().min(2048)]);
             }
+            Self::GameModeUpdate { game_mode } => {
+                write_u8(&mut payload, 17)?;
+                write_u8(&mut payload, *game_mode as u8)?;
+            }
         }
 
         wrap_frame(&payload)
@@ -942,6 +949,10 @@ impl ServerPacket {
                     position,
                     data,
                 })
+            }
+            17 => {
+                let gm = crate::player::GameMode::from_u8(read_u8(&mut r)?);
+                Ok(Self::GameModeUpdate { game_mode: gm })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1256,6 +1267,14 @@ fn apply_command_output(
 
     for (target_pid, slot) in output.gives {
         direct_sends.push((target_pid, ServerPacket::ReceiveItem { item: slot }));
+    }
+
+    for (target_pid, new_mode) in output.gamemode_updates {
+        if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+            c.saved_state.stats.game_mode = new_mode;
+            let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
+        }
+        direct_sends.push((target_pid, ServerPacket::GameModeUpdate { game_mode: new_mode }));
     }
 
     for (target_name, new_rank) in output.rank_updates {
@@ -2686,6 +2705,7 @@ fn write_saved_player_state<W: Write>(w: &mut W, p: &SavedPlayerState) -> io::Re
         write_f32(w, *yaw)?;
         write_f32(w, *pitch)?;
     }
+    write_u8(w, p.stats.game_mode as u8)?;
     Ok(())
 }
 
@@ -2729,6 +2749,10 @@ fn read_saved_player_state<R: Read>(r: &mut R) -> io::Result<SavedPlayerState> {
                 homes.insert(name, (pos, yaw, pitch));
             }
         }
+    }
+
+    if let Ok(gm) = read_u8(r) {
+        stats.game_mode = crate::GameMode::from_u8(gm);
     }
 
     Ok(SavedPlayerState {

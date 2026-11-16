@@ -62,7 +62,7 @@ pub use permissions::{
     PlayerPermissions,
 };
 pub use physics::{PlayerPhysics, AABB};
-pub use player::PlayerStats;
+pub use player::{GameMode, PlayerStats};
 pub use raycast::{raycast_voxel, RaycastHit};
 pub use save::{
     delete_player_data, delete_saved_world, list_saved_players, list_saved_worlds, load_player_data,

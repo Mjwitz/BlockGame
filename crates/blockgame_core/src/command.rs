@@ -108,6 +108,8 @@ pub struct CommandOutput {
     pub set_home: Option<(u32, String, Vec3, f32, f32)>,
     /// Delete home: `(player_id, home_name)`.
     pub del_home: Option<(u32, String)>,
+    /// GameMode updates: `(player_id, new_mode)`.
+    pub gamemode_updates: Vec<(u32, crate::player::GameMode)>,
 }
 
 impl CommandOutput {
@@ -961,6 +963,62 @@ pub fn execute_command(
         }
 
         // --- 13. SPAWN COMMANDS ---
+        "gamemode" | "gm" => {
+            if !check_perm("blockgame.command.gamemode") {
+                return CommandOutput::error("You don't have permission to use /gamemode.");
+            }
+            if args.is_empty() {
+                return CommandOutput::error(
+                    "Usage: /gamemode <survival|creative|0|1> [player]",
+                );
+            }
+            let Some(mode) = crate::player::GameMode::parse(args[0]) else {
+                return CommandOutput::error(format!(
+                    "Unknown game mode '{}'. Use survival (0) or creative (1).",
+                    args[0]
+                ));
+            };
+            let target = if args.len() >= 2 {
+                let target_name = args[1];
+                match online_players
+                    .iter()
+                    .find(|p| p.username.eq_ignore_ascii_case(target_name))
+                {
+                    Some(p) => p,
+                    None => {
+                        return CommandOutput::error(format!(
+                            "Player '{}' is not online.",
+                            target_name
+                        ))
+                    }
+                }
+            } else if let Some(pid) = source.player_id() {
+                match online_players.iter().find(|p| p.player_id == pid) {
+                    Some(p) => p,
+                    None => return CommandOutput::error("Sender not found online."),
+                }
+            } else {
+                return CommandOutput::error(
+                    "Console must specify a player: /gamemode <survival|creative> <player>",
+                );
+            };
+
+            let mut out = CommandOutput::default();
+            out.gamemode_updates.push((target.player_id, mode));
+            let msg = format!(
+                "Set {}'s game mode to {}.",
+                target.username,
+                mode.display_name()
+            );
+            out.feedback.push(msg);
+            if source.player_id() != Some(target.player_id) {
+                out.direct_messages.push((
+                    target.player_id,
+                    format!("Your game mode was changed to {}.", mode.display_name()),
+                ));
+            }
+            return out;
+        }
         "setspawn" => {
             if !check_perm("blockgame.command.setspawn") {
                 return CommandOutput::error("You do not have permission: blockgame.command.setspawn");
@@ -1811,5 +1869,63 @@ mod tests {
         );
         assert!(bans.is_ip_banned("192.168.1.55").is_some());
         assert_eq!(bans.is_ip_banned("192.168.1.55").unwrap().reason, "Proxy botting");
+    }
+
+    #[test]
+    fn test_gamemode_command() {
+        let mut perms = PermissionsManager::new();
+        let _ = perms.add_player_group("Alice", "admin");
+        let mut bans = BanManager::new();
+        let mut tpa = HashMap::new();
+        let registry = ItemRegistry::new();
+        let spawn = Vec3::new(0.0, 65.0, 0.0);
+        let online = vec![
+            OnlinePlayerInfo::new(1, "Alice", Vec3::ZERO, 0.0, 0.0).with_ip("127.0.0.1"),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::ZERO, 0.0, 0.0).with_ip("127.0.0.2"),
+        ];
+
+        // 1. Admin switches self to Creative via /gamemode c
+        let res = exec(
+            &CommandSource::Player {
+                player_id: 1,
+                username: "Alice".to_string(),
+            },
+            "/gamemode creative",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.gamemode_updates, vec![(1, crate::GameMode::Creative)]);
+
+        // 2. Console switches Bob to Survival via /gm 0 Bob
+        let res = exec(
+            &CommandSource::Console,
+            "/gm 0 Bob",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert_eq!(res.gamemode_updates, vec![(2, crate::GameMode::Survival)]);
+        assert!(!res.direct_messages.is_empty());
+
+        // 3. Invalid mode returns error
+        let res = exec(
+            &CommandSource::Console,
+            "/gamemode spectator",
+            &online,
+            &mut perms,
+            &mut bans,
+            &registry,
+            spawn,
+            &mut tpa,
+        );
+        assert!(res.gamemode_updates.is_empty());
+        assert!(res.feedback[0].contains("Unknown game mode"));
     }
 }
