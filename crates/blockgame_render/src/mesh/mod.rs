@@ -94,9 +94,25 @@ impl<'a> ChunkMesher<'a> {
     where
         F: Fn(i32, i32, i32) -> BlockId,
     {
+        self.mesh_chunk_with_lighting_opt(chunk, light_sources_rel, |x, y, z| {
+            Some(get_neighbor(x, y, z))
+        })
+    }
+
+    /// Meshes a chunk with external light sources and an optional neighbor lookup callback
+    /// returning `None` for out-of-bounds coordinates belonging to currently unloaded chunks.
+    pub fn mesh_chunk_with_lighting_opt<F>(
+        &self,
+        chunk: &Chunk,
+        light_sources_rel: &[(glam::IVec3, u8)],
+        get_neighbor_opt: F,
+    ) -> ChunkMesh
+    where
+        F: Fn(i32, i32, i32) -> Option<BlockId>,
+    {
         let mut mesh = ChunkMesh::new();
 
-        let query_block = |x: i32, y: i32, z: i32| -> BlockId {
+        let query_block_opt = |x: i32, y: i32, z: i32| -> Option<BlockId> {
             if x >= 0
                 && x < CHUNK_SIZE_X as i32
                 && y >= 0
@@ -104,10 +120,14 @@ impl<'a> ChunkMesher<'a> {
                 && z >= 0
                 && z < CHUNK_SIZE_Z as i32
             {
-                chunk.get_unchecked(x as usize, y as usize, z as usize)
+                Some(chunk.get_unchecked(x as usize, y as usize, z as usize))
             } else {
-                get_neighbor(x, y, z)
+                get_neighbor_opt(x, y, z)
             }
+        };
+
+        let query_block = |x: i32, y: i32, z: i32| -> BlockId {
+            query_block_opt(x, y, z).unwrap_or(BlockId::AIR)
         };
 
         let light_map = blockgame_core::lighting::calculate_chunk_lighting_with_sources(
@@ -213,7 +233,7 @@ impl<'a> ChunkMesher<'a> {
                         // 1. Build crossed diagonal plant quads for seagrass
                         self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
 
-                        // 2. Seagrass is waterlogged! Generate water boundary faces for any direction
+                        // 2. Seagrass is waterlogged! Generate water boundary faces for any loaded direction
                         // not adjacent to water or another waterlogged block.
                         for dir in Direction::ALL {
                             let normal = dir.normal_ivec();
@@ -221,7 +241,10 @@ impl<'a> ChunkMesher<'a> {
                             let ny = iy + normal.y;
                             let nz = iz + normal.z;
 
-                            let neighbor_id = query_block(nx, ny, nz);
+                            let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
+                                // Neighbor chunk not loaded yet; avoid emitting phantom water walls at chunk borders
+                                continue;
+                            };
 
                             if neighbor_id.is_water() {
                                 continue;
@@ -267,7 +290,10 @@ impl<'a> ChunkMesher<'a> {
                             let ny = iy + normal.y;
                             let nz = iz + normal.z;
 
-                            let neighbor_id = query_block(nx, ny, nz);
+                            let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
+                                // Neighbor chunk not loaded yet; avoid emitting phantom water walls at chunk borders
+                                continue;
+                            };
 
                             // Adjacent water blocks (and waterlogged seagrass) should not render internal faces
                             if neighbor_id.is_water() {
@@ -3613,5 +3639,45 @@ mod tests {
         let mut flower_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         flower_chunk.set(4, 4, 4, BlockId::POPPY);
         assert_eq!(mesher.mesh_chunk(&flower_chunk).vertices.len(), 16);
+    }
+
+    #[test]
+    fn test_water_chunk_border_unloaded_neighbor_culling() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+
+        // Water block sitting directly on the +X (x=15) chunk border with air inside the chunk around it
+        chunk.set(15, 4, 8, BlockId::WATER);
+
+        // 1. When the +X neighbor chunk is NOT loaded yet (returns None for x >= 16, Some(AIR) elsewhere),
+        // the +X boundary wall must NOT be emitted (5 faces = 20 vertices, zero +X face).
+        let unloaded_mesh = mesher.mesh_chunk_with_lighting_opt(&chunk, &[], |x, _y, _z| {
+            if x >= 16 {
+                None
+            } else {
+                Some(BlockId::AIR)
+            }
+        });
+        assert_eq!(unloaded_mesh.water_vertices.len(), 20);
+        assert!(
+            unloaded_mesh.water_vertices.iter().all(|v| v.normal[0] < 0.5),
+            "Unloaded neighbor chunk must not generate +X water boundary wall"
+        );
+
+        // 2. When the +X neighbor chunk IS loaded and contains WATER on x=0, zero +X boundary wall.
+        let water_neighbor_mesh = mesher.mesh_chunk_with_lighting_opt(&chunk, &[], |x, y, z| {
+            if x == 16 && y == 4 && z == 8 {
+                Some(BlockId::WATER)
+            } else {
+                Some(BlockId::AIR)
+            }
+        });
+        assert_eq!(water_neighbor_mesh.water_vertices.len(), 20);
+
+        // 3. When the +X neighbor chunk IS loaded and contains AIR on x=0, +X water face IS emitted (6 faces = 24 vertices).
+        let air_neighbor_mesh =
+            mesher.mesh_chunk_with_lighting_opt(&chunk, &[], |_, _, _| Some(BlockId::AIR));
+        assert_eq!(air_neighbor_mesh.water_vertices.len(), 24);
     }
 }

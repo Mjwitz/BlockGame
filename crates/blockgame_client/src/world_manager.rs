@@ -11,7 +11,8 @@ use blockgame_core::{
         find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
         is_leaf_supported, place_water_source, try_grow_cactus, BlockId, BlockRegistry,
     },
-    chunk::{Chunk, ChunkPos, VERTICAL_CHUNKS},
+    chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, VERTICAL_CHUNKS},
+    direction::Direction,
     entity::{FallingBlock, FallingBlockStatus, ItemDrop, ItemDropStatus},
     item::{ItemId, ItemSlot},
     monster::{can_monster_spawn_at, ArrowProjectile, MonsterEntity, MonsterKind},
@@ -23,6 +24,143 @@ use blockgame_render::{ChunkMesh, ChunkMesher, GpuMeshBuffers, VoxelPipeline};
 use glam::{IVec2, IVec3, Vec3};
 use rayon::prelude::*;
 
+/// Meshes a single chunk using loaded neighbor chunks when available and returning `None`
+/// for out-of-bounds coordinates in currently unloaded chunks so phantom water chunk-border
+/// walls are not emitted before neighbor chunks finish streaming.
+fn mesh_chunk_from_world(
+    world: &World,
+    registry: &BlockRegistry,
+    chunk: &Chunk,
+) -> ChunkMesh {
+    let mesher = ChunkMesher::new(registry);
+    let origin = chunk.pos.to_world_origin();
+    let sources = world.get_light_sources_near(origin, 15);
+    mesher.mesh_chunk_with_lighting_opt(chunk, &sources, |lx, ly, lz| {
+        let wp = origin + IVec3::new(lx, ly, lz);
+        let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+        if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+            Some(BlockId::AIR)
+        } else {
+            world
+                .get_chunk(ncpos)
+                .map(|c| c.get_unchecked(nlx, nly, nlz))
+        }
+    })
+}
+
+/// Checks whether inserting `new_chunk` adjacent to `neighbor_chunk` (at `new_chunk.pos + dir`)
+/// can alter `neighbor_chunk`'s visible boundary faces or water boundaries.
+fn chunks_share_visible_boundary(
+    new_chunk: &Chunk,
+    neighbor_chunk: &Chunk,
+    dir: Direction,
+) -> bool {
+    match dir {
+        Direction::PosX | Direction::NegX => {
+            let (new_x, nb_x) = if dir == Direction::PosX {
+                (CHUNK_SIZE_X - 1, 0)
+            } else {
+                (0, CHUNK_SIZE_X - 1)
+            };
+            for y in 0..CHUNK_SIZE_Y {
+                for z in 0..CHUNK_SIZE_Z {
+                    let new_b = new_chunk.get_unchecked(new_x, y, z);
+                    let nb_b = neighbor_chunk.get_unchecked(nb_x, y, z);
+                    if (!nb_b.is_air() && !new_b.is_air()) || (nb_b.is_water() && !new_b.is_water())
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        Direction::PosY | Direction::NegY => {
+            let (new_y, nb_y) = if dir == Direction::PosY {
+                (CHUNK_SIZE_Y - 1, 0)
+            } else {
+                (0, CHUNK_SIZE_Y - 1)
+            };
+            for z in 0..CHUNK_SIZE_Z {
+                for x in 0..CHUNK_SIZE_X {
+                    let new_b = new_chunk.get_unchecked(x, new_y, z);
+                    let nb_b = neighbor_chunk.get_unchecked(x, nb_y, z);
+                    if (!nb_b.is_air() && !new_b.is_air()) || (nb_b.is_water() && !new_b.is_water())
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        Direction::PosZ | Direction::NegZ => {
+            let (new_z, nb_z) = if dir == Direction::PosZ {
+                (CHUNK_SIZE_Z - 1, 0)
+            } else {
+                (0, CHUNK_SIZE_Z - 1)
+            };
+            for y in 0..CHUNK_SIZE_Y {
+                for x in 0..CHUNK_SIZE_X {
+                    let new_b = new_chunk.get_unchecked(x, y, new_z);
+                    let nb_b = neighbor_chunk.get_unchecked(x, y, nb_z);
+                    if (!nb_b.is_air() && !new_b.is_air()) || (nb_b.is_water() && !new_b.is_water())
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
+}
+
+/// Finds already-loaded neighbor chunks touching `newly_inserted` chunks that should remesh
+/// to update face culling, water boundary faces, or cross-chunk lighting.
+fn collect_affected_neighbors(world: &World, newly_inserted: &[ChunkPos]) -> Vec<ChunkPos> {
+    let inserted_set: HashSet<ChunkPos> = newly_inserted.iter().copied().collect();
+    let mut affected = HashSet::new();
+
+    for &pos in newly_inserted {
+        let Some(new_chunk) = world.get_chunk(pos) else {
+            continue;
+        };
+        let has_near_lights = !world.get_light_sources_near(pos.to_world_origin(), 15).is_empty();
+
+        for dir in Direction::ALL {
+            let normal = dir.normal_ivec();
+            let n_pos = ChunkPos::new(pos.0.x + normal.x, pos.0.y + normal.y, pos.0.z + normal.z);
+            if inserted_set.contains(&n_pos) || affected.contains(&n_pos) {
+                continue;
+            }
+            let Some(neighbor_chunk) = world.get_chunk(n_pos) else {
+                continue;
+            };
+            if has_near_lights || chunks_share_visible_boundary(new_chunk, neighbor_chunk, dir) {
+                affected.insert(n_pos);
+            }
+        }
+    }
+
+    affected.into_iter().collect()
+}
+
+/// Priority key for chunk streaming & GPU uploads: strongly prefers horizontally closest columns
+/// around `player_chunk` while prioritizing the player's current altitude band inside each ring.
+#[inline]
+fn chunk_streaming_priority(pos: ChunkPos, player_chunk: ChunkPos) -> (i32, i32, i32) {
+    let dx = pos.0.x - player_chunk.0.x;
+    let dz = pos.0.z - player_chunk.0.z;
+    let dy_abs = (pos.0.y - player_chunk.0.y).abs();
+    let horiz_sq = dx * dx + dz * dz;
+    let vert_penalty = if dy_abs <= 1 {
+        0
+    } else if dy_abs <= 3 {
+        1
+    } else {
+        4
+    };
+    (horiz_sq + vert_penalty, horiz_sq, dy_abs)
+}
+
 pub struct WorldManager {
     world: Arc<Mutex<World>>,
     pub generator: Arc<TerrainGenerator>,
@@ -31,11 +169,17 @@ pub struct WorldManager {
     loaded_chunks_set: HashSet<ChunkPos>,
     queued_generation: HashSet<ChunkPos>,
     queued_meshing: HashSet<ChunkPos>,
+    dirty_remesh: HashSet<ChunkPos>,
+    chunk_mesh_epoch: HashMap<ChunkPos, u64>,
+    next_mesh_epoch: u64,
     has_pending_chunks: bool,
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
-    mesh_rx: Receiver<(ChunkPos, ChunkMesh)>,
-    mesh_tx: Sender<(ChunkPos, ChunkMesh)>,
+    pending_gpu_uploads: HashMap<ChunkPos, ChunkMesh>,
+    mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh)>,
+    mesh_tx: Sender<(ChunkPos, u64, ChunkMesh)>,
+    gen_done_rx: Receiver<Vec<ChunkPos>>,
+    gen_done_tx: Sender<Vec<ChunkPos>>,
     last_player_chunk: ChunkPos,
     pub item_drops: Vec<ItemDrop>,
     pub falling_blocks: Vec<FallingBlock>,
@@ -57,6 +201,7 @@ pub struct WorldManager {
 impl WorldManager {
     pub fn new(seed: u32, render_distance: i32, registry: Arc<BlockRegistry>) -> Self {
         let (mesh_tx, mesh_rx) = mpsc::channel();
+        let (gen_done_tx, gen_done_rx) = mpsc::channel();
         let mut monster_rng_state = (seed as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ 0x853c49e6748fea9b;
         if monster_rng_state == 0 {
             monster_rng_state = 0x853c49e6748fea9b;
@@ -70,11 +215,17 @@ impl WorldManager {
             loaded_chunks_set: HashSet::new(),
             queued_generation: HashSet::new(),
             queued_meshing: HashSet::new(),
+            dirty_remesh: HashSet::new(),
+            chunk_mesh_epoch: HashMap::new(),
+            next_mesh_epoch: 1,
             has_pending_chunks: true,
             gpu_chunks: HashMap::new(),
             gpu_water_chunks: HashMap::new(),
+            pending_gpu_uploads: HashMap::new(),
             mesh_rx,
             mesh_tx,
+            gen_done_rx,
+            gen_done_tx,
             last_player_chunk: ChunkPos::new(i32::MAX, i32::MAX, i32::MAX),
             item_drops: Vec::new(),
             falling_blocks: Vec::new(),
@@ -188,19 +339,12 @@ impl WorldManager {
 
         // Parallel chunk meshing for all chunks in the area
         let world_guard = self.world.lock().unwrap();
-        let mesher = ChunkMesher::new(&self.registry);
-
         let meshes: Vec<(ChunkPos, ChunkMesh)> = area_chunks
             .par_iter()
             .filter_map(|&pos| {
-                world_guard.get_chunk(pos).map(|chunk| {
-                    let origin = pos.to_world_origin();
-                    let sources = world_guard.get_light_sources_near(origin, 15);
-                    let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
-                        world_guard.get_block(origin + IVec3::new(lx, ly, lz))
-                    });
-                    (pos, mesh)
-                })
+                world_guard
+                    .get_chunk(pos)
+                    .map(|chunk| (pos, mesh_chunk_from_world(&world_guard, &self.registry, chunk)))
             })
             .collect();
         drop(world_guard);
@@ -383,26 +527,198 @@ impl WorldManager {
         }
     }
 
+    /// Removes GPU buffers and streaming state for chunks beyond `render_distance + 2`.
+    fn unload_distant_chunks(&mut self, current_chunk: ChunkPos) {
+        let unload_radius_sq = (self.render_distance + 2) * (self.render_distance + 2);
+        let pcx = current_chunk.0.x;
+        let pcz = current_chunk.0.z;
+
+        let mut to_remove = HashSet::new();
+        for &pos in self
+            .loaded_chunks_set
+            .iter()
+            .chain(self.gpu_chunks.keys())
+            .chain(self.gpu_water_chunks.keys())
+            .chain(self.pending_gpu_uploads.keys())
+            .chain(self.dirty_remesh.iter())
+        {
+            let dx = pos.0.x - pcx;
+            let dz = pos.0.z - pcz;
+            if dx * dx + dz * dz > unload_radius_sq {
+                to_remove.insert(pos);
+            }
+        }
+
+        for pos in to_remove {
+            self.gpu_chunks.remove(&pos);
+            self.gpu_water_chunks.remove(&pos);
+            self.pending_gpu_uploads.remove(&pos);
+            self.loaded_chunks_set.remove(&pos);
+            self.queued_meshing.remove(&pos);
+            self.queued_generation.remove(&pos);
+            self.dirty_remesh.remove(&pos);
+            self.chunk_mesh_epoch.remove(&pos);
+        }
+    }
+
+    /// Collects and prioritizes missing or dirty-neighbor chunks within render distance using a unified
+    /// player-proximity queue so nearby chunks always load before distant chunks regardless of whether
+    /// they need terrain generation or only meshing.
+    fn collect_streaming_batch(
+        &mut self,
+        current_chunk: ChunkPos,
+        max_in_flight: usize,
+    ) -> (Vec<(ChunkPos, u64)>, Vec<(ChunkPos, u64)>) {
+        let pcx = current_chunk.0.x;
+        let pcz = current_chunk.0.z;
+        let r = self.render_distance;
+        let max_radius_sq = (r + 1) * (r + 1);
+
+        let in_flight = self.queued_generation.len() + self.queued_meshing.len();
+        let remaining_capacity = max_in_flight.saturating_sub(in_flight);
+        if remaining_capacity == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        let mut candidates: Vec<(ChunkPos, bool)> = Vec::new();
+        let mut seen = HashSet::new();
+        let mut stale_dirty = Vec::new();
+
+        {
+            let world_guard = self.world.lock().unwrap();
+            for cy in 0..VERTICAL_CHUNKS {
+                for dz in -r..=r {
+                    for dx in -r..=r {
+                        if dx * dx + dz * dz <= max_radius_sq {
+                            let pos = ChunkPos::new(pcx + dx, cy, pcz + dz);
+                            if !self.loaded_chunks_set.contains(&pos)
+                                && !self.queued_meshing.contains(&pos)
+                                && !self.queued_generation.contains(&pos)
+                            {
+                                let needs_gen = !world_guard.has_chunk(pos);
+                                candidates.push((pos, needs_gen));
+                                seen.insert(pos);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for &pos in &self.dirty_remesh {
+                let dx = pos.0.x - pcx;
+                let dz = pos.0.z - pcz;
+                if dx * dx + dz * dz > max_radius_sq || !world_guard.has_chunk(pos) {
+                    stale_dirty.push(pos);
+                    continue;
+                }
+                if !self.queued_meshing.contains(&pos)
+                    && !self.queued_generation.contains(&pos)
+                    && seen.insert(pos)
+                {
+                    candidates.push((pos, false));
+                }
+            }
+        }
+
+        for pos in stale_dirty {
+            self.dirty_remesh.remove(&pos);
+        }
+
+        candidates.sort_by_key(|&(pos, needs_gen)| {
+            (chunk_streaming_priority(pos, current_chunk), needs_gen)
+        });
+
+        let total_candidates = candidates.len();
+        let mut batch_gen = Vec::new();
+        let mut batch_mesh = Vec::new();
+
+        for (pos, needs_gen) in candidates.into_iter().take(remaining_capacity) {
+            self.dirty_remesh.remove(&pos);
+            let epoch = self.next_mesh_epoch;
+            self.next_mesh_epoch += 1;
+            self.chunk_mesh_epoch.insert(pos, epoch);
+            if needs_gen {
+                self.queued_generation.insert(pos);
+                batch_gen.push((pos, epoch));
+            } else {
+                self.queued_meshing.insert(pos);
+                batch_mesh.push((pos, epoch));
+            }
+        }
+
+        self.has_pending_chunks = total_candidates > remaining_capacity;
+        (batch_gen, batch_mesh)
+    }
+
     /// Periodic update called every frame: streams chunks and uploads completed background meshes.
     pub fn update(&mut self, player_pos: Vec3, device: &wgpu::Device, pipeline: &VoxelPipeline) {
-        // 1. Ingest background mesh results with a per-frame upload budget.
-        // Uploading too many GPU buffers in a single frame causes GPU driver stalls and noticeable frame drops.
-        const MAX_GPU_UPLOADS_PER_FRAME: usize = 4;
-        let mut uploaded = 0;
-        let mut completed_surface_chunks = Vec::new();
-        while uploaded < MAX_GPU_UPLOADS_PER_FRAME {
-            match self.mesh_rx.try_recv() {
-                Ok((pos, mesh)) => {
-                    self.queued_meshing.remove(&pos);
-                    self.queued_generation.remove(&pos);
-                    self.loaded_chunks_set.insert(pos);
-                    if pos.0.y == 0 {
-                        completed_surface_chunks.push((pos.0.x, pos.0.z));
-                    }
-                    self.store_mesh(pos, &mesh, device, pipeline);
-                    uploaded += 1;
+        // 1. Identify player's current chunk coordinates and unload far chunks when moving across borders
+        let (current_chunk, _, _, _) = world_to_chunk_coords(IVec3::new(
+            player_pos.x.floor() as i32,
+            player_pos.y.floor() as i32,
+            player_pos.z.floor() as i32,
+        ));
+
+        if current_chunk != self.last_player_chunk {
+            self.last_player_chunk = current_chunk;
+            self.has_pending_chunks = true;
+            self.unload_distant_chunks(current_chunk);
+        }
+
+        // 2. Queue neighbor remeshes triggered by newly generated chunks touching loaded chunks
+        while let Ok(neighbors) = self.gen_done_rx.try_recv() {
+            for n_pos in neighbors {
+                if self.loaded_chunks_set.contains(&n_pos)
+                    || self.queued_meshing.contains(&n_pos)
+                    || self.queued_generation.contains(&n_pos)
+                    || self.pending_gpu_uploads.contains_key(&n_pos)
+                {
+                    self.dirty_remesh.insert(n_pos);
+                    self.has_pending_chunks = true;
                 }
-                Err(_) => break,
+            }
+        }
+
+        // 3. Drain completed background mesh results without letting empty chunks consume GPU upload budget
+        let unload_radius_sq = (self.render_distance + 2) * (self.render_distance + 2);
+        let mut completed_surface_chunks = Vec::new();
+        while let Ok((pos, epoch, mesh)) = self.mesh_rx.try_recv() {
+            let latest_epoch = self.chunk_mesh_epoch.get(&pos).copied().unwrap_or(0);
+            if epoch < latest_epoch {
+                continue;
+            }
+            self.queued_meshing.remove(&pos);
+            self.queued_generation.remove(&pos);
+
+            let dx = pos.0.x - current_chunk.0.x;
+            let dz = pos.0.z - current_chunk.0.z;
+            if dx * dx + dz * dz > unload_radius_sq {
+                continue;
+            }
+
+            self.loaded_chunks_set.insert(pos);
+            if pos.0.y == 0 {
+                completed_surface_chunks.push((pos.0.x, pos.0.z));
+            }
+
+            if mesh.is_empty() {
+                self.pending_gpu_uploads.remove(&pos);
+                self.store_mesh(pos, &mesh, device, pipeline);
+            } else {
+                self.pending_gpu_uploads.insert(pos, mesh);
+            }
+        }
+
+        // Upload closest non-empty meshes first within a per-frame GPU buffer budget
+        const MAX_GPU_UPLOADS_PER_FRAME: usize = 6;
+        if !self.pending_gpu_uploads.is_empty() {
+            let mut ready_positions: Vec<ChunkPos> =
+                self.pending_gpu_uploads.keys().copied().collect();
+            ready_positions.sort_by_key(|&pos| chunk_streaming_priority(pos, current_chunk));
+            for pos in ready_positions.into_iter().take(MAX_GPU_UPLOADS_PER_FRAME) {
+                if let Some(mesh) = self.pending_gpu_uploads.remove(&pos) {
+                    self.store_mesh(pos, &mesh, device, pipeline);
+                }
             }
         }
 
@@ -414,99 +730,26 @@ impl WorldManager {
             }
         }
 
-        // 2. Identify player's current chunk coordinates
-        let (current_chunk, _, _, _) = world_to_chunk_coords(IVec3::new(
-            player_pos.x.floor() as i32,
-            player_pos.y.floor() as i32,
-            player_pos.z.floor() as i32,
-        ));
-
-        let player_chunk_changed = current_chunk != self.last_player_chunk;
-        if player_chunk_changed {
-            self.last_player_chunk = current_chunk;
-            self.has_pending_chunks = true;
-        }
-
-        let pcx = current_chunk.0.x;
-        let pcy = current_chunk.0.y;
-        let pcz = current_chunk.0.z;
-        let r = self.render_distance;
-
-        // 3. Scan render distance when player crosses a chunk boundary or there are pending chunks.
+        // 4. Scan render distance when player crosses a chunk boundary or there are pending/dirty chunks.
         // Keep in-flight generation + meshing bounded so CPU thread pool is never overwhelmed.
-        const MAX_IN_FLIGHT: usize = 12;
+        const MAX_IN_FLIGHT: usize = 24;
         let in_flight = self.queued_generation.len() + self.queued_meshing.len();
 
-        if self.has_pending_chunks && in_flight < MAX_IN_FLIGHT {
-            let mut to_generate = Vec::new();
-            let mut to_mesh = Vec::new();
+        if (self.has_pending_chunks || !self.dirty_remesh.is_empty()) && in_flight < MAX_IN_FLIGHT {
+            let (batch_gen, batch_mesh) =
+                self.collect_streaming_batch(current_chunk, MAX_IN_FLIGHT);
 
-            {
-                let world_guard = self.world.lock().unwrap();
-                for cy in 0..VERTICAL_CHUNKS {
-                    for dz in -r..=r {
-                        for dx in -r..=r {
-                            if dx * dx + dz * dz <= (r + 1) * (r + 1) {
-                                let pos = ChunkPos::new(pcx + dx, cy, pcz + dz);
-                                if !self.gpu_chunks.contains_key(&pos)
-                                    && !self.queued_meshing.contains(&pos)
-                                    && !self.queued_generation.contains(&pos)
-                                {
-                                    if world_guard.has_chunk(pos) {
-                                        to_mesh.push(pos);
-                                    } else {
-                                        to_generate.push(pos);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Prioritize chunks closest to player first
-            to_generate.sort_by_key(|pos| {
-                let dx = pos.0.x - pcx;
-                let dz = pos.0.z - pcz;
-                let dy = pos.0.y - pcy;
-                dx * dx + dz * dz + dy * dy
-            });
-            to_mesh.sort_by_key(|pos| {
-                let dx = pos.0.x - pcx;
-                let dz = pos.0.z - pcz;
-                let dy = pos.0.y - pcy;
-                dx * dx + dz * dz + dy * dy
-            });
-
-            let total_missing = to_generate.len() + to_mesh.len();
-            let remaining_capacity = MAX_IN_FLIGHT.saturating_sub(in_flight);
-            let gen_count = to_generate.len().min(remaining_capacity);
-            let mesh_count = to_mesh.len().min(remaining_capacity.saturating_sub(gen_count));
-
-            let batch_gen: Vec<ChunkPos> = to_generate.into_iter().take(gen_count).collect();
-            let batch_mesh: Vec<ChunkPos> = to_mesh.into_iter().take(mesh_count).collect();
-
-            for &pos in &batch_gen {
-                self.queued_generation.insert(pos);
-            }
-            for &pos in &batch_mesh {
-                self.queued_meshing.insert(pos);
-            }
-
-            let total_taken = batch_gen.len() + batch_mesh.len();
-            if total_taken >= total_missing {
-                self.has_pending_chunks = false;
-            }
-
-            // 4. Dispatch terrain generation + meshing asynchronously
+            // 5. Dispatch terrain generation + meshing asynchronously
             if !batch_gen.is_empty() {
                 let generator = self.generator.clone();
                 let world_arc = self.world.clone();
                 let registry = self.registry.clone();
                 let tx = self.mesh_tx.clone();
+                let gen_tx = self.gen_done_tx.clone();
 
                 rayon::spawn(move || {
-                    let new_chunks: Vec<Chunk> = batch_gen
+                    let positions: Vec<ChunkPos> = batch_gen.iter().map(|&(pos, _)| pos).collect();
+                    let new_chunks: Vec<Chunk> = positions
                         .par_iter()
                         .map(|&pos| {
                             let mut chunk = generator.generate_chunk(pos);
@@ -515,82 +758,54 @@ impl WorldManager {
                         })
                         .collect();
 
-                    // Insert generated chunks in a quick, isolated lock scope
-                    {
+                    // Insert generated chunks in a quick, isolated lock scope and notify affected neighbors
+                    let affected_neighbors = {
                         let mut world = world_arc.lock().unwrap();
                         for chunk in new_chunks {
                             world.insert_chunk(chunk);
                         }
+                        collect_affected_neighbors(&world, &positions)
+                    };
+
+                    if !affected_neighbors.is_empty() {
+                        let _ = gen_tx.send(affected_neighbors);
                     }
 
                     // Mesh each chunk individually, releasing the world lock between chunks
                     // so the main thread (physics, raycasting, input) is never blocked!
-                    let mesher = ChunkMesher::new(&registry);
-                    for &pos in &batch_gen {
+                    for &(pos, epoch) in &batch_gen {
                         let mesh_opt = {
                             let world = world_arc.lock().unwrap();
-                            if let Some(chunk) = world.get_chunk(pos) {
-                                let origin = pos.to_world_origin();
-                                let sources = world.get_light_sources_near(origin, 15);
-                                Some(mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
-                                    world.get_block(origin + IVec3::new(lx, ly, lz))
-                                }))
-                            } else {
-                                None
-                            }
+                            world
+                                .get_chunk(pos)
+                                .map(|chunk| mesh_chunk_from_world(&world, &registry, chunk))
                         };
                         if let Some(mesh) = mesh_opt {
-                            let _ = tx.send((pos, mesh));
+                            let _ = tx.send((pos, epoch, mesh));
                         }
                     }
                 });
             }
 
-            // 5. Dispatch meshing for already-generated chunks needing GPU buffers
+            // 6. Dispatch meshing for already-generated chunks needing GPU buffers or neighbor remeshes
             if !batch_mesh.is_empty() {
                 let world_arc = self.world.clone();
                 let registry = self.registry.clone();
                 let tx = self.mesh_tx.clone();
 
                 rayon::spawn(move || {
-                    let mesher = ChunkMesher::new(&registry);
-                    for pos in batch_mesh {
+                    for (pos, epoch) in batch_mesh {
                         let mesh_opt = {
                             let world = world_arc.lock().unwrap();
-                            if let Some(chunk) = world.get_chunk(pos) {
-                                let origin = pos.to_world_origin();
-                                let sources = world.get_light_sources_near(origin, 15);
-                                Some(mesher.mesh_chunk_with_lighting(chunk, &sources, |lx, ly, lz| {
-                                    world.get_block(origin + IVec3::new(lx, ly, lz))
-                                }))
-                            } else {
-                                None
-                            }
+                            world
+                                .get_chunk(pos)
+                                .map(|chunk| mesh_chunk_from_world(&world, &registry, chunk))
                         };
                         if let Some(mesh) = mesh_opt {
-                            let _ = tx.send((pos, mesh));
+                            let _ = tx.send((pos, epoch, mesh));
                         }
                     }
                 });
-            }
-
-            // 6. Unload distant chunks outside radius + 2 to free VRAM
-            let unload_radius_sq = (r + 2) * (r + 2);
-            let mut to_remove = Vec::new();
-            for &pos in self.gpu_chunks.keys() {
-                let dx = pos.0.x - pcx;
-                let dz = pos.0.z - pcz;
-                if dx * dx + dz * dz > unload_radius_sq {
-                    to_remove.push(pos);
-                }
-            }
-
-            for pos in to_remove {
-                self.gpu_chunks.remove(&pos);
-                self.gpu_water_chunks.remove(&pos);
-                self.loaded_chunks_set.remove(&pos);
-                self.queued_meshing.remove(&pos);
-                self.queued_generation.remove(&pos);
             }
         }
     }
@@ -835,18 +1050,12 @@ impl WorldManager {
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
-            let mesher = ChunkMesher::new(&self.registry);
             let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect();
             (current, meshes, dropped_chest_items, extra_drops, spawned_falling)
@@ -958,18 +1167,12 @@ impl WorldManager {
 
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
-            let mesher = ChunkMesher::new(&self.registry);
             chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect()
         };
@@ -1215,18 +1418,12 @@ impl WorldManager {
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
-            let mesher = ChunkMesher::new(&self.registry);
             let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect();
             (meshes, extra_drops, spawned_falling)
@@ -1301,18 +1498,12 @@ impl WorldManager {
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
-            let mesher = ChunkMesher::new(&self.registry);
             let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect();
 
@@ -1372,18 +1563,12 @@ impl WorldManager {
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
-            let mesher = ChunkMesher::new(&self.registry);
             let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect();
 
@@ -1836,18 +2021,12 @@ impl WorldManager {
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
-            let mesher = ChunkMesher::new(&self.registry);
             let meshes = chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect();
             (meshes, extra_drops, spawned_falling)
@@ -1945,18 +2124,12 @@ impl WorldManager {
 
         if !changed_chunks.is_empty() {
             let registry = Arc::clone(&self.registry);
-            let mesher = ChunkMesher::new(&registry);
             let mut meshes = Vec::new();
             {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        meshes.push((cpos, mesh));
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
                     }
                 }
             }
@@ -2055,18 +2228,12 @@ impl WorldManager {
 
         if !changed_chunks.is_empty() {
             let registry = Arc::clone(&self.registry);
-            let mesher = ChunkMesher::new(&registry);
             let mut meshes = Vec::new();
             {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        meshes.push((cpos, mesh));
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
                     }
                 }
             }
@@ -2121,18 +2288,12 @@ impl WorldManager {
 
         if !changed_chunks.is_empty() {
             let registry = Arc::clone(&self.registry);
-            let mesher = ChunkMesher::new(&registry);
             let mut meshes = Vec::new();
             {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        meshes.push((cpos, mesh));
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
                     }
                 }
             }
@@ -2195,18 +2356,12 @@ impl WorldManager {
 
         if !changed_chunks.is_empty() {
             let registry = Arc::clone(&self.registry);
-            let mesher = ChunkMesher::new(&registry);
             let mut meshes = Vec::new();
             {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        meshes.push((cpos, mesh));
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
                     }
                 }
             }
@@ -2248,18 +2403,12 @@ impl WorldManager {
 
         if !changed_chunks.is_empty() {
             let registry = Arc::clone(&self.registry);
-            let mesher = ChunkMesher::new(&registry);
             let mut meshes = Vec::new();
             {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        meshes.push((cpos, mesh));
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
                     }
                 }
             }
@@ -2355,18 +2504,12 @@ impl WorldManager {
                 chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
                 chunks_to_rebuild.dedup();
 
-                let mesher = ChunkMesher::new(&self.registry);
                 let meshes: Vec<(ChunkPos, ChunkMesh)> = chunks_to_rebuild
                     .into_iter()
                     .filter_map(|cpos| {
-                        world.get_chunk(cpos).map(|chunk| {
-                            let origin = cpos.to_world_origin();
-                            let sources = world.get_light_sources_near(origin, 15);
-                            let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                                world.get_block(origin + IVec3::new(x, y, z))
-                            });
-                            (cpos, mesh)
-                        })
+                        world
+                            .get_chunk(cpos)
+                            .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                     })
                     .collect();
                 (meshes, extra_drops, more_falling)
@@ -2422,18 +2565,12 @@ impl WorldManager {
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
 
-            let mesher = ChunkMesher::new(&self.registry);
             chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect::<Vec<_>>()
         };
@@ -2493,18 +2630,12 @@ impl WorldManager {
 
         let new_meshes = {
             let world = self.world.lock().unwrap();
-            let mesher = ChunkMesher::new(&self.registry);
             chunks_to_rebuild
                 .into_iter()
                 .filter_map(|cpos| {
-                    world.get_chunk(cpos).map(|chunk| {
-                        let origin = cpos.to_world_origin();
-                        let sources = world.get_light_sources_near(origin, 15);
-                        let mesh = mesher.mesh_chunk_with_lighting(chunk, &sources, |x, y, z| {
-                            world.get_block(origin + IVec3::new(x, y, z))
-                        });
-                        (cpos, mesh)
-                    })
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
                 })
                 .collect::<Vec<_>>()
         };
@@ -2600,6 +2731,98 @@ mod tests {
 
         assert!(wm.queued_generation.is_empty());
         assert!(wm.queued_meshing.is_empty());
+    }
+
+    #[test]
+    fn test_world_manager_prioritizes_near_chunks_and_skips_loaded_empty_chunks() {
+        let registry = Arc::new(BlockRegistry::default());
+        let mut wm = WorldManager::new(4242, 4, registry);
+        let player_chunk = ChunkPos::new(0, 4, 0);
+
+        // Pre-populate a nearby chunk in `world` that still needs meshing (without gpu_chunks entry),
+        // and mark an empty sky chunk above the player as already completed in `loaded_chunks_set`.
+        let near_to_mesh = ChunkPos::new(1, 4, 0);
+        let already_loaded_empty = ChunkPos::new(0, 5, 0);
+        {
+            let mut world = wm.world().lock().unwrap();
+            world.insert_chunk(Chunk::new(near_to_mesh));
+            world.insert_chunk(Chunk::new(already_loaded_empty));
+        }
+        wm.loaded_chunks_set.insert(already_loaded_empty);
+
+        let (batch_gen, batch_mesh) = wm.collect_streaming_batch(player_chunk, 12);
+
+        // Already-loaded empty chunk must NOT be re-queued into batch_mesh
+        assert!(
+            batch_mesh.iter().all(|&(p, _)| p != already_loaded_empty),
+            "Loaded empty chunks must never be re-queued into meshing"
+        );
+        // Nearby `to_mesh` chunk must NOT be starved behind distant `to_generate` chunks
+        assert!(
+            batch_mesh.iter().any(|&(p, _)| p == near_to_mesh),
+            "Nearby already-generated chunk must be included in first streaming batch instead of starving behind far generation"
+        );
+        // Player's own column must be in the very first batch and no distant edge chunk (dist >= 3) should jump ahead
+        assert!(batch_gen.iter().any(|&(p, _)| p == player_chunk));
+        for &(p, _) in batch_gen.iter().chain(batch_mesh.iter()) {
+            let horiz_sq = p.0.x * p.0.x + p.0.z * p.0.z;
+            assert!(
+                horiz_sq <= 4,
+                "Expected only close chunks (horiz_sq <= 4) in first batch, got {:?} (horiz_sq={})",
+                p,
+                horiz_sq
+            );
+        }
+    }
+
+    #[test]
+    fn test_world_manager_neighbor_remesh_and_water_border_suppression() {
+        let registry = Arc::new(BlockRegistry::default());
+        let mut world = World::new();
+
+        let c_left = ChunkPos::new(0, 2, 0);
+        let c_right = ChunkPos::new(1, 2, 0);
+        let c_air = ChunkPos::new(-1, 2, 0);
+
+        // Create two adjacent ocean chunks with water meeting at x=15 | x=0
+        let mut left_chunk = Chunk::new(c_left);
+        let mut right_chunk = Chunk::new(c_right);
+        for z in 0..CHUNK_SIZE_Z {
+            for x in 0..CHUNK_SIZE_X {
+                for y in 0..=6 {
+                    left_chunk.set(x, y, z, BlockId::WATER);
+                    right_chunk.set(x, y, z, BlockId::WATER);
+                }
+            }
+        }
+        world.insert_chunk(left_chunk);
+        world.insert_chunk(right_chunk);
+        // Note: `c_air` (-1, 2, 0) and `ChunkPos(0, 2, 1)` are still unloaded!
+
+        let mesh_left_before = mesh_chunk_from_world(&world, &registry, world.get_chunk(c_left).unwrap());
+        // Must have NO internal water wall on +X (shared with c_right) and NO water wall on -X or +Z (unloaded)
+        assert!(
+            mesh_left_before
+                .water_vertices
+                .iter()
+                .all(|v| v.normal[0].abs() < 0.1 && v.normal[2] < 0.1),
+            "Water chunk must not emit vertical border walls toward loaded water or unloaded neighbors"
+        );
+
+        // Now insert `c_air` (-1, 2, 0) containing AIR; collect_affected_neighbors must flag `c_left` for remesh
+        world.insert_chunk(Chunk::new(c_air));
+        let affected = collect_affected_neighbors(&world, &[c_air]);
+        assert!(
+            affected.contains(&c_left),
+            "Inserting a loaded neighbor touching water must schedule affected neighbor for remesh"
+        );
+
+        // After remeshing `c_left` with `c_air` loaded, the -X water-to-air wall must now be emitted cleanly
+        let mesh_left_after = mesh_chunk_from_world(&world, &registry, world.get_chunk(c_left).unwrap());
+        assert!(
+            mesh_left_after.water_vertices.iter().any(|v| v.normal[0] < -0.5),
+            "Remeshed water chunk must emit -X face once neighboring AIR chunk is loaded"
+        );
     }
 }
 
