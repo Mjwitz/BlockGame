@@ -119,7 +119,6 @@ fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
 pub struct TerrainGenerator {
     pub seed: u32,
     continental_noise: Fbm<Perlin>,
-    erosion_noise: Fbm<Perlin>,
     ridge_noise: Fbm<Perlin>,
     detail_noise: Fbm<Perlin>,
     cave_noise: Fbm<Perlin>,
@@ -133,7 +132,6 @@ pub struct TerrainGenerator {
     moisture_detail_noise: Perlin,
     river_noise: Perlin,
     cont_offset: [f64; 2],
-    erosion_offset: [f64; 2],
     ridge_offset: [f64; 2],
     detail_offset: [f64; 2],
     warp_offset: [f64; 2],
@@ -150,20 +148,14 @@ pub struct TerrainGenerator {
 impl TerrainGenerator {
     pub fn new(seed: u32) -> Self {
         let continental_noise = Fbm::<Perlin>::new(seed)
-            .set_octaves(4)
-            .set_frequency(0.0052)
-            .set_lacunarity(2.05)
-            .set_persistence(0.5);
-
-        let erosion_noise = Fbm::<Perlin>::new(seed.wrapping_add(733))
-            .set_octaves(3)
-            .set_frequency(0.0068)
+            .set_octaves(2)
+            .set_frequency(0.0022)
             .set_lacunarity(2.0)
-            .set_persistence(0.5);
+            .set_persistence(0.45);
 
         let ridge_noise = Fbm::<Perlin>::new(seed.wrapping_add(1571))
             .set_octaves(4)
-            .set_frequency(0.0078)
+            .set_frequency(0.0072)
             .set_lacunarity(2.1)
             .set_persistence(0.48);
 
@@ -202,13 +194,12 @@ impl TerrainGenerator {
         // Mild per-seed world character biases so seeds feel distinct while keeping all biomes reachable
         let seed_temp_bias = (seed_unit_f64(seed, 21) - 0.5) * 0.14;
         let seed_moist_bias = (seed_unit_f64(seed, 22) - 0.5) * 0.12;
-        let seed_altitude_bias = (seed_unit_f64(seed, 23) - 0.5) * 5.0;
-        let seed_relief_scale = 0.88 + seed_unit_f64(seed, 24) * 0.36;
+        let seed_altitude_bias = (seed_unit_f64(seed, 23) - 0.5) * 4.5;
+        let seed_relief_scale = 0.90 + seed_unit_f64(seed, 24) * 0.34;
 
         Self {
             seed,
             continental_noise,
-            erosion_noise,
             ridge_noise,
             detail_noise,
             cave_noise,
@@ -222,7 +213,6 @@ impl TerrainGenerator {
             moisture_detail_noise,
             river_noise,
             cont_offset: seed_offset_pair(seed, 1),
-            erosion_offset: seed_offset_pair(seed, 2),
             ridge_offset: seed_offset_pair(seed, 3),
             detail_offset: seed_offset_pair(seed, 4),
             warp_offset: seed_offset_pair(seed, 5),
@@ -242,13 +232,13 @@ impl TerrainGenerator {
         let fx = x as f64;
         let fz = z as f64;
         let wx = self.warp_noise_x.get([
-            fx * 0.0075 + self.warp_offset[0],
-            fz * 0.0075 + self.warp_offset[1],
-        ]) * 20.0;
+            fx * 0.0032 + self.warp_offset[0],
+            fz * 0.0032 + self.warp_offset[1],
+        ]) * 14.0;
         let wz = self.warp_noise_z.get([
-            fx * 0.0075 + self.warp_offset[1],
-            fz * 0.0075 - self.warp_offset[0],
-        ]) * 20.0;
+            fx * 0.0032 + self.warp_offset[1],
+            fz * 0.0032 - self.warp_offset[0],
+        ]) * 14.0;
         (fx + wx, fz + wz)
     }
 
@@ -256,21 +246,21 @@ impl TerrainGenerator {
     fn sample_climate(&self, wx: f64, wz: f64) -> (f64, f64) {
         let temp = self
             .temp_noise
-            .get([wx * 0.0044 + self.temp_offset[0], wz * 0.0044 + self.temp_offset[1]])
-            + 0.28
+            .get([wx * 0.0021 + self.temp_offset[0], wz * 0.0021 + self.temp_offset[1]])
+            + 0.14
                 * self.temp_detail_noise.get([
-                    wx * 0.011 + self.temp_offset[0],
-                    wz * 0.011 + self.temp_offset[1],
+                    wx * 0.0048 + self.temp_offset[0],
+                    wz * 0.0048 + self.temp_offset[1],
                 ])
             + self.seed_temp_bias;
 
         let moisture = self
             .moisture_noise
-            .get([wx * 0.0046 + self.moist_offset[0], wz * 0.0046 + self.moist_offset[1]])
-            + 0.28
+            .get([wx * 0.0022 + self.moist_offset[0], wz * 0.0022 + self.moist_offset[1]])
+            + 0.14
                 * self.moisture_detail_noise.get([
-                    wx * 0.012 + self.moist_offset[0],
-                    wz * 0.012 + self.moist_offset[1],
+                    wx * 0.0050 + self.moist_offset[0],
+                    wz * 0.0050 + self.moist_offset[1],
                 ])
             + self.seed_moist_bias;
 
@@ -287,20 +277,171 @@ impl TerrainGenerator {
             .abs()
     }
 
+    #[inline]
+    fn classify_cell_biome(&self, sx: f64, sz: f64, cell_hash: u64) -> Biome {
+        let (cell_temp, cell_moist) = self.sample_climate(sx, sz);
+        let h_pick = (cell_hash >> 32) % 100;
+
+        if cell_temp < -0.13 {
+            if cell_temp < -0.24 || h_pick < 36 {
+                Biome::Glacier
+            } else if h_pick >= 84 {
+                Biome::Mountains
+            } else {
+                Biome::SnowyTundra
+            }
+        } else if cell_temp < 0.03 {
+            if cell_moist > 0.07 {
+                if h_pick < 18 {
+                    Biome::Mountains
+                } else if h_pick < 36 {
+                    Biome::Swamp
+                } else {
+                    Biome::Taiga
+                }
+            } else if cell_moist < -0.06 {
+                if h_pick < 20 {
+                    Biome::Mountains
+                } else if h_pick < 52 {
+                    Biome::FlowerMeadow
+                } else {
+                    Biome::Plains
+                }
+            } else if h_pick < 42 {
+                Biome::BirchForest
+            } else if h_pick < 82 {
+                Biome::Forest
+            } else {
+                Biome::Mountains
+            }
+        } else if cell_temp < 0.16 {
+            if cell_moist > 0.12 {
+                if h_pick < 46 {
+                    Biome::Swamp
+                } else if h_pick < 86 {
+                    Biome::DarkForest
+                } else {
+                    Biome::Jungle
+                }
+            } else if cell_moist > -0.02 {
+                match h_pick % 5 {
+                    0 => Biome::BirchForest,
+                    1 => Biome::Forest,
+                    2 => Biome::DarkForest,
+                    3 => Biome::FlowerMeadow,
+                    _ => Biome::Plains,
+                }
+            } else if h_pick < 18 {
+                Biome::Mountains
+            } else if h_pick < 42 {
+                Biome::Savanna
+            } else if h_pick < 66 {
+                Biome::FlowerMeadow
+            } else {
+                Biome::Plains
+            }
+        } else if cell_moist > 0.10 {
+            Biome::Jungle
+        } else if cell_moist > -0.03 {
+            if h_pick < 55 {
+                Biome::Savanna
+            } else if h_pick < 85 {
+                Biome::Desert
+            } else {
+                Biome::Badlands
+            }
+        } else if h_pick < 36 {
+            Biome::Desert
+        } else if h_pick < 70 {
+            Biome::RedDesert
+        } else {
+            Biome::Badlands
+        }
+    }
+
+    /// Evaluates the 3x3 Voronoi macro biome cells around warped coordinate `(wx, wz)`.
+    /// Guarantees every non-river/non-shore biome spans at least one macro cell (~260 blocks),
+    /// while returning smooth C1 boundary weights across neighboring cells for terrain height blending.
+    #[inline]
+    fn sample_macro_cells(&self, wx: f64, wz: f64) -> (Biome, u64, f64, [(Biome, f64); 9]) {
+        const CELL_SIZE: f64 = 260.0;
+        const TRANSITION_WIDTH: f64 = 56.0;
+
+        let gx = (wx / CELL_SIZE).floor() as i32;
+        let gz = (wz / CELL_SIZE).floor() as i32;
+
+        let mut entries: [(Biome, f64); 9] = [(Biome::Plains, 0.0); 9];
+        let mut dists = [f64::MAX; 9];
+        let mut best_biome = Biome::Plains;
+        let mut best_hash = 0u64;
+        let mut best_temp = 0.0;
+        let mut min_dist = f64::MAX;
+
+        let mut idx = 0usize;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let cx = gx + dx;
+                let cz = gz + dz;
+                let h = splitmix64(
+                    (cx as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ (cz as i64 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                        ^ (self.seed as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93),
+                );
+                let jx = ((h & 0xFFFF) as f64) / 65535.0;
+                let jz = (((h >> 16) & 0xFFFF) as f64) / 65535.0;
+                // Keep sites inside [0.28, 0.72] of each cell so neighbors are always >= 114 blocks apart
+                let sx = (cx as f64 + 0.28 + jx * 0.44) * CELL_SIZE;
+                let sz = (cz as f64 + 0.28 + jz * 0.44) * CELL_SIZE;
+
+                let site_cont = self
+                    .continental_noise
+                    .get([sx + self.cont_offset[0], sz + self.cont_offset[1]]);
+                // Deep-ocean cells gently yield coastal fringes to neighboring land cells so
+                // tiny 10-block ocean-cell corners don't dot coastlines.
+                let ocean_penalty = ((-0.16 - site_cont).max(0.0) * 180.0).min(75.0);
+
+                let d = ((wx - sx).powi(2) + (wz - sz).powi(2)).sqrt() + ocean_penalty;
+                let biome = self.classify_cell_biome(sx, sz, h);
+
+                entries[idx] = (biome, 0.0);
+                dists[idx] = d;
+                if d < min_dist {
+                    min_dist = d;
+                    best_biome = biome;
+                    best_hash = h;
+                    best_temp = self.sample_climate(sx, sz).0;
+                }
+                idx += 1;
+            }
+        }
+
+        let mut total_w = 0.0;
+        for i in 0..9 {
+            let delta = (dists[i] - min_dist).max(0.0);
+            let t = ((TRANSITION_WIDTH - delta) / TRANSITION_WIDTH).clamp(0.0, 1.0);
+            let w = t * t;
+            entries[i].1 = w;
+            total_w += w;
+        }
+        if total_w > 0.0 {
+            for e in &mut entries {
+                e.1 /= total_w;
+            }
+        }
+
+        (best_biome, best_hash, best_temp, entries)
+    }
+
     /// Computes the surface elevation at global coordinate (x, z).
     #[inline]
     pub fn surface_height(&self, x: i32, z: i32) -> i32 {
         let fx = x as f64;
         let fz = z as f64;
         let (wx, wz) = self.sample_warp(x, z);
-        let (temp, moisture) = self.sample_climate(wx, wz);
 
         let cont = self
             .continental_noise
             .get([wx + self.cont_offset[0], wz + self.cont_offset[1]]);
-        let erosion = self
-            .erosion_noise
-            .get([wx + self.erosion_offset[0], wz + self.erosion_offset[1]]);
         let ridge_raw = self
             .ridge_noise
             .get([wx + self.ridge_offset[0], wz + self.ridge_offset[1]]);
@@ -309,128 +450,121 @@ impl TerrainGenerator {
             .detail_noise
             .get([fx + self.detail_offset[0], fz + self.detail_offset[1]]);
 
-        let land_mask = smoothstep(-0.22, -0.08, cont);
-        let inland_mask = smoothstep(-0.14, 0.22, cont);
-        // Low erosion -> steep peaks/plateaus/cliffs; high erosion -> broad buildable valleys/plains
-        let rugged_mask = smoothstep(0.18, -0.34, erosion);
-        let mountain_erosion = smoothstep(-0.10, -0.36, erosion);
+        let inland_mask = smoothstep(-0.16, 0.14, cont);
+        let shore_shelf = smoothstep(-0.20, -0.10, cont);
 
-        // 1. Smooth climate weights so flat biomes stay buildable & calm while mountains/canyons/jungles keep dramatic relief
-        let cold_w = smoothstep(-0.10, -0.22, temp) * land_mask;
-        let badlands_w = smoothstep(0.16, 0.24, temp)
-            * smoothstep(-0.02, -0.12, moisture)
-            * smoothstep(0.02, -0.10, erosion)
-            * inland_mask;
-        let red_desert_w = smoothstep(0.16, 0.24, temp)
-            * smoothstep(-0.02, -0.12, moisture)
-            * smoothstep(-0.08, 0.06, erosion)
-            * land_mask;
-        let desert_w = smoothstep(0.14, 0.24, temp)
-            * smoothstep(0.08, -0.02, moisture)
-            * (1.0 - badlands_w)
-            * (1.0 - red_desert_w)
-            * land_mask;
-        let savanna_w = smoothstep(0.05, 0.14, temp)
-            * smoothstep(0.16, 0.02, moisture)
-            * (1.0 - desert_w)
-            * (1.0 - badlands_w)
-            * (1.0 - red_desert_w)
-            * land_mask;
-        let jungle_w =
-            smoothstep(0.10, 0.20, temp) * smoothstep(0.10, 0.22, moisture) * inland_mask;
-        let swamp_w = smoothstep(0.10, 0.24, moisture)
-            * smoothstep(-0.06, 0.08, temp)
-            * smoothstep(0.22, -0.02, cont);
-        let plains_w = smoothstep(-0.14, -0.04, temp)
-            * smoothstep(0.12, 0.04, temp)
-            * smoothstep(0.08, -0.04, moisture)
-            * land_mask;
+        let (_best_biome, _best_hash, _best_temp, cell_weights) = self.sample_macro_cells(wx, wz);
 
-        let remaining_w =
-            (1.0 - plains_w - cold_w - red_desert_w - desert_w - savanna_w - swamp_w - jungle_w - badlands_w)
-                .clamp(0.0, 1.0);
-        // Flatness in [0.0, 0.96]: high for Plains, FlowerMeadow, Swamp, RedDesert, SnowyTundra, Glacier;
-        // moderate for Forest/BirchForest/Taiga/Savanna/Desert; low for Jungle and Badlands.
-        let natural_flatness = (0.88 * plains_w
-            + 0.84 * cold_w
-            + 0.88 * red_desert_w
-            + 0.66 * desert_w
-            + 0.68 * savanna_w
-            + 0.94 * swamp_w
-            + 0.48 * remaining_w)
-            .clamp(0.0, 0.96);
-        // Deep low-erosion mountain belts break through flat-biome suppression to create alpine peaks
-        let relief_suppression = natural_flatness * (1.0 - mountain_erosion * 0.94);
-        let verticality = (1.0 - relief_suppression).clamp(0.08, 1.0);
+        let mut verticality_sum = 0.0;
+        let mut base_lift_sum = 0.0;
+        let mut mountain_w = 0.0;
+        let mut badlands_w = 0.0;
+        let mut red_desert_w = 0.0;
+        let mut desert_w = 0.0;
+        let mut savanna_w = 0.0;
+        let mut jungle_w = 0.0;
+        let mut swamp_w = 0.0;
 
-        // 2. Continental curve: oceans plunge smoothly, flatlands rise gently, highlands rise steeply
+        for &(b, w) in &cell_weights {
+            if w <= 0.0 {
+                continue;
+            }
+            let (v, lift) = match b {
+                Biome::Plains | Biome::FlowerMeadow | Biome::RedDesert => (0.07, 0.8),
+                Biome::Swamp => (0.06, -1.2),
+                Biome::Glacier | Biome::SnowyTundra => (0.10, 0.9),
+                Biome::Desert => (0.12, 1.0),
+                Biome::Savanna => (0.18, 2.0),
+                Biome::Forest | Biome::BirchForest | Biome::DarkForest | Biome::Taiga => (0.34, 2.2),
+                Biome::Jungle => (0.76, 4.5),
+                Biome::Badlands => (0.85, 6.0),
+                Biome::Mountains => (1.00, 12.0),
+                _ => (0.20, 1.0),
+            };
+            verticality_sum += v * w;
+            base_lift_sum += lift * w;
+            match b {
+                Biome::Mountains => mountain_w += w,
+                Biome::Badlands => badlands_w += w,
+                Biome::RedDesert => red_desert_w += w,
+                Biome::Desert => desert_w += w,
+                Biome::Savanna => savanna_w += w,
+                Biome::Jungle => jungle_w += w,
+                Biome::Swamp => swamp_w += w,
+                _ => {}
+            }
+        }
+
+        let verticality = verticality_sum.clamp(0.06, 1.0);
+
+        // 1. Continental curve: oceans plunge smoothly, coastal shelf separates shore, inland rises per biome
         let base_elev = if cont < -0.20 {
             let ocean_t = ((-0.20 - cont) / 0.45).clamp(0.0, 1.35);
-            (self.water_level as f64 + 1.0) - ocean_t * 17.0 + detail * 2.5
+            (self.water_level as f64 + 0.4) - ocean_t * 17.0
         } else {
             let land_t = ((cont + 0.20) / 0.85).clamp(0.0, 1.35);
-            let slope_rise = 3.8 + 13.2 * verticality;
-            (self.water_level as f64 + 1.5)
+            let slope_rise = 2.6 + 11.5 * verticality;
+            (self.water_level as f64 + 0.6)
+                + shore_shelf * 2.5
+                + base_lift_sum * inland_mask
                 + land_t.powf(1.0 + 0.15 * verticality) * slope_rise
-                + self.seed_altitude_bias * (0.35 + 0.65 * verticality) * inland_mask
+                + self.seed_altitude_bias * (0.25 + 0.75 * verticality) * inland_mask
         };
 
-        // 3. Alpine ridged mountain ranges and gentle-to-rolling hills scaled by verticality
-        let mountain_peaks =
-            smoothstep(0.22, 0.88, ridge) * 48.0 * self.seed_relief_scale * inland_mask * mountain_erosion;
-        let rolling_hills = smoothstep(0.32, 0.92, ridge) * 12.0 * inland_mask * verticality.powf(1.2);
+        // 2. Alpine mountain peaks inside Mountains cells and gentle-to-rolling hills scaled by verticality
+        let mountain_peaks = (10.0 + smoothstep(0.15, 0.88, ridge) * 44.0)
+            * self.seed_relief_scale
+            * inland_mask
+            * mountain_w;
+        let rolling_hills = smoothstep(0.32, 0.92, ridge) * 11.0 * inland_mask * verticality.powf(1.2);
 
         let mut height = base_elev + mountain_peaks + rolling_hills;
 
-        // 4. Climate-specific silhouettes
+        // 3. Biome-specific silhouettes
         if badlands_w > 0.01 {
-            // Stepped canyon & terracotta mesa plateaus
             let mesa_signal = (ridge * 0.65 + (cont + 0.2) * 0.45).clamp(0.0, 1.2);
-            let raw_mesa = smoothstep(0.24, 0.70, mesa_signal) * 28.0;
+            let raw_mesa = smoothstep(0.20, 0.68, mesa_signal) * 28.0;
             let terrace_step = 4.0;
             let snapped = (raw_mesa / terrace_step).floor() * terrace_step;
             let frac = (raw_mesa - snapped) / terrace_step;
             let smooth_terrace = snapped + terrace_step * smoothstep(0.72, 0.96, frac);
-            height += smooth_terrace * badlands_w;
+            height += smooth_terrace * badlands_w * inland_mask;
         }
 
         if red_desert_w > 0.01 {
-            // Flat-to-gently-rippled red sand expanse contrasting with tall Badlands mesas
-            let ripple = ((fx * 0.028 + fz * 0.016 + detail * 0.9).sin().abs()) * 1.8;
-            height += ripple * red_desert_w;
+            let ripple = ((fx * 0.028 + fz * 0.016 + detail * 0.9).sin().abs()) * 1.6;
+            height += ripple * red_desert_w * inland_mask;
         }
 
         if desert_w > 0.01 {
-            // Wind-swept gentle desert sand dunes
-            let dune = ((fx * 0.036 + fz * 0.020 + detail * 1.4).sin().abs()) * 3.6;
-            height += dune * desert_w;
+            let dune = ((fx * 0.036 + fz * 0.020 + detail * 1.4).sin().abs()) * 3.4;
+            height += dune * desert_w * inland_mask;
         }
 
         if savanna_w > 0.01 {
-            // Flat grassy savanna plains with occasional flat-topped elevated plateaus
-            let plateau = smoothstep(0.45, 0.68, ridge) * 12.0;
-            height += plateau * savanna_w;
+            let plateau = smoothstep(0.45, 0.68, ridge) * 11.0;
+            height += plateau * savanna_w * inland_mask;
         }
 
         if jungle_w > 0.01 {
-            // Steep tropical hills and lush valleys
-            height += (4.0 + detail * 6.5) * jungle_w;
+            height += (3.5 + detail * 6.0) * jungle_w * inland_mask;
         }
 
         if swamp_w > 0.01 {
-            let basin_target = (self.water_level as f64) + 0.8 + detail * 0.9;
-            height += (basin_target - height) * (swamp_w * 0.82);
+            let basin_target = (self.water_level as f64) + 1.2 + detail * 1.1;
+            height += (basin_target - height) * (swamp_w * shore_shelf * 0.88);
         }
 
-        // Local surface bumpiness stays crisp & smooth in flat biomes and craggy in mountains/cliffs
+        // Crisp low-amplitude surface texture in flat biomes; craggy peaks in mountains & badlands;
+        // smoothly zeroed at shoreline cont = -0.20 so ocean puddles / micro-islands don't dot coasts.
         let detail_amp = if cont < -0.20 {
-            1.4
+            smoothstep(-0.20, -0.27, cont) * 2.4
         } else {
-            0.55 + 1.85 * verticality + 4.4 * rugged_mask * mountain_erosion * inland_mask
+            (0.45 + 1.55 * verticality + 3.6 * mountain_w) * shore_shelf
         };
         height += detail * detail_amp;
 
-        // 5. Winding river channels cutting gently through land (and deeper gorges through hills)
+        // 4. Winding river channels cutting gently through land (and deeper gorges through hills)
         let river_val = self.sample_river_val(wx, wz);
         const RIVER_WIDTH: f64 = 0.036;
         if height > (self.water_level - 2) as f64 && river_val < RIVER_WIDTH {
@@ -447,105 +581,50 @@ impl TerrainGenerator {
     #[inline]
     pub fn get_biome(&self, x: i32, z: i32, height: i32) -> Biome {
         let (wx, wz) = self.sample_warp(x, z);
-        let (temp, moisture) = self.sample_climate(wx, wz);
-        let erosion = self
-            .erosion_noise
-            .get([wx + self.erosion_offset[0], wz + self.erosion_offset[1]]);
+        let (cell_biome, cell_hash, cell_site_temp, _) = self.sample_macro_cells(wx, wz);
 
-        // River channels: carved river corridors filled with water or river banks
-        let river_val = self.sample_river_val(wx, wz);
-        if river_val < 0.036 && height <= self.water_level + 1 {
-            return Biome::River;
+        let cont = self
+            .continental_noise
+            .get([wx + self.cont_offset[0], wz + self.cont_offset[1]]);
+
+        // River channels: narrow corridors explicitly exempt from macro biome size limits (land/coast only)
+        if cont >= -0.20 {
+            let river_val = self.sample_river_val(wx, wz);
+            if river_val < 0.036 && height <= self.water_level + 1 {
+                return Biome::River;
+            }
+        }
+
+        // Inland Swamp marsh pools retain Swamp biome so lily pads and murky water generate naturally
+        if cell_biome == Biome::Swamp && cont >= -0.14 && height <= self.water_level + 6 {
+            return Biome::Swamp;
         }
 
         if height <= self.water_level {
-            if temp > 0.14 && moisture > -0.10 {
+            if cell_site_temp > 0.10 || (cell_site_temp > -0.02 && (cell_hash >> 40) % 3 == 0) {
                 return Biome::CoralReef;
             }
             return Biome::Ocean;
         }
 
-        // Coastal shore transitions bordering water
-        if height <= self.water_level + 2 {
-            if temp <= -0.24 {
-                return Biome::Glacier;
-            }
-            if temp <= -0.02 || erosion < -0.08 {
-                return Biome::StonyShore;
-            }
-            return Biome::Beach;
-        }
-        if height == self.water_level + 3
-            && erosion < -0.16
-            && temp > -0.24
-            && moisture <= 0.14
-        {
-            return Biome::StonyShore;
-        }
-
-        if height > 61
-            || (erosion < -0.22
-                && height >= self.water_level + 12
-                && !(temp > 0.12 && moisture > 0.12))
-        {
-            // Preserve hot terracotta mesas at high plateau elevations
-            if temp > 0.18 && moisture < -0.05 && erosion < -0.04 {
-                return Biome::Badlands;
-            }
-            return Biome::Mountains;
+        // Coastal shore transitions along ocean borders (width & rockiness governed by macro cell)
+        if cont < -0.14 && height <= self.water_level + 5 {
+            return match cell_biome {
+                Biome::Glacier => Biome::Glacier,
+                Biome::SnowyTundra | Biome::Mountains | Biome::Taiga | Biome::DarkForest => {
+                    Biome::StonyShore
+                }
+                _ => {
+                    if (cell_hash >> 44) % 5 == 0 {
+                        Biome::StonyShore
+                    } else {
+                        Biome::Beach
+                    }
+                }
+            };
         }
 
-        // Cold regions: Glacier ice sheets vs Snowy Tundra
-        if temp < -0.24 {
-            Biome::Glacier
-        } else if temp < -0.13 {
-            Biome::SnowyTundra
-        } else if temp < 0.06 && moisture > 0.06 {
-            // Cool climate with ample moisture: Taiga (dense spruce, podzol floor)
-            Biome::Taiga
-        } else if temp > 0.18 && moisture < -0.05 {
-            // Hyper-arid hot regions split by erosion: rugged canyons/mesas (Badlands) vs flat red sands (RedDesert)
-            if erosion < -0.04 {
-                Biome::Badlands
-            } else {
-                Biome::RedDesert
-            }
-        } else if temp > 0.18 && moisture < 0.04 {
-            // Arid hot regions: Desert
-            Biome::Desert
-        } else if temp > 0.12 && moisture > 0.12 {
-            // Warm and tropical high moisture: Jungle
-            Biome::Jungle
-        } else if temp > 0.08 && moisture < 0.12 {
-            // Warm semi-arid grasslands & plateaus: Savanna
-            Biome::Savanna
-        } else if height <= self.water_level + 5 && moisture > 0.14 {
-            // Lowlands near water level with high humidity: Swamp
-            Biome::Swamp
-        } else if temp >= -0.04 && temp <= 0.20 && moisture > 0.18 {
-            // High humidity temperate canopy: Dark Forest (dense 2x2 dark oak trees)
-            Biome::DarkForest
-        } else if moisture > 0.05 {
-            // Temperate woodland split into coherent BirchForest and Oak/Mixed Forest zones
-            let variant = self
-                .temp_detail_noise
-                .get([wx * 0.0055 + 91.3, wz * 0.0055 + 47.2]);
-            if variant > 0.04 {
-                Biome::BirchForest
-            } else {
-                Biome::Forest
-            }
-        } else {
-            // Temperate open flatlands split into FlowerMeadow and grassy Plains
-            let variant = self
-                .moisture_detail_noise
-                .get([wx * 0.006 + 31.7, wz * 0.006 - 73.1]);
-            if variant > 0.08 {
-                Biome::FlowerMeadow
-            } else {
-                Biome::Plains
-            }
-        }
+        cell_biome
     }
 
     /// Searches deterministically outward from (0, 0) for a safe, dry-land spawn point
@@ -2054,8 +2133,8 @@ mod tests {
         let gen = TerrainGenerator::new(1337);
         let mut biomes_found = std::collections::HashSet::new();
 
-        for z in (-900..900).step_by(10) {
-            for x in (-900..900).step_by(10) {
+        for z in (-2200..2200).step_by(20) {
+            for x in (-2200..2200).step_by(20) {
                 let h = gen.surface_height(x, z);
                 let biome = gen.get_biome(x, z, h);
                 biomes_found.insert(biome);
@@ -2097,6 +2176,237 @@ mod tests {
         assert!(biomes_found.contains(&Biome::Taiga), "Expected Taiga biome");
         assert!(biomes_found.contains(&Biome::DarkForest), "Expected DarkForest biome");
         assert!(biomes_found.contains(&Biome::CoralReef), "Expected CoralReef biome");
+    }
+
+    #[test]
+    fn test_minimum_biome_extent() {
+        use std::collections::VecDeque;
+
+        // Verify across multiple seeds that non-river/non-shore biomes form large, contiguous
+        // macro regions rather than tiny 10-second pockets.
+        const STEP: i32 = 10;
+        const HALF: i32 = 120; // 240x240 grid => 2400x2400 blocks
+        let grid_n = (HALF * 2) as usize;
+
+        for seed in [42u32, 1337, 99999] {
+            let gen = TerrainGenerator::new(seed);
+            let mut grid = vec![Biome::Plains; grid_n * grid_n];
+            for gz in 0..grid_n {
+                let z = (gz as i32 - HALF) * STEP;
+                for gx in 0..grid_n {
+                    let x = (gx as i32 - HALF) * STEP;
+                    let h = gen.surface_height(x, z);
+                    grid[gz * grid_n + gx] = gen.get_biome(x, z, h);
+                }
+            }
+
+            let mut visited = vec![false; grid_n * grid_n];
+            let mut tiny_inland_pockets = Vec::new();
+
+            for gz in 0..grid_n {
+                for gx in 0..grid_n {
+                    let idx = gz * grid_n + gx;
+                    if visited[idx] {
+                        continue;
+                    }
+                    let biome = grid[idx];
+                    let mut queue = VecDeque::new();
+                    let mut cells = Vec::new();
+                    visited[idx] = true;
+                    queue.push_back((gx, gz));
+
+                    let mut touches_edge = false;
+                    let mut touches_river_or_water = false;
+                    while let Some((cx, cz)) = queue.pop_front() {
+                        cells.push((cx, cz));
+                        if cx == 0 || cz == 0 || cx + 1 == grid_n || cz + 1 == grid_n {
+                            touches_edge = true;
+                        }
+                        for (nx, nz) in [
+                            (cx.wrapping_sub(1), cz),
+                            (cx + 1, cz),
+                            (cx, cz.wrapping_sub(1)),
+                            (cx, cz + 1),
+                        ] {
+                            if nx < grid_n && nz < grid_n {
+                                let nidx = nz * grid_n + nx;
+                                let nb = grid[nidx];
+                                if nb == biome {
+                                    if !visited[nidx] {
+                                        visited[nidx] = true;
+                                        queue.push_back((nx, nz));
+                                    }
+                                } else if matches!(
+                                    nb,
+                                    Biome::River
+                                        | Biome::Beach
+                                        | Biome::StonyShore
+                                        | Biome::Ocean
+                                        | Biome::CoralReef
+                                ) {
+                                    touches_river_or_water = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if touches_edge
+                        || matches!(
+                            biome,
+                            Biome::River
+                                | Biome::Beach
+                                | Biome::StonyShore
+                                | Biome::Ocean
+                                | Biome::CoralReef
+                        )
+                    {
+                        continue;
+                    }
+
+                    let area_sq_blocks = cells.len() * (STEP as usize) * (STEP as usize);
+                    if !touches_river_or_water && area_sq_blocks < 10_000 {
+                        let (sx, sz) = cells[0];
+                        tiny_inland_pockets.push((
+                            biome,
+                            area_sq_blocks,
+                            (sx as i32 - HALF) * STEP,
+                            (sz as i32 - HALF) * STEP,
+                        ));
+                    }
+                }
+            }
+
+            assert!(
+                tiny_inland_pockets.is_empty(),
+                "Seed {} produced tiny land-locked biome pockets (< 10000 sq blocks): {:?}",
+                seed,
+                tiny_inland_pockets
+            );
+
+            // Verify macro-land region median area (bridging River/Shore overlays)
+            let mut pure_grid = vec![Biome::Plains; grid_n * grid_n];
+            for gz in 0..grid_n {
+                let z = (gz as i32 - HALF) * STEP;
+                for gx in 0..grid_n {
+                    let x = (gx as i32 - HALF) * STEP;
+                    let (wx, wz) = gen.sample_warp(x, z);
+                    let cont = gen
+                        .continental_noise
+                        .get([wx + gen.cont_offset[0], wz + gen.cont_offset[1]]);
+                    pure_grid[gz * grid_n + gx] = if cont < -0.20 {
+                        Biome::Ocean
+                    } else {
+                        gen.sample_macro_cells(wx, wz).0
+                    };
+                }
+            }
+            let mut pvisited = vec![false; grid_n * grid_n];
+            let mut pure_areas = Vec::new();
+            for gz in 0..grid_n {
+                for gx in 0..grid_n {
+                    let idx = gz * grid_n + gx;
+                    if pvisited[idx] || pure_grid[idx] == Biome::Ocean {
+                        continue;
+                    }
+                    let b = pure_grid[idx];
+                    let mut q = VecDeque::new();
+                    pvisited[idx] = true;
+                    q.push_back((gx, gz));
+                    let mut count = 0usize;
+                    let mut edge = false;
+                    while let Some((cx, cz)) = q.pop_front() {
+                        count += 1;
+                        if cx == 0 || cz == 0 || cx + 1 == grid_n || cz + 1 == grid_n {
+                            edge = true;
+                        }
+                        for (nx, nz) in [
+                            (cx.wrapping_sub(1), cz),
+                            (cx + 1, cz),
+                            (cx, cz.wrapping_sub(1)),
+                            (cx, cz + 1),
+                        ] {
+                            if nx < grid_n && nz < grid_n {
+                                let nidx = nz * grid_n + nx;
+                                if !pvisited[nidx] && pure_grid[nidx] == b {
+                                    pvisited[nidx] = true;
+                                    q.push_back((nx, nz));
+                                }
+                            }
+                        }
+                    }
+                    if !edge {
+                        pure_areas.push(count * (STEP as usize) * (STEP as usize));
+                    }
+                }
+            }
+            pure_areas.sort_unstable();
+            let median_macro_area = pure_areas.get(pure_areas.len() / 2).copied().unwrap_or(0);
+            assert!(
+                median_macro_area >= 35_000,
+                "Seed {} median macro-land biome area too small: {} sq blocks",
+                seed,
+                median_macro_area
+            );
+        }
+
+        // Also verify 1D interior run lengths remain broad across slices
+        let gen = TerrainGenerator::new(1337);
+        let mut run_lengths = Vec::new();
+        for z in (-1500..=1500).step_by(300) {
+            let mut cur: Option<Biome> = None;
+            let mut run = 0i32;
+            let mut prev_was_river_or_water = true;
+            for x in (-1500..=1500).step_by(5) {
+                let h = gen.surface_height(x, z);
+                let b = gen.get_biome(x, z, h);
+                let is_water_or_shore = matches!(
+                    b,
+                    Biome::River
+                        | Biome::Beach
+                        | Biome::StonyShore
+                        | Biome::Ocean
+                        | Biome::CoralReef
+                );
+                if Some(b) == cur {
+                    run += 5;
+                } else {
+                    if let Some(prev_b) = cur {
+                        if !matches!(
+                            prev_b,
+                            Biome::River
+                                | Biome::Beach
+                                | Biome::StonyShore
+                                | Biome::Ocean
+                                | Biome::CoralReef
+                        ) && !prev_was_river_or_water
+                            && !is_water_or_shore
+                        {
+                            run_lengths.push(run);
+                        }
+                    }
+                    prev_was_river_or_water = cur.map_or(true, |pb| {
+                        matches!(
+                            pb,
+                            Biome::River
+                                | Biome::Beach
+                                | Biome::StonyShore
+                                | Biome::Ocean
+                                | Biome::CoralReef
+                        )
+                    });
+                    cur = Some(b);
+                    run = 5;
+                }
+            }
+        }
+        run_lengths.sort_unstable();
+        let median_run = run_lengths.get(run_lengths.len() / 2).copied().unwrap_or(0);
+        assert!(
+            median_run >= 140,
+            "Expected median 1D land biome run >= 140 blocks, got {} ({:?})",
+            median_run,
+            run_lengths
+        );
     }
 
     #[test]
