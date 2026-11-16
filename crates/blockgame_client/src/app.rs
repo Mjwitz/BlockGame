@@ -187,6 +187,7 @@ pub struct AppState {
     pub underwater_sound_timer: f32,
     pub audio: crate::audio::AudioManager,
     pub music_scheduler: crate::audio::MusicScheduler,
+    pub mining_music_grace: f32,
     pub creature_sound_timer: f32,
     pub voice_capture: crate::voice::VoiceCaptureManager,
     pub ptt_down: bool,
@@ -228,6 +229,49 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Returns true if the player is currently underground (earthen/stone ceiling above or deep cavern).
+    pub fn is_player_underground(&self) -> bool {
+        if self.screen != AppScreen::InGame {
+            return false;
+        }
+        let px = self.player.position.x.floor() as i32;
+        let py = (self.player.position.y + 1.8).floor() as i32;
+        let pz = self.player.position.z.floor() as i32;
+        let world_guard = self.world_manager.world().lock().unwrap();
+        let world_height =
+            blockgame_core::chunk::VERTICAL_CHUNKS * blockgame_core::chunk::CHUNK_SIZE_Y as i32;
+        let max_y = (py + 28).min(world_height - 1);
+        for y in (py + 1)..=max_y {
+            let block = world_guard.get_block(IVec3::new(px, y, pz));
+            if matches!(
+                block,
+                BlockId::STONE
+                    | BlockId::DIRT
+                    | BlockId::GRASS
+                    | BlockId::COBBLESTONE
+                    | BlockId::BEDROCK
+                    | BlockId::COAL_ORE
+                    | BlockId::COPPER_ORE
+                    | BlockId::IRON_ORE
+                    | BlockId::GOLD_ORE
+                    | BlockId::DIAMOND_ORE
+                    | BlockId::SAND
+                    | BlockId::RED_SAND
+                    | BlockId::SANDSTONE
+                    | BlockId::GRAVEL
+                    | BlockId::CLAY
+                    | BlockId::TERRACOTTA
+                    | BlockId::PODZOL
+                    | BlockId::MOSSY_COBBLESTONE
+                    | BlockId::SNOW_BLOCK
+                    | BlockId::ICE
+            ) {
+                return true;
+            }
+        }
+        self.player.position.y < 34.0
+    }
+
     pub fn refresh_saved_worlds(&mut self) {
         self.saved_worlds = list_saved_worlds(&self.saves_root);
     }
@@ -1247,6 +1291,7 @@ impl ApplicationHandler for BlockGameApp {
             underwater_sound_timer: 0.0,
             audio,
             music_scheduler,
+            mining_music_grace: 0.0,
             creature_sound_timer: 4.0,
             mouse_left_down: false,
             mouse_right_down: false,
@@ -3677,12 +3722,23 @@ impl ApplicationHandler for BlockGameApp {
                     .as_secs_f32()
                     .min(0.1);
                 state.last_frame_time = now;
-                let is_underground = state.player.position.y < 55.0;
-                let is_sprinting_day = state.sprinting && state.day_night.sun_intensity() > 0.2 && state.player.position.y >= 55.0;
-                let is_mining = state.breaking_voxel.is_some();
+                if state.screen == AppScreen::InGame {
+                    state.mining_music_grace = (state.mining_music_grace - dt).max(0.0);
+                } else {
+                    state.mining_music_grace = 0.0;
+                }
+                let is_underground = state.is_player_underground();
+                let is_moving = state.moving_forward
+                    || state.moving_backward
+                    || state.moving_left
+                    || state.moving_right;
+                let is_adventuring =
+                    state.screen == AppScreen::InGame && !is_underground && state.sprinting && is_moving;
+                let is_mining =
+                    state.screen == AppScreen::InGame && state.mining_music_grace > 0.0;
                 let music_ctx = crate::audio::MusicContext {
                     is_underground,
-                    is_sprinting_day,
+                    is_adventuring,
                     is_mining,
                 };
                 state.music_scheduler.update(dt, &mut state.audio, music_ctx);
@@ -4899,7 +4955,9 @@ impl ApplicationHandler for BlockGameApp {
                                     held_tool_type,
                                     held_tool_tier,
                                 );
-                                let skill_speed = match break_speed_skill_for_block(block_at_voxel) {
+                                let break_speed_skill =
+                                    break_speed_skill_for_block(block_at_voxel);
+                                let skill_speed = match break_speed_skill {
                                     Some(SkillKind::Mining) => {
                                         state.player_skills.mining_speed_multiplier()
                                     }
@@ -4921,6 +4979,11 @@ impl ApplicationHandler for BlockGameApp {
                                     state.cracking_buffer = None;
                                     state.break_hit_timer = 0.0;
                                 } else {
+                                    if break_speed_skill == Some(SkillKind::Mining)
+                                        || state.is_player_underground()
+                                    {
+                                        state.mining_music_grace = 4.0;
+                                    }
                                     if is_creative {
                                         if state.creative_break_cooldown <= 0.0 {
                                             state.break_progress = 1.0;

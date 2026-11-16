@@ -5,9 +5,9 @@
 //! - 3D spatial attenuation and stereo panning based on listener camera position and yaw.
 //! - Random pitch (0.85 to 1.15) and volume (0.85 to 1.05) variation to eliminate repetitive fatigue.
 //! - Dynamic footstep triggers synchronized with grounded movement and walk/sprint stride intervals.
-//! - Intermittent background music scheduler with non-repeating track selection and 3-8 minute cooldowns.
-//! - Self-contained high-fidelity procedural WAV synthesizers with automatic fallback and support for
-//!   drop-in WAV/OGG files in `assets/sounds/`.
+//! - Intermittent background music scheduler with non-repeating track selection and 3-6 minute cooldowns.
+//! - Custom stereo MP3 music tracks embedded directly in the binary (with optional disk overrides)
+//!   plus self-contained procedural WAV synthesizers for SFX with optional drop-in WAV/OGG files.
 
 use blockgame_core::block::BlockId;
 use glam::Vec3;
@@ -23,6 +23,38 @@ use std::collections::{HashMap, VecDeque};
 use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+pub const MUSIC_TRACK_WHERE_MAPS_END: usize = 0;
+pub const MUSIC_TRACK_MEASURE_OF_THE_DARK: usize = 1;
+pub const MUSIC_TRACK_WHERE_THE_ROOTS_BREAK_SOIL: usize = 2;
+pub const MUSIC_TRACK_THE_VIEW_FROM_THE_RIDGE: usize = 3;
+pub const BACKGROUND_MUSIC_TRACKS: [usize; 2] = [
+    MUSIC_TRACK_WHERE_THE_ROOTS_BREAK_SOIL,
+    MUSIC_TRACK_THE_VIEW_FROM_THE_RIDGE,
+];
+
+const MUSIC_TRACK_DEFS: [(&str, &str, &[u8]); 4] = [
+    (
+        "Where_Maps_End.mp3",
+        "Where Maps End (Adventuring)",
+        include_bytes!("../../../Music/Where_Maps_End.mp3"),
+    ),
+    (
+        "Measure_of_the_Dark.mp3",
+        "Measure of the Dark (Mining)",
+        include_bytes!("../../../Music/Measure_of_the_Dark.mp3"),
+    ),
+    (
+        "Where_the_Roots_Break_Soil.mp3",
+        "Where the Roots Break Soil (Background)",
+        include_bytes!("../../../Music/Where_the_Roots_Break_Soil.mp3"),
+    ),
+    (
+        "The_View_From_The_Ridge.mp3",
+        "The View From The Ridge (Background)",
+        include_bytes!("../../../Music/The_View_From_The_Ridge.mp3"),
+    ),
+];
 
 /// Sound profile materials for physics and voxel interactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -143,6 +175,7 @@ pub enum SoundCategory {
 /// Represents an active sound voice currently being rendered by the mixer.
 struct ActiveVoice {
     samples: Arc<Vec<f32>>,
+    is_stereo: bool,
     cursor: f32,
     pitch: f32,
     volume_l: f32,
@@ -151,6 +184,17 @@ struct ActiveVoice {
     fade: f32,
     target_fade: f32,
     fade_speed: f32,
+}
+
+impl ActiveVoice {
+    #[inline]
+    fn total_frames(&self) -> usize {
+        if self.is_stereo {
+            self.samples.len() / 2
+        } else {
+            self.samples.len()
+        }
+    }
 }
 
 /// Per-player streaming jitter buffer for 16 kHz proximity voice chat.
@@ -220,7 +264,7 @@ impl AudioMixer {
         stream.samples.extend(pcm.iter().copied());
     }
 
-    /// Add a voice to the active voice list.
+    /// Add a mono voice to the active voice list.
     pub fn play_voice(
         &mut self,
         samples: Arc<Vec<f32>>,
@@ -238,8 +282,38 @@ impl AudioMixer {
 
         self.voices.push(ActiveVoice {
             samples,
+            is_stereo: false,
             cursor: 0.0,
             pitch: pitch.clamp(0.2, 4.0),
+            volume_l,
+            volume_r,
+            category,
+            fade,
+            target_fade,
+            fade_speed,
+        });
+    }
+
+    /// Add an interleaved stereo voice (e.g. music tracks) to the active voice list.
+    pub fn play_stereo_voice(
+        &mut self,
+        samples: Arc<Vec<f32>>,
+        volume_l: f32,
+        volume_r: f32,
+        category: SoundCategory,
+        fade_in_sec: f32,
+    ) {
+        let (fade, target_fade, fade_speed) = if fade_in_sec > 0.0 {
+            (0.0, 1.0, 1.0 / fade_in_sec)
+        } else {
+            (1.0, 1.0, 0.0)
+        };
+
+        self.voices.push(ActiveVoice {
+            samples,
+            is_stereo: true,
+            cursor: 0.0,
+            pitch: 1.0,
             volume_l,
             volume_r,
             category,
@@ -281,7 +355,8 @@ impl AudioMixer {
             let mut right_acc = 0.0;
 
             for voice in &mut self.voices {
-                if voice.cursor >= voice.samples.len() as f32 {
+                let total_frames = voice.total_frames();
+                if total_frames == 0 || voice.cursor >= total_frames as f32 {
                     continue;
                 }
 
@@ -293,15 +368,24 @@ impl AudioMixer {
                 }
 
                 if voice.fade <= 0.0 && voice.target_fade <= 0.0 {
-                    voice.cursor = voice.samples.len() as f32; // mark for cleanup
+                    voice.cursor = total_frames as f32; // mark for cleanup
                     continue;
                 }
 
-                // Linear interpolation for pitch shifting
                 let idx0 = voice.cursor as usize;
-                let idx1 = (idx0 + 1).min(voice.samples.len() - 1);
+                let idx1 = (idx0 + 1).min(total_frames - 1);
                 let frac = voice.cursor - idx0 as f32;
-                let sample = voice.samples[idx0] * (1.0 - frac) + voice.samples[idx1] * frac;
+
+                let (sample_l, sample_r) = if voice.is_stereo {
+                    let s0 = idx0 * 2;
+                    let s1 = idx1 * 2;
+                    let l = voice.samples[s0] * (1.0 - frac) + voice.samples[s1] * frac;
+                    let r = voice.samples[s0 + 1] * (1.0 - frac) + voice.samples[s1 + 1] * frac;
+                    (l, r)
+                } else {
+                    let s = voice.samples[idx0] * (1.0 - frac) + voice.samples[idx1] * frac;
+                    (s, s)
+                };
 
                 let category_vol = match voice.category {
                     SoundCategory::Music => self.music_volume,
@@ -310,8 +394,8 @@ impl AudioMixer {
                 };
                 let effective_vol = self.master_volume * category_vol * voice.fade;
 
-                left_acc += sample * voice.volume_l * effective_vol;
-                right_acc += sample * voice.volume_r * effective_vol;
+                left_acc += sample_l * voice.volume_l * effective_vol;
+                right_acc += sample_r * voice.volume_r * effective_vol;
 
                 voice.cursor += voice.pitch;
             }
@@ -352,7 +436,7 @@ impl AudioMixer {
         self.voice_streams.retain(|_, s| !s.samples.is_empty());
 
         // Retain only voices that still have samples remaining
-        self.voices.retain(|v| v.cursor < v.samples.len() as f32);
+        self.voices.retain(|v| v.cursor < v.total_frames() as f32);
     }
 }
 
@@ -549,301 +633,6 @@ pub mod sound_generator {
         samples
     }
 
-    fn add_note(
-        buffer: &mut [f32],
-        start_sec: f32,
-        freq: f32,
-        dur_sec: f32,
-        amp: f32,
-        instrument: u8,
-    ) {
-        let start_sample = (start_sec * SAMPLE_RATE) as usize;
-        let num_samples = (dur_sec * SAMPLE_RATE) as usize;
-        let buf_len = buffer.len();
-
-        for n in 0..num_samples {
-            let idx = start_sample + n;
-            if idx >= buf_len {
-                break;
-            }
-            let t = n as f32 / SAMPLE_RATE;
-            let sample = match instrument {
-                // 0: Felt Piano (warm fundamental with exponential decay)
-                0 => {
-                    let env = (-t * 0.85).exp();
-                    let f1 = (2.0 * PI * freq * t).sin();
-                    let f2 = 0.35 * (2.0 * PI * freq * 2.0 * t).sin() * (-t * 1.8).exp();
-                    let f3 = 0.15 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 2.5).exp();
-                    (f1 + f2 + f3) * env
-                }
-                // 1: Plucked Acoustic Guitar / Lute (fast attack, bright string harmonics)
-                1 => {
-                    let env = (-t * 3.4).exp();
-                    let f1 = (2.0 * PI * freq * t).sin();
-                    let f2 = 0.40 * (2.0 * PI * freq * 2.0 * t).sin() * (-t * 3.0).exp();
-                    let f3 = 0.20 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 4.5).exp();
-                    (f1 + f2 + f3) * env
-                }
-                // 2: Crystal Chime / Mineral Bell (cavernous reverberation, crystalline inharmonicity)
-                2 => {
-                    let env = (-t * 0.95).exp();
-                    let f1 = (2.0 * PI * freq * t).sin();
-                    let f2 = 0.45 * (2.0 * PI * (freq * 2.756) * t).sin() * (-t * 1.4).exp();
-                    let f3 = 0.25 * (2.0 * PI * (freq * 5.404) * t).sin() * (-t * 2.2).exp();
-                    (f1 + f2 + f3) * env
-                }
-                // 3: Woodwind / Flute (gentle breath attack, expressive 5.5Hz vibrato)
-                3 => {
-                    let vib = 1.0 + 0.018 * (2.0 * PI * 5.5 * t).sin();
-                    let phase = 2.0 * PI * freq * vib * t;
-                    let env = (PI * (t / dur_sec).clamp(0.0, 1.0)).sin().powf(0.65);
-                    (phase.sin() + 0.25 * (phase * 2.0).sin()) * env
-                }
-                // 4: Warm Bass (deep round low-end with soft pluck)
-                4 => {
-                    let env = (-t * 2.1).exp();
-                    let f1 = (2.0 * PI * freq * t).sin();
-                    let f2 = 0.30 * (2.0 * PI * freq * 2.0 * t).sin();
-                    (f1 + f2) * env
-                }
-                // 5: Celesta / Star Bell (twinkling high bell tone)
-                _ => {
-                    let env = (-t * 1.6).exp();
-                    let f1 = (2.0 * PI * freq * t).sin();
-                    let f2 = 0.35 * (2.0 * PI * freq * 3.0 * t).sin() * (-t * 2.5).exp();
-                    (f1 + f2) * env
-                }
-            };
-            buffer[idx] += amp * sample;
-        }
-    }
-
-    /// Procedurally generates ambient music tracks (tracks 0..6).
-    ///
-    /// - Tracks 0..2: Peaceful, nostalgic solo felt piano and warm analog pads (~24s).
-    /// - Track 3: "Adventuring / Overland Wanderer" (~150s / 2.5 min) - Lively acoustic guitar arpeggios,
-    ///   walking bass, woodwind flute lead, and buoyant exploration rhythm.
-    /// - Track 4: "Echoes of the Deep / Subterranean Mining" (~150s / 2.5 min) - Cavernous sub-bass drones,
-    ///   reverberant crystalline mineral bell chimes, and eerie atmospheric pad sweeps.
-    /// - Track 5: "Starlight Vista / Dusk Reflection" (~150s / 2.5 min) - Celestial twilight landscapes,
-    ///   lush evolving ambient synth pads, and sparkling celesta bell motifs.
-    pub fn generate_ambient_music(track_index: usize) -> Vec<f32> {
-        let is_extended = track_index >= 3;
-        let duration = if is_extended { 150.0 } else { 24.0 };
-        let num_samples = (duration * SAMPLE_RATE) as usize;
-        let mut samples = vec![0.0_f32; num_samples];
-
-        match track_index {
-            // Track 3: Adventuring / Overland Wanderer (150s, 108 BPM)
-            3 => {
-                let beat = 60.0 / 108.0; // 0.5555s
-                let bar = beat * 4.0;    // 2.2222s
-                let total_bars = (duration / bar).floor() as usize;
-
-                // Chord progression: G -> D -> Em -> C -> G -> Bm -> C -> D
-                let chords = [
-                    // (root_bass, [notes], flute_melody_note)
-                    (98.00, [196.00, 246.94, 293.66, 392.00], 392.00),  // G3 (G, B, D, G)
-                    (73.42, [146.83, 185.00, 220.00, 293.66], 440.00),  // D3 (D, F#, A, D)
-                    (82.41, [164.81, 196.00, 246.94, 329.63], 493.88),  // Em (E, G, B, E)
-                    (65.41, [130.81, 164.81, 196.00, 261.63], 523.25),  // C3 (C, E, G, C)
-                    (98.00, [196.00, 246.94, 293.66, 392.00], 587.33),  // G3
-                    (61.74, [123.47, 146.83, 185.00, 246.94], 493.88),  // Bm (B, D, F#, B)
-                    (65.41, [130.81, 164.81, 196.00, 261.63], 440.00),  // C3
-                    (73.42, [146.83, 185.00, 220.00, 293.66], 392.00),  // D3
-                ];
-
-                for b in 0..total_bars {
-                    let bar_start = b as f32 * bar;
-                    let chord_idx = b % chords.len();
-                    let (bass_f, arp_notes, flute_f) = chords[chord_idx];
-
-                    // Walking acoustic bass
-                    add_note(&mut samples, bar_start, bass_f, 1.8, 0.38, 4);
-                    add_note(&mut samples, bar_start + beat * 2.0, bass_f * 1.5, 1.4, 0.30, 4);
-
-                    // Plucked acoustic guitar arpeggios (8th notes)
-                    for step in 0..8 {
-                        let note_time = bar_start + step as f32 * (beat * 0.5);
-                        let note_f = arp_notes[step % arp_notes.len()];
-                        add_note(&mut samples, note_time, note_f, 1.2, 0.22, 1);
-                    }
-
-                    // Flute melody phrases in thematic sections (bars 4..16, 20..32, etc.)
-                    let phrase_pos = b % 16;
-                    if (4..12).contains(&phrase_pos) || (20..28).contains(&phrase_pos) {
-                        let mel_f = if step_even(b) { flute_f } else { flute_f * 1.122 };
-                        add_note(&mut samples, bar_start + beat * 0.5, mel_f, bar * 0.85, 0.28, 3);
-                    }
-                }
-
-                // Underlying warm acoustic ambiance pad
-                for i in 0..num_samples {
-                    let t = i as f32 / SAMPLE_RATE;
-                    let pad_env = (PI * t / duration).sin().clamp(0.0, 1.0);
-                    let pad = 0.12 * pad_env * ((2.0 * PI * 98.0 * t).sin() + 0.3 * (2.0 * PI * 146.83 * t).sin());
-                    samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
-                }
-            }
-
-            // Track 4: Echoes of the Deep / Subterranean Mining (150s, 64 BPM)
-            4 => {
-                let beat = 60.0 / 64.0; // 0.9375s
-                let bar = beat * 4.0;   // 3.75s
-                let total_bars = (duration / bar).floor() as usize;
-
-                // Minor cavern progression: Dm -> Bb -> Gm -> Am
-                let chords = [
-                    (73.42, [587.33, 880.00, 1174.66, 1760.00]), // Dm
-                    (58.27, [466.16, 698.46, 932.33, 1396.91]),  // Bb
-                    (49.00, [392.00, 587.33, 783.99, 1174.66]),  // Gm
-                    (55.00, [440.00, 659.25, 880.00, 1318.51]),  // Am
-                ];
-
-                // Continuous subterranean sub-bass drone (45Hz - 55Hz undulating)
-                for i in 0..num_samples {
-                    let t = i as f32 / SAMPLE_RATE;
-                    let drone_env = (PI * t / duration).sin().clamp(0.0, 1.0);
-                    let sub = 0.18 * drone_env * ((2.0 * PI * 48.0 * t).sin() + 0.35 * (2.0 * PI * 55.0 * t).sin());
-                    let cavern_swell = 0.08 * (2.0 * PI * 0.04 * t).sin() * (2.0 * PI * 110.0 * t).sin();
-                    samples[i] += sub + cavern_swell;
-                }
-
-                for b in 0..total_bars {
-                    let bar_start = b as f32 * bar;
-                    let (root, chimes) = chords[b % chords.len()];
-
-                    // Cavernous bass root resonance
-                    add_note(&mut samples, bar_start, root, bar * 0.9, 0.32, 4);
-
-                    // Mineral crystal bell strikes (chimes reflecting off cave walls)
-                    let chime_time1 = bar_start + beat * 1.0;
-                    let chime_time2 = bar_start + beat * 2.5;
-                    add_note(&mut samples, chime_time1, chimes[(b * 2) % chimes.len()], 4.5, 0.25, 2);
-                    add_note(&mut samples, chime_time2, chimes[(b * 2 + 1) % chimes.len()], 4.0, 0.22, 2);
-                }
-
-                // Final clamp
-                for s in &mut samples {
-                    *s = s.clamp(-1.0, 1.0);
-                }
-            }
-
-            // Track 5: Starlight Vista / Dusk Reflection (150s, 72 BPM)
-            5 => {
-                let beat = 60.0 / 72.0; // 0.8333s
-                let bar = beat * 4.0;   // 3.3333s
-                let total_bars = (duration / bar).floor() as usize;
-
-                // Fmaj7 -> Cmaj9 -> Am7 -> Gsus4
-                let progression = [
-                    (87.31, [349.23, 440.00, 523.25, 659.25]), // Fmaj7
-                    (65.41, [261.63, 329.63, 392.00, 493.88]), // Cmaj9
-                    (55.00, [220.00, 261.63, 329.63, 392.00]), // Am7
-                    (98.00, [196.00, 261.63, 293.66, 392.00]), // Gsus4
-                ];
-
-                for b in 0..total_bars {
-                    let bar_start = b as f32 * bar;
-                    let (bass, chord_notes) = progression[b % progression.len()];
-
-                    // Warm electric piano / bass foundation
-                    add_note(&mut samples, bar_start, bass, bar * 0.95, 0.30, 4);
-                    for &note_f in &chord_notes {
-                        add_note(&mut samples, bar_start + 0.1, note_f, bar * 0.8, 0.16, 0);
-                    }
-
-                    // Twinkling celestial star bells (pentatonic motifs)
-                    let star_f1 = chord_notes[(b + 1) % chord_notes.len()] * 2.0;
-                    let star_f2 = chord_notes[(b + 2) % chord_notes.len()] * 2.0;
-                    add_note(&mut samples, bar_start + beat * 1.5, star_f1, 2.5, 0.20, 5);
-                    add_note(&mut samples, bar_start + beat * 3.0, star_f2, 2.8, 0.18, 5);
-                }
-
-                // Evolving celestial synth pad swell
-                for i in 0..num_samples {
-                    let t = i as f32 / SAMPLE_RATE;
-                    let pad_env = (PI * t / duration).sin().clamp(0.0, 1.0);
-                    let pad = 0.14
-                        * pad_env
-                        * ((2.0 * PI * 130.81 * t).sin()
-                            + 0.3 * (2.0 * PI * 196.0 * t).sin()
-                            + 0.2 * (2.0 * PI * 261.63 * t).sin());
-                    samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
-                }
-            }
-
-            // Tracks 0..2: Peaceful C418-style Felt Piano & Pads (24s)
-            _ => {
-                let notes_schedule: Vec<(f32, f32, f32)> = match track_index % 3 {
-                    0 => vec![
-                        (0.0, 261.63, 0.45),  // C4
-                        (1.5, 329.63, 0.40),  // E4
-                        (3.0, 392.00, 0.42),  // G4
-                        (4.5, 523.25, 0.38),  // C5
-                        (7.0, 220.00, 0.45),  // A3
-                        (8.5, 261.63, 0.40),  // C4
-                        (10.0, 329.63, 0.42), // E4
-                        (12.0, 174.61, 0.45), // F3
-                        (13.5, 261.63, 0.38), // C4
-                        (15.0, 349.23, 0.40), // F4
-                        (17.5, 196.00, 0.45), // G3
-                        (19.0, 246.94, 0.38), // B3
-                        (20.5, 293.66, 0.40), // D4
-                    ],
-                    1 => vec![
-                        (0.0, 293.66, 0.45),  // D4
-                        (1.8, 369.99, 0.40),  // F#4
-                        (3.6, 440.00, 0.42),  // A4
-                        (6.5, 185.00, 0.45),  // F#3
-                        (8.3, 220.00, 0.38),  // A3
-                        (10.1, 277.18, 0.40), // C#4
-                        (13.0, 196.00, 0.45), // G3
-                        (14.8, 246.94, 0.40), // B3
-                        (16.6, 293.66, 0.42), // D4
-                        (19.5, 220.00, 0.42), // A3
-                        (21.0, 277.18, 0.38), // C#4
-                    ],
-                    _ => vec![
-                        (0.0, 196.00, 0.45),  // G3
-                        (2.2, 293.66, 0.40),  // D4
-                        (4.4, 329.63, 0.42),  // E4
-                        (7.5, 261.63, 0.45),  // C4
-                        (9.7, 392.00, 0.38),  // G4
-                        (13.0, 220.00, 0.45), // A3
-                        (15.2, 329.63, 0.40), // E4
-                        (18.5, 196.00, 0.45), // G3
-                        (20.7, 261.63, 0.40), // C4
-                    ],
-                };
-
-                for &(start_time, freq, amplitude) in &notes_schedule {
-                    add_note(&mut samples, start_time, freq, 4.5, amplitude, 0);
-                }
-
-                let pad_root = match track_index % 3 {
-                    0 => 65.41,  // C2
-                    1 => 73.42,  // D2
-                    _ => 98.00,  // G2
-                };
-                for i in 0..num_samples {
-                    let t = i as f32 / SAMPLE_RATE;
-                    let pad_envelope = (PI * t / duration).sin().clamp(0.0, 1.0);
-                    let pad = 0.18
-                        * pad_envelope
-                        * ((2.0 * PI * pad_root * t).sin() + 0.3 * (2.0 * PI * (pad_root * 1.5) * t).sin());
-                    samples[i] = (samples[i] + pad).clamp(-1.0, 1.0);
-                }
-            }
-        }
-
-        samples
-    }
-
-    #[inline]
-    fn step_even(n: usize) -> bool {
-        n % 2 == 0
-    }
 
     /// Synthesizes short, crisp block hitting/chipping audio effects for mining progress.
     pub fn generate_hit(material: SoundMaterial, variant: usize) -> Vec<f32> {
@@ -1734,17 +1523,25 @@ impl AudioManager {
             self.tool_breaks.push(Arc::new(buffer));
         }
 
-        // 10. Ambient Music Tracks (6 tracks: 3 calm ambient + 3 multi-minute thematic tracks)
-        for track_idx in 0..6 {
-            let file_name = format!("ambient_track_{}.wav", track_idx + 1);
-            let file_path = assets_dir.join(&file_name);
+        // 10. Custom Stereo Music Tracks (4 MP3 tracks: Adventuring, Mining, and 2 Anytime Background)
+        let custom_music_dir = Path::new("assets/music");
+        let root_music_dir = Path::new("Music");
+        for (file_name, _label, embedded_bytes) in MUSIC_TRACK_DEFS {
+            let assets_path = custom_music_dir.join(file_name);
+            let root_path = root_music_dir.join(file_name);
 
-            let buffer = if has_assets && file_path.exists() {
-                Self::load_audio_file(&file_path)
-                    .unwrap_or_else(|| sound_generator::generate_ambient_music(track_idx))
+            let buffer = if assets_path.exists() {
+                Self::load_audio_file_stereo(&assets_path)
+            } else if root_path.exists() {
+                Self::load_audio_file_stereo(&root_path)
             } else {
-                sound_generator::generate_ambient_music(track_idx)
-            };
+                None
+            }
+            .or_else(|| Self::load_audio_bytes_stereo(embedded_bytes))
+            .unwrap_or_else(|| {
+                eprintln!("[Audio] Warning: Failed to decode music track {}", file_name);
+                Vec::new()
+            });
 
             self.music_tracks.push(Arc::new(buffer));
         }
@@ -1876,6 +1673,58 @@ impl AudioManager {
                 break;
             }
             samples.extend_from_slice(&frame_buf[0..frames_read]);
+        }
+
+        if !samples.is_empty() {
+            Some(samples)
+        } else {
+            None
+        }
+    }
+
+    /// Decodes an external audio file into 44.1kHz interleaved stereo PCM f32 samples.
+    fn load_audio_file_stereo(path: &Path) -> Option<Vec<f32>> {
+        let mut decoder = DecoderBuilder::new_f32()
+            .channels(2)
+            .sample_rate(SampleRate::Sr44100)
+            .from_file(path)
+            .ok()?;
+
+        let mut samples = Vec::new();
+        let mut frame_buf = [0.0_f32; 2048];
+
+        loop {
+            let frames_read = decoder.read_pcm_frames_into(&mut frame_buf).unwrap_or(0);
+            if frames_read == 0 {
+                break;
+            }
+            samples.extend_from_slice(&frame_buf[0..(frames_read * 2)]);
+        }
+
+        if !samples.is_empty() {
+            Some(samples)
+        } else {
+            None
+        }
+    }
+
+    /// Decodes embedded audio bytes (e.g. MP3) into 44.1kHz interleaved stereo PCM f32 samples.
+    fn load_audio_bytes_stereo(bytes: &[u8]) -> Option<Vec<f32>> {
+        let mut decoder = DecoderBuilder::new_f32()
+            .channels(2)
+            .sample_rate(SampleRate::Sr44100)
+            .from_memory(bytes)
+            .ok()?;
+
+        let mut samples = Vec::new();
+        let mut frame_buf = [0.0_f32; 2048];
+
+        loop {
+            let frames_read = decoder.read_pcm_frames_into(&mut frame_buf).unwrap_or(0);
+            if frames_read == 0 {
+                break;
+            }
+            samples.extend_from_slice(&frame_buf[0..(frames_read * 2)]);
         }
 
         if !samples.is_empty() {
@@ -2198,13 +2047,16 @@ impl AudioManager {
         }
     }
 
-    /// Plays a background music track with smooth fade-in.
+    /// Plays a stereo background music track with smooth fade-in.
     pub fn play_music(&mut self, track_idx: usize, fade_in_sec: f32) {
         if track_idx < self.music_tracks.len() {
             let samples = self.music_tracks[track_idx].clone();
+            if samples.is_empty() {
+                return;
+            }
             if let Ok(mut mixer) = self.mixer.lock() {
                 mixer.stop_music(1.5);
-                mixer.play_voice(samples, 1.0, 0.5, 0.5, SoundCategory::Music, fade_in_sec);
+                mixer.play_stereo_voice(samples, 0.85, 0.85, SoundCategory::Music, fade_in_sec);
             }
         }
     }
@@ -2235,20 +2087,21 @@ impl AudioManager {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MusicContext {
     pub is_underground: bool,
-    pub is_sprinting_day: bool,
+    pub is_adventuring: bool,
     pub is_mining: bool,
 }
 
 /// Intermittent Background Music Scheduler.
 ///
-/// Features:
-/// - Plays ambient music sporadically rather than looping continuously.
-/// - Enforces silence cooldowns between 3 and 8 minutes between tracks.
-/// - Guarantees non-repeating track selections across sessions.
-/// - Supports contextual selection (e.g. adventuring on surface by day, underground mining).
-/// - Handles smooth volume fading.
+/// Track layout:
+/// - `0` (`Where_Maps_End`): triggered when running through the world adventuring.
+/// - `1` (`Measure_of_the_Dark`): triggered while mining.
+/// - `2` (`Where_the_Roots_Break_Soil`) & `3` (`The_View_From_The_Ridge`): background tracks that can play anytime.
 pub struct MusicScheduler {
     cooldown_timer: f32,
+    context_rest_timer: f32,
+    adventure_hold_sec: f32,
+    mining_hold_sec: f32,
     is_playing: bool,
     last_played_track: Option<usize>,
     total_tracks: usize,
@@ -2259,8 +2112,11 @@ impl MusicScheduler {
     /// Constructs a new music scheduler.
     pub fn new(total_tracks: usize) -> Self {
         Self {
-            // Friendly initial cooldown of 15 seconds after launching game
-            cooldown_timer: 15.0,
+            // Friendly initial cooldown of 12 seconds after launching game
+            cooldown_timer: 12.0,
+            context_rest_timer: 3.0,
+            adventure_hold_sec: 0.0,
+            mining_hold_sec: 0.0,
             is_playing: false,
             last_played_track: None,
             total_tracks,
@@ -2276,17 +2132,33 @@ impl MusicScheduler {
         ((self.rng_state >> 33) as f32) / ((u32::MAX >> 1) as f32)
     }
 
-    /// Computes a randomized silence cooldown between `min_sec` (e.g. 180s) and `max_sec` (e.g. 480s).
+    /// Computes a randomized silence cooldown between `min_sec` (180s) and `max_sec` (360s).
     fn next_cooldown(&mut self) -> f32 {
         let min_sec = 180.0_f32; // 3 minutes
-        let max_sec = 480.0_f32; // 8 minutes
+        let max_sec = 360.0_f32; // 6 minutes
         min_sec + self.random_f32() * (max_sec - min_sec)
     }
 
-    /// Selects the next track ensuring it doesn't immediately repeat the previous track.
+    /// Selects an anytime background track (`Where_the_Roots_Break_Soil` or `The_View_From_The_Ridge`)
+    /// ensuring it doesn't immediately repeat the previous track.
     pub fn select_next_track(&mut self) -> usize {
         if self.total_tracks <= 1 {
             return 0;
+        }
+
+        if self.total_tracks >= 4 {
+            let mut pool_idx = (self.random_f32() * BACKGROUND_MUSIC_TRACKS.len() as f32).floor()
+                as usize
+                % BACKGROUND_MUSIC_TRACKS.len();
+            let mut candidate = BACKGROUND_MUSIC_TRACKS[pool_idx];
+
+            if let Some(prev) = self.last_played_track {
+                if candidate == prev {
+                    pool_idx = (pool_idx + 1) % BACKGROUND_MUSIC_TRACKS.len();
+                    candidate = BACKGROUND_MUSIC_TRACKS[pool_idx];
+                }
+            }
+            return candidate;
         }
 
         let mut candidate = (self.random_f32() * self.total_tracks as f32).floor() as usize
@@ -2301,21 +2173,22 @@ impl MusicScheduler {
         candidate
     }
 
-    /// Selects the next track taking player environment into account (adventuring, underground mining, or ambient).
+    /// Selects the next track taking player activity into account:
+    /// - Mining -> `Measure_of_the_Dark`
+    /// - Running/Adventuring -> `Where_Maps_End`
+    /// - Otherwise -> anytime background pool (`Where_the_Roots_Break_Soil` / `The_View_From_The_Ridge`)
     pub fn select_next_track_contextual(&mut self, ctx: MusicContext) -> usize {
         if self.total_tracks <= 1 {
             return 0;
         }
 
-        if ctx.is_sprinting_day && self.total_tracks > 3 {
-            // Prioritize Adventuring track (track 3)
-            if self.last_played_track != Some(3) {
-                return 3;
+        if ctx.is_mining && self.total_tracks > MUSIC_TRACK_MEASURE_OF_THE_DARK {
+            if self.last_played_track != Some(MUSIC_TRACK_MEASURE_OF_THE_DARK) {
+                return MUSIC_TRACK_MEASURE_OF_THE_DARK;
             }
-        } else if ctx.is_underground && ctx.is_mining && self.total_tracks > 4 {
-            // Prioritize Subterranean Mining track (track 4)
-            if self.last_played_track != Some(4) {
-                return 4;
+        } else if ctx.is_adventuring && self.total_tracks > MUSIC_TRACK_WHERE_MAPS_END {
+            if self.last_played_track != Some(MUSIC_TRACK_WHERE_MAPS_END) {
+                return MUSIC_TRACK_WHERE_MAPS_END;
             }
         }
 
@@ -2336,6 +2209,9 @@ impl MusicScheduler {
             if !audio.is_music_playing() {
                 self.is_playing = false;
                 self.cooldown_timer = self.next_cooldown();
+                self.context_rest_timer = 45.0;
+                self.adventure_hold_sec = 0.0;
+                self.mining_hold_sec = 0.0;
                 println!(
                     "[MusicScheduler] Track completed. Silence cooldown started: {:.1} seconds ({:.1} min).",
                     self.cooldown_timer,
@@ -2345,23 +2221,45 @@ impl MusicScheduler {
         } else {
             // In silence cooldown period
             self.cooldown_timer -= dt;
+            self.context_rest_timer = (self.context_rest_timer - dt).max(0.0);
 
-            // Contextual music trigger: When exploring/sprinting across surface by day or mining underground,
-            // accelerate cooldown if nearing readiness (<= 35s remaining).
-            let context_event = (ctx.is_sprinting_day || (ctx.is_underground && ctx.is_mining))
-                && self.cooldown_timer <= 35.0;
+            if ctx.is_mining {
+                self.mining_hold_sec += dt;
+            } else {
+                self.mining_hold_sec = (self.mining_hold_sec - dt * 2.0).max(0.0);
+            }
 
-            if self.cooldown_timer <= 0.0 || context_event {
+            if ctx.is_adventuring {
+                self.adventure_hold_sec += dt;
+            } else {
+                self.adventure_hold_sec = (self.adventure_hold_sec - dt * 2.0).max(0.0);
+            }
+
+            let can_trigger_mining = ctx.is_mining
+                && self.mining_hold_sec >= 2.5
+                && self.context_rest_timer <= 0.0
+                && self.last_played_track != Some(MUSIC_TRACK_MEASURE_OF_THE_DARK);
+
+            let can_trigger_adventuring = ctx.is_adventuring
+                && self.adventure_hold_sec >= 3.5
+                && self.context_rest_timer <= 0.0
+                && self.last_played_track != Some(MUSIC_TRACK_WHERE_MAPS_END);
+
+            if self.cooldown_timer <= 0.0 || can_trigger_mining || can_trigger_adventuring {
                 let track = self.select_next_track_contextual(ctx);
                 self.last_played_track = Some(track);
                 self.is_playing = true;
-                let track_desc = match track {
-                    3 => "Adventuring (Overland Wanderer)",
-                    4 => "Echoes of the Deep (Subterranean Mining)",
-                    5 => "Starlight Vista (Dusk Reflection)",
-                    _ => "Calm Ambient",
-                };
-                println!("[MusicScheduler] Starting track #{} [{}] with 2.5s fade-in.", track + 1, track_desc);
+                self.adventure_hold_sec = 0.0;
+                self.mining_hold_sec = 0.0;
+                let track_desc = MUSIC_TRACK_DEFS
+                    .get(track)
+                    .map(|(_, label, _)| *label)
+                    .unwrap_or("Background");
+                println!(
+                    "[MusicScheduler] Starting track #{} [{}] with 2.5s fade-in.",
+                    track + 1,
+                    track_desc
+                );
                 audio.play_music(track, 2.5);
             }
         }
@@ -2406,10 +2304,15 @@ mod tests {
 
     #[test]
     fn test_music_scheduler_non_repeating() {
-        let mut scheduler = MusicScheduler::new(6);
+        let mut scheduler = MusicScheduler::new(4);
         let mut prev = None;
         for _ in 0..25 {
             let next = scheduler.select_next_track();
+            assert!(
+                BACKGROUND_MUSIC_TRACKS.contains(&next),
+                "Anytime background pool should pick Roots or Ridge, got {}",
+                next
+            );
             if let Some(p) = prev {
                 assert_ne!(next, p, "Next track should not repeat previous track immediately");
             }
@@ -2420,22 +2323,126 @@ mod tests {
 
     #[test]
     fn test_music_scheduler_contextual() {
-        let mut scheduler = MusicScheduler::new(6);
-        let day_ctx = MusicContext {
+        let mut scheduler = MusicScheduler::new(4);
+        let adventure_ctx = MusicContext {
             is_underground: false,
-            is_sprinting_day: true,
+            is_adventuring: true,
             is_mining: false,
         };
-        let track = scheduler.select_next_track_contextual(day_ctx);
-        assert_eq!(track, 3, "Day sprinting should select Track 3 (Adventuring)");
+        let track = scheduler.select_next_track_contextual(adventure_ctx);
+        assert_eq!(
+            track, MUSIC_TRACK_WHERE_MAPS_END,
+            "Adventuring should select Where_Maps_End"
+        );
 
         let mining_ctx = MusicContext {
             is_underground: true,
-            is_sprinting_day: false,
+            is_adventuring: false,
             is_mining: true,
         };
         let track2 = scheduler.select_next_track_contextual(mining_ctx);
-        assert_eq!(track2, 4, "Underground mining should select Track 4 (Subterranean Mining)");
+        assert_eq!(
+            track2, MUSIC_TRACK_MEASURE_OF_THE_DARK,
+            "Mining should select Measure_of_the_Dark"
+        );
+
+        // Surface mining should also trigger Measure_of_the_Dark
+        let surface_mining_ctx = MusicContext {
+            is_underground: false,
+            is_adventuring: false,
+            is_mining: true,
+        };
+        assert_eq!(
+            scheduler.select_next_track_contextual(surface_mining_ctx),
+            MUSIC_TRACK_MEASURE_OF_THE_DARK
+        );
+
+        // Idle background context should pick from anytime background tracks
+        let idle_ctx = MusicContext::default();
+        let bg = scheduler.select_next_track_contextual(idle_ctx);
+        assert!(BACKGROUND_MUSIC_TRACKS.contains(&bg));
+    }
+
+    #[test]
+    fn test_custom_music_tracks_decode() {
+        for (name, _label, bytes) in MUSIC_TRACK_DEFS {
+            let samples = AudioManager::load_audio_bytes_stereo(bytes)
+                .unwrap_or_else(|| panic!("Failed to decode embedded MP3 track: {}", name));
+            assert_eq!(
+                samples.len() % 2,
+                0,
+                "Decoded stereo buffer for {} must have even interleaved length",
+                name
+            );
+            let frames = samples.len() / 2;
+            let duration_sec = frames as f32 / 44_100.0;
+            assert!(
+                duration_sec > 30.0,
+                "Expected full-length music track for {}, got {:.1}s",
+                name,
+                duration_sec
+            );
+            let peak = samples.iter().fold(0.0_f32, |m, &s| m.max(s.abs()));
+            assert!(
+                peak > 0.01 && peak.is_finite(),
+                "Expected audible signal for {}, peak={}",
+                name,
+                peak
+            );
+        }
+    }
+
+    #[test]
+    fn test_stereo_mixer_playback() {
+        let mut mixer = AudioMixer::new();
+        let samples = Arc::new(vec![0.5, -0.5, 0.5, -0.5, 0.5, -0.5, 0.5, -0.5]);
+        mixer.play_stereo_voice(samples, 1.0, 1.0, SoundCategory::Music, 0.0);
+        assert!(mixer.is_music_playing());
+        let mut out = [0.0_f32; 4];
+        mixer.mix(&mut out, 44100);
+        assert!(out[0] > 0.0 && out[1] < 0.0, "Stereo L/R channels should remain distinct");
+    }
+
+    #[test]
+    fn test_music_scheduler_contextual_triggers() {
+        let mut audio = AudioManager::new();
+        assert_eq!(audio.music_track_count(), 4);
+
+        // 1. Sustained mining triggers Measure_of_the_Dark
+        let mut sched = MusicScheduler::new(audio.music_track_count());
+        let mining_ctx = MusicContext {
+            is_underground: true,
+            is_adventuring: false,
+            is_mining: true,
+        };
+        for _ in 0..4 {
+            sched.update(1.0, &mut audio, mining_ctx);
+        }
+        assert!(sched.is_playing);
+        assert_eq!(sched.last_played_track, Some(MUSIC_TRACK_MEASURE_OF_THE_DARK));
+        audio.stop_music(0.0);
+
+        // 2. Sustained surface adventuring triggers Where_Maps_End
+        let mut sched2 = MusicScheduler::new(audio.music_track_count());
+        let adv_ctx = MusicContext {
+            is_underground: false,
+            is_adventuring: true,
+            is_mining: false,
+        };
+        for _ in 0..4 {
+            sched2.update(1.0, &mut audio, adv_ctx);
+        }
+        assert!(sched2.is_playing);
+        assert_eq!(sched2.last_played_track, Some(MUSIC_TRACK_WHERE_MAPS_END));
+        audio.stop_music(0.0);
+
+        // 3. Idle background cooldown picks from Where_the_Roots_Break_Soil / The_View_From_The_Ridge
+        let mut sched3 = MusicScheduler::new(audio.music_track_count());
+        for _ in 0..13 {
+            sched3.update(1.0, &mut audio, MusicContext::default());
+        }
+        assert!(sched3.is_playing);
+        assert!(BACKGROUND_MUSIC_TRACKS.contains(&sched3.last_played_track.unwrap()));
     }
 
     #[test]
@@ -2468,13 +2475,5 @@ mod tests {
         assert!(!sound_generator::generate_skeleton_hurt(0).is_empty());
         assert!(!sound_generator::generate_spider_ambient(0).is_empty());
         assert!(!sound_generator::generate_spider_hurt(0).is_empty());
-
-        // New music tracks
-        let trk3 = sound_generator::generate_ambient_music(3);
-        assert_eq!(trk3.len(), (150.0 * 44100.0) as usize);
-        let trk4 = sound_generator::generate_ambient_music(4);
-        assert_eq!(trk4.len(), (150.0 * 44100.0) as usize);
-        let trk5 = sound_generator::generate_ambient_music(5);
-        assert_eq!(trk5.len(), (150.0 * 44100.0) as usize);
     }
 }
