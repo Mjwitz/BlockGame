@@ -1037,15 +1037,31 @@ impl BlockGameApp {
     }
 }
 
+fn load_window_icon() -> Option<winit::window::Icon> {
+    let bytes = include_bytes!("../../../assets/icon.png");
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    winit::window::Icon::from_rgba(img.into_raw(), width, height).ok()
+}
+
 impl ApplicationHandler for BlockGameApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
         }
 
-        let window_attrs = WindowAttributes::default()
+        let window_icon = load_window_icon();
+        #[allow(unused_mut)]
+        let mut window_attrs = WindowAttributes::default()
             .with_title("BlockGame")
-            .with_inner_size(PhysicalSize::new(1280, 720));
+            .with_inner_size(PhysicalSize::new(1280, 720))
+            .with_window_icon(window_icon.clone());
+
+        #[cfg(target_os = "windows")]
+        {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            window_attrs = window_attrs.with_taskbar_icon(window_icon);
+        }
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
 

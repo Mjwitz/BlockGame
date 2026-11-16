@@ -4133,7 +4133,7 @@ impl UiBuilder {
         }
 
         // Bottom footer version text
-        let ver_text = "BlockGame v0.1.0 - Faithful 32x";
+        let ver_text = concat!("BlockGame v", env!("CARGO_PKG_VERSION"), " - Faithful 32x");
         Self::draw_string(
             mesh,
             12.0,

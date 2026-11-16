@@ -22,3 +22,6 @@ winit = "0.30.9"
 wgpu = "24.0.0"
 rayon.workspace = true
 maudio = "0.1.15"
+
+[build-dependencies]
+winresource = "0.1"
