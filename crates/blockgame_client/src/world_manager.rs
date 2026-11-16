@@ -66,7 +66,8 @@ fn chunks_share_visible_boundary(
                 for z in 0..CHUNK_SIZE_Z {
                     let new_b = new_chunk.get_unchecked(new_x, y, z);
                     let nb_b = neighbor_chunk.get_unchecked(nb_x, y, z);
-                    if (!nb_b.is_air() && !new_b.is_air()) || (nb_b.is_water() && !new_b.is_water())
+                    if (!nb_b.is_air() && !new_b.is_air())
+                        || ((nb_b.is_water() || nb_b == BlockId::ICE) && new_b != nb_b)
                     {
                         return true;
                     }
@@ -84,7 +85,8 @@ fn chunks_share_visible_boundary(
                 for x in 0..CHUNK_SIZE_X {
                     let new_b = new_chunk.get_unchecked(x, new_y, z);
                     let nb_b = neighbor_chunk.get_unchecked(x, nb_y, z);
-                    if (!nb_b.is_air() && !new_b.is_air()) || (nb_b.is_water() && !new_b.is_water())
+                    if (!nb_b.is_air() && !new_b.is_air())
+                        || ((nb_b.is_water() || nb_b == BlockId::ICE) && new_b != nb_b)
                     {
                         return true;
                     }
@@ -102,7 +104,8 @@ fn chunks_share_visible_boundary(
                 for x in 0..CHUNK_SIZE_X {
                     let new_b = new_chunk.get_unchecked(x, y, new_z);
                     let nb_b = neighbor_chunk.get_unchecked(x, y, nb_z);
-                    if (!nb_b.is_air() && !new_b.is_air()) || (nb_b.is_water() && !new_b.is_water())
+                    if (!nb_b.is_air() && !new_b.is_air())
+                        || ((nb_b.is_water() || nb_b == BlockId::ICE) && new_b != nb_b)
                     {
                         return true;
                     }

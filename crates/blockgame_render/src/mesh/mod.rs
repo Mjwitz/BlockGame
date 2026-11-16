@@ -246,7 +246,7 @@ impl<'a> ChunkMesher<'a> {
                                 continue;
                             };
 
-                            if neighbor_id.is_water() {
+                            if neighbor_id.is_water() || neighbor_id == BlockId::ICE {
                                 continue;
                             }
 
@@ -295,14 +295,67 @@ impl<'a> ChunkMesher<'a> {
                                 continue;
                             };
 
-                            // Adjacent water blocks (and waterlogged seagrass) should not render internal faces
-                            if neighbor_id.is_water() {
+                            // Adjacent water blocks, waterlogged seagrass, and ice handle the shared boundary cleanly
+                            if neighbor_id.is_water() || neighbor_id == BlockId::ICE {
                                 continue;
                             }
 
                             // Only generate water face if adjacent block is transparent (air, tall grass, glass, etc.)
                             if self.registry.is_transparent(neighbor_id) {
                                 let tile_id = self.registry.get_texture(block_id, dir);
+                                let uv = TextureAtlas::get_uv_bounds(tile_id);
+
+                                let light = if nx >= 0
+                                    && nx < CHUNK_SIZE_X as i32
+                                    && ny >= 0
+                                    && ny < CHUNK_SIZE_Y as i32
+                                    && nz >= 0
+                                    && nz < CHUNK_SIZE_Z as i32
+                                {
+                                    let lv = light_map.get(nx as usize, ny as usize, nz as usize);
+                                    [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
+                                } else {
+                                    let blk = light_map.get_block_rel(nx, ny, nz);
+                                    [1.0, blk as f32 / 15.0]
+                                };
+
+                                self.build_water_face(
+                                    &mut mesh,
+                                    chunk.pos,
+                                    ix,
+                                    iy,
+                                    iz,
+                                    dir,
+                                    uv,
+                                    light,
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
+                    if block_id == BlockId::ICE {
+                        // Ice uses a semi-transparent texture and must render in the translucent pass
+                        // (`water_pipeline`, depth_write_enabled = false) after all opaque geometry so
+                        // looking through ice never culls terrain behind it.
+                        for dir in Direction::ALL {
+                            let normal = dir.normal_ivec();
+                            let nx = ix + normal.x;
+                            let ny = iy + normal.y;
+                            let nz = iz + normal.z;
+
+                            let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
+                                continue;
+                            };
+
+                            // Adjacent ice blocks should not render internal faces between them
+                            if neighbor_id == BlockId::ICE {
+                                continue;
+                            }
+
+                            if self.registry.is_transparent(neighbor_id) {
+                                let tex_dir = rotate_horizontal_dir(dir, facing);
+                                let tile_id = self.registry.get_texture(block_id, tex_dir);
                                 let uv = TextureAtlas::get_uv_bounds(tile_id);
 
                                 let light = if nx >= 0
@@ -3679,5 +3732,35 @@ mod tests {
         let air_neighbor_mesh =
             mesher.mesh_chunk_with_lighting_opt(&chunk, &[], |_, _, _| Some(BlockId::AIR));
         assert_eq!(air_neighbor_mesh.water_vertices.len(), 24);
+    }
+
+    #[test]
+    fn test_ice_translucent_mesh_and_culling() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+
+        // 1. Ice above Stone: Stone emits all 6 opaque faces (including PosY under transparent Ice),
+        // while Ice emits only its 5 exposed faces into translucent water_vertices (not opaque vertices).
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        chunk.set(4, 4, 4, BlockId::STONE);
+        chunk.set(4, 5, 4, BlockId::ICE);
+        let mesh = mesher.mesh_chunk(&chunk);
+        assert_eq!(mesh.vertices.len(), 24, "Stone under Ice must keep all 6 opaque faces");
+        assert_eq!(mesh.water_vertices.len(), 20, "Ice must render its 5 exposed faces in translucent pass");
+
+        // 2. Two adjacent Ice blocks cull their shared internal face (10 exposed faces = 40 water_vertices)
+        let mut two_ice = Chunk::new(ChunkPos::new(0, 0, 0));
+        two_ice.set(4, 5, 4, BlockId::ICE);
+        two_ice.set(5, 5, 4, BlockId::ICE);
+        let two_ice_mesh = mesher.mesh_chunk(&two_ice);
+        assert!(two_ice_mesh.vertices.is_empty(), "Ice must not emit opaque depth-writing vertices");
+        assert_eq!(two_ice_mesh.water_vertices.len(), 40);
+
+        // 3. Ice directly above Water: Ice emits 6 faces, Water emits 5 non-Ice faces (zero duplicate coplanar face)
+        let mut ice_water = Chunk::new(ChunkPos::new(0, 0, 0));
+        ice_water.set(4, 4, 4, BlockId::WATER);
+        ice_water.set(4, 5, 4, BlockId::ICE);
+        let iw_mesh = mesher.mesh_chunk(&ice_water);
+        assert_eq!(iw_mesh.water_vertices.len(), 44);
     }
 }
