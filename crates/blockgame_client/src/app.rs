@@ -2460,9 +2460,9 @@ impl ApplicationHandler for BlockGameApp {
                                     let dir = state.camera.forward().normalize_or_zero();
                                     let start_pos = state.player.eye_position() + dir * 0.6;
                                     let vel = dir * 13.5 + Vec3::new(0.0, 2.8, 0.0);
-                                    let wait_time = (2.2
+                                    let wait_time = (4.5
                                         + blockgame_core::fishing::next_f32(&mut state.fishing_rng)
-                                            * 4.5)
+                                            * 7.5)
                                         / tackle.bite_speed_mult;
                                     state.fishing_state = FishingSession::Waiting {
                                         bobber_pos: start_pos,

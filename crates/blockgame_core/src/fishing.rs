@@ -565,8 +565,8 @@ impl FishingMinigameState {
         }
 
         let diff_norm = (self.species.difficulty / 100.0).clamp(0.1, 1.0);
-        let max_fish_speed = 0.25 + diff_norm * 0.78;
-        let stiffness = 2.8 + diff_norm * 4.5;
+        let max_fish_speed = (0.25 + diff_norm * 0.78) * 1.10;
+        let stiffness = (2.8 + diff_norm * 4.5) * 1.10;
         let desired_vel = ((self.fish_target - self.fish_pos) * stiffness)
             .clamp(-max_fish_speed, max_fish_speed);
         self.fish_vel += (desired_vel - self.fish_vel) * (8.0 * dt).min(1.0);
@@ -576,14 +576,14 @@ impl FishingMinigameState {
         let bar_bottom = self.bar_pos;
         let bar_top = self.bar_pos + self.bar_height;
         // Small generous margin around fish center
-        let margin = 0.025;
+        let margin = 0.022;
         self.fish_in_bar = self.fish_pos >= (bar_bottom - margin) && self.fish_pos <= (bar_top + margin);
 
         if self.fish_in_bar {
-            self.progress += 0.24 * self.progress_speed_mult * dt;
+            self.progress += 0.215 * self.progress_speed_mult * dt;
         } else {
             self.perfect = false;
-            self.progress -= 0.16 * self.escape_speed_mult * dt;
+            self.progress -= 0.176 * self.escape_speed_mult * dt;
         }
 
         if self.progress >= 1.0 {
