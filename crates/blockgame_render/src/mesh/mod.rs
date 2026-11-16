@@ -2713,59 +2713,163 @@ pub fn build_arrows_mesh(arrows: &[blockgame_core::monster::ArrowProjectile]) ->
     mesh
 }
 
-/// Builds a 3D mesh for a cast fishing bobber (red/white float) and a segmented fishing line
-/// connecting `rod_tip` to `bobber_pos`.
+/// Builds a 3D mesh for a cast fishing bobber (red/white float with pin) and a continuous
+/// 3D-oriented catenary fishing line connecting `rod_tip` to the bobber's top pin.
 pub fn build_fishing_bobber_mesh(
     rod_tip: glam::Vec3,
     bobber_pos: glam::Vec3,
     is_biting: bool,
 ) -> ChunkMesh {
     let mut mesh = ChunkMesh::new();
-    let bobber_uvs = get_animal_uvs(391); // Cork bobber tile
-    let line_uvs = get_animal_uvs(389);   // Pale blue/white line tile
+    let white_uvs = get_animal_uvs(289); // Solid white wool
+    let red_uvs = get_animal_uvs(290);   // Solid red wool
+    let dark_uvs = get_animal_uvs(301);  // Solid charcoal/black wool
+    let wood_uvs = get_animal_uvs(4);    // Wood planks for top pin
 
-    // Bobber body (white bottom + red top, slightly larger / dipped when biting)
-    let scale = if is_biting { 1.15 } else { 1.0 };
+    let s = if is_biting { 1.15 } else { 1.0 };
+
+    // 1. White bottom half of the 3D bobber
     add_animal_box(
         &mut mesh,
-        [-0.09 * scale, -0.09 * scale, -0.09 * scale],
-        [0.09 * scale, 0.09 * scale, 0.09 * scale],
-        &bobber_uvs,
+        [-0.075 * s, -0.07 * s, -0.075 * s],
+        [0.075 * s, 0.0, 0.075 * s],
+        &white_uvs,
         None,
         1.0,
-        [1.0, 0.4],
+        [1.0, 0.35],
         bobber_pos,
         1.0,
         0.0,
     );
 
-    // Segmented catenary fishing line from rod_tip to bobber_pos
-    let segments = 10;
-    let delta = bobber_pos - rod_tip;
+    // 2. Red top half of the 3D bobber
+    add_animal_box(
+        &mut mesh,
+        [-0.075 * s, 0.0, -0.075 * s],
+        [0.075 * s, 0.07 * s, 0.075 * s],
+        &red_uvs,
+        None,
+        1.0,
+        [1.0, 0.35],
+        bobber_pos,
+        1.0,
+        0.0,
+    );
+
+    // 3. Top pin (where the line ties onto the bobber)
+    add_animal_box(
+        &mut mesh,
+        [-0.018 * s, 0.07 * s, -0.018 * s],
+        [0.018 * s, 0.14 * s, 0.018 * s],
+        &wood_uvs,
+        None,
+        1.0,
+        [1.0, 0.35],
+        bobber_pos,
+        1.0,
+        0.0,
+    );
+
+    // 4. Small underwater sinker/hook below the bobber
+    add_animal_box(
+        &mut mesh,
+        [-0.018 * s, -0.13 * s, -0.018 * s],
+        [0.018 * s, -0.07 * s, 0.018 * s],
+        &dark_uvs,
+        None,
+        1.0,
+        [1.0, 0.35],
+        bobber_pos,
+        1.0,
+        0.0,
+    );
+
+    // 5. Continuous 3D-oriented catenary fishing line from rod_tip to bobber pin
+    let attach_pos = bobber_pos + glam::Vec3::new(0.0, 0.14 * s, 0.0);
+    let segments = 16;
+    let delta = attach_pos - rod_tip;
     let total_len = delta.length();
     if total_len > 0.1 {
-        let mut prev = rod_tip;
-        for i in 1..=segments {
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(301);
+        let radius = 0.008;
+
+        let mut points = Vec::with_capacity(segments + 1);
+        for i in 0..=segments {
             let t = i as f32 / segments as f32;
-            let sag = if is_biting { 0.05 } else { 0.35 } * (t * (1.0 - t) * 4.0);
-            let curr = rod_tip + delta * t - glam::Vec3::new(0.0, sag, 0.0);
-            let mid = (prev + curr) * 0.5;
-            let seg = curr - prev;
-            let seg_len = seg.length().max(0.02);
-            let yaw = seg.x.atan2(seg.z);
-            add_animal_box(
-                &mut mesh,
-                [-0.008, -0.008, -seg_len * 0.52],
-                [0.008, 0.008, seg_len * 0.52],
-                &line_uvs,
-                None,
-                1.0,
-                [1.0, 0.2],
-                mid,
-                yaw.cos(),
-                yaw.sin(),
-            );
-            prev = curr;
+            let sag = if is_biting { 0.04 } else { 0.38 } * (t * (1.0 - t) * 4.0);
+            points.push(rod_tip + delta * t - glam::Vec3::new(0.0, sag, 0.0));
+        }
+
+        for i in 0..segments {
+            let p_start = points[i];
+            let p_end = points[i + 1];
+            let seg = p_end - p_start;
+            let len = seg.length();
+            if len < 1e-4 {
+                continue;
+            }
+            let dir = seg / len;
+            let ref_up = if dir.y.abs() < 0.95 {
+                glam::Vec3::Y
+            } else {
+                glam::Vec3::X
+            };
+            let right = dir.cross(ref_up).normalize() * radius;
+            let up = right.cross(dir).normalize() * radius;
+
+            let p_ring = [
+                p_start - right - up,
+                p_start + right - up,
+                p_start + right + up,
+                p_start - right + up,
+            ];
+            let q_ring = [
+                p_end - right - up,
+                p_end + right - up,
+                p_end + right + up,
+                p_end - right + up,
+            ];
+            let side_normals = [
+                -up.normalize(),
+                right.normalize(),
+                up.normalize(),
+                -right.normalize(),
+            ];
+
+            for side in 0..4 {
+                let next_side = (side + 1) % 4;
+                let base_idx = mesh.vertices.len() as u32;
+                let n = side_normals[side].to_array();
+                let corners = [
+                    p_ring[side],
+                    p_ring[next_side],
+                    q_ring[next_side],
+                    q_ring[side],
+                ];
+                let uvs = [
+                    [u_min, v_min],
+                    [u_max, v_min],
+                    [u_max, v_max],
+                    [u_min, v_max],
+                ];
+                for k in 0..4 {
+                    mesh.vertices.push(VoxelVertex {
+                        position: corners[k].to_array(),
+                        normal: n,
+                        uv: uvs[k],
+                        ao: 1.0,
+                        light: [1.0, 0.25],
+                    });
+                }
+                mesh.indices.extend_from_slice(&[
+                    base_idx,
+                    base_idx + 1,
+                    base_idx + 2,
+                    base_idx,
+                    base_idx + 2,
+                    base_idx + 3,
+                ]);
+            }
         }
     }
 
