@@ -7,16 +7,21 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Biome {
     Plains,
+    FlowerMeadow,
     Forest,
+    BirchForest,
     Desert,
+    RedDesert,
     Mountains,
     SnowyTundra,
+    Glacier,
     Swamp,
     Savanna,
     Ocean,
     Jungle,
     Badlands,
     Beach,
+    StonyShore,
     River,
     Taiga,
     DarkForest,
@@ -29,8 +34,10 @@ impl Biome {
     pub fn fog_color(&self) -> [f32; 3] {
         match self {
             Biome::Desert => [0.82, 0.70, 0.52],       // Warm golden-amber desert haze
+            Biome::RedDesert => [0.88, 0.64, 0.46],    // Sunlit red-sand desert haze
             Biome::Badlands => [0.85, 0.58, 0.44],     // Terracotta canyon dust
             Biome::SnowyTundra => [0.78, 0.84, 0.92], // Cool arctic pale-blue mist
+            Biome::Glacier => [0.72, 0.88, 0.96],      // Crisp glacial ice-blue mist
             Biome::Swamp => [0.44, 0.52, 0.38],       // Murky moss-green swamp fog
             Biome::Jungle => [0.50, 0.72, 0.50],      // Vibrant tropical emerald mist
             Biome::Savanna => [0.86, 0.80, 0.60],     // Sun-drenched golden afternoon
@@ -38,9 +45,12 @@ impl Biome {
             Biome::Ocean => [0.38, 0.58, 0.86],       // Deep marine azure
             Biome::CoralReef => [0.22, 0.65, 0.78],   // Vibrant turquoise/aquamarine lagoon
             Biome::Beach => [0.75, 0.82, 0.92],       // Sunny coastal breeze
+            Biome::StonyShore => [0.66, 0.74, 0.82],  // Cool sea-spray rocky coast
             Biome::River => [0.55, 0.75, 0.95],       // Clear flowing stream atmosphere
             Biome::Taiga => [0.62, 0.74, 0.72],       // Cool evergreen pine mist
             Biome::DarkForest => [0.32, 0.42, 0.35],  // Dense canopy shadowy gloom
+            Biome::BirchForest => [0.72, 0.82, 0.88], // Bright sunlit silver-birch woodland
+            Biome::FlowerMeadow => [0.68, 0.84, 0.98], // Crisp vibrant meadow sky
             Biome::Forest | Biome::Plains => [0.60, 0.78, 0.98], // Clear temperate sky
         }
     }
@@ -50,8 +60,10 @@ impl Biome {
     pub fn sky_tint(&self) -> [f32; 3] {
         match self {
             Biome::Desert => [1.05, 0.95, 0.80],
+            Biome::RedDesert => [1.08, 0.92, 0.78],
             Biome::Badlands => [1.08, 0.88, 0.75],
             Biome::SnowyTundra => [0.92, 0.96, 1.05],
+            Biome::Glacier => [0.90, 0.98, 1.08],
             Biome::Swamp => [0.85, 0.92, 0.80],
             Biome::Jungle => [0.90, 1.05, 0.88],
             Biome::Savanna => [1.04, 0.98, 0.85],
@@ -59,9 +71,12 @@ impl Biome {
             Biome::Ocean => [0.88, 0.95, 1.08],
             Biome::CoralReef => [0.90, 1.08, 1.12],
             Biome::Beach => [1.00, 1.00, 1.02],
+            Biome::StonyShore => [0.95, 0.98, 1.02],
             Biome::River => [0.98, 1.02, 1.05],
             Biome::Taiga => [0.94, 0.98, 1.02],
             Biome::DarkForest => [0.88, 0.94, 0.86],
+            Biome::BirchForest => [1.02, 1.01, 0.96],
+            Biome::FlowerMeadow => [1.03, 1.02, 0.98],
             Biome::Forest | Biome::Plains => [1.00, 1.00, 1.00],
         }
     }
@@ -294,33 +309,84 @@ impl TerrainGenerator {
             .detail_noise
             .get([fx + self.detail_offset[0], fz + self.detail_offset[1]]);
 
-        // 1. Continental curve: oceans plunge smoothly, inland rises into foothills and highlands
+        let land_mask = smoothstep(-0.22, -0.08, cont);
+        let inland_mask = smoothstep(-0.14, 0.22, cont);
+        // Low erosion -> steep peaks/plateaus/cliffs; high erosion -> broad buildable valleys/plains
+        let rugged_mask = smoothstep(0.18, -0.34, erosion);
+        let mountain_erosion = smoothstep(-0.10, -0.36, erosion);
+
+        // 1. Smooth climate weights so flat biomes stay buildable & calm while mountains/canyons/jungles keep dramatic relief
+        let cold_w = smoothstep(-0.10, -0.22, temp) * land_mask;
+        let badlands_w = smoothstep(0.16, 0.24, temp)
+            * smoothstep(-0.02, -0.12, moisture)
+            * smoothstep(0.02, -0.10, erosion)
+            * inland_mask;
+        let red_desert_w = smoothstep(0.16, 0.24, temp)
+            * smoothstep(-0.02, -0.12, moisture)
+            * smoothstep(-0.08, 0.06, erosion)
+            * land_mask;
+        let desert_w = smoothstep(0.14, 0.24, temp)
+            * smoothstep(0.08, -0.02, moisture)
+            * (1.0 - badlands_w)
+            * (1.0 - red_desert_w)
+            * land_mask;
+        let savanna_w = smoothstep(0.05, 0.14, temp)
+            * smoothstep(0.16, 0.02, moisture)
+            * (1.0 - desert_w)
+            * (1.0 - badlands_w)
+            * (1.0 - red_desert_w)
+            * land_mask;
+        let jungle_w =
+            smoothstep(0.10, 0.20, temp) * smoothstep(0.10, 0.22, moisture) * inland_mask;
+        let swamp_w = smoothstep(0.10, 0.24, moisture)
+            * smoothstep(-0.06, 0.08, temp)
+            * smoothstep(0.22, -0.02, cont);
+        let plains_w = smoothstep(-0.14, -0.04, temp)
+            * smoothstep(0.12, 0.04, temp)
+            * smoothstep(0.08, -0.04, moisture)
+            * land_mask;
+
+        let remaining_w =
+            (1.0 - plains_w - cold_w - red_desert_w - desert_w - savanna_w - swamp_w - jungle_w - badlands_w)
+                .clamp(0.0, 1.0);
+        // Flatness in [0.0, 0.96]: high for Plains, FlowerMeadow, Swamp, RedDesert, SnowyTundra, Glacier;
+        // moderate for Forest/BirchForest/Taiga/Savanna/Desert; low for Jungle and Badlands.
+        let natural_flatness = (0.88 * plains_w
+            + 0.84 * cold_w
+            + 0.88 * red_desert_w
+            + 0.66 * desert_w
+            + 0.68 * savanna_w
+            + 0.94 * swamp_w
+            + 0.48 * remaining_w)
+            .clamp(0.0, 0.96);
+        // Deep low-erosion mountain belts break through flat-biome suppression to create alpine peaks
+        let relief_suppression = natural_flatness * (1.0 - mountain_erosion * 0.94);
+        let verticality = (1.0 - relief_suppression).clamp(0.08, 1.0);
+
+        // 2. Continental curve: oceans plunge smoothly, flatlands rise gently, highlands rise steeply
         let base_elev = if cont < -0.20 {
             let ocean_t = ((-0.20 - cont) / 0.45).clamp(0.0, 1.35);
             (self.water_level as f64 + 1.0) - ocean_t * 17.0 + detail * 2.5
         } else {
             let land_t = ((cont + 0.20) / 0.85).clamp(0.0, 1.35);
-            (self.water_level as f64 + 1.5) + land_t.powf(1.15) * 16.0 + self.seed_altitude_bias
+            let slope_rise = 3.8 + 13.2 * verticality;
+            (self.water_level as f64 + 1.5)
+                + land_t.powf(1.0 + 0.15 * verticality) * slope_rise
+                + self.seed_altitude_bias * (0.35 + 0.65 * verticality) * inland_mask
         };
 
-        let inland_mask = smoothstep(-0.14, 0.22, cont);
-        // Low erosion -> steep peaks/plateaus/cliffs; high erosion -> broad buildable valleys/plains
-        let rugged_mask = smoothstep(0.28, -0.36, erosion);
-
-        // 2. Alpine ridged mountain ranges and rolling highland hills
+        // 3. Alpine ridged mountain ranges and gentle-to-rolling hills scaled by verticality
         let mountain_peaks =
-            smoothstep(0.24, 0.90, ridge) * 44.0 * self.seed_relief_scale * inland_mask * rugged_mask;
-        let rolling_hills = smoothstep(0.35, 0.95, ridge) * 11.0 * inland_mask;
+            smoothstep(0.22, 0.88, ridge) * 48.0 * self.seed_relief_scale * inland_mask * mountain_erosion;
+        let rolling_hills = smoothstep(0.32, 0.92, ridge) * 12.0 * inland_mask * verticality.powf(1.2);
 
         let mut height = base_elev + mountain_peaks + rolling_hills;
 
-        // 3. Climate-specific vertical silhouettes (blended smoothly so cliffs match terrain context)
-        let badlands_w =
-            smoothstep(0.16, 0.26, temp) * smoothstep(-0.04, -0.18, moisture) * inland_mask;
+        // 4. Climate-specific silhouettes
         if badlands_w > 0.01 {
             // Stepped canyon & terracotta mesa plateaus
             let mesa_signal = (ridge * 0.65 + (cont + 0.2) * 0.45).clamp(0.0, 1.2);
-            let raw_mesa = smoothstep(0.25, 0.72, mesa_signal) * 26.0;
+            let raw_mesa = smoothstep(0.24, 0.70, mesa_signal) * 28.0;
             let terrace_step = 4.0;
             let snapped = (raw_mesa / terrace_step).floor() * terrace_step;
             let frac = (raw_mesa - snapped) / terrace_step;
@@ -328,50 +394,43 @@ impl TerrainGenerator {
             height += smooth_terrace * badlands_w;
         }
 
-        let desert_w = smoothstep(0.14, 0.24, temp)
-            * smoothstep(0.10, -0.02, moisture)
-            * (1.0 - badlands_w)
-            * inland_mask;
+        if red_desert_w > 0.01 {
+            // Flat-to-gently-rippled red sand expanse contrasting with tall Badlands mesas
+            let ripple = ((fx * 0.028 + fz * 0.016 + detail * 0.9).sin().abs()) * 1.8;
+            height += ripple * red_desert_w;
+        }
+
         if desert_w > 0.01 {
-            // Wind-swept undulating desert sand dunes
-            let dune = ((fx * 0.042 + fz * 0.024 + detail * 2.2).sin().abs()) * 6.5;
+            // Wind-swept gentle desert sand dunes
+            let dune = ((fx * 0.036 + fz * 0.020 + detail * 1.4).sin().abs()) * 3.6;
             height += dune * desert_w;
         }
 
-        let savanna_w = smoothstep(0.06, 0.16, temp)
-            * smoothstep(0.16, 0.02, moisture)
-            * (1.0 - desert_w)
-            * (1.0 - badlands_w)
-            * inland_mask;
         if savanna_w > 0.01 {
-            // Flat-topped elevated Savanna plateaus
-            let plateau = smoothstep(0.42, 0.68, ridge) * 14.0;
+            // Flat grassy savanna plains with occasional flat-topped elevated plateaus
+            let plateau = smoothstep(0.45, 0.68, ridge) * 12.0;
             height += plateau * savanna_w;
         }
 
-        let jungle_w = smoothstep(0.10, 0.20, temp) * smoothstep(0.10, 0.22, moisture) * inland_mask;
         if jungle_w > 0.01 {
             // Steep tropical hills and lush valleys
-            height += (4.0 + detail * 7.5) * jungle_w;
+            height += (4.0 + detail * 6.5) * jungle_w;
         }
 
-        let swamp_w = smoothstep(0.10, 0.24, moisture)
-            * smoothstep(-0.06, 0.08, temp)
-            * smoothstep(0.20, -0.05, cont);
         if swamp_w > 0.01 {
-            let basin_target = (self.water_level as f64) + 0.8 + detail * 2.2;
-            height += (basin_target - height) * (swamp_w * 0.68);
+            let basin_target = (self.water_level as f64) + 0.8 + detail * 0.9;
+            height += (basin_target - height) * (swamp_w * 0.82);
         }
 
-        // Local surface bumpiness scales with ruggedness
+        // Local surface bumpiness stays crisp & smooth in flat biomes and craggy in mountains/cliffs
         let detail_amp = if cont < -0.20 {
-            1.5
+            1.4
         } else {
-            3.2 + 7.5 * rugged_mask * inland_mask
+            0.55 + 1.85 * verticality + 4.4 * rugged_mask * mountain_erosion * inland_mask
         };
         height += detail * detail_amp;
 
-        // 4. Winding river channels cutting gently through land (and deeper gorges through hills)
+        // 5. Winding river channels cutting gently through land (and deeper gorges through hills)
         let river_val = self.sample_river_val(wx, wz);
         const RIVER_WIDTH: f64 = 0.036;
         if height > (self.water_level - 2) as f64 && river_val < RIVER_WIDTH {
@@ -389,6 +448,9 @@ impl TerrainGenerator {
     pub fn get_biome(&self, x: i32, z: i32, height: i32) -> Biome {
         let (wx, wz) = self.sample_warp(x, z);
         let (temp, moisture) = self.sample_climate(wx, wz);
+        let erosion = self
+            .erosion_noise
+            .get([wx + self.erosion_offset[0], wz + self.erosion_offset[1]]);
 
         // River channels: carved river corridors filled with water or river banks
         let river_val = self.sample_river_val(wx, wz);
@@ -403,28 +465,51 @@ impl TerrainGenerator {
             return Biome::Ocean;
         }
 
-        // Coastal beach transition bordering water
-        if height <= self.water_level + 2 && temp > -0.22 {
+        // Coastal shore transitions bordering water
+        if height <= self.water_level + 2 {
+            if temp <= -0.24 {
+                return Biome::Glacier;
+            }
+            if temp <= -0.02 || erosion < -0.08 {
+                return Biome::StonyShore;
+            }
             return Biome::Beach;
         }
+        if height == self.water_level + 3
+            && erosion < -0.16
+            && temp > -0.24
+            && moisture <= 0.14
+        {
+            return Biome::StonyShore;
+        }
 
-        if height > 61 {
+        if height > 61
+            || (erosion < -0.22
+                && height >= self.water_level + 12
+                && !(temp > 0.12 && moisture > 0.12))
+        {
             // Preserve hot terracotta mesas at high plateau elevations
-            if temp > 0.22 && moisture < -0.10 {
+            if temp > 0.18 && moisture < -0.05 && erosion < -0.04 {
                 return Biome::Badlands;
             }
             return Biome::Mountains;
         }
 
-        // Cold regions: Snowy Tundra vs Taiga
-        if temp < -0.16 {
+        // Cold regions: Glacier ice sheets vs Snowy Tundra
+        if temp < -0.24 {
+            Biome::Glacier
+        } else if temp < -0.13 {
             Biome::SnowyTundra
         } else if temp < 0.06 && moisture > 0.06 {
             // Cool climate with ample moisture: Taiga (dense spruce, podzol floor)
             Biome::Taiga
-        } else if temp > 0.22 && moisture < -0.10 {
-            // Hyper-arid hot plateaus: Badlands
-            Biome::Badlands
+        } else if temp > 0.18 && moisture < -0.05 {
+            // Hyper-arid hot regions split by erosion: rugged canyons/mesas (Badlands) vs flat red sands (RedDesert)
+            if erosion < -0.04 {
+                Biome::Badlands
+            } else {
+                Biome::RedDesert
+            }
         } else if temp > 0.18 && moisture < 0.04 {
             // Arid hot regions: Desert
             Biome::Desert
@@ -432,7 +517,7 @@ impl TerrainGenerator {
             // Warm and tropical high moisture: Jungle
             Biome::Jungle
         } else if temp > 0.08 && moisture < 0.12 {
-            // Warm semi-arid plateaus: Savanna
+            // Warm semi-arid grasslands & plateaus: Savanna
             Biome::Savanna
         } else if height <= self.water_level + 5 && moisture > 0.14 {
             // Lowlands near water level with high humidity: Swamp
@@ -441,11 +526,25 @@ impl TerrainGenerator {
             // High humidity temperate canopy: Dark Forest (dense 2x2 dark oak trees)
             Biome::DarkForest
         } else if moisture > 0.05 {
-            // High humidity temperate: Forest
-            Biome::Forest
+            // Temperate woodland split into coherent BirchForest and Oak/Mixed Forest zones
+            let variant = self
+                .temp_detail_noise
+                .get([wx * 0.0055 + 91.3, wz * 0.0055 + 47.2]);
+            if variant > 0.04 {
+                Biome::BirchForest
+            } else {
+                Biome::Forest
+            }
         } else {
-            // Temperate grasslands: Plains
-            Biome::Plains
+            // Temperate open flatlands split into FlowerMeadow and grassy Plains
+            let variant = self
+                .moisture_detail_noise
+                .get([wx * 0.006 + 31.7, wz * 0.006 - 73.1]);
+            if variant > 0.08 {
+                Biome::FlowerMeadow
+            } else {
+                Biome::Plains
+            }
         }
     }
 
@@ -607,6 +706,25 @@ impl TerrainGenerator {
                                     } else {
                                         BlockId::SAND
                                     }
+                                } else if biome == Biome::StonyShore {
+                                    let sh = (wx.wrapping_mul(13) ^ wz.wrapping_mul(23))
+                                        .unsigned_abs()
+                                        % 4;
+                                    if sh == 0 {
+                                        BlockId::COBBLESTONE
+                                    } else if sh == 1 {
+                                        BlockId::STONE
+                                    } else {
+                                        BlockId::GRAVEL
+                                    }
+                                } else if biome == Biome::Glacier {
+                                    if is_underwater {
+                                        BlockId::GRAVEL
+                                    } else {
+                                        BlockId::ICE
+                                    }
+                                } else if biome == Biome::RedDesert {
+                                    BlockId::RED_SAND
                                 } else if biome == Biome::River {
                                     let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29))
                                         .unsigned_abs()
@@ -622,7 +740,7 @@ impl TerrainGenerator {
                                     BlockId::SAND
                                 }
                             } else if is_steep_cliff {
-                                // Steep vertical cliffs expose natural rock, terracotta, or sandstone strata
+                                // Steep vertical cliffs expose natural rock, terracotta, ice, or sandstone strata
                                 match biome {
                                     Biome::Badlands => {
                                         if (surface_y / 2) % 2 == 0 {
@@ -631,17 +749,42 @@ impl TerrainGenerator {
                                             BlockId::RED_SAND
                                         }
                                     }
+                                    Biome::RedDesert => BlockId::TERRACOTTA,
                                     Biome::Desert | Biome::Beach => BlockId::SANDSTONE,
+                                    Biome::Glacier => BlockId::ICE,
                                     _ => BlockId::STONE,
                                 }
                             } else {
                                 match biome {
                                     Biome::Desert | Biome::Beach => BlockId::SAND,
+                                    Biome::RedDesert => BlockId::RED_SAND,
                                     Biome::Badlands => {
                                         if (surface_y / 2) % 2 == 0 {
                                             BlockId::RED_SAND
                                         } else {
                                             BlockId::TERRACOTTA
+                                        }
+                                    }
+                                    Biome::StonyShore => {
+                                        let sh = (wx.wrapping_mul(13) ^ wz.wrapping_mul(23))
+                                            .unsigned_abs()
+                                            % 4;
+                                        if sh == 0 {
+                                            BlockId::COBBLESTONE
+                                        } else if sh == 1 {
+                                            BlockId::STONE
+                                        } else {
+                                            BlockId::GRAVEL
+                                        }
+                                    }
+                                    Biome::Glacier => {
+                                        let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(41))
+                                            .unsigned_abs()
+                                            % 10;
+                                        if gh < 7 {
+                                            BlockId::ICE
+                                        } else {
+                                            BlockId::SNOW_BLOCK
                                         }
                                     }
                                     Biome::SnowyTundra => BlockId::SNOW_BLOCK,
@@ -700,6 +843,20 @@ impl TerrainGenerator {
                                     } else {
                                         BlockId::SAND
                                     }
+                                } else if biome == Biome::StonyShore {
+                                    BlockId::GRAVEL
+                                } else if biome == Biome::Glacier {
+                                    if wy < surface_y - 2 {
+                                        BlockId::STONE
+                                    } else {
+                                        BlockId::ICE
+                                    }
+                                } else if biome == Biome::RedDesert {
+                                    if wy < surface_y - 2 {
+                                        BlockId::SANDSTONE
+                                    } else {
+                                        BlockId::RED_SAND
+                                    }
                                 } else if biome == Biome::River {
                                     let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29))
                                         .unsigned_abs()
@@ -712,7 +869,16 @@ impl TerrainGenerator {
                                 } else {
                                     BlockId::SAND
                                 }
-                            } else if is_steep_cliff && !matches!(biome, Biome::Badlands | Biome::Desert | Biome::Beach) {
+                            } else if is_steep_cliff
+                                && !matches!(
+                                    biome,
+                                    Biome::Badlands
+                                        | Biome::RedDesert
+                                        | Biome::Desert
+                                        | Biome::Beach
+                                        | Biome::Glacier
+                                )
+                            {
                                 BlockId::STONE
                             } else {
                                 match biome {
@@ -721,6 +887,27 @@ impl TerrainGenerator {
                                             BlockId::SANDSTONE
                                         } else {
                                             BlockId::SAND
+                                        }
+                                    }
+                                    Biome::RedDesert => {
+                                        if wy < surface_y - 2 {
+                                            BlockId::TERRACOTTA
+                                        } else {
+                                            BlockId::RED_SAND
+                                        }
+                                    }
+                                    Biome::Glacier => {
+                                        if wy < surface_y - 2 {
+                                            BlockId::STONE
+                                        } else {
+                                            BlockId::ICE
+                                        }
+                                    }
+                                    Biome::StonyShore => {
+                                        if wy < surface_y - 2 {
+                                            BlockId::STONE
+                                        } else {
+                                            BlockId::GRAVEL
                                         }
                                     }
                                     Biome::Badlands => {
@@ -745,7 +932,9 @@ impl TerrainGenerator {
                             self.get_subsurface_block(wx, wy, wz)
                         }
                     } else if wy <= self.water_level {
-                        if biome == Biome::SnowyTundra && wy == self.water_level {
+                        if matches!(biome, Biome::SnowyTundra | Biome::Glacier)
+                            && wy == self.water_level
+                        {
                             BlockId::ICE
                         } else {
                             BlockId::WATER
@@ -933,7 +1122,9 @@ impl TerrainGenerator {
                     {
                         let grass_chance = match biome {
                             Biome::Plains => 20,
+                            Biome::FlowerMeadow => 12,
                             Biome::Forest => 14,
+                            Biome::BirchForest => 18,
                             Biome::Savanna => 26,
                             Biome::Swamp => 16,
                             Biome::Jungle => 36,
@@ -949,7 +1140,9 @@ impl TerrainGenerator {
                         } else {
                             let fh = tree_hash(wx, wz, self.seed.wrapping_add(919));
                             let flower_pct = match biome {
+                                Biome::FlowerMeadow => 38,
                                 Biome::Plains => 6,
+                                Biome::BirchForest => 8,
                                 Biome::Forest => 4,
                                 Biome::Swamp => 3,
                                 Biome::DarkForest => 2,
@@ -960,6 +1153,32 @@ impl TerrainGenerator {
                             if flower_pct > 0 && (fh % 100) < flower_pct {
                                 let flower = match biome {
                                     Biome::Swamp => BlockId::BLUE_ORCHID,
+                                    Biome::BirchForest => match (fh >> 8) % 3 {
+                                        0 => BlockId::OXEYE_DAISY,
+                                        1 => BlockId::DANDELION,
+                                        _ => BlockId::ALLIUM,
+                                    },
+                                    Biome::FlowerMeadow => {
+                                        // Natural color-grouped flower patches across sunny meadows
+                                        let patch = tree_hash(
+                                            wx >> 3,
+                                            wz >> 3,
+                                            self.seed.wrapping_add(555),
+                                        );
+                                        let pick = if (fh >> 12) % 3 == 0 {
+                                            (fh >> 8) % 6
+                                        } else {
+                                            patch % 6
+                                        };
+                                        match pick {
+                                            0 => BlockId::ALLIUM,
+                                            1 => BlockId::ORANGE_TULIP,
+                                            2 => BlockId::PINK_TULIP,
+                                            3 => BlockId::OXEYE_DAISY,
+                                            4 => BlockId::POPPY,
+                                            _ => BlockId::DANDELION,
+                                        }
+                                    }
                                     Biome::Taiga | Biome::Savanna | Biome::Mountains => {
                                         if (fh >> 8) % 2 == 0 {
                                             BlockId::DANDELION
@@ -977,8 +1196,14 @@ impl TerrainGenerator {
                                     },
                                 };
                                 chunk.set(lx, ly, lz, flower);
-                            } else if matches!(biome, Biome::Plains | Biome::Forest | Biome::Taiga)
-                                && fh % 260 == 0
+                            } else if matches!(
+                                biome,
+                                Biome::Plains
+                                    | Biome::FlowerMeadow
+                                    | Biome::Forest
+                                    | Biome::BirchForest
+                                    | Biome::Taiga
+                            ) && fh % 240 == 0
                             {
                                 chunk.set(lx, ly, lz, BlockId::PUMPKIN);
                             } else if matches!(biome, Biome::Jungle | Biome::Swamp)
@@ -990,17 +1215,19 @@ impl TerrainGenerator {
                     }
                 }
 
-                // Desert Cacti on sand
-                if biome == Biome::Desert
+                // Desert & RedDesert Cacti on sand / red sand
+                if matches!(biome, Biome::Desert | Biome::RedDesert)
                     && local_surface_y >= 1
                     && local_surface_y < (CHUNK_SIZE_Y as i32 - 4)
                 {
                     let ly = local_surface_y as usize;
-                    if chunk.get(lx, ly - 1, lz) == Some(BlockId::SAND)
+                    let under = chunk.get(lx, ly - 1, lz);
+                    if (under == Some(BlockId::SAND) || under == Some(BlockId::RED_SAND))
                         && chunk.get(lx, ly, lz) == Some(BlockId::AIR)
                     {
                         let ch = tree_hash(wx, wz, self.seed.wrapping_add(888));
-                        if ch % 42 == 0 {
+                        let mod_freq = if biome == Biome::RedDesert { 58 } else { 42 };
+                        if ch % mod_freq == 0 {
                             let cactus_height = 1 + ((ch >> 4) % 4) as usize;
                             for cy in ly..(ly + cactus_height).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, cy, lz, BlockId::CACTUS);
@@ -1009,7 +1236,7 @@ impl TerrainGenerator {
                     }
                 }
 
-                // Trees & boulders: keep 2-block margin from chunk horizontal edges
+                // Trees, spires & boulders: keep 2-block margin from chunk horizontal edges
                 if lx < 2 || lx >= (CHUNK_SIZE_X - 2) || lz < 2 || lz >= (CHUNK_SIZE_Z - 2) {
                     continue;
                 }
@@ -1023,6 +1250,14 @@ impl TerrainGenerator {
                 let valid_ground = match biome {
                     Biome::SnowyTundra => {
                         ground == Some(BlockId::SNOW_BLOCK) || ground == Some(BlockId::GRASS)
+                    }
+                    Biome::Glacier => {
+                        ground == Some(BlockId::ICE) || ground == Some(BlockId::SNOW_BLOCK)
+                    }
+                    Biome::StonyShore => {
+                        ground == Some(BlockId::GRAVEL)
+                            || ground == Some(BlockId::COBBLESTONE)
+                            || ground == Some(BlockId::STONE)
                     }
                     Biome::Swamp => ground == Some(BlockId::GRASS) || ground == Some(BlockId::CLAY),
                     Biome::Taiga => ground == Some(BlockId::PODZOL) || ground == Some(BlockId::GRASS),
@@ -1585,6 +1820,140 @@ impl TerrainGenerator {
                             }
                         }
                     }
+                    Biome::BirchForest => {
+                        if (th >> 12) % 95 == 0 {
+                            chunk.set(lx, ly, lz, BlockId::MOSSY_COBBLESTONE);
+                        } else if th % 16 == 0 {
+                            let trunk_h = 5 + ((th >> 4) % 4) as usize;
+                            for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, ty, lz, BlockId::BIRCH_LOG);
+                            }
+                            let crown_start = ly + trunk_h.saturating_sub(2);
+                            let crown_end = (ly + trunk_h + 1).min(CHUNK_SIZE_Y - 1);
+                            for cy in crown_start..=crown_end {
+                                let radius: i32 = if cy >= ly + trunk_h { 1 } else { 2 };
+                                for dz in -radius..=radius {
+                                    for dx in -radius..=radius {
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if dx.abs() == 2
+                                                && dz.abs() == 2
+                                                && (dx + dz) % 2 == 0
+                                            {
+                                                continue;
+                                            }
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::BIRCH_LEAVES,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Biome::FlowerMeadow => {
+                        if th % 115 == 0 {
+                            let is_birch = (th >> 8) % 2 == 0;
+                            let (log, leaves) = if is_birch {
+                                (BlockId::BIRCH_LOG, BlockId::BIRCH_LEAVES)
+                            } else {
+                                (BlockId::WOOD_LOG, BlockId::LEAVES)
+                            };
+                            let trunk_h = 4 + ((th >> 4) % 2) as usize;
+                            for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
+                                chunk.set(lx, ty, lz, log);
+                            }
+                            let crown_start = ly + 2;
+                            let crown_end = (ly + trunk_h + 1).min(CHUNK_SIZE_Y - 1);
+                            for cy in crown_start..=crown_end {
+                                let radius: i32 = if cy >= ly + trunk_h { 1 } else { 2 };
+                                for dz in -radius..=radius {
+                                    for dx in -radius..=radius {
+                                        if dx.abs() == 2
+                                            && dz.abs() == 2
+                                            && (dx + dz) % 2 == 0
+                                        {
+                                            continue;
+                                        }
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(cx as usize, cy, cz as usize, leaves);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Biome::Glacier => {
+                        if th % 42 == 0 {
+                            // Crystalline glacial ice spires rising above flat ice sheets
+                            let spire_h = 5 + ((th >> 4) % 6) as usize;
+                            for dy in 0..spire_h {
+                                let cy = ly + dy;
+                                if cy >= CHUNK_SIZE_Y {
+                                    break;
+                                }
+                                if dy < spire_h / 2 {
+                                    for (dx, dz) in [(0_i32, 0_i32), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                                        let cx = lx as i32 + dx;
+                                        let cz = lz as i32 + dz;
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::ICE,
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else if chunk.get(lx, cy, lz) == Some(BlockId::AIR) {
+                                    chunk.set(lx, cy, lz, BlockId::ICE);
+                                }
+                            }
+                        }
+                    }
+                    Biome::StonyShore => {
+                        if th % 48 == 0 {
+                            let boulder_block = if (th >> 6) % 2 == 0 {
+                                BlockId::COBBLESTONE
+                            } else {
+                                BlockId::STONE
+                            };
+                            chunk.set(lx, ly, lz, boulder_block);
+                            if (th >> 10) % 3 == 0 && ly + 1 < CHUNK_SIZE_Y {
+                                chunk.set(lx, ly + 1, lz, boulder_block);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1685,8 +2054,8 @@ mod tests {
         let gen = TerrainGenerator::new(1337);
         let mut biomes_found = std::collections::HashSet::new();
 
-        for z in (-700..700).step_by(10) {
-            for x in (-700..700).step_by(10) {
+        for z in (-900..900).step_by(10) {
+            for x in (-900..900).step_by(10) {
                 let h = gen.surface_height(x, z);
                 let biome = gen.get_biome(x, z, h);
                 biomes_found.insert(biome);
@@ -1694,20 +2063,97 @@ mod tests {
         }
 
         assert!(biomes_found.contains(&Biome::Plains), "Expected Plains biome");
+        assert!(
+            biomes_found.contains(&Biome::FlowerMeadow),
+            "Expected FlowerMeadow biome"
+        );
         assert!(biomes_found.contains(&Biome::Forest), "Expected Forest biome");
+        assert!(
+            biomes_found.contains(&Biome::BirchForest),
+            "Expected BirchForest biome"
+        );
         assert!(biomes_found.contains(&Biome::Mountains), "Expected Mountains biome");
         assert!(biomes_found.contains(&Biome::Desert), "Expected Desert biome");
-        assert!(biomes_found.contains(&Biome::SnowyTundra), "Expected SnowyTundra biome");
+        assert!(
+            biomes_found.contains(&Biome::RedDesert),
+            "Expected RedDesert biome"
+        );
+        assert!(
+            biomes_found.contains(&Biome::SnowyTundra),
+            "Expected SnowyTundra biome"
+        );
+        assert!(biomes_found.contains(&Biome::Glacier), "Expected Glacier biome");
         assert!(biomes_found.contains(&Biome::Savanna), "Expected Savanna biome");
         assert!(biomes_found.contains(&Biome::Swamp), "Expected Swamp biome");
         assert!(biomes_found.contains(&Biome::Ocean), "Expected Ocean biome");
         assert!(biomes_found.contains(&Biome::Jungle), "Expected Jungle biome");
         assert!(biomes_found.contains(&Biome::Badlands), "Expected Badlands biome");
         assert!(biomes_found.contains(&Biome::Beach), "Expected Beach biome");
+        assert!(
+            biomes_found.contains(&Biome::StonyShore),
+            "Expected StonyShore biome"
+        );
         assert!(biomes_found.contains(&Biome::River), "Expected River biome");
         assert!(biomes_found.contains(&Biome::Taiga), "Expected Taiga biome");
         assert!(biomes_found.contains(&Biome::DarkForest), "Expected DarkForest biome");
         assert!(biomes_found.contains(&Biome::CoralReef), "Expected CoralReef biome");
+    }
+
+    #[test]
+    fn test_biome_relief_contrast() {
+        let gen = TerrainGenerator::new(1337);
+        let mut flat_slopes = Vec::new();
+        let mut flat_heights = Vec::new();
+        let mut vert_slopes = Vec::new();
+        let mut vert_heights = Vec::new();
+
+        for z in (-800..800).step_by(12) {
+            for x in (-800..800).step_by(12) {
+                let h = gen.surface_height(x, z);
+                let biome = gen.get_biome(x, z, h);
+                let slope = (h - gen.surface_height(x + 4, z))
+                    .abs()
+                    .max((h - gen.surface_height(x, z + 4)).abs());
+                match biome {
+                    Biome::Plains | Biome::FlowerMeadow | Biome::Swamp | Biome::RedDesert => {
+                        flat_heights.push(h as f64);
+                        flat_slopes.push(slope as f64);
+                    }
+                    Biome::Mountains | Biome::Badlands => {
+                        vert_heights.push(h as f64);
+                        vert_slopes.push(slope as f64);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            !flat_heights.is_empty() && !vert_heights.is_empty(),
+            "Expected both flat and vertical biome samples"
+        );
+        let avg_flat_h = flat_heights.iter().sum::<f64>() / flat_heights.len() as f64;
+        let avg_vert_h = vert_heights.iter().sum::<f64>() / vert_heights.len() as f64;
+        let avg_flat_slope = flat_slopes.iter().sum::<f64>() / flat_slopes.len() as f64;
+        let avg_vert_slope = vert_slopes.iter().sum::<f64>() / vert_slopes.len() as f64;
+
+        assert!(
+            avg_flat_h < 50.0,
+            "Flat biomes should remain gently elevated near sea level, got avg y={:.2}",
+            avg_flat_h
+        );
+        assert!(
+            avg_vert_h > avg_flat_h + 15.0,
+            "Vertical biomes ({:.2}) should tower clearly above flat biomes ({:.2})",
+            avg_vert_h,
+            avg_flat_h
+        );
+        assert!(
+            avg_flat_slope < 2.1 && avg_vert_slope > avg_flat_slope * 2.5,
+            "Flat biomes should have noticeably calmer slopes ({:.2}) than vertical biomes ({:.2})",
+            avg_flat_slope,
+            avg_vert_slope
+        );
     }
 
     #[test]

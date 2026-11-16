@@ -448,9 +448,16 @@ impl WorldManager {
         // - Taiga: 55% spawn chance (coniferous foraging: cows, pigs, chickens)
         // - River: 20% spawn chance (riverbank chickens/pigs)
         let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
-            Biome::Desert | Biome::Ocean | Biome::Badlands | Biome::CoralReef => return,
+            Biome::Desert
+            | Biome::RedDesert
+            | Biome::Glacier
+            | Biome::Ocean
+            | Biome::Badlands
+            | Biome::CoralReef => return,
             Biome::Plains => (0.65, [(AnimalKind::Cow, 0.30), (AnimalKind::Pig, 0.25), (AnimalKind::Chicken, 0.15), (AnimalKind::Sheep, 0.30)], 2, 4),
+            Biome::FlowerMeadow => (0.70, [(AnimalKind::Sheep, 0.35), (AnimalKind::Cow, 0.30), (AnimalKind::Pig, 0.20), (AnimalKind::Chicken, 0.15)], 2, 4),
             Biome::Forest => (0.50, [(AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25), (AnimalKind::Cow, 0.15), (AnimalKind::Sheep, 0.25)], 2, 3),
+            Biome::BirchForest => (0.55, [(AnimalKind::Pig, 0.30), (AnimalKind::Sheep, 0.30), (AnimalKind::Chicken, 0.25), (AnimalKind::Cow, 0.15)], 2, 4),
             Biome::DarkForest => (0.50, [(AnimalKind::Pig, 0.35), (AnimalKind::Chicken, 0.25), (AnimalKind::Cow, 0.15), (AnimalKind::Sheep, 0.25)], 2, 4),
             Biome::Mountains => (0.25, [(AnimalKind::Sheep, 0.45), (AnimalKind::Chicken, 0.25), (AnimalKind::Cow, 0.20), (AnimalKind::Pig, 0.10)], 1, 3),
             Biome::Savanna => (0.60, [(AnimalKind::Cow, 0.45), (AnimalKind::Sheep, 0.25), (AnimalKind::Pig, 0.15), (AnimalKind::Chicken, 0.15)], 2, 4),
@@ -458,6 +465,7 @@ impl WorldManager {
             Biome::SnowyTundra => (0.25, [(AnimalKind::Sheep, 0.40), (AnimalKind::Chicken, 0.30), (AnimalKind::Cow, 0.20), (AnimalKind::Pig, 0.10)], 1, 3),
             Biome::Jungle => (0.65, [(AnimalKind::Chicken, 0.45), (AnimalKind::Pig, 0.30), (AnimalKind::Cow, 0.15), (AnimalKind::Sheep, 0.10)], 2, 5),
             Biome::Beach => (0.30, [(AnimalKind::Chicken, 0.65), (AnimalKind::Pig, 0.15), (AnimalKind::Cow, 0.10), (AnimalKind::Sheep, 0.10)], 1, 3),
+            Biome::StonyShore => (0.15, [(AnimalKind::Chicken, 0.70), (AnimalKind::Sheep, 0.30), (AnimalKind::Pig, 0.0), (AnimalKind::Cow, 0.0)], 1, 2),
             Biome::Taiga => (0.55, [(AnimalKind::Cow, 0.30), (AnimalKind::Sheep, 0.30), (AnimalKind::Pig, 0.20), (AnimalKind::Chicken, 0.20)], 2, 4),
             Biome::River => (0.20, [(AnimalKind::Chicken, 0.55), (AnimalKind::Pig, 0.25), (AnimalKind::Cow, 0.10), (AnimalKind::Sheep, 0.10)], 1, 2),
         };
@@ -505,7 +513,15 @@ impl WorldManager {
             let mut ay = (VERTICAL_CHUNKS * 16) - 2;
             while ay > 1 {
                 let b = world.get_block(IVec3::new(ax, ay, az));
-                if b == BlockId::GRASS || b == BlockId::DIRT || b == BlockId::SNOW_BLOCK || b == BlockId::CLAY || b == BlockId::SAND || b == BlockId::PODZOL || b == BlockId::MYCELIUM {
+                if b == BlockId::GRASS
+                    || b == BlockId::DIRT
+                    || b == BlockId::SNOW_BLOCK
+                    || b == BlockId::CLAY
+                    || b == BlockId::SAND
+                    || b == BlockId::GRAVEL
+                    || b == BlockId::PODZOL
+                    || b == BlockId::MYCELIUM
+                {
                     break;
                 }
                 ay -= 1;
