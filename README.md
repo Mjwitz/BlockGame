@@ -2,7 +2,7 @@
 
 A procedural voxel sandbox survival game inspired by Minecraft, written in **Rust** with **wgpu** for modern cross-platform graphics on **Linux** and **Windows** (plus dedicated multiplayer server support).
 
-![BlockGame Procedural Landscape](landscape_render.png)
+![BlockGame Procedural Landscape](assets/screenshots/landscape_render_new.png)
 
 ---
 
