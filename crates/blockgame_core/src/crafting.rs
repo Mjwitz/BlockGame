@@ -809,50 +809,6 @@ impl CraftingManager {
             output: ItemSlot::new(ItemId::TORCH, 4),
         });
 
-        // 5. 1 Planks over 1 Stick -> 4 Torches (Survival convenience recipe)
-        self.register(Recipe::Shaped {
-            name: "Torches from Planks",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::TORCH, 4),
-        });
-        self.register(Recipe::Shaped {
-            name: "Torches from Birch Planks",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::BIRCH_PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::TORCH, 4),
-        });
-        self.register(Recipe::Shaped {
-            name: "Torches from Spruce Planks",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::SPRUCE_PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::TORCH, 4),
-        });
-        self.register(Recipe::Shaped {
-            name: "Torches from Acacia Planks",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::ACACIA_PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::TORCH, 4),
-        });
-        self.register(Recipe::Shaped {
-            name: "Torches from Jungle Planks",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::JUNGLE_PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::TORCH, 4),
-        });
-        self.register(Recipe::Shaped {
-            name: "Torches from Dark Oak Planks",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::DARK_OAK_PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::TORCH, 4),
-        });
-
         // 6. Wooden Pickaxe: 3 Planks top row, 2 Sticks center column (Shaped 3x3)
         self.register(Recipe::Shaped {
             name: "Wooden Pickaxe",
@@ -2063,13 +2019,22 @@ impl CraftingManager {
         });
 
         // --- Fishing Lures ---
-        self.register(Recipe::Shaped {
-            name: "Cork Bobber Lure",
-            width: 1,
-            height: 2,
-            pattern: vec![Some(ItemId::PLANKS), Some(ItemId::STICK)],
-            output: ItemSlot::new(ItemId::CORK_BOBBER, 1),
-        });
+        for (name, planks) in [
+            ("Cork Bobber Lure", ItemId::PLANKS),
+            ("Cork Bobber Lure (Birch)", ItemId::BIRCH_PLANKS),
+            ("Cork Bobber Lure (Spruce)", ItemId::SPRUCE_PLANKS),
+            ("Cork Bobber Lure (Acacia)", ItemId::ACACIA_PLANKS),
+            ("Cork Bobber Lure (Jungle)", ItemId::JUNGLE_PLANKS),
+            ("Cork Bobber Lure (Dark Oak)", ItemId::DARK_OAK_PLANKS),
+        ] {
+            self.register(Recipe::Shaped {
+                name,
+                width: 1,
+                height: 2,
+                pattern: vec![Some(planks), Some(ItemId::STICK)],
+                output: ItemSlot::new(ItemId::CORK_BOBBER, 1),
+            });
+        }
         self.register(Recipe::Shaped {
             name: "Copper Spinner Lure",
             width: 2,
