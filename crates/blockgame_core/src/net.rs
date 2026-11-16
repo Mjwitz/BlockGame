@@ -1505,6 +1505,99 @@ fn apply_command_output(
     }
 }
 
+fn find_dry_spawn_from_generator(
+    chunk_generator: &Arc<dyn Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync>,
+) -> Vec3 {
+    let max_cy = crate::chunk::VERTICAL_CHUNKS - 1;
+    let is_dry_ground = |b: BlockId| {
+        !b.is_air()
+            && b != BlockId::WATER
+            && b != BlockId::ICE
+            && b != BlockId::LEAVES
+            && b != BlockId::BIRCH_LEAVES
+            && b != BlockId::SPRUCE_LEAVES
+            && b != BlockId::ACACIA_LEAVES
+            && b != BlockId::JUNGLE_LEAVES
+            && b != BlockId::DARK_OAK_LEAVES
+    };
+
+    // Quick check at (0,0) first to exit instantly on empty test chunk generators
+    let mut center_has_terrain = false;
+    for cy in 0..=max_cy {
+        let ch = chunk_generator(ChunkPos::new(0, cy, 0));
+        if ch.raw_blocks().iter().any(|b| !b.is_air()) {
+            center_has_terrain = true;
+            break;
+        }
+    }
+    if !center_has_terrain {
+        return Vec3::new(0.5, 76.0, 0.5);
+    }
+
+    // Search outward in chunk rings (up to radius 12 chunks = ~192 blocks) for solid dry ground above water level (38)
+    for r in 0_i32..=12 {
+        for cz in -r..=r {
+            for cx in -r..=r {
+                if cx.abs() != r && cz.abs() != r {
+                    continue;
+                }
+                let chunks: Vec<crate::chunk::Chunk> = (0..=max_cy)
+                    .map(|cy| chunk_generator(ChunkPos::new(cx, cy, cz)))
+                    .collect();
+
+                for lz in [4usize, 8, 12] {
+                    for lx in [4usize, 8, 12] {
+                        let mut surface_y: Option<i32> = None;
+                        for cy in (0..=max_cy).rev() {
+                            let ch = &chunks[cy as usize];
+                            for ly in (0..crate::chunk::CHUNK_SIZE_Y).rev() {
+                                let b = ch.get_unchecked(lx, ly, lz);
+                                if b.is_air()
+                                    || matches!(
+                                        b,
+                                        BlockId::TALL_GRASS
+                                            | BlockId::POPPY
+                                            | BlockId::DANDELION
+                                            | BlockId::BLUE_ORCHID
+                                            | BlockId::ALLIUM
+                                            | BlockId::ORANGE_TULIP
+                                            | BlockId::PINK_TULIP
+                                            | BlockId::OXEYE_DAISY
+                                            | BlockId::LEAVES
+                                            | BlockId::BIRCH_LEAVES
+                                            | BlockId::SPRUCE_LEAVES
+                                            | BlockId::ACACIA_LEAVES
+                                            | BlockId::JUNGLE_LEAVES
+                                            | BlockId::DARK_OAK_LEAVES
+                                    )
+                                {
+                                    continue;
+                                }
+                                let wy = cy * crate::chunk::CHUNK_SIZE_Y as i32 + ly as i32;
+                                if wy >= 40 && wy <= (max_cy * 16 + 10) && is_dry_ground(b) {
+                                    surface_y = Some(wy);
+                                }
+                                break;
+                            }
+                            if surface_y.is_some() {
+                                break;
+                            }
+                        }
+
+                        if let Some(sy) = surface_y {
+                            let wx = cx * crate::chunk::CHUNK_SIZE_X as i32 + lx as i32;
+                            let wz = cz * crate::chunk::CHUNK_SIZE_Z as i32 + lz as i32;
+                            return Vec3::new(wx as f32 + 0.5, (sy + 2) as f32, wz as f32 + 0.5);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Vec3::new(0.5, 76.0, 0.5)
+}
+
 fn run_server_loop(
     listener: TcpListener,
     saves_root: PathBuf,
@@ -1541,18 +1634,22 @@ fn run_server_loop(
     let mut default_spawn = if let Ok(s) = fs::read_to_string(&spawn_file) {
         let parts: Vec<&str> = s.trim().split(',').collect();
         if parts.len() == 3 {
-            if let (Ok(x), Ok(y), Ok(z)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+            if let (Ok(x), Ok(y), Ok(z)) = (
+                parts[0].parse::<f32>(),
+                parts[1].parse::<f32>(),
+                parts[2].parse::<f32>(),
+            ) {
                 Vec3::new(x, y, z)
             } else {
-                save_data.player.position
+                find_dry_spawn_from_generator(&chunk_generator)
             }
         } else {
-            save_data.player.position
+            find_dry_spawn_from_generator(&chunk_generator)
         }
-    } else if save_data.player.position.length_squared() > 0.1 {
+    } else if (save_data.player.position - SavedPlayerState::default().position).length_squared() > 0.25 {
         save_data.player.position
     } else {
-        Vec3::new(0.5, 76.0, 0.5)
+        find_dry_spawn_from_generator(&chunk_generator)
     };
 
     let mut tpa_requests: HashMap<u32, PendingTpaRequest> = HashMap::new();
@@ -3603,6 +3700,39 @@ mod tests {
         client2.disconnect();
         server.shutdown();
         let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_dry_spawn_selection_avoids_river() {
+        let gen_closure: Arc<dyn Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync> =
+            Arc::new(|cpos: ChunkPos| {
+                let mut ch = crate::chunk::Chunk::new(cpos);
+                let origin = cpos.to_world_origin();
+                for lz in 0..crate::chunk::CHUNK_SIZE_Z {
+                    for lx in 0..crate::chunk::CHUNK_SIZE_X {
+                        let is_dry_island = cpos.0.x == 1 && cpos.0.z == 0;
+                        let surface_y = if is_dry_island { 46 } else { 35 };
+                        for ly in 0..crate::chunk::CHUNK_SIZE_Y {
+                            let wy = origin.y + ly as i32;
+                            let b = if wy == 0 {
+                                BlockId::BEDROCK
+                            } else if wy < surface_y {
+                                BlockId::STONE
+                            } else if wy <= 38 {
+                                BlockId::WATER
+                            } else {
+                                BlockId::AIR
+                            };
+                            ch.set(lx, ly, lz, b);
+                        }
+                    }
+                }
+                ch
+            });
+
+        let spawn = find_dry_spawn_from_generator(&gen_closure);
+        assert!(spawn.x >= 16.0 && spawn.x < 32.0, "Expected spawn on dry chunk (cx=1, cz=0), got {:?}", spawn);
+        assert!(spawn.y >= 46.0, "Expected dry elevation >= 46, got {:?}", spawn);
     }
 }
 

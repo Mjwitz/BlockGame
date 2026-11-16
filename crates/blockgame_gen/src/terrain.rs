@@ -1,6 +1,6 @@
 use blockgame_core::{
     block::BlockId,
-    chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z},
+    chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, VERTICAL_CHUNKS},
 };
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
@@ -19,7 +19,6 @@ pub enum Biome {
     Beach,
     River,
     Taiga,
-    MushroomFields,
     DarkForest,
     CoralReef,
 }
@@ -41,7 +40,6 @@ impl Biome {
             Biome::Beach => [0.75, 0.82, 0.92],       // Sunny coastal breeze
             Biome::River => [0.55, 0.75, 0.95],       // Clear flowing stream atmosphere
             Biome::Taiga => [0.62, 0.74, 0.72],       // Cool evergreen pine mist
-            Biome::MushroomFields => [0.72, 0.60, 0.78], // Mystical spore-filled violet haze
             Biome::DarkForest => [0.32, 0.42, 0.35],  // Dense canopy shadowy gloom
             Biome::Forest | Biome::Plains => [0.60, 0.78, 0.98], // Clear temperate sky
         }
@@ -63,36 +61,100 @@ impl Biome {
             Biome::Beach => [1.00, 1.00, 1.02],
             Biome::River => [0.98, 1.02, 1.05],
             Biome::Taiga => [0.94, 0.98, 1.02],
-            Biome::MushroomFields => [1.04, 0.92, 1.06],
             Biome::DarkForest => [0.88, 0.94, 0.86],
             Biome::Forest | Biome::Plains => [1.00, 1.00, 1.00],
         }
     }
 }
 
+#[inline]
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+#[inline]
+fn seed_offset_pair(seed: u32, channel: u64) -> [f64; 2] {
+    let h1 = splitmix64((seed as u64) ^ channel.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let h2 = splitmix64(h1 ^ 0xA076_1D64_78BD_642F);
+    // Non-integer fractional offsets prevent Perlin zero-crossing alignment at (0, 0)
+    let ox = ((h1 & 0xFFFF) as f64 - 32768.0) * 1.37 + 0.413;
+    let oz = ((h2 & 0xFFFF) as f64 - 32768.0) * 1.41 + 0.689;
+    [ox, oz]
+}
+
+#[inline]
+fn seed_unit_f64(seed: u32, channel: u64) -> f64 {
+    let h = splitmix64((seed as u64).wrapping_add(channel.wrapping_mul(0xD6E8_FEB8_6659_FD93)));
+    ((h >> 11) as f64) / ((1u64 << 53) as f64)
+}
+
+#[inline]
+fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
+    let t = if (edge1 - edge0).abs() < 1e-9 {
+        0.0
+    } else {
+        ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0)
+    };
+    t * t * (3.0 - 2.0 * t)
+}
+
 pub struct TerrainGenerator {
     pub seed: u32,
     continental_noise: Fbm<Perlin>,
+    erosion_noise: Fbm<Perlin>,
+    ridge_noise: Fbm<Perlin>,
     detail_noise: Fbm<Perlin>,
     cave_noise: Fbm<Perlin>,
+    tunnel_noise_a: Fbm<Perlin>,
+    tunnel_noise_b: Fbm<Perlin>,
+    warp_noise_x: Perlin,
+    warp_noise_z: Perlin,
     temp_noise: Perlin,
+    temp_detail_noise: Perlin,
     moisture_noise: Perlin,
+    moisture_detail_noise: Perlin,
     river_noise: Perlin,
-    mushroom_noise: Perlin,
+    cont_offset: [f64; 2],
+    erosion_offset: [f64; 2],
+    ridge_offset: [f64; 2],
+    detail_offset: [f64; 2],
+    warp_offset: [f64; 2],
+    temp_offset: [f64; 2],
+    moist_offset: [f64; 2],
+    river_offset: [f64; 2],
+    seed_temp_bias: f64,
+    seed_moist_bias: f64,
+    seed_altitude_bias: f64,
+    seed_relief_scale: f64,
     pub water_level: i32,
 }
 
 impl TerrainGenerator {
     pub fn new(seed: u32) -> Self {
         let continental_noise = Fbm::<Perlin>::new(seed)
+            .set_octaves(4)
+            .set_frequency(0.0052)
+            .set_lacunarity(2.05)
+            .set_persistence(0.5);
+
+        let erosion_noise = Fbm::<Perlin>::new(seed.wrapping_add(733))
             .set_octaves(3)
-            .set_frequency(0.006)
+            .set_frequency(0.0068)
             .set_lacunarity(2.0)
             .set_persistence(0.5);
 
+        let ridge_noise = Fbm::<Perlin>::new(seed.wrapping_add(1571))
+            .set_octaves(4)
+            .set_frequency(0.0078)
+            .set_lacunarity(2.1)
+            .set_persistence(0.48);
+
         let detail_noise = Fbm::<Perlin>::new(seed.wrapping_add(1013))
             .set_octaves(4)
-            .set_frequency(0.02)
+            .set_frequency(0.022)
             .set_lacunarity(2.0)
             .set_persistence(0.5);
 
@@ -102,22 +164,112 @@ impl TerrainGenerator {
             .set_lacunarity(2.0)
             .set_persistence(0.5);
 
+        let tunnel_noise_a = Fbm::<Perlin>::new(seed.wrapping_add(2591))
+            .set_octaves(2)
+            .set_frequency(0.027)
+            .set_lacunarity(2.0)
+            .set_persistence(0.5);
+
+        let tunnel_noise_b = Fbm::<Perlin>::new(seed.wrapping_add(2879))
+            .set_octaves(2)
+            .set_frequency(0.027)
+            .set_lacunarity(2.0)
+            .set_persistence(0.5);
+
+        let warp_noise_x = Perlin::new(seed.wrapping_add(3511));
+        let warp_noise_z = Perlin::new(seed.wrapping_add(3889));
         let temp_noise = Perlin::new(seed.wrapping_add(3072));
+        let temp_detail_noise = Perlin::new(seed.wrapping_add(3319));
         let moisture_noise = Perlin::new(seed.wrapping_add(4096));
+        let moisture_detail_noise = Perlin::new(seed.wrapping_add(4457));
         let river_noise = Perlin::new(seed.wrapping_add(5120));
-        let mushroom_noise = Perlin::new(seed.wrapping_add(6144));
+
+        // Mild per-seed world character biases so seeds feel distinct while keeping all biomes reachable
+        let seed_temp_bias = (seed_unit_f64(seed, 21) - 0.5) * 0.14;
+        let seed_moist_bias = (seed_unit_f64(seed, 22) - 0.5) * 0.12;
+        let seed_altitude_bias = (seed_unit_f64(seed, 23) - 0.5) * 5.0;
+        let seed_relief_scale = 0.88 + seed_unit_f64(seed, 24) * 0.36;
 
         Self {
             seed,
             continental_noise,
+            erosion_noise,
+            ridge_noise,
             detail_noise,
             cave_noise,
+            tunnel_noise_a,
+            tunnel_noise_b,
+            warp_noise_x,
+            warp_noise_z,
             temp_noise,
+            temp_detail_noise,
             moisture_noise,
+            moisture_detail_noise,
             river_noise,
-            mushroom_noise,
+            cont_offset: seed_offset_pair(seed, 1),
+            erosion_offset: seed_offset_pair(seed, 2),
+            ridge_offset: seed_offset_pair(seed, 3),
+            detail_offset: seed_offset_pair(seed, 4),
+            warp_offset: seed_offset_pair(seed, 5),
+            temp_offset: seed_offset_pair(seed, 6),
+            moist_offset: seed_offset_pair(seed, 7),
+            river_offset: seed_offset_pair(seed, 8),
+            seed_temp_bias,
+            seed_moist_bias,
+            seed_altitude_bias,
+            seed_relief_scale,
             water_level: 38,
         }
+    }
+
+    #[inline]
+    fn sample_warp(&self, x: i32, z: i32) -> (f64, f64) {
+        let fx = x as f64;
+        let fz = z as f64;
+        let wx = self.warp_noise_x.get([
+            fx * 0.0075 + self.warp_offset[0],
+            fz * 0.0075 + self.warp_offset[1],
+        ]) * 20.0;
+        let wz = self.warp_noise_z.get([
+            fx * 0.0075 + self.warp_offset[1],
+            fz * 0.0075 - self.warp_offset[0],
+        ]) * 20.0;
+        (fx + wx, fz + wz)
+    }
+
+    #[inline]
+    fn sample_climate(&self, wx: f64, wz: f64) -> (f64, f64) {
+        let temp = self
+            .temp_noise
+            .get([wx * 0.0044 + self.temp_offset[0], wz * 0.0044 + self.temp_offset[1]])
+            + 0.28
+                * self.temp_detail_noise.get([
+                    wx * 0.011 + self.temp_offset[0],
+                    wz * 0.011 + self.temp_offset[1],
+                ])
+            + self.seed_temp_bias;
+
+        let moisture = self
+            .moisture_noise
+            .get([wx * 0.0046 + self.moist_offset[0], wz * 0.0046 + self.moist_offset[1]])
+            + 0.28
+                * self.moisture_detail_noise.get([
+                    wx * 0.012 + self.moist_offset[0],
+                    wz * 0.012 + self.moist_offset[1],
+                ])
+            + self.seed_moist_bias;
+
+        (temp, moisture)
+    }
+
+    #[inline]
+    fn sample_river_val(&self, wx: f64, wz: f64) -> f64 {
+        self.river_noise
+            .get([
+                wx * 0.0038 + self.river_offset[0],
+                wz * 0.0038 + self.river_offset[1],
+            ])
+            .abs()
     }
 
     /// Computes the surface elevation at global coordinate (x, z).
@@ -125,101 +277,170 @@ impl TerrainGenerator {
     pub fn surface_height(&self, x: i32, z: i32) -> i32 {
         let fx = x as f64;
         let fz = z as f64;
+        let (wx, wz) = self.sample_warp(x, z);
+        let (temp, moisture) = self.sample_climate(wx, wz);
 
-        let cont = self.continental_noise.get([fx, fz]);
-        let detail = self.detail_noise.get([fx, fz]);
+        let cont = self
+            .continental_noise
+            .get([wx + self.cont_offset[0], wz + self.cont_offset[1]]);
+        let erosion = self
+            .erosion_noise
+            .get([wx + self.erosion_offset[0], wz + self.erosion_offset[1]]);
+        let ridge_raw = self
+            .ridge_noise
+            .get([wx + self.ridge_offset[0], wz + self.ridge_offset[1]]);
+        let ridge = (1.0 - ridge_raw.abs()).clamp(0.0, 1.0).powi(2);
+        let detail = self
+            .detail_noise
+            .get([fx + self.detail_offset[0], fz + self.detail_offset[1]]);
 
-        // Base elevation around y = 46, varying up to mountains (y ~ 65-72) or water depressions (y ~ 28-37)
-        let mut height = 46.0 + (cont * 18.0) + (detail * 8.0);
-
-        // Mushroom Fields elevation boost in ocean/lowland regions
-        let m_val = self.mushroom_noise.get([fx * 0.003, fz * 0.003]);
-        if m_val > 0.32 {
-            let boost_island = (self.water_level + 3) as f64 + (m_val - 0.32) * 16.0;
-            if height < boost_island {
-                height = boost_island;
-            }
+        // 1. Continental curve: oceans plunge smoothly, inland rises into foothills and highlands
+        let base_elev = if cont < -0.20 {
+            let ocean_t = ((-0.20 - cont) / 0.45).clamp(0.0, 1.35);
+            (self.water_level as f64 + 1.0) - ocean_t * 17.0 + detail * 2.5
         } else {
-            // River carving: continuous winding river channels cutting through continental land down to water_level - 2
-            let river_val = self.river_noise.get([fx * 0.0035, fz * 0.0035]).abs();
-            const RIVER_WIDTH: f64 = 0.038;
-            if height > (self.water_level - 2) as f64 && river_val < RIVER_WIDTH {
-                let t = (river_val / RIVER_WIDTH).powi(2);
-                let river_bed = (self.water_level - 2) as f64;
-                height = river_bed + (height - river_bed) * t;
-            }
+            let land_t = ((cont + 0.20) / 0.85).clamp(0.0, 1.35);
+            (self.water_level as f64 + 1.5) + land_t.powf(1.15) * 16.0 + self.seed_altitude_bias
+        };
+
+        let inland_mask = smoothstep(-0.14, 0.22, cont);
+        // Low erosion -> steep peaks/plateaus/cliffs; high erosion -> broad buildable valleys/plains
+        let rugged_mask = smoothstep(0.28, -0.36, erosion);
+
+        // 2. Alpine ridged mountain ranges and rolling highland hills
+        let mountain_peaks =
+            smoothstep(0.24, 0.90, ridge) * 44.0 * self.seed_relief_scale * inland_mask * rugged_mask;
+        let rolling_hills = smoothstep(0.35, 0.95, ridge) * 11.0 * inland_mask;
+
+        let mut height = base_elev + mountain_peaks + rolling_hills;
+
+        // 3. Climate-specific vertical silhouettes (blended smoothly so cliffs match terrain context)
+        let badlands_w =
+            smoothstep(0.16, 0.26, temp) * smoothstep(-0.04, -0.18, moisture) * inland_mask;
+        if badlands_w > 0.01 {
+            // Stepped canyon & terracotta mesa plateaus
+            let mesa_signal = (ridge * 0.65 + (cont + 0.2) * 0.45).clamp(0.0, 1.2);
+            let raw_mesa = smoothstep(0.25, 0.72, mesa_signal) * 26.0;
+            let terrace_step = 4.0;
+            let snapped = (raw_mesa / terrace_step).floor() * terrace_step;
+            let frac = (raw_mesa - snapped) / terrace_step;
+            let smooth_terrace = snapped + terrace_step * smoothstep(0.72, 0.96, frac);
+            height += smooth_terrace * badlands_w;
         }
 
-        (height.round() as i32).max(1)
+        let desert_w = smoothstep(0.14, 0.24, temp)
+            * smoothstep(0.10, -0.02, moisture)
+            * (1.0 - badlands_w)
+            * inland_mask;
+        if desert_w > 0.01 {
+            // Wind-swept undulating desert sand dunes
+            let dune = ((fx * 0.042 + fz * 0.024 + detail * 2.2).sin().abs()) * 6.5;
+            height += dune * desert_w;
+        }
+
+        let savanna_w = smoothstep(0.06, 0.16, temp)
+            * smoothstep(0.16, 0.02, moisture)
+            * (1.0 - desert_w)
+            * (1.0 - badlands_w)
+            * inland_mask;
+        if savanna_w > 0.01 {
+            // Flat-topped elevated Savanna plateaus
+            let plateau = smoothstep(0.42, 0.68, ridge) * 14.0;
+            height += plateau * savanna_w;
+        }
+
+        let jungle_w = smoothstep(0.10, 0.20, temp) * smoothstep(0.10, 0.22, moisture) * inland_mask;
+        if jungle_w > 0.01 {
+            // Steep tropical hills and lush valleys
+            height += (4.0 + detail * 7.5) * jungle_w;
+        }
+
+        let swamp_w = smoothstep(0.10, 0.24, moisture)
+            * smoothstep(-0.06, 0.08, temp)
+            * smoothstep(0.20, -0.05, cont);
+        if swamp_w > 0.01 {
+            let basin_target = (self.water_level as f64) + 0.8 + detail * 2.2;
+            height += (basin_target - height) * (swamp_w * 0.68);
+        }
+
+        // Local surface bumpiness scales with ruggedness
+        let detail_amp = if cont < -0.20 {
+            1.5
+        } else {
+            3.2 + 7.5 * rugged_mask * inland_mask
+        };
+        height += detail * detail_amp;
+
+        // 4. Winding river channels cutting gently through land (and deeper gorges through hills)
+        let river_val = self.sample_river_val(wx, wz);
+        const RIVER_WIDTH: f64 = 0.036;
+        if height > (self.water_level - 2) as f64 && river_val < RIVER_WIDTH {
+            let t = (river_val / RIVER_WIDTH).powi(2);
+            let river_bed = (self.water_level - 2) as f64;
+            height = river_bed + (height - river_bed) * t;
+        }
+
+        let max_surface = (CHUNK_SIZE_Y as i32 * VERTICAL_CHUNKS) - 12;
+        (height.round() as i32).clamp(2, max_surface)
     }
 
     /// Determines the biome at global coordinate (x, z).
     #[inline]
     pub fn get_biome(&self, x: i32, z: i32, height: i32) -> Biome {
-        let fx = x as f64;
-        let fz = z as f64;
-
-        // Mushroom Fields: very rare fungal biome with distinct mycelium turf
-        let m_val = self.mushroom_noise.get([fx * 0.003, fz * 0.003]);
-        if m_val > 0.60 {
-            if height <= self.water_level {
-                return Biome::Ocean;
-            }
-            return Biome::MushroomFields;
-        }
+        let (wx, wz) = self.sample_warp(x, z);
+        let (temp, moisture) = self.sample_climate(wx, wz);
 
         // River channels: carved river corridors filled with water or river banks
-        let river_val = self.river_noise.get([fx * 0.0035, fz * 0.0035]).abs();
-        if river_val < 0.038 && height <= self.water_level + 1 {
+        let river_val = self.sample_river_val(wx, wz);
+        if river_val < 0.036 && height <= self.water_level + 1 {
             return Biome::River;
         }
 
         if height <= self.water_level {
-            let temp = self.temp_noise.get([fx * 0.003, fz * 0.003]);
-            let moisture = self.moisture_noise.get([fx * 0.003, fz * 0.003]);
-            if temp > 0.18 && moisture > -0.10 {
+            if temp > 0.14 && moisture > -0.10 {
                 return Biome::CoralReef;
             }
             return Biome::Ocean;
         }
 
-        let temp = self.temp_noise.get([fx * 0.003, fz * 0.003]);
-        let moisture = self.moisture_noise.get([fx * 0.003, fz * 0.003]);
-
-        // Coastal beach transition: 1 to 2 blocks above water level bordering water
-        if height <= self.water_level + 2 && temp > -0.20 {
+        // Coastal beach transition bordering water
+        if height <= self.water_level + 2 && temp > -0.22 {
             return Biome::Beach;
         }
 
-        if height > 58 {
+        if height > 61 {
+            // Preserve hot terracotta mesas at high plateau elevations
+            if temp > 0.22 && moisture < -0.10 {
+                return Biome::Badlands;
+            }
             return Biome::Mountains;
         }
 
         // Cold regions: Snowy Tundra vs Taiga
-        if temp < -0.18 {
+        if temp < -0.16 {
             Biome::SnowyTundra
-        } else if temp >= -0.18 && temp < 0.05 && moisture > 0.10 {
+        } else if temp < 0.06 && moisture > 0.06 {
             // Cool climate with ample moisture: Taiga (dense spruce, podzol floor)
             Biome::Taiga
-        } else if temp > 0.28 && moisture < -0.15 {
+        } else if temp > 0.22 && moisture < -0.10 {
             // Hyper-arid hot plateaus: Badlands
             Biome::Badlands
-        } else if temp > 0.25 && moisture < 0.0 {
+        } else if temp > 0.18 && moisture < 0.04 {
             // Arid hot regions: Desert
             Biome::Desert
-        } else if temp > 0.15 && moisture > 0.15 {
+        } else if temp > 0.12 && moisture > 0.12 {
             // Warm and tropical high moisture: Jungle
             Biome::Jungle
-        } else if temp > 0.10 && moisture < 0.05 {
+        } else if temp > 0.08 && moisture < 0.12 {
             // Warm semi-arid plateaus: Savanna
             Biome::Savanna
-        } else if height <= self.water_level + 4 && moisture > 0.18 {
+        } else if height <= self.water_level + 5 && moisture > 0.14 {
             // Lowlands near water level with high humidity: Swamp
             Biome::Swamp
-        } else if temp >= 0.0 && temp <= 0.22 && moisture > 0.22 {
+        } else if temp >= -0.04 && temp <= 0.20 && moisture > 0.18 {
             // High humidity temperate canopy: Dark Forest (dense 2x2 dark oak trees)
             Biome::DarkForest
-        } else if moisture > 0.10 {
+        } else if moisture > 0.05 {
             // High humidity temperate: Forest
             Biome::Forest
         } else {
@@ -228,21 +449,102 @@ impl TerrainGenerator {
         }
     }
 
-    /// Checks if a 3D coordinate is carved out as a cave.
+    /// Searches deterministically outward from (0, 0) for a safe, dry-land spawn point
+    /// never inside a River, Ocean, CoralReef, or water basin, and avoiding sheer cliff edges.
+    /// Returns `(spawn_x, surface_y, spawn_z)`.
+    pub fn find_spawn_coords(&self) -> (i32, i32, i32) {
+        let is_good_land = |x: i32, z: i32, max_slope: i32| -> Option<i32> {
+            let h = self.surface_height(x, z);
+            if h <= self.water_level + 1 || h >= self.water_level + 36 {
+                return None;
+            }
+            let biome = self.get_biome(x, z, h);
+            if matches!(biome, Biome::River | Biome::Ocean | Biome::CoralReef) {
+                return None;
+            }
+            // Check local 5x5 neighborhood for dry terrain and tolerable slope
+            for dz in -2..=2 {
+                for dx in -2..=2 {
+                    let nh = self.surface_height(x + dx, z + dz);
+                    if nh <= self.water_level {
+                        return None;
+                    }
+                    if (nh - h).abs() > max_slope {
+                        return None;
+                    }
+                }
+            }
+            Some(h)
+        };
+
+        // Pass 1: Look for comfortable dry land with gentle slope (max_slope <= 3)
+        let max_radius: i32 = 640;
+        let step_i: i32 = 4;
+        let step_u: usize = step_i as usize;
+        for r in (0..=max_radius).step_by(step_u) {
+            if r == 0 {
+                if let Some(h) = is_good_land(0, 0, 3) {
+                    return (0, h, 0);
+                }
+                continue;
+            }
+            for x in (-r..=r).step_by(step_u) {
+                for &z in &[-r, r] {
+                    if let Some(h) = is_good_land(x, z, 3) {
+                        return (x, h, z);
+                    }
+                }
+            }
+            for z in ((-r + step_i)..=(r - step_i)).step_by(step_u) {
+                for &x in &[-r, r] {
+                    if let Some(h) = is_good_land(x, z, 3) {
+                        return (x, h, z);
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Relaxed slope fallback up to 1024 blocks so spawn is still guaranteed dry land
+        for r in (0_i32..=1024).step_by(8) {
+            for z in (-r..=r).step_by(8) {
+                for x in (-r..=r).step_by(8) {
+                    if z.abs() != r && x.abs() != r {
+                        continue;
+                    }
+                    let h = self.surface_height(x, z);
+                    let biome = self.get_biome(x, z, h);
+                    if h > self.water_level + 1
+                        && !matches!(biome, Biome::River | Biome::Ocean | Biome::CoralReef)
+                    {
+                        return (x, h, z);
+                    }
+                }
+            }
+        }
+
+        (0, self.surface_height(0, 0), 0)
+    }
+
+    /// Checks if a 3D coordinate is carved out as a cavern or winding tunnel cave.
     #[inline]
     pub fn is_cave(&self, x: i32, y: i32, z: i32) -> bool {
-        // No caves at bedrock or in the sky
         if y <= 1 {
             return false;
         }
 
-        let fx = x as f64;
+        let fx = x as f64 + self.detail_offset[0] * 0.1;
         let fy = y as f64;
-        let fz = z as f64;
+        let fz = z as f64 + self.detail_offset[1] * 0.1;
 
         let density = self.cave_noise.get([fx, fy, fz]);
-        // Cavern threshold
-        density > 0.45
+        if density > 0.44 {
+            return true;
+        }
+
+        // Winding spaghetti tunnels between depth 4 and surface cliffs
+        let ta = self.tunnel_noise_a.get([fx, fy * 1.15, fz]);
+        let tb = self.tunnel_noise_b.get([fx, fy * 1.15, fz]);
+        ta.abs() < 0.062 && tb.abs() < 0.062
     }
 
     /// Generates the base terrain for a specific chunk (without cross-chunk multi-block structures).
@@ -250,12 +552,30 @@ impl TerrainGenerator {
         let mut chunk = Chunk::new(pos);
         let origin = pos.to_world_origin();
 
+        // Precompute surface heights across the chunk plus a 1-block border for steepness/cliff painting
+        let mut heights = [[0i32; 18]; 18];
+        for dz in 0..18usize {
+            let wz = origin.z + dz as i32 - 1;
+            for dx in 0..18usize {
+                let wx = origin.x + dx as i32 - 1;
+                heights[dz][dx] = self.surface_height(wx, wz);
+            }
+        }
+
         for lz in 0..CHUNK_SIZE_Z {
             let wz = origin.z + lz as i32;
             for lx in 0..CHUNK_SIZE_X {
                 let wx = origin.x + lx as i32;
 
-                let surface_y = self.surface_height(wx, wz);
+                let h_idx_x = lx + 1;
+                let h_idx_z = lz + 1;
+                let surface_y = heights[h_idx_z][h_idx_x];
+                let max_neighbor_drop = (surface_y - heights[h_idx_z][h_idx_x - 1])
+                    .max(surface_y - heights[h_idx_z][h_idx_x + 1])
+                    .max(surface_y - heights[h_idx_z - 1][h_idx_x])
+                    .max(surface_y - heights[h_idx_z + 1][h_idx_x]);
+                let is_steep_cliff = max_neighbor_drop >= 3;
+
                 let biome = self.get_biome(wx, wz, surface_y);
                 let is_underwater = surface_y <= self.water_level;
 
@@ -265,21 +585,32 @@ impl TerrainGenerator {
                     let block = if wy == 0 {
                         BlockId::BEDROCK
                     } else if wy < surface_y {
-                        // Check if carved by cave system (leave surface top soil intact)
-                        if wy < surface_y - 3 && self.is_cave(wx, wy, wz) {
+                        // Allow tunnels to occasionally carve hillside cave mouths when steep and dry
+                        let cave_carved = if wy < surface_y - 3 {
+                            self.is_cave(wx, wy, wz)
+                        } else if wy > self.water_level + 1 && is_steep_cliff {
+                            self.is_cave(wx, wy, wz)
+                        } else {
+                            false
+                        };
+
+                        if cave_carved {
                             BlockId::AIR
                         } else if wy == surface_y - 1 {
                             if is_underwater || surface_y <= self.water_level + 1 {
                                 if biome == Biome::Ocean || biome == Biome::CoralReef {
-                                    // Alternating sand and gravel ocean bed
-                                    let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31)).unsigned_abs() % 3;
+                                    let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31))
+                                        .unsigned_abs()
+                                        % 3;
                                     if gh == 0 {
                                         BlockId::GRAVEL
                                     } else {
                                         BlockId::SAND
                                     }
                                 } else if biome == Biome::River {
-                                    let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29)).unsigned_abs() % 5;
+                                    let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29))
+                                        .unsigned_abs()
+                                        % 5;
                                     if rh == 0 {
                                         BlockId::CLAY
                                     } else if rh <= 2 {
@@ -289,6 +620,19 @@ impl TerrainGenerator {
                                     }
                                 } else {
                                     BlockId::SAND
+                                }
+                            } else if is_steep_cliff {
+                                // Steep vertical cliffs expose natural rock, terracotta, or sandstone strata
+                                match biome {
+                                    Biome::Badlands => {
+                                        if (surface_y / 2) % 2 == 0 {
+                                            BlockId::TERRACOTTA
+                                        } else {
+                                            BlockId::RED_SAND
+                                        }
+                                    }
+                                    Biome::Desert | Biome::Beach => BlockId::SANDSTONE,
+                                    _ => BlockId::STONE,
                                 }
                             } else {
                                 match biome {
@@ -302,16 +646,19 @@ impl TerrainGenerator {
                                     }
                                     Biome::SnowyTundra => BlockId::SNOW_BLOCK,
                                     Biome::Taiga => {
-                                        let ph = (wx.wrapping_mul(23) ^ wz.wrapping_mul(37)).unsigned_abs() % 5;
+                                        let ph = (wx.wrapping_mul(23) ^ wz.wrapping_mul(37))
+                                            .unsigned_abs()
+                                            % 5;
                                         if ph <= 2 {
                                             BlockId::PODZOL
                                         } else {
                                             BlockId::GRASS
                                         }
                                     }
-                                    Biome::MushroomFields => BlockId::MYCELIUM,
                                     Biome::River => {
-                                        let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29)).unsigned_abs() % 4;
+                                        let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29))
+                                            .unsigned_abs()
+                                            % 4;
                                         if rh == 0 {
                                             BlockId::CLAY
                                         } else if rh == 1 {
@@ -320,23 +667,43 @@ impl TerrainGenerator {
                                             BlockId::SAND
                                         }
                                     }
-                                    Biome::Mountains if surface_y > 64 => BlockId::SNOW_BLOCK,
-                                    Biome::Mountains if surface_y > 58 => BlockId::STONE,
-                                    Biome::Swamp if surface_y <= self.water_level + 2 && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) => BlockId::CLAY,
+                                    Biome::Mountains if surface_y >= 78 => BlockId::SNOW_BLOCK,
+                                    Biome::Mountains if surface_y >= 65 => {
+                                        if (wx.wrapping_mul(11) ^ wz.wrapping_mul(29))
+                                            .unsigned_abs()
+                                            % 5
+                                            == 0
+                                        {
+                                            BlockId::GRAVEL
+                                        } else {
+                                            BlockId::STONE
+                                        }
+                                    }
+                                    Biome::Mountains => BlockId::GRASS,
+                                    Biome::Swamp
+                                        if surface_y <= self.water_level + 2
+                                            && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) =>
+                                    {
+                                        BlockId::CLAY
+                                    }
                                     _ => BlockId::GRASS,
                                 }
                             }
                         } else if wy >= surface_y - 4 {
                             if is_underwater || surface_y <= self.water_level + 1 {
                                 if biome == Biome::Ocean || biome == Biome::CoralReef {
-                                    let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31)).unsigned_abs() % 3;
+                                    let gh = (wx.wrapping_mul(17) ^ wz.wrapping_mul(31))
+                                        .unsigned_abs()
+                                        % 3;
                                     if gh == 0 {
                                         BlockId::GRAVEL
                                     } else {
                                         BlockId::SAND
                                     }
                                 } else if biome == Biome::River {
-                                    let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29)).unsigned_abs() % 3;
+                                    let rh = (wx.wrapping_mul(19) ^ wz.wrapping_mul(29))
+                                        .unsigned_abs()
+                                        % 3;
                                     if rh == 0 {
                                         BlockId::GRAVEL
                                     } else {
@@ -345,6 +712,8 @@ impl TerrainGenerator {
                                 } else {
                                     BlockId::SAND
                                 }
+                            } else if is_steep_cliff && !matches!(biome, Biome::Badlands | Biome::Desert | Biome::Beach) {
+                                BlockId::STONE
                             } else {
                                 match biome {
                                     Biome::Desert | Biome::Beach => {
@@ -356,24 +725,26 @@ impl TerrainGenerator {
                                     }
                                     Biome::Badlands => {
                                         let layer = (wy / 2) % 3;
-                                        if layer == 0 {
+                                        if layer == 0 || layer == 2 {
                                             BlockId::TERRACOTTA
-                                        } else if layer == 1 {
-                                            BlockId::RED_SAND
                                         } else {
-                                            BlockId::TERRACOTTA
+                                            BlockId::RED_SAND
                                         }
                                     }
-                                    Biome::Swamp if surface_y <= self.water_level + 2 && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) => BlockId::CLAY,
+                                    Biome::Mountains if surface_y >= 65 => BlockId::STONE,
+                                    Biome::Swamp
+                                        if surface_y <= self.water_level + 2
+                                            && (wx.wrapping_add(wz).unsigned_abs() % 3 == 0) =>
+                                    {
+                                        BlockId::CLAY
+                                    }
                                     _ => BlockId::DIRT,
                                 }
                             }
                         } else {
-                            // Subsurface stone with ore veins
                             self.get_subsurface_block(wx, wy, wz)
                         }
                     } else if wy <= self.water_level {
-                        // Freezing water in Snowy Tundra turns surface to ICE
                         if biome == Biome::SnowyTundra && wy == self.water_level {
                             BlockId::ICE
                         } else {
@@ -406,7 +777,8 @@ impl TerrainGenerator {
                 let vx = (cx << 2) + ((h & 3) as i32);
                 let vy = (cy << 2) + (((h >> 2) & 3) as i32);
                 let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                let dist_sq =
+                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
                 if dist_sq <= 2 {
                     return BlockId::DIAMOND_ORE;
                 }
@@ -420,56 +792,59 @@ impl TerrainGenerator {
                 let vx = (cx << 2) + ((h & 3) as i32);
                 let vy = (cy << 2) + (((h >> 2) & 3) as i32);
                 let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                let dist_sq =
+                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
                 if dist_sq <= 3 {
                     return BlockId::GOLD_ORE;
                 }
             }
         }
 
-        // Iron Ore: Broad subsurface range (y: 6..52)
-        if wy >= 6 && wy <= 52 {
+        // Iron Ore: Broad subsurface range (y: 6..64)
+        if wy >= 6 && wy <= 64 {
             let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9923));
             if h % 15 == 0 {
                 let vx = (cx << 2) + ((h & 3) as i32);
                 let vy = (cy << 2) + (((h >> 2) & 3) as i32);
                 let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                let dist_sq =
+                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
                 if dist_sq <= 4 {
                     return BlockId::IRON_ORE;
                 }
             }
         }
 
-        // Copper Ore: (y: 14..56)
-        if wy >= 14 && wy <= 56 {
+        // Copper Ore: (y: 14..70)
+        if wy >= 14 && wy <= 70 {
             let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9931));
             if h % 13 == 0 {
                 let vx = (cx << 2) + ((h & 3) as i32);
                 let vy = (cy << 2) + (((h >> 2) & 3) as i32);
                 let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                let dist_sq =
+                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
                 if dist_sq <= 4 {
                     return BlockId::COPPER_ORE;
                 }
             }
         }
 
-        // Coal Ore: Abundant across upper & middle underground (y: 18..72)
-        if wy >= 18 && wy <= 72 {
+        // Coal Ore: Abundant across upper & middle underground & mountains (y: 18..96)
+        if wy >= 18 && wy <= 96 {
             let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9941));
             if h % 9 == 0 {
                 let vx = (cx << 2) + ((h & 3) as i32);
                 let vy = (cy << 2) + (((h >> 2) & 3) as i32);
                 let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq = (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
+                let dist_sq =
+                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
                 if dist_sq <= 5 {
                     return BlockId::COAL_ORE;
                 }
             }
         }
 
-        // Cobblestone patches
         if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23)) % 23 == 0 {
             BlockId::COBBLESTONE
         } else {
@@ -477,7 +852,7 @@ impl TerrainGenerator {
         }
     }
 
-    /// Populates foliage, trees (Oak, Birch, Spruce) and tall grass on chunks where the ground exists.
+    /// Populates foliage, trees, boulders, coral reefs, flowers, and cacti on chunks.
     pub fn populate_chunk_features(&self, chunk: &mut Chunk) {
         let origin = chunk.pos.to_world_origin();
 
@@ -498,7 +873,7 @@ impl TerrainGenerator {
                                 && chunk.get(lx, ly, lz) == Some(BlockId::AIR)
                             {
                                 let lh = tree_hash(wx, wz, self.seed.wrapping_add(999));
-                                if lh % 11 == 0 {
+                                if lh % 10 == 0 {
                                     chunk.set(lx, ly, lz, BlockId::LILY_PAD);
                                 }
                             }
@@ -517,8 +892,8 @@ impl TerrainGenerator {
                             let ch = tree_hash(wx, wz, self.seed.wrapping_add(1234));
                             if biome == Biome::CoralReef && water_depth >= 2 {
                                 if ch % 11 == 0 {
-                                    // Coral column (2-4 blocks tall, within water depth)
-                                    let col_height = (2 + ((ch >> 4) % 3) as usize).min(water_depth.saturating_sub(1) as usize);
+                                    let col_height = (2 + ((ch >> 4) % 4) as usize)
+                                        .min(water_depth.saturating_sub(1) as usize);
                                     let coral_type = if (ch >> 8) % 2 == 0 {
                                         BlockId::CORAL_BLOCK
                                     } else {
@@ -528,27 +903,28 @@ impl TerrainGenerator {
                                         chunk.set(lx, cy, lz, coral_type);
                                     }
                                     if (ch >> 12) % 3 == 0 && col_height >= 2 {
-                                        let lantern_y = (ly + col_height - 1).min(CHUNK_SIZE_Y - 1);
+                                        let lantern_y =
+                                            (ly + col_height - 1).min(CHUNK_SIZE_Y - 1);
                                         chunk.set(lx, lantern_y, lz, BlockId::SEA_LANTERN);
                                     }
                                 } else if ch % 23 == 0 {
-                                    // Glowing Sea Lantern resting on the reef floor
                                     chunk.set(lx, ly, lz, BlockId::SEA_LANTERN);
                                 } else if ch % 3 == 0 {
-                                    // Lush seagrass
                                     chunk.set(lx, ly, lz, BlockId::SEAGRASS);
                                 }
-                            } else if (biome == Biome::Ocean || biome == Biome::River) && ch % 7 == 0 {
+                            } else if (biome == Biome::Ocean || biome == Biome::River)
+                                && ch % 7 == 0
+                            {
                                 chunk.set(lx, ly, lz, BlockId::SEAGRASS);
                             }
                         }
                     }
-                    continue; // No trees or tall grass underwater
+                    continue;
                 }
 
                 let local_surface_y = surface_y - origin.y;
 
-                // Tall grass scattering on surface grass and podzol blocks
+                // Tall grass, flowers, pumpkins, and melons on surface grass and podzol
                 if local_surface_y >= 1 && local_surface_y < CHUNK_SIZE_Y as i32 {
                     let ly = local_surface_y as usize;
                     let under = chunk.get(lx, ly - 1, lz);
@@ -557,12 +933,13 @@ impl TerrainGenerator {
                     {
                         let grass_chance = match biome {
                             Biome::Plains => 20,
-                            Biome::Forest => 12,
-                            Biome::Savanna => 25,
-                            Biome::Swamp => 15,
-                            Biome::Jungle => 35,
+                            Biome::Forest => 14,
+                            Biome::Savanna => 26,
+                            Biome::Swamp => 16,
+                            Biome::Jungle => 36,
                             Biome::Taiga => 18,
                             Biome::DarkForest => 15,
+                            Biome::Mountains => 8,
                             _ => 0,
                         };
                         if grass_chance > 0
@@ -570,20 +947,20 @@ impl TerrainGenerator {
                         {
                             chunk.set(lx, ly, lz, BlockId::TALL_GRASS);
                         } else {
-                            // Flower, Pumpkin, and Melon scattering on unoccupied grass/podzol
                             let fh = tree_hash(wx, wz, self.seed.wrapping_add(919));
                             let flower_pct = match biome {
-                                Biome::Plains => 5,
+                                Biome::Plains => 6,
                                 Biome::Forest => 4,
                                 Biome::Swamp => 3,
                                 Biome::DarkForest => 2,
                                 Biome::Taiga | Biome::Savanna => 2,
+                                Biome::Mountains => 2,
                                 _ => 0,
                             };
                             if flower_pct > 0 && (fh % 100) < flower_pct {
                                 let flower = match biome {
                                     Biome::Swamp => BlockId::BLUE_ORCHID,
-                                    Biome::Taiga | Biome::Savanna => {
+                                    Biome::Taiga | Biome::Savanna | Biome::Mountains => {
                                         if (fh >> 8) % 2 == 0 {
                                             BlockId::DANDELION
                                         } else {
@@ -601,10 +978,11 @@ impl TerrainGenerator {
                                 };
                                 chunk.set(lx, ly, lz, flower);
                             } else if matches!(biome, Biome::Plains | Biome::Forest | Biome::Taiga)
-                                && fh % 280 == 0
+                                && fh % 260 == 0
                             {
                                 chunk.set(lx, ly, lz, BlockId::PUMPKIN);
-                            } else if matches!(biome, Biome::Jungle | Biome::Swamp) && fh % 220 == 0
+                            } else if matches!(biome, Biome::Jungle | Biome::Swamp)
+                                && fh % 200 == 0
                             {
                                 chunk.set(lx, ly, lz, BlockId::MELON);
                             }
@@ -613,14 +991,17 @@ impl TerrainGenerator {
                 }
 
                 // Desert Cacti on sand
-                if biome == Biome::Desert && local_surface_y >= 1 && local_surface_y < (CHUNK_SIZE_Y as i32 - 4) {
+                if biome == Biome::Desert
+                    && local_surface_y >= 1
+                    && local_surface_y < (CHUNK_SIZE_Y as i32 - 4)
+                {
                     let ly = local_surface_y as usize;
                     if chunk.get(lx, ly - 1, lz) == Some(BlockId::SAND)
                         && chunk.get(lx, ly, lz) == Some(BlockId::AIR)
                     {
                         let ch = tree_hash(wx, wz, self.seed.wrapping_add(888));
-                        if ch % 45 == 0 {
-                            let cactus_height = 1 + ((ch >> 4) % 3) as usize; // 1 to 3 blocks
+                        if ch % 42 == 0 {
+                            let cactus_height = 1 + ((ch >> 4) % 4) as usize;
                             for cy in ly..(ly + cactus_height).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, cy, lz, BlockId::CACTUS);
                             }
@@ -628,7 +1009,7 @@ impl TerrainGenerator {
                     }
                 }
 
-                // Trees: require a margin of 2 blocks from chunk edges for leaves
+                // Trees & boulders: keep 2-block margin from chunk horizontal edges
                 if lx < 2 || lx >= (CHUNK_SIZE_X - 2) || lz < 2 || lz >= (CHUNK_SIZE_Z - 2) {
                     continue;
                 }
@@ -640,11 +1021,20 @@ impl TerrainGenerator {
                 let ly = local_surface_y as usize;
                 let ground = chunk.get(lx, ly - 1, lz);
                 let valid_ground = match biome {
-                    Biome::SnowyTundra => ground == Some(BlockId::SNOW_BLOCK) || ground == Some(BlockId::GRASS),
+                    Biome::SnowyTundra => {
+                        ground == Some(BlockId::SNOW_BLOCK) || ground == Some(BlockId::GRASS)
+                    }
                     Biome::Swamp => ground == Some(BlockId::GRASS) || ground == Some(BlockId::CLAY),
                     Biome::Taiga => ground == Some(BlockId::PODZOL) || ground == Some(BlockId::GRASS),
-                    Biome::MushroomFields => ground == Some(BlockId::MYCELIUM),
-                    Biome::DarkForest => ground == Some(BlockId::GRASS) || ground == Some(BlockId::DIRT) || ground == Some(BlockId::PODZOL),
+                    Biome::DarkForest => {
+                        ground == Some(BlockId::GRASS)
+                            || ground == Some(BlockId::DIRT)
+                            || ground == Some(BlockId::PODZOL)
+                    }
+                    Biome::Mountains => {
+                        surface_y <= 70
+                            && (ground == Some(BlockId::GRASS) || ground == Some(BlockId::STONE))
+                    }
                     _ => ground == Some(BlockId::GRASS),
                 };
                 if !valid_ground {
@@ -655,51 +1045,85 @@ impl TerrainGenerator {
 
                 match biome {
                     Biome::Forest => {
-                        if th % 22 == 0 {
+                        if (th >> 12) % 90 == 0 {
+                            // Forest mossy boulder landmark
+                            chunk.set(lx, ly, lz, BlockId::MOSSY_COBBLESTONE);
+                            if ly + 1 < CHUNK_SIZE_Y {
+                                chunk.set(lx, ly + 1, lz, BlockId::MOSSY_COBBLESTONE);
+                            }
+                        } else if th % 20 == 0 {
                             let is_birch = (th >> 8) % 2 == 0;
                             if is_birch {
-                                // Birch Tree: 5 blocks high trunk, BIRCH_LOG and BIRCH_LEAVES
-                                for ty in ly..(ly + 5).min(CHUNK_SIZE_Y) {
+                                let trunk_h = 5 + ((th >> 4) % 3) as usize;
+                                for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
                                     chunk.set(lx, ty, lz, BlockId::BIRCH_LOG);
                                 }
-                                let crown_start = ly + 3;
-                                let crown_end = (ly + 6).min(CHUNK_SIZE_Y - 1);
+                                let crown_start = ly + trunk_h.saturating_sub(2);
+                                let crown_end = (ly + trunk_h + 1).min(CHUNK_SIZE_Y - 1);
                                 for cy in crown_start..=crown_end {
-                                    let radius: i32 = if cy >= ly + 5 { 1 } else { 2 };
+                                    let radius: i32 = if cy >= ly + trunk_h { 1 } else { 2 };
                                     for dz in -radius..=radius {
                                         for dx in -radius..=radius {
                                             let cx = lx as i32 + dx;
                                             let cz = lz as i32 + dz;
-                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                                if dx.abs() == 2 && dz.abs() == 2 && (dx + dz) % 2 == 0 {
+                                            if cx >= 0
+                                                && cx < CHUNK_SIZE_X as i32
+                                                && cz >= 0
+                                                && cz < CHUNK_SIZE_Z as i32
+                                            {
+                                                if dx.abs() == 2
+                                                    && dz.abs() == 2
+                                                    && (dx + dz) % 2 == 0
+                                                {
                                                     continue;
                                                 }
-                                                if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                    chunk.set(cx as usize, cy, cz as usize, BlockId::BIRCH_LEAVES);
+                                                if chunk.get(cx as usize, cy, cz as usize)
+                                                    == Some(BlockId::AIR)
+                                                {
+                                                    chunk.set(
+                                                        cx as usize,
+                                                        cy,
+                                                        cz as usize,
+                                                        BlockId::BIRCH_LEAVES,
+                                                    );
                                                 }
                                             }
                                         }
                                     }
                                 }
                             } else {
-                                // Oak Tree: 4 blocks high trunk, WOOD_LOG and LEAVES
-                                for ty in ly..(ly + 4).min(CHUNK_SIZE_Y) {
+                                let trunk_h = 4 + ((th >> 4) % 3) as usize;
+                                for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
                                     chunk.set(lx, ty, lz, BlockId::WOOD_LOG);
                                 }
-                                let crown_start = ly + 2;
-                                let crown_end = (ly + 5).min(CHUNK_SIZE_Y - 1);
+                                let crown_start = ly + trunk_h.saturating_sub(2);
+                                let crown_end = (ly + trunk_h + 1).min(CHUNK_SIZE_Y - 1);
                                 for cy in crown_start..=crown_end {
-                                    let radius: i32 = if cy >= ly + 4 { 1 } else { 2 };
+                                    let radius: i32 = if cy >= ly + trunk_h { 1 } else { 2 };
                                     for dz in -radius..=radius {
                                         for dx in -radius..=radius {
                                             let cx = lx as i32 + dx;
                                             let cz = lz as i32 + dz;
-                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                                if dx.abs() == 2 && dz.abs() == 2 && (dx + dz) % 2 == 0 {
+                                            if cx >= 0
+                                                && cx < CHUNK_SIZE_X as i32
+                                                && cz >= 0
+                                                && cz < CHUNK_SIZE_Z as i32
+                                            {
+                                                if dx.abs() == 2
+                                                    && dz.abs() == 2
+                                                    && (dx + dz) % 2 == 0
+                                                {
                                                     continue;
                                                 }
-                                                if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                    chunk.set(cx as usize, cy, cz as usize, BlockId::LEAVES);
+                                                if chunk.get(cx as usize, cy, cz as usize)
+                                                    == Some(BlockId::AIR)
+                                                {
+                                                    chunk.set(
+                                                        cx as usize,
+                                                        cy,
+                                                        cz as usize,
+                                                        BlockId::LEAVES,
+                                                    );
                                                 }
                                             }
                                         }
@@ -709,24 +1133,39 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::Plains => {
-                        if th % 80 == 0 {
-                            for ty in ly..(ly + 4).min(CHUNK_SIZE_Y) {
+                        if th % 75 == 0 {
+                            let trunk_h = 4 + ((th >> 4) % 2) as usize;
+                            for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::WOOD_LOG);
                             }
                             let crown_start = ly + 2;
-                            let crown_end = (ly + 5).min(CHUNK_SIZE_Y - 1);
+                            let crown_end = (ly + trunk_h + 1).min(CHUNK_SIZE_Y - 1);
                             for cy in crown_start..=crown_end {
-                                let radius: i32 = if cy >= ly + 4 { 1 } else { 2 };
+                                let radius: i32 = if cy >= ly + trunk_h { 1 } else { 2 };
                                 for dz in -radius..=radius {
                                     for dx in -radius..=radius {
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if dx.abs() == 2 && dz.abs() == 2 && (dx + dz) % 2 == 0 {
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if dx.abs() == 2
+                                                && dz.abs() == 2
+                                                && (dx + dz) % 2 == 0
+                                            {
                                                 continue;
                                             }
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::LEAVES);
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::LEAVES,
+                                                );
                                             }
                                         }
                                     }
@@ -735,14 +1174,20 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::Savanna => {
-                        if th % 45 == 0 {
-                            let trunk_h = 5;
+                        if th % 40 == 0 {
+                            let trunk_h = 5 + ((th >> 4) % 2) as usize;
                             for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::ACACIA_LOG);
                             }
                             let top_y = ly + trunk_h;
                             for cy in (top_y - 1)..=(top_y + 1).min(CHUNK_SIZE_Y - 1) {
-                                let radius: i32 = if cy == top_y + 1 { 1 } else if cy == top_y { 2 } else { 1 };
+                                let radius: i32 = if cy == top_y + 1 {
+                                    1
+                                } else if cy == top_y {
+                                    2
+                                } else {
+                                    1
+                                };
                                 for dz in -radius..=radius {
                                     for dx in -radius..=radius {
                                         if radius == 2 && dx.abs() == 2 && dz.abs() == 2 {
@@ -750,9 +1195,20 @@ impl TerrainGenerator {
                                         }
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::ACACIA_LEAVES);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::ACACIA_LEAVES,
+                                                );
                                             }
                                         }
                                     }
@@ -761,7 +1217,7 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::Swamp => {
-                        if th % 30 == 0 {
+                        if th % 28 == 0 {
                             let trunk_h = 4;
                             for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::WOOD_LOG);
@@ -777,9 +1233,20 @@ impl TerrainGenerator {
                                         }
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::LEAVES);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::LEAVES,
+                                                );
                                             }
                                         }
                                     }
@@ -788,8 +1255,8 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::SnowyTundra => {
-                        if th % 35 == 0 {
-                            let trunk_height = 5 + ((th >> 4) % 2) as usize;
+                        if th % 34 == 0 {
+                            let trunk_height = 5 + ((th >> 4) % 3) as usize;
                             for ty in ly..(ly + trunk_height).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::SPRUCE_LOG);
                             }
@@ -810,9 +1277,20 @@ impl TerrainGenerator {
                                         }
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::SPRUCE_LEAVES);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::SPRUCE_LEAVES,
+                                                );
                                             }
                                         }
                                     }
@@ -821,9 +1299,8 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::Mountains => {
-                        if th % 40 == 0 {
-                            // Spruce Pine Tree in Mountains
-                            let trunk_height = 5 + ((th >> 4) % 2) as usize;
+                        if ground == Some(BlockId::GRASS) && th % 36 == 0 {
+                            let trunk_height = 5 + ((th >> 4) % 3) as usize;
                             for ty in ly..(ly + trunk_height).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::SPRUCE_LOG);
                             }
@@ -844,9 +1321,20 @@ impl TerrainGenerator {
                                         }
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::SPRUCE_LEAVES);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::SPRUCE_LEAVES,
+                                                );
                                             }
                                         }
                                     }
@@ -855,43 +1343,82 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::Jungle => {
-                        if th % 16 == 0 {
-                            // Towering Jungle Tree: 6 to 9 blocks high trunk with lush wide canopy
-                            let trunk_h = 6 + ((th >> 4) % 4) as usize;
+                        if th % 15 == 0 {
+                            let trunk_h = 6 + ((th >> 4) % 5) as usize;
                             for ty in ly..(ly + trunk_h).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::JUNGLE_LOG);
                             }
                             let top_y = ly + trunk_h;
-                            for cy in (top_y - 2)..=(top_y + 1).min(CHUNK_SIZE_Y - 1) {
-                                let radius: i32 = if cy == top_y + 1 { 1 } else if cy >= top_y - 1 { 2 } else { 1 };
+                            for cy in (top_y.saturating_sub(2))..=(top_y + 1).min(CHUNK_SIZE_Y - 1)
+                            {
+                                let radius: i32 = if cy == top_y + 1 {
+                                    1
+                                } else if cy >= top_y.saturating_sub(1) {
+                                    2
+                                } else {
+                                    1
+                                };
                                 for dz in -radius..=radius {
                                     for dx in -radius..=radius {
-                                        if radius == 2 && dx.abs() == 2 && dz.abs() == 2 && (dx + dz) % 2 == 0 {
+                                        if radius == 2
+                                            && dx.abs() == 2
+                                            && dz.abs() == 2
+                                            && (dx + dz) % 2 == 0
+                                        {
                                             continue;
                                         }
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::JUNGLE_LEAVES);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::JUNGLE_LEAVES,
+                                                );
                                             }
                                         }
                                     }
                                 }
                             }
-                        } else if th % 22 == 0 {
-                            // Jungle floor bush: 1 JUNGLE_LOG surrounded by JUNGLE_LEAVES
+                        } else if th % 21 == 0 {
                             chunk.set(lx, ly, lz, BlockId::JUNGLE_LOG);
                             for dz in -1..=1 {
                                 for dx in -1..=1 {
                                     let cx = lx as i32 + dx;
                                     let cz = lz as i32 + dz;
-                                    if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                        if chunk.get(cx as usize, ly, cz as usize) == Some(BlockId::AIR) {
-                                            chunk.set(cx as usize, ly, cz as usize, BlockId::JUNGLE_LEAVES);
+                                    if cx >= 0
+                                        && cx < CHUNK_SIZE_X as i32
+                                        && cz >= 0
+                                        && cz < CHUNK_SIZE_Z as i32
+                                    {
+                                        if chunk.get(cx as usize, ly, cz as usize)
+                                            == Some(BlockId::AIR)
+                                        {
+                                            chunk.set(
+                                                cx as usize,
+                                                ly,
+                                                cz as usize,
+                                                BlockId::JUNGLE_LEAVES,
+                                            );
                                         }
-                                        if ly + 1 < CHUNK_SIZE_Y && chunk.get(cx as usize, ly + 1, cz as usize) == Some(BlockId::AIR) {
-                                            chunk.set(cx as usize, ly + 1, cz as usize, BlockId::JUNGLE_LEAVES);
+                                        if ly + 1 < CHUNK_SIZE_Y
+                                            && chunk.get(cx as usize, ly + 1, cz as usize)
+                                                == Some(BlockId::AIR)
+                                        {
+                                            chunk.set(
+                                                cx as usize,
+                                                ly + 1,
+                                                cz as usize,
+                                                BlockId::JUNGLE_LEAVES,
+                                            );
                                         }
                                     }
                                 }
@@ -899,8 +1426,7 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::Taiga => {
-                        if (th >> 12) % 65 == 0 {
-                            // Mossy Cobblestone Boulder
+                        if (th >> 12) % 60 == 0 {
                             for dy in 0..2 {
                                 for dz in -1_i32..=1 {
                                     for dx in -1_i32..=1 {
@@ -910,15 +1436,24 @@ impl TerrainGenerator {
                                         let cx = lx as i32 + dx;
                                         let cy = ly + dy;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 && cy < CHUNK_SIZE_Y {
-                                            chunk.set(cx as usize, cy, cz as usize, BlockId::MOSSY_COBBLESTONE);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                            && cy < CHUNK_SIZE_Y
+                                        {
+                                            chunk.set(
+                                                cx as usize,
+                                                cy,
+                                                cz as usize,
+                                                BlockId::MOSSY_COBBLESTONE,
+                                            );
                                         }
                                     }
                                 }
                             }
-                        } else if th % 18 == 0 {
-                            // Dense Spruce Tree
-                            let trunk_height = 6 + ((th >> 4) % 3) as usize;
+                        } else if th % 17 == 0 {
+                            let trunk_height = 6 + ((th >> 4) % 4) as usize;
                             for ty in ly..(ly + trunk_height).min(CHUNK_SIZE_Y) {
                                 chunk.set(lx, ty, lz, BlockId::SPRUCE_LOG);
                             }
@@ -939,70 +1474,20 @@ impl TerrainGenerator {
                                         }
                                         let cx = lx as i32 + dx;
                                         let cz = lz as i32 + dz;
-                                        if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                            if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                chunk.set(cx as usize, cy, cz as usize, BlockId::SPRUCE_LEAVES);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Biome::MushroomFields => {
-                        if th % 16 == 0 {
-                            let is_red = (th >> 6) % 2 == 0;
-                            let stalk_height = 5 + ((th >> 3) % 3) as usize; // 5 to 7 blocks tall
-                            for ty in ly..(ly + stalk_height).min(CHUNK_SIZE_Y) {
-                                chunk.set(lx, ty, lz, BlockId::MUSHROOM_STEM);
-                            }
-                            let top_y = ly + stalk_height;
-                            if is_red {
-                                // Giant Red Mushroom: Dome cap
-                                if top_y < CHUNK_SIZE_Y {
-                                    for dz in -2_i32..=2 {
-                                        for dx in -2_i32..=2 {
-                                            if dx.abs() == 2 && dz.abs() == 2 {
-                                                continue;
-                                            }
-                                            let cx = lx as i32 + dx;
-                                            let cz = lz as i32 + dz;
-                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                                chunk.set(cx as usize, top_y, cz as usize, BlockId::RED_MUSHROOM_BLOCK);
-                                            }
-                                        }
-                                    }
-                                }
-                                for dy in 1..=2 {
-                                    if dy > top_y { break; }
-                                    let cy = top_y - dy;
-                                    for dz in -2_i32..=2 {
-                                        for dx in -2_i32..=2 {
-                                            if dx.abs() == 2 || dz.abs() == 2 {
-                                                if dx.abs() == 2 && dz.abs() == 2 {
-                                                    continue;
-                                                }
-                                                let cx = lx as i32 + dx;
-                                                let cz = lz as i32 + dz;
-                                                if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                                    chunk.set(cx as usize, cy, cz as usize, BlockId::RED_MUSHROOM_BLOCK);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Giant Brown Mushroom: Flat plate cap
-                                if top_y < CHUNK_SIZE_Y {
-                                    for dz in -2_i32..=2 {
-                                        for dx in -2_i32..=2 {
-                                            if dx.abs() == 2 && dz.abs() == 2 {
-                                                continue;
-                                            }
-                                            let cx = lx as i32 + dx;
-                                            let cz = lz as i32 + dz;
-                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                                chunk.set(cx as usize, top_y, cz as usize, BlockId::BROWN_MUSHROOM_BLOCK);
+                                        if cx >= 0
+                                            && cx < CHUNK_SIZE_X as i32
+                                            && cz >= 0
+                                            && cz < CHUNK_SIZE_Z as i32
+                                        {
+                                            if chunk.get(cx as usize, cy, cz as usize)
+                                                == Some(BlockId::AIR)
+                                            {
+                                                chunk.set(
+                                                    cx as usize,
+                                                    cy,
+                                                    cz as usize,
+                                                    BlockId::SPRUCE_LEAVES,
+                                                );
                                             }
                                         }
                                     }
@@ -1011,10 +1496,14 @@ impl TerrainGenerator {
                         }
                     }
                     Biome::DarkForest => {
-                        if th % 13 == 0 && lx >= 2 && lx < (CHUNK_SIZE_X - 4) && lz >= 2 && lz < (CHUNK_SIZE_Z - 4) {
+                        if th % 13 == 0
+                            && lx >= 2
+                            && lx < (CHUNK_SIZE_X - 4)
+                            && lz >= 2
+                            && lz < (CHUNK_SIZE_Z - 4)
+                        {
                             let is_shroom = (th >> 9) % 7 == 0;
                             if is_shroom {
-                                // Giant mushroom growing beneath or between dark oak canopy
                                 let is_red = (th >> 5) % 2 == 0;
                                 let stalk_height = 4 + ((th >> 3) % 2) as usize;
                                 for ty in ly..(ly + stalk_height).min(CHUNK_SIZE_Y) {
@@ -1031,26 +1520,35 @@ impl TerrainGenerator {
                                         for dx in -1_i32..=1 {
                                             let cx = lx as i32 + dx;
                                             let cz = lz as i32 + dz;
-                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
+                                            if cx >= 0
+                                                && cx < CHUNK_SIZE_X as i32
+                                                && cz >= 0
+                                                && cz < CHUNK_SIZE_Z as i32
+                                            {
                                                 chunk.set(cx as usize, top_y, cz as usize, cap_block);
                                             }
                                         }
                                     }
                                 }
                             } else {
-                                // Massive 2x2 Dark Oak Tree
-                                let trunk_height = 6 + ((th >> 3) % 3) as usize; // 6 to 8 blocks
+                                let trunk_height = 6 + ((th >> 3) % 3) as usize;
                                 for ty in ly..(ly + trunk_height).min(CHUNK_SIZE_Y) {
                                     for ox in 0..2 {
                                         for oz in 0..2 {
-                                            chunk.set(lx + ox, ty, lz + oz, BlockId::DARK_OAK_LOG);
+                                            chunk.set(
+                                                lx + ox,
+                                                ty,
+                                                lz + oz,
+                                                BlockId::DARK_OAK_LOG,
+                                            );
                                         }
                                     }
                                 }
                                 let top_y = ly + trunk_height;
-                                // Dense intersecting roof canopy (leaves)
                                 for dy in 0..=3 {
-                                    if dy > top_y { break; }
+                                    if dy > top_y {
+                                        break;
+                                    }
                                     let cy = top_y + 1 - dy;
                                     if cy >= CHUNK_SIZE_Y {
                                         continue;
@@ -1058,14 +1556,27 @@ impl TerrainGenerator {
                                     let radius: i32 = if dy == 0 { 2 } else { 3 };
                                     for dz in -radius..=(radius + 1) {
                                         for dx in -radius..=(radius + 1) {
-                                            if (dx == -radius || dx == radius + 1) && (dz == -radius || dz == radius + 1) {
-                                                continue; // Round corners
+                                            if (dx == -radius || dx == radius + 1)
+                                                && (dz == -radius || dz == radius + 1)
+                                            {
+                                                continue;
                                             }
                                             let cx = lx as i32 + dx;
                                             let cz = lz as i32 + dz;
-                                            if cx >= 0 && cx < CHUNK_SIZE_X as i32 && cz >= 0 && cz < CHUNK_SIZE_Z as i32 {
-                                                if chunk.get(cx as usize, cy, cz as usize) == Some(BlockId::AIR) {
-                                                    chunk.set(cx as usize, cy, cz as usize, BlockId::DARK_OAK_LEAVES);
+                                            if cx >= 0
+                                                && cx < CHUNK_SIZE_X as i32
+                                                && cz >= 0
+                                                && cz < CHUNK_SIZE_Z as i32
+                                            {
+                                                if chunk.get(cx as usize, cy, cz as usize)
+                                                    == Some(BlockId::AIR)
+                                                {
+                                                    chunk.set(
+                                                        cx as usize,
+                                                        cy,
+                                                        cz as usize,
+                                                        BlockId::DARK_OAK_LEAVES,
+                                                    );
                                                 }
                                             }
                                         }
@@ -1115,6 +1626,7 @@ mod tests {
                 assert_eq!(gen1.surface_height(x, z), gen2.surface_height(x, z));
             }
         }
+        assert_eq!(gen1.find_spawn_coords(), gen2.find_spawn_coords());
     }
 
     #[test]
@@ -1123,8 +1635,6 @@ mod tests {
         let mut chunk = gen.generate_chunk(ChunkPos::new(0, 1, 0));
         gen.populate_chunk_features(&mut chunk);
 
-        // Bedrock is at y = 0 (chunk y=1 starts at world y=16)
-        // Ensure chunk contains non-air blocks
         let has_blocks = chunk.raw_blocks().iter().any(|b| !b.is_air());
         assert!(has_blocks);
     }
@@ -1138,7 +1648,6 @@ mod tests {
         let mut found_gold = false;
         let mut found_diamond = false;
 
-        // Sample underground across a 4x4 area of chunks at bottom layers (0..5 vertical chunks)
         for cx in 0..4 {
             for cz in 0..4 {
                 for cy in 0..5 {
@@ -1168,10 +1677,7 @@ mod tests {
         assert!(found_iron, "Expected iron ore to generate underground");
         assert!(found_copper, "Expected copper ore to generate underground");
         assert!(found_gold, "Expected gold ore to generate underground");
-        assert!(
-            found_diamond,
-            "Expected diamond ore to generate underground"
-        );
+        assert!(found_diamond, "Expected diamond ore to generate underground");
     }
 
     #[test]
@@ -1179,16 +1685,14 @@ mod tests {
         let gen = TerrainGenerator::new(1337);
         let mut biomes_found = std::collections::HashSet::new();
 
-        // Sample a 1000x1000 block region
-        for z in (-500..500).step_by(10) {
-            for x in (-500..500).step_by(10) {
+        for z in (-700..700).step_by(10) {
+            for x in (-700..700).step_by(10) {
                 let h = gen.surface_height(x, z);
                 let biome = gen.get_biome(x, z, h);
                 biomes_found.insert(biome);
             }
         }
 
-        // Verify that all 16 varied climate biomes are generated
         assert!(biomes_found.contains(&Biome::Plains), "Expected Plains biome");
         assert!(biomes_found.contains(&Biome::Forest), "Expected Forest biome");
         assert!(biomes_found.contains(&Biome::Mountains), "Expected Mountains biome");
@@ -1202,8 +1706,57 @@ mod tests {
         assert!(biomes_found.contains(&Biome::Beach), "Expected Beach biome");
         assert!(biomes_found.contains(&Biome::River), "Expected River biome");
         assert!(biomes_found.contains(&Biome::Taiga), "Expected Taiga biome");
-        assert!(biomes_found.contains(&Biome::MushroomFields), "Expected MushroomFields biome");
         assert!(biomes_found.contains(&Biome::DarkForest), "Expected DarkForest biome");
         assert!(biomes_found.contains(&Biome::CoralReef), "Expected CoralReef biome");
+    }
+
+    #[test]
+    fn test_seed_diversity_verticality_and_dry_spawn() {
+        let mut spawn_signatures = std::collections::HashSet::new();
+        let mut max_observed_height = 0;
+
+        for seed in [1u32, 42, 1337, 99999, 202511, 777777, 888888, 1234567] {
+            let gen = TerrainGenerator::new(seed);
+            let (sx, sy, sz) = gen.find_spawn_coords();
+            let sbiome = gen.get_biome(sx, sz, sy);
+            assert!(
+                sy > gen.water_level + 1,
+                "Seed {} spawned in or too close to water: y={} <= {}",
+                seed,
+                sy,
+                gen.water_level + 1
+            );
+            assert!(
+                !matches!(sbiome, Biome::River | Biome::Ocean | Biome::CoralReef),
+                "Seed {} spawned in water biome {:?}",
+                seed,
+                sbiome
+            );
+
+            spawn_signatures.insert((
+                gen.surface_height(0, 0),
+                gen.get_biome(0, 0, gen.surface_height(0, 0)),
+                sx,
+                sz,
+            ));
+
+            // Check that verticality creates genuine peaks above y = 65
+            for z in (-500..=500).step_by(20) {
+                for x in (-500..=500).step_by(20) {
+                    max_observed_height = max_observed_height.max(gen.surface_height(x, z));
+                }
+            }
+        }
+
+        assert!(
+            spawn_signatures.len() >= 6,
+            "Different seeds must vary terrain/biomes near spawn, only got {} unique signatures",
+            spawn_signatures.len()
+        );
+        assert!(
+            max_observed_height >= 72,
+            "Expected tall mountain peaks (>= 72), max observed was {}",
+            max_observed_height
+        );
     }
 }

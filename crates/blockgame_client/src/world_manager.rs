@@ -302,7 +302,6 @@ impl WorldManager {
         // - Swamp: 55% spawn chance (mud wallowing pigs and chickens)
         // - SnowyTundra: 25% spawn chance (cold adapted chickens, cows, pigs)
         // - Taiga: 55% spawn chance (coniferous foraging: cows, pigs, chickens)
-        // - MushroomFields: 70% spawn chance (peaceful fungal sanctuary: cows)
         // - River: 20% spawn chance (riverbank chickens/pigs)
         let (spawn_chance, kind_weights, min_herd, max_herd) = match biome {
             Biome::Desert | Biome::Ocean | Biome::Badlands | Biome::CoralReef => return,
@@ -316,7 +315,6 @@ impl WorldManager {
             Biome::Jungle => (0.65, [(AnimalKind::Chicken, 0.45), (AnimalKind::Pig, 0.30), (AnimalKind::Cow, 0.15), (AnimalKind::Sheep, 0.10)], 2, 5),
             Biome::Beach => (0.30, [(AnimalKind::Chicken, 0.65), (AnimalKind::Pig, 0.15), (AnimalKind::Cow, 0.10), (AnimalKind::Sheep, 0.10)], 1, 3),
             Biome::Taiga => (0.55, [(AnimalKind::Cow, 0.30), (AnimalKind::Sheep, 0.30), (AnimalKind::Pig, 0.20), (AnimalKind::Chicken, 0.20)], 2, 4),
-            Biome::MushroomFields => (0.70, [(AnimalKind::Cow, 1.00), (AnimalKind::Pig, 0.0), (AnimalKind::Chicken, 0.0), (AnimalKind::Sheep, 0.0)], 2, 4),
             Biome::River => (0.20, [(AnimalKind::Chicken, 0.55), (AnimalKind::Pig, 0.25), (AnimalKind::Cow, 0.10), (AnimalKind::Sheep, 0.10)], 1, 2),
         };
 

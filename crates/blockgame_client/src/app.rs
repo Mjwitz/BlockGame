@@ -795,15 +795,20 @@ impl AppState {
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
-        world_manager.init_spawn_area(&self.device, &self.pipeline);
+        let (spawn_x, _, spawn_z) = world_manager.generator.find_spawn_coords();
+        world_manager.init_area_around(
+            Vec3::new(spawn_x as f32 + 0.5, 64.0, spawn_z as f32 + 0.5),
+            &self.device,
+            &self.pipeline,
+        );
 
-        // Find safe surface spawn height at (0, 0)
+        // Find safe surface spawn height at the dry-land spawn coordinates
         let spawn_y = {
             let world_guard = world_manager.world().lock().unwrap();
             let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
             while y > 1 {
-                let block = world_guard.get_block(IVec3::new(0, y, 0));
-                if !block.is_air() {
+                let block = world_guard.get_block(IVec3::new(spawn_x, y, spawn_z));
+                if !block.is_air() && block != BlockId::TALL_GRASS {
                     break;
                 }
                 y -= 1;
@@ -812,7 +817,7 @@ impl AppState {
         };
 
         self.world_manager = world_manager;
-        self.player = PlayerPhysics::new(Vec3::new(0.5, spawn_y, 0.5));
+        self.player = PlayerPhysics::new(Vec3::new(spawn_x as f32 + 0.5, spawn_y, spawn_z as f32 + 0.5));
         self.player_stats = PlayerStats::new();
         self.player_stats.game_mode = game_mode;
         self.player_skills = PlayerSkills::new();
@@ -940,20 +945,26 @@ impl AppState {
         self.breaking_voxel = None;
         self.cracking_buffer = None;
 
-        // Find safe surface spawn height at (0, 0)
+        // Find safe surface spawn height at this world's dry-land spawn
+        let (spawn_x, _, spawn_z) = self.world_manager.generator.find_spawn_coords();
+        self.world_manager.init_area_around(
+            Vec3::new(spawn_x as f32 + 0.5, 64.0, spawn_z as f32 + 0.5),
+            &self.device,
+            &self.pipeline,
+        );
         let spawn_y = {
             let world_guard = self.world_manager.world().lock().unwrap();
             let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
             while y > 1 {
-                let block = world_guard.get_block(IVec3::new(0, y, 0));
-                if !block.is_air() {
+                let block = world_guard.get_block(IVec3::new(spawn_x, y, spawn_z));
+                if !block.is_air() && block != BlockId::TALL_GRASS {
                     break;
                 }
                 y -= 1;
             }
             (y + 2) as f32
         };
-        self.player.position = Vec3::new(0.5, spawn_y, 0.5);
+        self.player.position = Vec3::new(spawn_x as f32 + 0.5, spawn_y, spawn_z as f32 + 0.5);
         self.camera.position = self.player.eye_position();
         self.camera.pitch = 0.0;
         self.mouse_captured = true;
@@ -1068,22 +1079,27 @@ impl ApplicationHandler for BlockGameApp {
 
         let mut world_manager =
             WorldManager::new(self.seed, self.render_distance, self.registry.clone());
-        world_manager.init_spawn_area(&device, &pipeline);
+        let (spawn_x, _, spawn_z) = world_manager.generator.find_spawn_coords();
+        world_manager.init_area_around(
+            Vec3::new(spawn_x as f32 + 0.5, 64.0, spawn_z as f32 + 0.5),
+            &device,
+            &pipeline,
+        );
 
-        // Spawn player atop the surface
+        // Spawn player atop the dry-land surface
         let spawn_y = {
             let world_guard = world_manager.world().lock().unwrap();
             let mut y = (blockgame_core::chunk::VERTICAL_CHUNKS * 16) - 2;
             while y > 1 {
-                let block = world_guard.get_block(IVec3::new(0, y, 0));
-                if !block.is_air() {
+                let block = world_guard.get_block(IVec3::new(spawn_x, y, spawn_z));
+                if !block.is_air() && block != BlockId::TALL_GRASS {
                     break;
                 }
                 y -= 1;
             }
             (y + 2) as f32
         };
-        let player = PlayerPhysics::new(Vec3::new(0.5, spawn_y, 0.5));
+        let player = PlayerPhysics::new(Vec3::new(spawn_x as f32 + 0.5, spawn_y, spawn_z as f32 + 0.5));
 
         let camera = Camera::new(
             player.eye_position(),
