@@ -136,6 +136,8 @@ pub struct AppState {
     pub inventory: Inventory,
     pub armor: blockgame_core::item::ArmorEquipment,
     pub active_hotbar_slot: usize,
+    pub hotbar_activity_timer: f32,
+    pub hotbar_tuck_progress: f32,
     pub item_registry: Arc<ItemRegistry>,
     pub crafting_manager: CraftingManager,
     pub crafting_grid: CraftingGrid,
@@ -1053,7 +1055,7 @@ impl ApplicationHandler for BlockGameApp {
         let window_icon = load_window_icon();
         #[allow(unused_mut)]
         let mut window_attrs = WindowAttributes::default()
-            .with_title("BlockGame")
+            .with_title("Roots & Ridges")
             .with_inner_size(PhysicalSize::new(1280, 720))
             .with_window_icon(window_icon.clone());
 
@@ -1240,6 +1242,8 @@ impl ApplicationHandler for BlockGameApp {
             inventory,
             armor: blockgame_core::item::ArmorEquipment::new(),
             active_hotbar_slot: 0,
+            hotbar_activity_timer: 4.0,
+            hotbar_tuck_progress: 0.0,
             item_registry,
             crafting_manager,
             crafting_grid,
@@ -1406,8 +1410,10 @@ impl ApplicationHandler for BlockGameApp {
                 }
                 if scroll > 0.0 {
                     state.active_hotbar_slot = (state.active_hotbar_slot + 8) % 9;
+                    state.hotbar_activity_timer = 4.0;
                 } else if scroll < 0.0 {
                     state.active_hotbar_slot = (state.active_hotbar_slot + 1) % 9;
+                    state.hotbar_activity_timer = 4.0;
                 }
             }
             WindowEvent::MouseInput {
@@ -2232,6 +2238,7 @@ impl ApplicationHandler for BlockGameApp {
                             return;
                         }
                         if pressed {
+                            state.hotbar_activity_timer = 4.0;
                             state.punch_timer = 0.25; // Trigger punch animation
                             let held_slot = state.inventory.get(state.active_hotbar_slot);
                             let base_attack_damage =
@@ -2418,6 +2425,7 @@ impl ApplicationHandler for BlockGameApp {
                         {
                             return;
                         }
+                        state.hotbar_activity_timer = 4.0;
                         // 1. Check if targeting an interactive block (e.g. Furnace, Chest, or Crafting Table)
                         if let Some(hit) = state.targeted_block {
                             let block_id = {
@@ -3718,15 +3726,15 @@ impl ApplicationHandler for BlockGameApp {
                                 (state.day_night.time + 3000.0).rem_euclid(24000.0);
                             log::info!("Time of day advanced to: {:.1} ticks", state.day_night.time);
                         }
-                        KeyCode::Digit1 if pressed && !state.skills_open => state.active_hotbar_slot = 0,
-                        KeyCode::Digit2 if pressed && !state.skills_open => state.active_hotbar_slot = 1,
-                        KeyCode::Digit3 if pressed && !state.skills_open => state.active_hotbar_slot = 2,
-                        KeyCode::Digit4 if pressed && !state.skills_open => state.active_hotbar_slot = 3,
-                        KeyCode::Digit5 if pressed && !state.skills_open => state.active_hotbar_slot = 4,
-                        KeyCode::Digit6 if pressed && !state.skills_open => state.active_hotbar_slot = 5,
-                        KeyCode::Digit7 if pressed && !state.skills_open => state.active_hotbar_slot = 6,
-                        KeyCode::Digit8 if pressed && !state.skills_open => state.active_hotbar_slot = 7,
-                        KeyCode::Digit9 if pressed && !state.skills_open => state.active_hotbar_slot = 8,
+                        KeyCode::Digit1 if pressed && !state.skills_open => { state.active_hotbar_slot = 0; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit2 if pressed && !state.skills_open => { state.active_hotbar_slot = 1; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit3 if pressed && !state.skills_open => { state.active_hotbar_slot = 2; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit4 if pressed && !state.skills_open => { state.active_hotbar_slot = 3; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit5 if pressed && !state.skills_open => { state.active_hotbar_slot = 4; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit6 if pressed && !state.skills_open => { state.active_hotbar_slot = 5; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit7 if pressed && !state.skills_open => { state.active_hotbar_slot = 6; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit8 if pressed && !state.skills_open => { state.active_hotbar_slot = 7; state.hotbar_activity_timer = 4.0; }
+                        KeyCode::Digit9 if pressed && !state.skills_open => { state.active_hotbar_slot = 8; state.hotbar_activity_timer = 4.0; }
                         _ => {}
                     }
                 }
@@ -3740,8 +3748,21 @@ impl ApplicationHandler for BlockGameApp {
                 state.last_frame_time = now;
                 if state.screen == AppScreen::InGame {
                     state.mining_music_grace = (state.mining_music_grace - dt).max(0.0);
+                    if !state.inventory_open {
+                        if state.hotbar_activity_timer > 0.0 {
+                            state.hotbar_activity_timer = (state.hotbar_activity_timer - dt).max(0.0);
+                            state.hotbar_tuck_progress = (state.hotbar_tuck_progress - dt * 6.0).max(0.0);
+                        } else {
+                            state.hotbar_tuck_progress = (state.hotbar_tuck_progress + dt * 2.8).min(1.0);
+                        }
+                    } else {
+                        state.hotbar_activity_timer = 4.0;
+                        state.hotbar_tuck_progress = 0.0;
+                    }
                 } else {
                     state.mining_music_grace = 0.0;
+                    state.hotbar_activity_timer = 4.0;
+                    state.hotbar_tuck_progress = 0.0;
                 }
                 let is_underground = state.is_player_underground();
                 let is_moving = state.moving_forward
@@ -5589,7 +5610,7 @@ impl ApplicationHandler for BlockGameApp {
                         } else {
                             0.0
                         };
-                        UiBuilder::build_hud_with_armor(
+                        UiBuilder::build_hud_with_armor_and_tuck(
                             &mut state.ui_mesh,
                             screen_w,
                             screen_h,
@@ -5600,6 +5621,7 @@ impl ApplicationHandler for BlockGameApp {
                             punch_time,
                             &state.player_stats,
                             state.armor.total_defense(&state.item_registry),
+                            state.hotbar_tuck_progress,
                         );
 
                         match &state.fishing_state {

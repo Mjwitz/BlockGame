@@ -1,8 +1,8 @@
-# BlockGame
+# Roots & Ridges
 
-A procedural voxel sandbox survival game inspired by Minecraft, written in **Rust** with **wgpu** for modern cross-platform graphics on **Linux** and **Windows** (plus dedicated multiplayer server support).
+A procedural voxel sandbox survival game written in **Rust** with **wgpu** for modern cross-platform graphics on **Linux** and **Windows** (plus dedicated multiplayer server support).
 
-![BlockGame Procedural Landscape](assets/screenshots/landscape_render_new.png)
+![Roots & Ridges Procedural Landscape](assets/screenshots/landscape_render_new.png)
 
 ---
 

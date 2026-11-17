@@ -1907,11 +1907,113 @@ impl UiBuilder {
         stats: &blockgame_core::player::PlayerStats,
         armor_points: u8,
     ) {
+        Self::build_hud_with_armor_and_tuck(
+            mesh,
+            screen_w,
+            screen_h,
+            inventory,
+            active_slot,
+            registry,
+            walk_distance,
+            punch_time,
+            stats,
+            armor_points,
+            0.0,
+        );
+    }
+
+    /// Draws a sleek, stylized segmented status gauge (Roots & Ridges style)
+    /// replacing legacy heart/drumstick sprites.
+    pub fn draw_segmented_gauge(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        label_color: [f32; 4],
+        current_val: f32,
+        max_val: f32,
+        active_color: [f32; 4],
+        highlight_color: [f32; 4],
+        empty_color: [f32; 4],
+        border_color: [f32; 4],
+        num_segments: usize,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // 1. Dark outer container / frame
+        // Drop shadow
+        mesh.add_quad(x + 1.5, y + 1.5, w, h, white_uv, [0.02, 0.03, 0.05, 0.60]);
+        // Border
+        mesh.add_quad(x, y, w, h, white_uv, border_color);
+        // Slate background
+        mesh.add_quad(x + 1.0, y + 1.0, w - 2.0, h - 2.0, white_uv, [0.06, 0.08, 0.12, 0.88]);
+
+        // 2. Left label / icon tag
+        let label_w = Self::string_width(label, 7.5, 0.5);
+        Self::draw_string(mesh, x + 5.0, y + (h - 9.0) * 0.5, label, 7.5, 9.0, 0.5, label_color);
+
+        // 3. Segmented track
+        let track_start_x = x + 8.0 + label_w;
+        let num_str = format!("{:.0}", current_val.max(0.0));
+        let num_w = Self::string_width(&num_str, 7.0, 0.5);
+        let track_end_x = x + w - num_w - 7.0;
+        let track_w = (track_end_x - track_start_x).max(10.0);
+
+        let seg_gap = 2.0;
+        let total_gaps = (num_segments.saturating_sub(1)) as f32 * seg_gap;
+        let seg_w = ((track_w - total_gaps) / num_segments as f32).max(2.0);
+        let seg_h = h - 4.0;
+        let seg_y = y + 2.0;
+
+        let val_per_seg = max_val / num_segments as f32;
+
+        for i in 0..num_segments {
+            let sx = track_start_x + (i as f32) * (seg_w + seg_gap);
+            let threshold = (i as f32 + 1.0) * val_per_seg;
+            let half_threshold = threshold - (val_per_seg * 0.5);
+
+            // Empty groove
+            mesh.add_quad(sx, seg_y, seg_w, seg_h, white_uv, empty_color);
+
+            if current_val >= threshold {
+                // Full segment
+                mesh.add_quad(sx, seg_y, seg_w, seg_h, white_uv, active_color);
+                // Top gloss highlight
+                mesh.add_quad(sx, seg_y, seg_w, (seg_h * 0.35).max(1.0), white_uv, highlight_color);
+            } else if current_val >= half_threshold {
+                // Half segment
+                let half_w = seg_w * 0.5;
+                mesh.add_quad(sx, seg_y, half_w, seg_h, white_uv, active_color);
+                mesh.add_quad(sx, seg_y, half_w, (seg_h * 0.35).max(1.0), white_uv, highlight_color);
+            }
+        }
+
+        // 4. Numeric readout on the right
+        Self::draw_string(mesh, x + w - num_w - 4.0, y + (h - 9.0) * 0.5, &num_str, 7.0, 9.0, 0.5, [0.92, 0.94, 0.98, 0.95]);
+    }
+
+    /// Builds the standard Roots & Ridges gameplay HUD: center crosshair, held item,
+    /// dynamic auto-tucking hotbar, segmented Vitality/Stamina gauges, damage flash, and death screen.
+    pub fn build_hud_with_armor_and_tuck(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        inventory: &Inventory,
+        active_slot: usize,
+        registry: &ItemRegistry,
+        walk_distance: f32,
+        punch_time: f32,
+        stats: &blockgame_core::player::PlayerStats,
+        armor_points: u8,
+        hotbar_tuck_progress: f32,
+    ) {
         mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
         // 0. Full-screen Underwater Screen Overlay (When Player is Submerged)
         if stats.is_submerged && !stats.is_dead {
-            let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
             mesh.add_quad(
                 0.0,
                 0.0,
@@ -1945,19 +2047,41 @@ impl UiBuilder {
             );
         }
 
-        // 3. Hotbar Slots (9 slots, each 50x50 px with 5px gap)
+        // 3. Hotbar Slots (9 slots, each 50x50 px with 5px gap) with smooth tuck animation
         let slot_size = 50.0;
         let slot_gap = 5.0;
         let total_w = 9.0 * slot_size + 8.0 * slot_gap;
         let start_x = (screen_w - total_w) * 0.5;
-        let start_y = screen_h - slot_size - 16.0;
+        let base_start_y = screen_h - slot_size - 16.0;
+        let tuck_offset = (slot_size - 18.0) * hotbar_tuck_progress.clamp(0.0, 1.0);
+        let hotbar_y = base_start_y + tuck_offset;
+
+        // Elegant dock backdrop behind the slots
+        let dock_pad_x = 10.0;
+        let dock_pad_y = 6.0;
+        mesh.add_quad(
+            start_x - dock_pad_x,
+            hotbar_y - dock_pad_y,
+            total_w + dock_pad_x * 2.0,
+            slot_size + dock_pad_y * 2.0 + 8.0,
+            white_uv,
+            [0.04, 0.06, 0.09, 0.75],
+        );
+        mesh.add_quad(
+            start_x - dock_pad_x,
+            hotbar_y - dock_pad_y,
+            total_w + dock_pad_x * 2.0,
+            1.5,
+            white_uv,
+            [0.35, 0.40, 0.48, 0.85],
+        );
 
         let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
         let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
 
         for i in 0..9 {
             let x = start_x + (i as f32) * (slot_size + slot_gap);
-            let y = start_y;
+            let y = hotbar_y;
 
             // Slot Background
             mesh.add_quad(x, y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
@@ -1973,6 +2097,18 @@ impl UiBuilder {
                     highlight_uv,
                     [1.0, 1.0, 1.0, 1.0],
                 );
+
+                // When tucked, draw a prominent illuminated gold tab at the visible top edge
+                if hotbar_tuck_progress > 0.15 {
+                    mesh.add_quad(
+                        x + (slot_size - 18.0) * 0.5,
+                        y - 5.0,
+                        18.0,
+                        5.0,
+                        white_uv,
+                        [1.0, 0.82, 0.28, 0.95],
+                    );
+                }
             }
 
             // Item Icon & Stack Count
@@ -1996,10 +2132,8 @@ impl UiBuilder {
             }
         }
 
-        // 4. Player Health Hearts, Armor, Hunger, and Oxygen (Survival only)
-        let icon_size = 18.0;
-        let icon_spacing = 17.0;
-        let bars_y = start_y - 24.0;
+        // 4. Roots & Ridges Vitality & Stamina Segmented Gauges (Survival only)
+        let bars_y = hotbar_y - 20.0;
 
         if stats.game_mode.is_creative() {
             let mode_label = "Creative Mode";
@@ -2007,7 +2141,7 @@ impl UiBuilder {
             Self::draw_string(
                 mesh,
                 (screen_w - label_w) * 0.5,
-                start_y - 18.0,
+                hotbar_y - 18.0,
                 mode_label,
                 9.0,
                 12.0,
@@ -2015,138 +2149,97 @@ impl UiBuilder {
                 [0.78, 0.92, 1.0, 0.92],
             );
         } else {
-            let heart_bg_uv = TextureAtlas::get_uv_bounds(Self::HEART_CONTAINER_TILE);
-            let heart_full_uv = TextureAtlas::get_uv_bounds(Self::HEART_FULL_TILE);
-            let heart_half_uv = TextureAtlas::get_uv_bounds(Self::HEART_HALF_TILE);
+            let gauge_w = 188.0;
+            let gauge_h = 13.0;
 
-            for i in 0..10 {
-                let hx = start_x + (i as f32) * icon_spacing;
-                // Always draw heart container background
-                mesh.add_quad(
-                    hx,
-                    bars_y,
-                    icon_size,
-                    icon_size,
-                    heart_bg_uv,
-                    [1.0, 1.0, 1.0, 1.0],
-                );
+            // 4a. Vitality Gauge (Health) on the left above hotbar
+            Self::draw_segmented_gauge(
+                mesh,
+                start_x,
+                bars_y,
+                gauge_w,
+                gauge_h,
+                "HP",
+                [1.0, 0.35, 0.40, 1.0],
+                stats.health,
+                stats.max_health,
+                [0.90, 0.18, 0.22, 1.0],
+                [1.0, 0.45, 0.48, 1.0],
+                [0.16, 0.18, 0.22, 0.65],
+                [0.48, 0.22, 0.26, 0.90],
+                10,
+            );
 
-                let hp_val = (i as f32 + 1.0) * 2.0;
-                if stats.health >= hp_val {
-                    mesh.add_quad(
-                        hx,
-                        bars_y,
-                        icon_size,
-                        icon_size,
-                        heart_full_uv,
-                        [1.0, 1.0, 1.0, 1.0],
-                    );
-                } else if stats.health >= hp_val - 1.0 {
-                    mesh.add_quad(
-                        hx,
-                        bars_y,
-                        icon_size,
-                        icon_size,
-                        heart_half_uv,
-                        [1.0, 1.0, 1.0, 1.0],
-                    );
-                }
-            }
-
-            // 4b. Armor Points Bar (10 chestplate icons above health hearts when armor > 0)
+            // 4b. Armor Points Gauge (above Vitality gauge when armor > 0)
             if armor_points > 0 {
-                let armor_y = bars_y - icon_size - 4.0;
-                let armor_uv = TextureAtlas::get_uv_bounds(Self::ARMOR_ICON_TILE);
-                for i in 0..10u8 {
-                    let ax = start_x + (i as f32) * icon_spacing;
-                    let threshold = (i + 1) * 2;
-                    let tint = if armor_points >= threshold {
-                        [1.0, 1.0, 1.0, 1.0]
-                    } else if armor_points >= threshold - 1 {
-                        [0.65, 0.70, 0.78, 0.9]
-                    } else {
-                        [0.2, 0.2, 0.25, 0.55]
-                    };
-                    mesh.add_quad(ax, armor_y, icon_size, icon_size, armor_uv, tint);
-                }
-            }
-
-            // 5. Player Hunger Drumsticks (10 drumsticks immediately above the right hotbar)
-            let hunger_bg_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_CONTAINER_TILE);
-            let hunger_full_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_FULL_TILE);
-            let hunger_half_uv = TextureAtlas::get_uv_bounds(Self::HUNGER_HALF_TILE);
-
-            let hotbar_right = start_x + total_w;
-            for i in 0..10 {
-                let dx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
-                // Always draw drumstick container background
-                mesh.add_quad(
-                    dx,
-                    bars_y,
-                    icon_size,
-                    icon_size,
-                    hunger_bg_uv,
-                    [1.0, 1.0, 1.0, 1.0],
+                let armor_y = bars_y - 15.0;
+                Self::draw_segmented_gauge(
+                    mesh,
+                    start_x,
+                    armor_y,
+                    gauge_w,
+                    11.0,
+                    "AP",
+                    [0.65, 0.82, 1.0, 1.0],
+                    armor_points as f32,
+                    20.0,
+                    [0.55, 0.75, 0.95, 1.0],
+                    [0.80, 0.90, 1.0, 1.0],
+                    [0.14, 0.18, 0.24, 0.65],
+                    [0.32, 0.45, 0.60, 0.85],
+                    10,
                 );
-
-                let hunger_val = (i as f32 + 1.0) * 2.0;
-                if stats.hunger >= hunger_val {
-                    mesh.add_quad(
-                        dx,
-                        bars_y,
-                        icon_size,
-                        icon_size,
-                        hunger_full_uv,
-                        [1.0, 1.0, 1.0, 1.0],
-                    );
-                } else if stats.hunger >= hunger_val - 1.0 {
-                    mesh.add_quad(
-                        dx,
-                        bars_y,
-                        icon_size,
-                        icon_size,
-                        hunger_half_uv,
-                        [1.0, 1.0, 1.0, 1.0],
-                    );
-                }
             }
 
-            // 6. Oxygen / Breath Bubbles (10 bubbles directly above hunger bar when submerged or recovering breath)
-            if (stats.is_submerged || stats.breath < stats.max_breath) && !stats.is_dead {
-                let bubble_full_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_FULL_TILE);
-                let bubble_pop_uv = TextureAtlas::get_uv_bounds(Self::BUBBLE_POP_TILE);
-                let bubbles_y = bars_y - 20.0;
+            // 5. Stamina / Nourishment Gauge on the right above hotbar
+            let stamina_x = start_x + total_w - gauge_w;
+            Self::draw_segmented_gauge(
+                mesh,
+                stamina_x,
+                bars_y,
+                gauge_w,
+                gauge_h,
+                "ST",
+                [1.0, 0.78, 0.25, 1.0],
+                stats.hunger,
+                stats.max_hunger,
+                [0.94, 0.60, 0.12, 1.0],
+                [1.0, 0.82, 0.35, 1.0],
+                [0.20, 0.18, 0.14, 0.65],
+                [0.55, 0.42, 0.20, 0.90],
+                10,
+            );
 
-                let bubbles_remaining = ((stats.breath / stats.max_breath) * 10.0).ceil() as i32;
-                for i in 0..10 {
-                    let bx = hotbar_right - (i as f32 + 1.0) * icon_spacing;
-                    if i < bubbles_remaining {
-                        mesh.add_quad(
-                            bx,
-                            bubbles_y,
-                            icon_size,
-                            icon_size,
-                            bubble_full_uv,
-                            [1.0, 1.0, 1.0, 1.0],
-                        );
-                    } else if i == bubbles_remaining && stats.drown_timer > 0.0 {
-                        mesh.add_quad(
-                            bx,
-                            bubbles_y,
-                            icon_size,
-                            icon_size,
-                            bubble_pop_uv,
-                            [1.0, 1.0, 1.0, 1.0],
-                        );
-                    }
-                }
+            // 6. Oxygen / Breath Depth Gauge (above Stamina gauge when submerged or recovering breath)
+            if (stats.is_submerged || stats.breath < stats.max_breath) && !stats.is_dead {
+                let breath_y = bars_y - 15.0;
+                let cyan_active = if stats.drown_timer > 0.0 && ((stats.drown_timer * 8.0) as i32 % 2 == 0) {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.22, 0.85, 0.95, 1.0]
+                };
+                Self::draw_segmented_gauge(
+                    mesh,
+                    stamina_x,
+                    breath_y,
+                    gauge_w,
+                    11.0,
+                    "O2",
+                    [0.30, 0.90, 1.0, 1.0],
+                    stats.breath,
+                    stats.max_breath,
+                    cyan_active,
+                    [0.65, 0.95, 1.0, 1.0],
+                    [0.10, 0.18, 0.22, 0.65],
+                    [0.18, 0.50, 0.60, 0.85],
+                    10,
+                );
             }
         }
 
         // 7. Full-screen Red Damage Flash
         if stats.damage_flash > 0.0 {
             let flash_alpha = ((stats.damage_flash / 0.5) * 0.40).clamp(0.0, 0.40);
-            let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
             mesh.add_quad(
                 0.0,
                 0.0,
