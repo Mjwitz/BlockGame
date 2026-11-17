@@ -71,6 +71,9 @@ pub enum AppScreen {
     Paused {
         status_message: Option<String>,
     },
+    Guide {
+        page: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1438,12 +1441,12 @@ impl ApplicationHandler for BlockGameApp {
                                 let rects = UiBuilder::title_screen_button_rects(screen_w, screen_h);
                                 if UiBuilder::is_rect_hovered(
                                     cpos,
-                                    rects[0][0],
-                                    rects[0][1],
-                                    rects[0][2],
-                                    rects[0][3],
+                                    rects[UiBuilder::TITLE_BTN_SINGLEPLAYER][0],
+                                    rects[UiBuilder::TITLE_BTN_SINGLEPLAYER][1],
+                                    rects[UiBuilder::TITLE_BTN_SINGLEPLAYER][2],
+                                    rects[UiBuilder::TITLE_BTN_SINGLEPLAYER][3],
                                 ) {
-                                    // Singleplayer
+                                    // Singleplayer / Continue Expedition
                                     state.refresh_saved_worlds();
                                     let sel = if state.saved_worlds.is_empty() {
                                         None
@@ -1455,10 +1458,24 @@ impl ApplicationHandler for BlockGameApp {
                                     };
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
-                                    rects[1][0],
-                                    rects[1][1],
-                                    rects[1][2],
-                                    rects[1][3],
+                                    rects[UiBuilder::TITLE_BTN_NEW_WORLD][0],
+                                    rects[UiBuilder::TITLE_BTN_NEW_WORLD][1],
+                                    rects[UiBuilder::TITLE_BTN_NEW_WORLD][2],
+                                    rects[UiBuilder::TITLE_BTN_NEW_WORLD][3],
+                                ) {
+                                    // New Expedition
+                                    state.screen = AppScreen::CreateWorld {
+                                        name_input: "New World".to_string(),
+                                        seed_input: String::new(),
+                                        focused_field: 0,
+                                        game_mode: blockgame_core::GameMode::Survival,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[UiBuilder::TITLE_BTN_MULTIPLAYER][0],
+                                    rects[UiBuilder::TITLE_BTN_MULTIPLAYER][1],
+                                    rects[UiBuilder::TITLE_BTN_MULTIPLAYER][2],
+                                    rects[UiBuilder::TITLE_BTN_MULTIPLAYER][3],
                                 ) {
                                     // Multiplayer Lobby
                                     state.screen = AppScreen::MultiplayerLobby {
@@ -1472,10 +1489,10 @@ impl ApplicationHandler for BlockGameApp {
                                     state.refresh_directory_servers();
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
-                                    rects[2][0],
-                                    rects[2][1],
-                                    rects[2][2],
-                                    rects[2][3],
+                                    rects[UiBuilder::TITLE_BTN_SETTINGS][0],
+                                    rects[UiBuilder::TITLE_BTN_SETTINGS][1],
+                                    rects[UiBuilder::TITLE_BTN_SETTINGS][2],
+                                    rects[UiBuilder::TITLE_BTN_SETTINGS][3],
                                 ) {
                                     // Settings
                                     state.screen = AppScreen::Settings {
@@ -1483,13 +1500,53 @@ impl ApplicationHandler for BlockGameApp {
                                     };
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
-                                    rects[3][0],
-                                    rects[3][1],
-                                    rects[3][2],
-                                    rects[3][3],
+                                    rects[UiBuilder::TITLE_BTN_GUIDE][0],
+                                    rects[UiBuilder::TITLE_BTN_GUIDE][1],
+                                    rects[UiBuilder::TITLE_BTN_GUIDE][2],
+                                    rects[UiBuilder::TITLE_BTN_GUIDE][3],
+                                ) {
+                                    // How to Play & Guide
+                                    state.screen = AppScreen::Guide { page: 0 };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[UiBuilder::TITLE_BTN_QUIT][0],
+                                    rects[UiBuilder::TITLE_BTN_QUIT][1],
+                                    rects[UiBuilder::TITLE_BTN_QUIT][2],
+                                    rects[UiBuilder::TITLE_BTN_QUIT][3],
                                 ) {
                                     // Quit Game
                                     event_loop.exit();
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[UiBuilder::TITLE_BTN_QUICK_RESUME][0],
+                                    rects[UiBuilder::TITLE_BTN_QUICK_RESUME][1],
+                                    rects[UiBuilder::TITLE_BTN_QUICK_RESUME][2],
+                                    rects[UiBuilder::TITLE_BTN_QUICK_RESUME][3],
+                                ) {
+                                    // Quick Resume Card Action
+                                    state.refresh_saved_worlds();
+                                    if let Some(recent) = state.saved_worlds.first() {
+                                        let folder = recent.folder_name.clone();
+                                        state.load_and_start_world(&folder);
+                                    } else {
+                                        state.screen = AppScreen::CreateWorld {
+                                            name_input: "New World".to_string(),
+                                            seed_input: String::new(),
+                                            focused_field: 0,
+                                            game_mode: blockgame_core::GameMode::Survival,
+                                        };
+                                    }
+                                }
+                            }
+                            AppScreen::Guide { page } => {
+                                let btns = UiBuilder::guide_screen_button_rects(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(cpos, btns[0][0], btns[0][1], btns[0][2], btns[0][3]) {
+                                    let new_page = if page == 0 { 2 } else { page - 1 };
+                                    state.screen = AppScreen::Guide { page: new_page };
+                                } else if UiBuilder::is_rect_hovered(cpos, btns[1][0], btns[1][1], btns[1][2], btns[1][3]) {
+                                    state.screen = AppScreen::Guide { page: (page + 1) % 3 };
+                                } else if UiBuilder::is_rect_hovered(cpos, btns[2][0], btns[2][1], btns[2][2], btns[2][3]) {
+                                    state.screen = AppScreen::Title;
                                 }
                             }
                             AppScreen::WorldSelect { selected_index } => {
@@ -3284,6 +3341,11 @@ impl ApplicationHandler for BlockGameApp {
                                 };
                             }
                         }
+                        AppScreen::Guide { .. } => {
+                            if key == KeyCode::Escape {
+                                state.screen = AppScreen::Title;
+                            }
+                        }
                         AppScreen::Title | AppScreen::InGame => {}
                     }
                     return;
@@ -3779,6 +3841,9 @@ impl ApplicationHandler for BlockGameApp {
                     is_mining,
                 };
                 state.music_scheduler.update(dt, &mut state.audio, music_ctx);
+                if matches!(state.screen, AppScreen::Title | AppScreen::Guide { .. }) && !state.audio.is_music_playing() {
+                    state.audio.play_music(crate::audio::MUSIC_TRACK_THE_VIEW_FROM_THE_RIDGE, 2.5);
+                }
 
                 let (screen_w, screen_h, ui_cursor) = state.ui_metrics();
                 let aspect = screen_w / screen_h;
@@ -5898,6 +5963,9 @@ impl ApplicationHandler for BlockGameApp {
                     // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerLobby):
                     // Slowly orbit camera over the currently loaded 3D terrain around player.position
                     state.total_time += dt;
+                    if matches!(state.screen, AppScreen::Title | AppScreen::Guide { .. }) {
+                        state.day_night.set_time(5500.0);
+                    }
                     state.poll_directory_servers();
                     state.world_manager.update(
                         state.player.position,
@@ -5905,7 +5973,7 @@ impl ApplicationHandler for BlockGameApp {
                         &state.pipeline,
                     );
 
-                    let angle = state.total_time * 0.12;
+                    let angle = state.total_time * 0.06;
                     let center_x = state.player.position.x;
                     let center_z = state.player.position.z;
                     let cam_x = center_x + angle.cos() * 24.0;
@@ -5959,10 +6027,20 @@ impl ApplicationHandler for BlockGameApp {
 
                     match &state.screen {
                         AppScreen::Title => {
-                            UiBuilder::build_title_screen(
+                            UiBuilder::build_title_screen_with_recent_world(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
+                                ui_cursor,
+                                state.saved_worlds.first(),
+                            );
+                        }
+                        AppScreen::Guide { page } => {
+                            UiBuilder::build_guide_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                *page,
                                 ui_cursor,
                             );
                         }
@@ -6179,6 +6257,7 @@ impl ApplicationHandler for BlockGameApp {
                     || matches!(
                         state.screen,
                         AppScreen::Title
+                            | AppScreen::Guide { .. }
                             | AppScreen::WorldSelect { .. }
                             | AppScreen::CreateWorld { .. }
                             | AppScreen::MultiplayerLobby { .. }

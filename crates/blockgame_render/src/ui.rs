@@ -4117,126 +4117,634 @@ impl UiBuilder {
         }
     }
 
-    /// Returns the 4 main button rectangles `[Singleplayer, Multiplayer, Settings, Quit Game]`
-    /// on the Title Screen as `([x, y, w, h])`.
-    pub fn title_screen_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 4] {
-        let btn_w = 340.0;
-        let btn_h = 44.0;
-        let gap = 14.0;
-        let btn_x = (screen_w - btn_w) * 0.5;
-        let start_y = screen_h * 0.44;
+    pub const TITLE_BTN_SINGLEPLAYER: usize = 0;
+    pub const TITLE_BTN_NEW_WORLD: usize = 1;
+    pub const TITLE_BTN_MULTIPLAYER: usize = 2;
+    pub const TITLE_BTN_SETTINGS: usize = 3;
+    pub const TITLE_BTN_GUIDE: usize = 4;
+    pub const TITLE_BTN_QUIT: usize = 5;
+    pub const TITLE_BTN_QUICK_RESUME: usize = 6;
+    pub const TITLE_BUTTON_COUNT: usize = 7;
+
+    /// Returns the 7 interactive button rectangles on the Roots & Ridges Title Screen:
+    /// `[0: Singleplayer, 1: New Expedition, 2: Multiplayer, 3: Settings, 4: Guide, 5: Quit, 6: Quick Resume]`.
+    pub fn title_screen_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; Self::TITLE_BUTTON_COUNT] {
+        let dock_w = 340.0_f32.min(screen_w * 0.35);
+        let pad_x = 28.0;
+        let btn_w = dock_w - pad_x * 2.0;
+        let btn_h = 42.0;
+        let gap = 10.0;
+        let start_y = 150.0_f32.min(screen_h * 0.22);
+
+        let card_w = 340.0_f32.min(screen_w * 0.34);
+        let card_h = 160.0;
+        let card_x = screen_w - card_w - 32.0;
+        let card_y = 44.0;
+        let res_btn_h = 36.0;
+        let res_btn_w = card_w - 32.0;
+        let res_btn_x = card_x + 16.0;
+        let res_btn_y = card_y + card_h - res_btn_h - 14.0;
+
         [
-            [btn_x, start_y, btn_w, btn_h],
-            [btn_x, start_y + (btn_h + gap), btn_w, btn_h],
-            [btn_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],
-            [btn_x, start_y + (btn_h + gap) * 3.0 + 8.0, btn_w, btn_h],
+            [pad_x, start_y, btn_w, btn_h],                         // 0: Continue Expedition / Singleplayer
+            [pad_x, start_y + (btn_h + gap), btn_w, btn_h],         // 1: New Expedition
+            [pad_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],   // 2: Multiplayer & Servers
+            [pad_x, start_y + (btn_h + gap) * 3.0, btn_w, btn_h],   // 3: Game Settings
+            [pad_x, start_y + (btn_h + gap) * 4.0, btn_w, btn_h],   // 4: How to Play & Guide
+            [pad_x, start_y + (btn_h + gap) * 5.0 + 10.0, btn_w, btn_h], // 5: Exit to Desktop
+            [res_btn_x, res_btn_y, res_btn_w, res_btn_h],           // 6: Quick Resume / First World
         ]
     }
 
-    /// Builds the Title Screen & Main Menu overlay.
+    /// Draws a sleek, modern sidebar dock button for Roots & Ridges.
+    pub fn draw_sidebar_button(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        glyph: &str,
+        label: &str,
+        cursor_pos: [f32; 2],
+        enabled: bool,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let hovered = enabled && Self::is_rect_hovered(cursor_pos, x, y, w, h);
+
+        // Drop shadow
+        mesh.add_quad(x + 2.0, y + 2.0, w, h, white_uv, [0.02, 0.03, 0.05, 0.50]);
+
+        let (bg, border, glyph_color, text_color, tab_color) = if !enabled {
+            (
+                [0.10, 0.12, 0.16, 0.60],
+                [0.22, 0.25, 0.32, 0.60],
+                [0.45, 0.48, 0.55, 0.60],
+                [0.45, 0.48, 0.55, 0.60],
+                [0.25, 0.28, 0.35, 0.0],
+            )
+        } else if hovered {
+            (
+                [0.16, 0.18, 0.24, 0.95],
+                [0.96, 0.78, 0.28, 1.0], // illuminated gold border
+                [1.0, 0.85, 0.35, 1.0],  // glowing gold glyph
+                [1.0, 0.98, 0.95, 1.0],  // bright text
+                [1.0, 0.80, 0.25, 1.0],  // prominent left active indicator notch
+            )
+        } else {
+            (
+                [0.08, 0.10, 0.15, 0.82],
+                [0.28, 0.32, 0.42, 0.85],
+                [0.85, 0.70, 0.30, 0.90],
+                [0.90, 0.92, 0.96, 0.95],
+                [0.85, 0.70, 0.30, 0.0],
+            )
+        };
+
+        // Outer border
+        mesh.add_quad(x, y, w, h, white_uv, border);
+        // Slate plate fill
+        mesh.add_quad(x + 1.0, y + 1.0, w - 2.0, h - 2.0, white_uv, bg);
+
+        // Left active indicator notch (slides out when hovered)
+        if hovered {
+            mesh.add_quad(x, y, 4.0, h, white_uv, tab_color);
+        }
+
+        // Glyph tag box on left
+        let glyph_w = 26.0;
+        let glyph_char_w = 9.0;
+        let glyph_char_h = 13.0;
+        let gx = x + 12.0;
+        let gy = y + (h - glyph_char_h) * 0.5;
+        Self::draw_string(mesh, gx, gy, glyph, glyph_char_w, glyph_char_h, 1.0, glyph_color);
+
+        // Button label
+        let char_w = 10.5;
+        let char_h = 14.0;
+        let spacing = 1.0;
+        let tx = x + 12.0 + glyph_w;
+        let ty = y + (h - char_h) * 0.5;
+
+        // Shadow & label
+        Self::draw_string(mesh, tx + 1.0, ty + 1.0, label, char_w, char_h, spacing, [0.03, 0.04, 0.06, 0.90]);
+        Self::draw_string(mesh, tx, ty, label, char_w, char_h, spacing, text_color);
+    }
+
+    /// Draws the Recent Expedition quick-resume card on the Title Screen.
+    pub fn draw_quick_resume_card(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        recent: Option<&blockgame_core::save::WorldMetadata>,
+        cursor_pos: [f32; 2],
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Card drop shadow
+        mesh.add_quad(x + 3.0, y + 3.0, w, h, white_uv, [0.01, 0.02, 0.04, 0.60]);
+        // Outer border
+        mesh.add_quad(x, y, w, h, white_uv, [0.38, 0.42, 0.52, 0.85]);
+        // Slate background
+        mesh.add_quad(x + 1.5, y + 1.5, w - 3.0, h - 3.0, white_uv, [0.06, 0.08, 0.12, 0.85]);
+
+        // Top decorative accent bar
+        mesh.add_quad(x + 1.5, y + 1.5, w - 3.0, 3.0, white_uv, [0.85, 0.68, 0.28, 0.95]);
+
+        // Header label
+        Self::draw_string(
+            mesh,
+            x + 16.0,
+            y + 14.0,
+            "RECENT EXPEDITION",
+            8.0,
+            11.0,
+            1.0,
+            [0.95, 0.78, 0.30, 0.95],
+        );
+
+        let btn_h = 36.0;
+        let btn_w = w - 32.0;
+        let btn_x = x + 16.0;
+        let btn_y = y + h - btn_h - 14.0;
+
+        if let Some(world) = recent {
+            // World name
+            let name_display = if world.name.len() > 22 {
+                format!("{}...", &world.name[..20])
+            } else {
+                world.name.clone()
+            };
+            Self::draw_string(
+                mesh,
+                x + 16.0,
+                y + 34.0,
+                &name_display,
+                11.0,
+                15.0,
+                1.0,
+                [0.98, 0.98, 1.0, 1.0],
+            );
+
+            // World stats: Mode & Seed
+            let mode_str = match world.game_mode {
+                blockgame_core::GameMode::Creative => "Creative Mode",
+                blockgame_core::GameMode::Survival => "Survival Mode",
+            };
+            let stats_str = format!("{}  *  Seed: {}", mode_str, world.seed);
+            Self::draw_string(
+                mesh,
+                x + 16.0,
+                y + 58.0,
+                &stats_str,
+                7.5,
+                10.5,
+                0.8,
+                [0.72, 0.76, 0.84, 0.90],
+            );
+
+            // Playtime
+            let hours = world.total_time / 3600.0;
+            let time_str = if hours >= 1.0 {
+                format!("Playtime: {:.1} hrs", hours)
+            } else {
+                let mins = (world.total_time / 60.0).max(1.0);
+                format!("Playtime: {:.0} mins", mins)
+            };
+            Self::draw_string(
+                mesh,
+                x + 16.0,
+                y + 76.0,
+                &time_str,
+                7.0,
+                10.0,
+                0.8,
+                [0.55, 0.60, 0.70, 0.85],
+            );
+
+            // Resume button
+            let btn_hovered = Self::is_rect_hovered(cursor_pos, btn_x, btn_y, btn_w, btn_h);
+            let (bg, border, text_col) = if btn_hovered {
+                (
+                    [0.22, 0.48, 0.28, 0.98],
+                    [0.45, 0.95, 0.55, 1.0],
+                    [1.0, 1.0, 1.0, 1.0],
+                )
+            } else {
+                (
+                    [0.15, 0.35, 0.20, 0.90],
+                    [0.32, 0.70, 0.40, 0.90],
+                    [0.90, 0.98, 0.92, 0.95],
+                )
+            };
+            mesh.add_quad(btn_x, btn_y, btn_w, btn_h, white_uv, border);
+            mesh.add_quad(btn_x + 1.0, btn_y + 1.0, btn_w - 2.0, btn_h - 2.0, white_uv, bg);
+            let btn_text = "> RESUME EXPEDITION";
+            let tw = Self::string_width(btn_text, 9.5, 1.0);
+            Self::draw_string(
+                mesh,
+                btn_x + (btn_w - tw) * 0.5,
+                btn_y + (btn_h - 13.0) * 0.5,
+                btn_text,
+                9.5,
+                13.0,
+                1.0,
+                text_col,
+            );
+        } else {
+            // No world saved yet
+            Self::draw_string(
+                mesh,
+                x + 16.0,
+                y + 36.0,
+                "Ready for Discovery",
+                11.0,
+                15.0,
+                1.0,
+                [0.95, 0.95, 0.98, 1.0],
+            );
+            Self::draw_string(
+                mesh,
+                x + 16.0,
+                y + 60.0,
+                "No saved expeditions yet.",
+                8.0,
+                11.0,
+                0.8,
+                [0.72, 0.75, 0.82, 0.90],
+            );
+            Self::draw_string(
+                mesh,
+                x + 16.0,
+                y + 78.0,
+                "Generate your first infinite realm.",
+                7.0,
+                10.0,
+                0.8,
+                [0.55, 0.60, 0.70, 0.85],
+            );
+
+            // Create button
+            let btn_hovered = Self::is_rect_hovered(cursor_pos, btn_x, btn_y, btn_w, btn_h);
+            let (bg, border, text_col) = if btn_hovered {
+                (
+                    [0.24, 0.38, 0.55, 0.98],
+                    [0.50, 0.80, 1.0, 1.0],
+                    [1.0, 1.0, 1.0, 1.0],
+                )
+            } else {
+                (
+                    [0.16, 0.26, 0.38, 0.90],
+                    [0.35, 0.55, 0.75, 0.90],
+                    [0.90, 0.95, 1.0, 0.95],
+                )
+            };
+            mesh.add_quad(btn_x, btn_y, btn_w, btn_h, white_uv, border);
+            mesh.add_quad(btn_x + 1.0, btn_y + 1.0, btn_w - 2.0, btn_h - 2.0, white_uv, bg);
+            let btn_text = "+ CREATE FIRST WORLD";
+            let tw = Self::string_width(btn_text, 9.5, 1.0);
+            Self::draw_string(
+                mesh,
+                btn_x + (btn_w - tw) * 0.5,
+                btn_y + (btn_h - 13.0) * 0.5,
+                btn_text,
+                9.5,
+                13.0,
+                1.0,
+                text_col,
+            );
+        }
+    }
+
+    /// Builds the Title Screen & Main Menu overlay (default without recent world info).
     pub fn build_title_screen(
         mesh: &mut UiMesh,
         screen_w: f32,
         screen_h: f32,
         cursor_pos: [f32; 2],
     ) {
+        Self::build_title_screen_with_recent_world(mesh, screen_w, screen_h, cursor_pos, None);
+    }
+
+    /// Builds the Roots & Ridges Main Menu overlay with left cinematic sidebar and recent world card.
+    pub fn build_title_screen_with_recent_world(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        cursor_pos: [f32; 2],
+        recent_world: Option<&blockgame_core::save::WorldMetadata>,
+    ) {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
-        // Subtle atmospheric vignette / darkening over the 3D background panorama
+        // 1. Subtle cinematic vignette darkening over the live 3D background panorama
         mesh.add_quad(
             0.0,
             0.0,
             screen_w,
             screen_h,
             white_uv,
-            [0.04, 0.06, 0.10, 0.38],
+            [0.03, 0.05, 0.08, 0.28],
         );
 
-        // Title Banner Panel
-        let title_text = "BLOCKGAME";
-        let title_char_w = 28.0;
-        let title_char_h = 38.0;
-        let title_spacing = 4.0;
-        let title_w = Self::string_width(title_text, title_char_w, title_spacing);
-        let title_x = (screen_w - title_w) * 0.5;
-        let title_y = screen_h * 0.17;
+        let dock_w = 340.0_f32.min(screen_w * 0.35);
 
-        // Deep 3D block shadow for title
+        // 2. Left Translucent Dark-Slate Dock Panel
+        mesh.add_quad(
+            0.0,
+            0.0,
+            dock_w,
+            screen_h,
+            white_uv,
+            [0.05, 0.07, 0.10, 0.88],
+        );
+        // Right dock border accent (warm amber / gold edge trim)
+        mesh.add_quad(
+            dock_w - 2.0,
+            0.0,
+            2.0,
+            screen_h,
+            white_uv,
+            [0.85, 0.68, 0.28, 0.85],
+        );
+
+        // 3. Title Emblem & Typography
+        let pad_x = 28.0;
+        let title_y = 36.0;
+
+        // Top decorative gold pip
+        mesh.add_quad(
+            pad_x,
+            title_y - 8.0,
+            32.0,
+            2.5,
+            white_uv,
+            [0.95, 0.78, 0.30, 0.95],
+        );
+
+        // Title: ROOTS & RIDGES
+        let title_text = "ROOTS & RIDGES";
+        let title_char_w = 19.0;
+        let title_char_h = 26.0;
+        let title_spacing = 2.5;
+
+        // 3D block shadow for title
         Self::draw_string(
             mesh,
-            title_x + 4.0,
-            title_y + 4.0,
+            pad_x + 2.5,
+            title_y + 2.5,
             title_text,
             title_char_w,
             title_char_h,
             title_spacing,
-            [0.08, 0.09, 0.12, 0.95],
+            [0.02, 0.03, 0.05, 0.95],
         );
         Self::draw_string(
             mesh,
-            title_x,
+            pad_x,
             title_y,
             title_text,
             title_char_w,
             title_char_h,
             title_spacing,
-            [0.95, 0.96, 0.98, 1.0],
+            [0.98, 0.97, 0.94, 1.0],
         );
 
-        // Subtitle / Edition Banner
-        let sub_text = "VOXEL SURVIVAL EDITION";
-        let sub_w = Self::string_width(sub_text, 10.5, 2.0);
-        let sub_x = (screen_w - sub_w) * 0.5;
-        let sub_y = title_y + title_char_h + 12.0;
+        // Subtitle / Tagline
+        let sub_text = "A WILDERNESS OF ENDLESS HORIZONS";
+        let sub_y = title_y + title_char_h + 8.0;
         Self::draw_string(
             mesh,
-            sub_x + 1.5,
-            sub_y + 1.5,
+            pad_x + 1.0,
+            sub_y + 1.0,
             sub_text,
+            7.5,
             10.5,
-            14.0,
-            2.0,
-            [0.08, 0.08, 0.10, 0.90],
+            0.8,
+            [0.02, 0.03, 0.05, 0.90],
         );
         Self::draw_string(
             mesh,
-            sub_x,
+            pad_x,
             sub_y,
             sub_text,
+            7.5,
             10.5,
-            14.0,
-            2.0,
-            [1.0, 0.86, 0.28, 1.0],
+            0.8,
+            [0.95, 0.78, 0.30, 0.95],
         );
 
+        // Thin divider line
+        mesh.add_quad(
+            pad_x,
+            sub_y + 18.0,
+            dock_w - pad_x * 2.0,
+            1.5,
+            white_uv,
+            [0.32, 0.36, 0.45, 0.65],
+        );
+
+        // 4. Navigation Buttons inside Left Dock
         let rects = Self::title_screen_button_rects(screen_w, screen_h);
-        let labels = ["Singleplayer", "Multiplayer", "Settings", "Quit Game"];
-        for (rect, label) in rects.iter().zip(labels.iter()) {
-            Self::draw_menu_button(
+        let button_defs = [
+            (">", "Continue Expedition"),
+            ("+", "New Expedition"),
+            ("@", "Multiplayer & Servers"),
+            ("*", "Game Settings"),
+            ("?", "How to Play & Guide"),
+            ("X", "Exit to Desktop"),
+        ];
+
+        for (i, (glyph, label)) in button_defs.iter().enumerate() {
+            let rect = rects[i];
+            Self::draw_sidebar_button(
                 mesh,
                 rect[0],
                 rect[1],
                 rect[2],
                 rect[3],
+                glyph,
                 label,
                 cursor_pos,
                 true,
             );
         }
 
-        // Bottom footer version text
-        let ver_text = concat!("BlockGame v", env!("CARGO_PKG_VERSION"), " - Faithful 32x");
+        // 5. Recent Expedition Quick-Resume Card (Floating on Upper Right)
+        let card_w = 340.0_f32.min(screen_w * 0.34);
+        let card_h = 160.0;
+        let card_x = screen_w - card_w - 32.0;
+        let card_y = 44.0;
+        Self::draw_quick_resume_card(mesh, card_x, card_y, card_w, card_h, recent_world, cursor_pos);
+
+        // 6. Bottom footer version text in left dock
+        let ver_text = concat!("Roots & Ridges v", env!("CARGO_PKG_VERSION"));
         Self::draw_string(
             mesh,
-            12.0,
-            screen_h - 22.0,
+            pad_x,
+            screen_h - 32.0,
             ver_text,
-            8.5,
-            12.0,
+            8.0,
+            11.0,
             0.8,
-            [0.80, 0.82, 0.86, 0.85],
+            [0.72, 0.76, 0.84, 0.85],
         );
+        Self::draw_string(
+            mesh,
+            pad_x,
+            screen_h - 18.0,
+            "Voxel Engine  *  32x Retro",
+            7.0,
+            9.5,
+            0.5,
+            [0.48, 0.52, 0.60, 0.75],
+        );
+    }
+
+    /// Returns the 3 button rectangles for the Guide screen `[Previous, Next, Back to Title]`.
+    pub fn guide_screen_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 3] {
+        let btn_w = 160.0;
+        let btn_h = 40.0;
+        let back_x = (screen_w - btn_w) * 0.5;
+        let y = screen_h - 58.0;
+        [
+            [back_x - 170.0, y, 140.0, btn_h], // 0: Previous Page
+            [back_x + 190.0, y, 140.0, btn_h], // 1: Next Page
+            [back_x, y, btn_w, btn_h],         // 2: Back to Title
+        ]
+    }
+
+    /// Builds the Adventurer's Field Guide screen with game controls, mechanics, and MMO skill info.
+    pub fn build_guide_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        page: usize,
+        cursor_pos: [f32; 2],
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Background backdrop
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.04, 0.06, 0.09, 0.90]);
+
+        // Main modal container
+        let modal_w = 720.0_f32.min(screen_w - 60.0);
+        let modal_h = 520.0_f32.min(screen_h - 90.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = 36.0;
+
+        mesh.add_quad(modal_x + 3.0, modal_y + 3.0, modal_w, modal_h, white_uv, [0.01, 0.02, 0.04, 0.60]);
+        mesh.add_quad(modal_x, modal_y, modal_w, modal_h, white_uv, [0.38, 0.42, 0.52, 0.85]);
+        mesh.add_quad(modal_x + 1.5, modal_y + 1.5, modal_w - 3.0, modal_h - 3.0, white_uv, [0.07, 0.09, 0.13, 0.96]);
+
+        // Top gold accent bar
+        mesh.add_quad(modal_x + 1.5, modal_y + 1.5, modal_w - 3.0, 3.0, white_uv, [0.85, 0.68, 0.28, 0.95]);
+
+        // Title
+        let header_text = "ADVENTURER'S FIELD GUIDE";
+        let hw = Self::string_width(header_text, 14.0, 1.5);
+        Self::draw_string(
+            mesh,
+            modal_x + (modal_w - hw) * 0.5,
+            modal_y + 18.0,
+            header_text,
+            14.0,
+            18.0,
+            1.5,
+            [0.98, 0.98, 1.0, 1.0],
+        );
+
+        let page_title = match page % 3 {
+            0 => "Section 1: Controls & Exploration",
+            1 => "Section 2: Survival, Crafting & Fishing",
+            _ => "Section 3: MMO Skills & Progression",
+        };
+        let ptw = Self::string_width(page_title, 9.5, 1.0);
+        Self::draw_string(
+            mesh,
+            modal_x + (modal_w - ptw) * 0.5,
+            modal_y + 42.0,
+            page_title,
+            9.5,
+            13.0,
+            1.0,
+            [0.95, 0.78, 0.30, 0.95],
+        );
+
+        // Content cards based on page
+        let content_y = modal_y + 70.0;
+        let pad = 24.0;
+        let card_w = modal_w - pad * 2.0;
+
+        match page % 3 {
+            0 => {
+                let controls = [
+                    ("W / A / S / D", "Move Forward, Strafe Left, Backward, Right"),
+                    ("Space", "Jump / Ascend (Hold in water to swim up)"),
+                    ("Left Ctrl", "Sprint (Consumes stamina over time)"),
+                    ("E", "Open Inventory, 2x2 Crafting & Equipment"),
+                    ("1 - 9 / Scroll", "Select Active Hotbar Slot (Auto-tucks after 4s)"),
+                    ("Left Click", "Attack Entity / Mine targeted block"),
+                    ("Right Click", "Place Block / Use Item / Eat Food / Open Container"),
+                    ("K", "Open MMO Skills & Milestone Perks menu"),
+                    ("F", "Toggle Flight Mode (Creative Mode only)"),
+                    ("T", "Open In-Game Chat / Slash Commands"),
+                    ("F3 / F5", "Toggle Debug HUD Overlay / Cycle 3rd Person View"),
+                ];
+                for (i, (key, desc)) in controls.iter().enumerate() {
+                    let y = content_y + (i as f32) * 29.0;
+                    if y + 25.0 > modal_y + modal_h - 10.0 { break; }
+                    mesh.add_quad(modal_x + pad, y, 140.0, 22.0, white_uv, [0.12, 0.15, 0.20, 0.85]);
+                    Self::draw_string(mesh, modal_x + pad + 8.0, y + 5.0, key, 8.5, 12.0, 0.8, [1.0, 0.82, 0.35, 1.0]);
+                    Self::draw_string(mesh, modal_x + pad + 155.0, y + 5.0, desc, 8.5, 12.0, 0.8, [0.90, 0.92, 0.96, 0.95]);
+                }
+            }
+            1 => {
+                let survival_tips = [
+                    ("1. Crafting Tools", "Chop Wood -> 4 Planks -> Crafting Table (3x3 grid) for Wooden & Stone Pickaxes."),
+                    ("2. Vitals & Food", "Vitals (HP) and Stamina (ST) are tracked at the bottom. Eat Bread or Cooked Meat to restore."),
+                    ("3. Night & Monsters", "Hostile Zombies, Skeletons, and Spiders hunt in darkness. Place Torches and sleep in Beds."),
+                    ("4. Mining & Smelting", "Smelt Raw Iron, Copper, and Gold in Furnaces using Coal or Wood for advanced equipment."),
+                    ("5. Fishing & Tackle", "Craft Fishing Rods with Lines, Lures, and Bait. Hook fish in rivers/lakes with timed reels."),
+                    ("6. Armor & Bows", "Equip Leather, Iron, or Diamond Armor for defense points (AP). Craft Bows & Arrows for ranged combat."),
+                ];
+                for (i, (title, text)) in survival_tips.iter().enumerate() {
+                    let y = content_y + (i as f32) * 58.0;
+                    if y + 50.0 > modal_y + modal_h - 10.0 { break; }
+                    mesh.add_quad(modal_x + pad, y, card_w, 48.0, white_uv, [0.10, 0.12, 0.17, 0.75]);
+                    mesh.add_quad(modal_x + pad, y, 3.0, 48.0, white_uv, [0.35, 0.65, 0.85, 0.95]);
+                    Self::draw_string(mesh, modal_x + pad + 12.0, y + 7.0, title, 9.5, 13.0, 1.0, [1.0, 0.85, 0.35, 1.0]);
+                    Self::draw_string(mesh, modal_x + pad + 12.0, y + 26.0, text, 8.0, 11.0, 0.8, [0.85, 0.88, 0.94, 0.95]);
+                }
+            }
+            _ => {
+                let skills_info = [
+                    ("Combat", "Level up by defeating monsters. Unlocks critical strike chance, sweep attacks, and bonus damage."),
+                    ("Woodcutting", "Level up by chopping trees. Unlocks tree feller chances and bonus log drops."),
+                    ("Mining", "Level up by mining stone & ores. Unlocks double ore drops, auto-smelting, and vein mining."),
+                    ("Fishing", "Level up by catching fish. Unlocks rare fish species, treasure lures, and master angler perks."),
+                    ("Digging", "Level up by excavating dirt, sand, and gravel. Unlocks excavation speed and buried treasures."),
+                    ("Farming", "Level up by harvesting crops and breeding animals. Unlocks instant regrowth and twin breeding."),
+                    ("Agility", "Level up by running and jumping. Unlocks increased sprint speed, reduced fall damage, and leap."),
+                ];
+                for (i, (skill, desc)) in skills_info.iter().enumerate() {
+                    let y = content_y + (i as f32) * 52.0;
+                    if y + 46.0 > modal_y + modal_h - 10.0 { break; }
+                    mesh.add_quad(modal_x + pad, y, card_w, 44.0, white_uv, [0.10, 0.12, 0.17, 0.75]);
+                    mesh.add_quad(modal_x + pad, y, 3.0, 44.0, white_uv, [0.85, 0.68, 0.28, 0.95]);
+                    Self::draw_string(mesh, modal_x + pad + 12.0, y + 6.0, skill, 9.5, 13.0, 1.0, [0.95, 0.78, 0.30, 1.0]);
+                    Self::draw_string(mesh, modal_x + pad + 12.0, y + 23.0, desc, 8.0, 11.0, 0.8, [0.85, 0.88, 0.94, 0.95]);
+                }
+            }
+        }
+
+        // Bottom navigation buttons
+        let btns = Self::guide_screen_button_rects(screen_w, screen_h);
+        Self::draw_menu_button(mesh, btns[0][0], btns[0][1], btns[0][2], btns[0][3], "< Previous", cursor_pos, true);
+        Self::draw_menu_button(mesh, btns[1][0], btns[1][1], btns[1][2], btns[1][3], "Next >", cursor_pos, true);
+        Self::draw_menu_button(mesh, btns[2][0], btns[2][1], btns[2][2], btns[2][3], "Back to Title", cursor_pos, true);
     }
 
     /// Returns the world list row rectangles (up to 5 visible slots) and the 4 bottom action buttons
@@ -7196,7 +7704,7 @@ mod tests {
         assert!(mesh.vertices.len() > 0);
 
         let rects = UiBuilder::title_screen_button_rects(1280.0, 720.0);
-        assert_eq!(rects.len(), 4);
+        assert_eq!(rects.len(), UiBuilder::TITLE_BUTTON_COUNT);
         // Hover check inside first button (Singleplayer)
         let r0 = rects[0];
         assert!(UiBuilder::is_rect_hovered(
@@ -7206,6 +7714,25 @@ mod tests {
             r0[2],
             r0[3]
         ));
+
+        // Test with recent world metadata
+        let sample_world = blockgame_core::save::WorldMetadata::new("Wilderness Outpost", 98765);
+        UiBuilder::build_title_screen_with_recent_world(
+            &mut mesh,
+            1280.0,
+            720.0,
+            [640.0, 360.0],
+            Some(&sample_world),
+        );
+        assert!(mesh.indices.len() > 0);
+
+        // Test guide screen across all pages and button rects
+        for page in 0..3 {
+            UiBuilder::build_guide_screen(&mut mesh, 1280.0, 720.0, page, [640.0, 360.0]);
+            assert!(mesh.indices.len() > 0);
+        }
+        let guide_rects = UiBuilder::guide_screen_button_rects(1280.0, 720.0);
+        assert_eq!(guide_rects.len(), 3);
     }
 
     #[test]

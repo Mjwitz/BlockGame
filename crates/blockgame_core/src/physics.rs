@@ -469,12 +469,8 @@ pub fn depenetrate_entity(
         return;
     }
 
-    // 1. Try small push-out along the shallowest overlapping block face first (up to 4 iterations)
-    for _ in 0..4 {
-        if !aabb_intersects_solid(*position, half_width, height, COLLISION_SKIN, world, registry) {
-            return;
-        }
-
+    // 1. Try small push-out along the shallowest overlapping block face first
+    {
         let box_now = AABB::from_player(*position, half_width, height);
         let min_x = box_now.min.x.floor() as i32;
         let max_x = box_now.max.x.floor() as i32;
@@ -531,8 +527,6 @@ pub fn depenetrate_entity(
         if let Some((_, resolved_pos)) = best_candidate {
             *position = resolved_pos;
             return;
-        } else {
-            break;
         }
     }
 
