@@ -680,25 +680,7 @@ impl UiBuilder {
         let def = def_opt.unwrap();
         let block_registry = blockgame_core::block::BlockRegistry::new();
 
-        let is_flat_plant_or_crop = match def.placeable_block {
-            Some(b) => {
-                b == blockgame_core::block::BlockId::SEAGRASS
-                    || b == blockgame_core::block::BlockId::TALL_GRASS
-                    || b == blockgame_core::block::BlockId::LILY_PAD
-                    || b == blockgame_core::block::BlockId::WHEAT_0
-                    || b == blockgame_core::block::BlockId::WHEAT_1
-                    || b == blockgame_core::block::BlockId::WHEAT_2
-                    || b == blockgame_core::block::BlockId::WHEAT_3
-                    || b == blockgame_core::block::BlockId::OAK_DOOR_CLOSED
-                    || b == blockgame_core::block::BlockId::BED
-                    || b == blockgame_core::block::BlockId::OAK_FENCE
-                    || b.is_stairs()
-                    || b.is_flower()
-            }
-            None => false,
-        };
-
-        if let Some(block_id) = def.placeable_block.filter(|_| !is_flat_plant_or_crop) {
+        if let Some(block_id) = def.placeable_block {
             if block_id == blockgame_core::block::BlockId::TORCH {
                 // -----------------------------------------------------------------
                 // 3D HELD TORCH: 3D volumetric wooden shaft and 3D glowing flame head
@@ -826,9 +808,397 @@ impl UiBuilder {
                         active_slot.count,
                     );
                 }
+            } else if block_id.is_stairs() {
+                // -----------------------------------------------------------------
+                // 3D HELD STAIRS: 3D stepped staircase block (riser, lower/upper treads, sides)
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
+                ];
+                let bs = 90.0 * scale;
+
+                let top_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
+                let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+                let right_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosX);
+
+                let [u0_t, v0_t, u1_t, v1_t] = TextureAtlas::get_uv_bounds(top_tile);
+                let [u0_s, v0_s, u1_s, v1_s] = TextureAtlas::get_uv_bounds(side_tile);
+                let [u0_r, v0_r, u1_r, v1_r] = TextureAtlas::get_uv_bounds(right_tile);
+
+                let h_face = bs * 1.10;
+                let h_half = h_face * 0.50;
+
+                // Diamond outer vertices of full block
+                let p_top_n = [bc[0], bc[1] - bs * 0.65];
+                let p_top_e = [bc[0] + bs * 1.05, bc[1] - bs * 0.16];
+                let p_top_s = [bc[0], bc[1] + bs * 0.35];
+                let p_top_w = [bc[0] - bs * 1.05, bc[1] - bs * 0.16];
+
+                let p_mid_w = [(p_top_w[0] + bc[0]) * 0.5, (p_top_w[1] + bc[1]) * 0.5];
+                let p_mid_e = [(p_top_e[0] + bc[0]) * 0.5, (p_top_e[1] + bc[1]) * 0.5];
+
+                // 1. Upper Step Top Face
+                let uvs_top = [[u0_t, v0_t], [u1_t, v0_t], [u1_t, v1_t], [u0_t, v1_t]];
+                mesh.add_quad_vertices(
+                    [p_mid_w, p_top_n, p_mid_e, bc],
+                    uvs_top,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
+                );
+
+                // 2. Vertical Riser between Upper and Lower Step
+                let p_tread_w = [p_mid_w[0], p_mid_w[1] + h_half];
+                let p_tread_c = [bc[0], bc[1] + h_half];
+                let p_tread_e = [p_mid_e[0], p_mid_e[1] + h_half];
+                let uvs_side = [[u0_s, v0_s], [u1_s, v0_s], [u1_s, v1_s], [u0_s, v1_s]];
+                mesh.add_quad_vertices(
+                    [p_mid_w, bc, p_tread_c, p_tread_w],
+                    uvs_side,
+                    [[0.82, 0.82, 0.82, 1.0]; 4],
+                );
+                let uvs_right = [[u0_r, v0_r], [u1_r, v0_r], [u1_r, v1_r], [u0_r, v1_r]];
+                mesh.add_quad_vertices(
+                    [bc, p_mid_e, p_tread_e, p_tread_c],
+                    uvs_right,
+                    [[0.68, 0.68, 0.68, 1.0]; 4],
+                );
+
+                // 3. Lower Step Top Tread Face
+                let p_step_s = [p_top_s[0], p_top_s[1] + h_half];
+                mesh.add_quad_vertices(
+                    [p_tread_w, p_tread_c, p_tread_e, p_step_s],
+                    uvs_top,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
+                );
+
+                // 4. Lower Step Front Faces
+                let p_bot_w = [p_top_w[0], p_top_w[1] + h_face];
+                let p_bot_s = [p_top_s[0], p_top_s[1] + h_face];
+                let p_bot_e = [p_top_e[0], p_top_e[1] + h_face];
+                mesh.add_quad_vertices(
+                    [p_tread_w, p_step_s, p_bot_s, p_bot_w],
+                    uvs_side,
+                    [[0.82, 0.82, 0.82, 1.0]; 4],
+                );
+                mesh.add_quad_vertices(
+                    [p_step_s, p_tread_e, p_bot_e, p_bot_s],
+                    uvs_right,
+                    [[0.68, 0.68, 0.68, 1.0]; 4],
+                );
+
+                // 5. Back Upper Side Faces
+                let p_top_w_mid = [p_top_w[0], p_top_w[1] + h_half];
+                mesh.add_quad_vertices(
+                    [p_top_w, p_mid_w, p_tread_w, p_top_w_mid],
+                    uvs_side,
+                    [[0.82, 0.82, 0.82, 1.0]; 4],
+                );
+                let p_top_e_mid = [p_top_e[0], p_top_e[1] + h_half];
+                mesh.add_quad_vertices(
+                    [p_mid_e, p_top_e, p_top_e_mid, p_tread_e],
+                    uvs_right,
+                    [[0.68, 0.68, 0.68, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 20.0 * scale,
+                        bc[1] + bs * 0.50,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if block_id == blockgame_core::block::BlockId::OAK_FENCE {
+                // -----------------------------------------------------------------
+                // 3D HELD OAK FENCE: 3D wooden post with horizontal cross rails
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
+                ];
+                let bs = 90.0 * scale;
+
+                let side_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(side_tile);
+                let plank_uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+
+                let post_w = bs * 0.35;
+                let post_h = bs * 1.15;
+
+                // Center Post Top Diamond
+                let pt_n = [bc[0], bc[1] - bs * 0.45];
+                let pt_e = [bc[0] + post_w, bc[1] - bs * 0.25];
+                let pt_s = [bc[0], bc[1] - bs * 0.05];
+                let pt_w = [bc[0] - post_w, bc[1] - bs * 0.25];
+                mesh.add_quad_vertices([pt_w, pt_n, pt_e, pt_s], plank_uv, [[1.0, 1.0, 1.0, 1.0]; 4]);
+
+                // Center Post Left & Right Faces
+                let pb_w = [pt_w[0], pt_w[1] + post_h];
+                let pb_s = [pt_s[0], pt_s[1] + post_h];
+                let pb_e = [pt_e[0], pt_e[1] + post_h];
+                mesh.add_quad_vertices([pt_w, pt_s, pb_s, pb_w], plank_uv, [[0.82, 0.82, 0.82, 1.0]; 4]);
+                mesh.add_quad_vertices([pt_s, pt_e, pb_e, pb_s], plank_uv, [[0.68, 0.68, 0.68, 1.0]; 4]);
+
+                // Upper & Lower Horizontal Rails
+                for &y_offset in &[0.20, 0.60] {
+                    let ry = pt_s[1] + post_h * y_offset;
+                    let rail_h = 14.0 * scale;
+                    let rail_len = bs * 0.85;
+
+                    // Left rail
+                    let r_l_start = [pt_w[0], ry];
+                    let r_l_end = [pt_w[0] - rail_len, ry - rail_len * 0.2];
+                    let r0 = r_l_end;
+                    let r1 = r_l_start;
+                    let r2 = [r1[0], r1[1] + rail_h];
+                    let r3 = [r0[0], r0[1] + rail_h];
+                    mesh.add_quad_vertices([r0, r1, r2, r3], plank_uv, [[0.78, 0.78, 0.78, 1.0]; 4]);
+
+                    // Right rail
+                    let r_r_start = [pt_e[0], ry];
+                    let r_r_end = [pt_e[0] + rail_len, ry - rail_len * 0.2];
+                    let rr0 = r_r_start;
+                    let rr1 = r_r_end;
+                    let rr2 = [rr1[0], rr1[1] + rail_h];
+                    let rr3 = [rr0[0], rr0[1] + rail_h];
+                    mesh.add_quad_vertices([rr0, rr1, rr2, rr3], plank_uv, [[0.65, 0.65, 0.65, 1.0]; 4]);
+                }
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 20.0 * scale,
+                        bc[1] + bs * 0.50,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if block_id == blockgame_core::block::BlockId::OAK_DOOR_CLOSED {
+                // -----------------------------------------------------------------
+                // 3D HELD OAK DOOR: 3D upright wooden door slab with thickness
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
+                ];
+                let bs = 90.0 * scale;
+
+                let door_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(door_tile);
+                let door_uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+
+                let door_w = bs * 0.75;
+                let door_h = bs * 1.50;
+                let thick = [-10.0 * scale, -8.0 * scale];
+
+                // Front Face (tilted upright isometric door panel)
+                let p0 = [bc[0] - door_w * 0.85, bc[1] + door_h * 0.45];
+                let p1 = [bc[0] + door_w * 0.45, bc[1] + door_h * 0.25];
+                let p2 = [bc[0] + door_w * 0.45, bc[1] - door_h * 0.55];
+                let p3 = [bc[0] - door_w * 0.85, bc[1] - door_h * 0.35];
+                mesh.add_quad_vertices([p0, p1, p2, p3], door_uv, [[1.0, 1.0, 1.0, 1.0]; 4]);
+
+                // Side Thickness Face (left edge)
+                let p0_b = [p0[0] + thick[0], p0[1] + thick[1]];
+                let p3_b = [p3[0] + thick[0], p3[1] + thick[1]];
+                mesh.add_quad_vertices([p0_b, p0, p3, p3_b], white_uv, [[0.46, 0.32, 0.18, 1.0]; 4]);
+
+                // Top Thickness Face (top edge)
+                let p2_b = [p2[0] + thick[0], p2[1] + thick[1]];
+                mesh.add_quad_vertices([p3_b, p3, p2, p2_b], white_uv, [[0.62, 0.44, 0.25, 1.0]; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 15.0 * scale,
+                        bc[1] + bs * 0.45,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if block_id == blockgame_core::block::BlockId::BED {
+                // -----------------------------------------------------------------
+                // 3D HELD BED: 3D miniature bed (pillow, mattress/quilt, wood frame, legs)
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
+                ];
+                let bs = 90.0 * scale;
+                let bed_h = bs * 0.48;
+
+                // Diamond outer vertices of lowered bed
+                let p_top_n = [bc[0], bc[1] - bs * 0.45];
+                let p_top_e = [bc[0] + bs * 1.05, bc[1] + bs * 0.04];
+                let p_top_s = [bc[0], bc[1] + bs * 0.55];
+                let p_top_w = [bc[0] - bs * 1.05, bc[1] + bs * 0.04];
+
+                // Pillow line at 35% from head (north)
+                let p_pil_w = [p_top_n[0] + (p_top_w[0] - p_top_n[0]) * 0.35, p_top_n[1] + (p_top_w[1] - p_top_n[1]) * 0.35];
+                let p_pil_e = [p_top_n[0] + (p_top_e[0] - p_top_n[0]) * 0.35, p_top_n[1] + (p_top_e[1] - p_top_n[1]) * 0.35];
+
+                // 1. White Pillow Top Face
+                mesh.add_quad_vertices([p_pil_w, p_top_n, p_top_e, p_pil_e], white_uv, [[0.92, 0.92, 0.95, 1.0]; 4]);
+
+                // 2. Red Quilt / Blanket Top Face
+                let [u0_wool, v0_wool, u1_wool, v1_wool] = TextureAtlas::get_uv_bounds(111); // red wool
+                let wool_uv = [[u0_wool, v0_wool], [u1_wool, v0_wool], [u1_wool, v1_wool], [u0_wool, v1_wool]];
+                mesh.add_quad_vertices([p_top_w, p_pil_w, p_pil_e, p_top_s], wool_uv, [[0.88, 0.22, 0.22, 1.0]; 4]);
+
+                // 3. Left Face (Quilt upper half + Oak wooden frame lower half)
+                let p_left_bot_w = [p_top_w[0], p_top_w[1] + bed_h];
+                let p_left_bot_s = [p_top_s[0], p_top_s[1] + bed_h];
+                let p_left_mid_w = [p_top_w[0], p_top_w[1] + bed_h * 0.45];
+                let p_left_mid_s = [p_top_s[0], p_top_s[1] + bed_h * 0.45];
+                mesh.add_quad_vertices([p_top_w, p_top_s, p_left_mid_s, p_left_mid_w], white_uv, [[0.75, 0.18, 0.18, 1.0]; 4]);
+                mesh.add_quad_vertices([p_left_mid_w, p_left_mid_s, p_left_bot_s, p_left_bot_w], white_uv, [[0.46, 0.32, 0.18, 1.0]; 4]);
+
+                // 4. Right Face
+                let p_right_bot_e = [p_top_e[0], p_top_e[1] + bed_h];
+                let p_right_mid_e = [p_top_e[0], p_top_e[1] + bed_h * 0.45];
+                mesh.add_quad_vertices([p_top_s, p_top_e, p_right_mid_e, p_left_mid_s], white_uv, [[0.60, 0.14, 0.14, 1.0]; 4]);
+                mesh.add_quad_vertices([p_left_mid_s, p_right_mid_e, p_right_bot_e, p_left_bot_s], white_uv, [[0.36, 0.24, 0.13, 1.0]; 4]);
+
+                // 5. Wooden Corner Legs
+                let leg_w = 7.0 * scale;
+                let leg_h = 12.0 * scale;
+                for &pt in &[p_left_bot_w, p_left_bot_s, p_right_bot_e] {
+                    mesh.add_quad_vertices(
+                        [[pt[0] - leg_w * 0.5, pt[1]], [pt[0] + leg_w * 0.5, pt[1]], [pt[0] + leg_w * 0.5, pt[1] + leg_h], [pt[0] - leg_w * 0.5, pt[1] + leg_h]],
+                        white_uv,
+                        [[0.28, 0.18, 0.10, 1.0]; 4],
+                    );
+                }
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 20.0 * scale,
+                        bc[1] + bs * 0.50,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if block_id.is_flower()
+                || block_id == blockgame_core::block::BlockId::TALL_GRASS
+                || block_id == blockgame_core::block::BlockId::SEAGRASS
+                || block_id == blockgame_core::block::BlockId::WHEAT_0
+                || block_id == blockgame_core::block::BlockId::WHEAT_1
+                || block_id == blockgame_core::block::BlockId::WHEAT_2
+                || block_id == blockgame_core::block::BlockId::WHEAT_3
+            {
+                // -----------------------------------------------------------------
+                // 3D HELD PLANT / FLOWER: Crossed-quad in-world plant geometry with soil clod
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
+                ];
+
+                let plant_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosZ);
+                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(plant_tile);
+                let plant_uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+
+                let ps = 95.0 * scale;
+                let cx = bc[0];
+                let cy = bc[1] + 20.0 * scale;
+
+                // Little clod of earth at stem base
+                let dw = 25.0 * scale;
+                let dh = 12.0 * scale;
+                let dirt_top = [
+                    [cx - dw, cy + ps * 0.42],
+                    [cx, cy + ps * 0.42 - dh],
+                    [cx + dw, cy + ps * 0.42],
+                    [cx, cy + ps * 0.42 + dh],
+                ];
+                mesh.add_quad_vertices(dirt_top, white_uv, [[0.44, 0.30, 0.18, 1.0]; 4]);
+
+                // Quad 1: Diagonal plane A (back-left to front-right)
+                let qa_bl = [cx - ps * 0.55, cy + ps * 0.42 - ps * 0.12];
+                let qa_br = [cx + ps * 0.55, cy + ps * 0.42 + ps * 0.12];
+                let qa_tr = [cx + ps * 0.55, cy - ps * 0.48 + ps * 0.12];
+                let qa_tl = [cx - ps * 0.55, cy - ps * 0.48 - ps * 0.12];
+                mesh.add_quad_vertices([qa_bl, qa_br, qa_tr, qa_tl], plant_uv, [[1.0, 1.0, 1.0, 1.0]; 4]);
+
+                // Quad 2: Diagonal plane B (perpendicular cross: front-left to back-right)
+                let qb_bl = [cx - ps * 0.55, cy + ps * 0.42 + ps * 0.12];
+                let qb_br = [cx + ps * 0.55, cy + ps * 0.42 - ps * 0.12];
+                let qb_tr = [cx + ps * 0.55, cy - ps * 0.48 - ps * 0.12];
+                let qb_tl = [cx - ps * 0.55, cy - ps * 0.48 + ps * 0.12];
+                mesh.add_quad_vertices([qb_bl, qb_br, qb_tr, qb_tl], plant_uv, [[0.86, 0.86, 0.86, 1.0]; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        cx + 20.0 * scale,
+                        cy + ps * 0.35,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if block_id == blockgame_core::block::BlockId::LILY_PAD {
+                // -----------------------------------------------------------------
+                // 3D HELD LILY PAD: 3D floating disc with pad rim thickness
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 145.0 * scale + bob_x + item_punch_x,
+                    screen_h - 130.0 * scale + bob_y + item_punch_y,
+                ];
+                let bs = 90.0 * scale;
+
+                let lily_tile = block_registry.get_texture(block_id, blockgame_core::direction::Direction::PosY);
+                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(lily_tile);
+                let lily_uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+
+                let lw = bs * 1.0;
+                let lh = bs * 0.55;
+
+                let p_n = [bc[0], bc[1] - lh * 0.5];
+                let p_e = [bc[0] + lw * 0.5, bc[1]];
+                let p_s = [bc[0], bc[1] + lh * 0.5];
+                let p_w = [bc[0] - lw * 0.5, bc[1]];
+                mesh.add_quad_vertices([p_w, p_n, p_e, p_s], lily_uv, [[1.0, 1.0, 1.0, 1.0]; 4]);
+
+                // Rim thickness underneath
+                let rim_h = 7.0 * scale;
+                let pb_w = [p_w[0], p_w[1] + rim_h];
+                let pb_s = [p_s[0], p_s[1] + rim_h];
+                let pb_e = [p_e[0], p_e[1] + rim_h];
+                mesh.add_quad_vertices([p_w, p_s, pb_s, pb_w], white_uv, [[0.20, 0.48, 0.22, 1.0]; 4]);
+                mesh.add_quad_vertices([p_s, p_e, pb_e, pb_s], white_uv, [[0.15, 0.38, 0.18, 1.0]; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 20.0 * scale,
+                        bc[1] + bs * 0.40,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
             } else {
                 // -----------------------------------------------------------------
-                // 3D HELD BLOCK: Prominent isometric 3D block with top and side shading
+                // 3D HELD SOLID BLOCK: Prominent isometric 3D block with top and side shading
                 // -----------------------------------------------------------------
                 let item_punch_x = -40.0 * scale * punch_swing;
                 let item_punch_y = 25.0 * scale * punch_swing;
@@ -932,6 +1302,20 @@ impl UiBuilder {
                 || active_slot.item_id == ItemId::IRON_SWORD
                 || active_slot.item_id == ItemId::DIAMOND_SWORD
                 || active_slot.item_id == ItemId::GOLD_SWORD;
+
+            let is_fishing_rod = active_slot.item_id == ItemId::WOODEN_FISHING_ROD
+                || active_slot.item_id == ItemId::COPPER_FISHING_ROD
+                || active_slot.item_id == ItemId::IRON_FISHING_ROD
+                || active_slot.item_id == ItemId::DIAMOND_FISHING_ROD;
+
+            let is_bow = active_slot.item_id == ItemId::BOW;
+            let is_arrow = active_slot.item_id == ItemId::ARROW;
+
+            let is_bucket = active_slot.item_id == ItemId::BUCKET
+                || active_slot.item_id == ItemId::WATER_BUCKET;
+
+            let is_bread = active_slot.item_id == ItemId::BREAD;
+            let is_apple = active_slot.item_id == ItemId::APPLE;
 
             if is_pickaxe {
                 // -----------------------------------------------------------------
@@ -1833,33 +2217,515 @@ impl UiBuilder {
                         active_slot.count,
                     );
                 }
-            } else {
+            } else if is_fishing_rod {
                 // -----------------------------------------------------------------
-                // GENERIC / 2D ITEM: Clean sprite quad with NO bounding-box bevels
+                // 3D HELD FISHING ROD: 3D tapered pole, grip, reel drum, guides, line, & bobber
                 // -----------------------------------------------------------------
-                let item_punch_x = -40.0 * scale * punch_swing;
-                let item_punch_y = 25.0 * scale * punch_swing;
+                let rod_punch_x = -60.0 * scale * punch_swing;
+                let rod_punch_y = 75.0 * scale * punch_swing;
 
-                let size = 110.0 * scale;
-                let ix = screen_w - size - 40.0 * scale + bob_x + item_punch_x;
-                let iy = screen_h - size - 40.0 * scale + bob_y + item_punch_y;
+                let base = [
+                    screen_w - 45.0 * scale + bob_x + rod_punch_x,
+                    screen_h + 20.0 * scale + bob_y + rod_punch_y,
+                ];
+                let tip = [
+                    screen_w - 225.0 * scale + bob_x + rod_punch_x * 1.5,
+                    screen_h - 250.0 * scale + bob_y + rod_punch_y * 1.5,
+                ];
 
-                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-                let icon_uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+                let dx = tip[0] - base[0];
+                let dy = tip[1] - base[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
 
-                let p0 = [ix, iy + size];
-                let p1 = [ix + size, iy + size];
-                let p2 = [ix + size, iy];
-                let p3 = [ix, iy];
+                let base_w = 8.5 * scale;
+                let tip_w = 4.0 * scale;
+                let thick = [-8.0 * scale, -6.0 * scale];
 
-                // Front Face with clean item texture (transparent background, no borders)
-                mesh.add_quad_vertices([p0, p1, p2, p3], icon_uvs, [[1.0, 1.0, 1.0, 1.0]; 4]);
+                let (col_rod, col_side) = match active_slot.item_id {
+                    ItemId::COPPER_FISHING_ROD => (
+                        [0.85, 0.55, 0.38, 1.0],
+                        [0.60, 0.38, 0.24, 1.0],
+                    ),
+                    ItemId::IRON_FISHING_ROD => (
+                        [0.85, 0.88, 0.92, 1.0],
+                        [0.60, 0.63, 0.68, 1.0],
+                    ),
+                    ItemId::DIAMOND_FISHING_ROD => (
+                        [0.45, 0.92, 0.96, 1.0],
+                        [0.22, 0.65, 0.72, 1.0],
+                    ),
+                    _ => (
+                        // Wooden Fishing Rod
+                        [0.65, 0.46, 0.28, 1.0],
+                        [0.42, 0.28, 0.16, 1.0],
+                    ),
+                };
+
+                // 1. Tapered Rod Pole Front Face
+                let p0 = [base[0] - norm[0] * base_w, base[1] - norm[1] * base_w];
+                let p1 = [base[0] + norm[0] * base_w, base[1] + norm[1] * base_w];
+                let p2 = [tip[0] + norm[0] * tip_w, tip[1] + norm[1] * tip_w];
+                let p3 = [tip[0] - norm[0] * tip_w, tip[1] - norm[1] * tip_w];
+                mesh.add_quad_vertices([p0, p1, p2, p3], white_uv, [col_rod; 4]);
+
+                // 2. Rod Side Thickness Face
+                let p0_b = [p0[0] + thick[0], p0[1] + thick[1]];
+                let p3_b = [p3[0] + thick[0], p3[1] + thick[1]];
+                mesh.add_quad_vertices([p0_b, p0, p3, p3_b], white_uv, [col_side; 4]);
+
+                // 3. Cork / Leather Grip at handle base
+                let grip_len = len * 0.28;
+                let g_tip = [base[0] + dir[0] * grip_len, base[1] + dir[1] * grip_len];
+                let g_half_w = base_w + 3.0 * scale;
+                let g0 = [base[0] - norm[0] * g_half_w, base[1] - norm[1] * g_half_w];
+                let g1 = [base[0] + norm[0] * g_half_w, base[1] + norm[1] * g_half_w];
+                let g2 = [g_tip[0] + norm[0] * g_half_w, g_tip[1] + norm[1] * g_half_w];
+                let g3 = [g_tip[0] - norm[0] * g_half_w, g_tip[1] - norm[1] * g_half_w];
+                mesh.add_quad_vertices([g0, g1, g2, g3], white_uv, [[0.36, 0.24, 0.14, 1.0]; 4]);
+
+                // 4. Reel Drum
+                let reel_c = [
+                    base[0] + dir[0] * (grip_len + 8.0 * scale) - norm[0] * 12.0 * scale,
+                    base[1] + dir[1] * (grip_len + 8.0 * scale) - norm[1] * 12.0 * scale,
+                ];
+                let rw = 12.0 * scale;
+                mesh.add_quad_vertices(
+                    [
+                        [reel_c[0] - rw, reel_c[1] - rw],
+                        [reel_c[0] + rw, reel_c[1] - rw],
+                        [reel_c[0] + rw, reel_c[1] + rw],
+                        [reel_c[0] - rw, reel_c[1] + rw],
+                    ],
+                    white_uv,
+                    [[0.25, 0.25, 0.28, 1.0]; 4],
+                );
+
+                // 5. Fishing Line (from rod tip hanging down)
+                let line_end = [tip[0] + 35.0 * scale, tip[1] + 120.0 * scale];
+                let lw = 1.8 * scale;
+                let l_dir_x = line_end[0] - tip[0];
+                let l_dir_y = line_end[1] - tip[1];
+                let l_len = (l_dir_x * l_dir_x + l_dir_y * l_dir_y).sqrt().max(0.001);
+                let l_norm = [-l_dir_y / l_len * lw, l_dir_x / l_len * lw];
+                mesh.add_quad_vertices(
+                    [
+                        [tip[0] - l_norm[0], tip[1] - l_norm[1]],
+                        [tip[0] + l_norm[0], tip[1] + l_norm[1]],
+                        [line_end[0] + l_norm[0], line_end[1] + l_norm[1]],
+                        [line_end[0] - l_norm[0], line_end[1] - l_norm[1]],
+                    ],
+                    white_uv,
+                    [[0.92, 0.94, 0.98, 0.90]; 4],
+                );
+
+                // 6. 3D Bobber (Red top, White bottom)
+                let bs_bob = 13.0 * scale;
+                let bob_c = line_end;
+                // Red top half
+                mesh.add_quad_vertices(
+                    [
+                        [bob_c[0] - bs_bob, bob_c[1]],
+                        [bob_c[0] + bs_bob, bob_c[1]],
+                        [bob_c[0] + bs_bob * 0.7, bob_c[1] - bs_bob],
+                        [bob_c[0] - bs_bob * 0.7, bob_c[1] - bs_bob],
+                    ],
+                    white_uv,
+                    [[0.90, 0.18, 0.18, 1.0]; 4],
+                );
+                // White bottom half
+                mesh.add_quad_vertices(
+                    [
+                        [bob_c[0] - bs_bob * 0.7, bob_c[1] + bs_bob],
+                        [bob_c[0] + bs_bob * 0.7, bob_c[1] + bs_bob],
+                        [bob_c[0] + bs_bob, bob_c[1]],
+                        [bob_c[0] - bs_bob, bob_c[1]],
+                    ],
+                    white_uv,
+                    [[0.95, 0.95, 0.98, 1.0]; 4],
+                );
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
                         mesh,
-                        ix + size - 35.0 * scale,
-                        iy + size - 25.0 * scale,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_bow {
+                // -----------------------------------------------------------------
+                // 3D HELD BOW: 3D curved wooden stave, grip wrap, and taut bowstring
+                // -----------------------------------------------------------------
+                let bow_punch_x = -45.0 * scale * punch_swing;
+                let bow_punch_y = 45.0 * scale * punch_swing;
+
+                let grip = [
+                    screen_w - 110.0 * scale + bob_x + bow_punch_x,
+                    screen_h - 110.0 * scale + bob_y + bow_punch_y,
+                ];
+                let nock_top = [grip[0] - 85.0 * scale, grip[1] - 120.0 * scale];
+                let nock_bot = [grip[0] + 45.0 * scale, grip[1] + 115.0 * scale];
+
+                let stave_w = 8.0 * scale;
+                let thick = [-7.0 * scale, -5.0 * scale];
+
+                // Upper curved limb (two segments)
+                let mid_top = [(grip[0] + nock_top[0]) * 0.5 - 20.0 * scale, (grip[1] + nock_top[1]) * 0.5 - 10.0 * scale];
+                mesh.add_quad_vertices(
+                    [[grip[0] - stave_w, grip[1]], [grip[0] + stave_w, grip[1]], [mid_top[0] + stave_w, mid_top[1]], [mid_top[0] - stave_w, mid_top[1]]],
+                    white_uv,
+                    [[0.60, 0.42, 0.24, 1.0]; 4],
+                );
+                mesh.add_quad_vertices(
+                    [[mid_top[0] - stave_w, mid_top[1]], [mid_top[0] + stave_w, mid_top[1]], [nock_top[0] + stave_w * 0.6, nock_top[1]], [nock_top[0] - stave_w * 0.6, nock_top[1]]],
+                    white_uv,
+                    [[0.55, 0.38, 0.20, 1.0]; 4],
+                );
+
+                // Lower curved limb (two segments)
+                let mid_bot = [(grip[0] + nock_bot[0]) * 0.5 - 15.0 * scale, (grip[1] + nock_bot[1]) * 0.5 + 10.0 * scale];
+                mesh.add_quad_vertices(
+                    [[grip[0] - stave_w, grip[1]], [grip[0] + stave_w, grip[1]], [mid_bot[0] + stave_w, mid_bot[1]], [mid_bot[0] - stave_w, mid_bot[1]]],
+                    white_uv,
+                    [[0.60, 0.42, 0.24, 1.0]; 4],
+                );
+                mesh.add_quad_vertices(
+                    [[mid_bot[0] - stave_w, mid_bot[1]], [mid_bot[0] + stave_w, mid_bot[1]], [nock_bot[0] + stave_w * 0.6, nock_bot[0]], [nock_bot[0] - stave_w * 0.6, nock_bot[1]]],
+                    white_uv,
+                    [[0.55, 0.38, 0.20, 1.0]; 4],
+                );
+
+                // Stave 3D Thickness along grip
+                mesh.add_quad_vertices(
+                    [[grip[0] - stave_w + thick[0], grip[1] + thick[1]], [grip[0] - stave_w, grip[1]], [mid_top[0] - stave_w, mid_top[1]], [mid_top[0] - stave_w + thick[0], mid_top[1] + thick[1]]],
+                    white_uv,
+                    [[0.38, 0.25, 0.14, 1.0]; 4],
+                );
+
+                // Center Grip Wrap
+                mesh.add_quad_vertices(
+                    [[grip[0] - stave_w * 1.3, grip[1] - 15.0 * scale], [grip[0] + stave_w * 1.3, grip[1] - 15.0 * scale], [grip[0] + stave_w * 1.3, grip[1] + 15.0 * scale], [grip[0] - stave_w * 1.3, grip[1] + 15.0 * scale]],
+                    white_uv,
+                    [[0.30, 0.20, 0.12, 1.0]; 4],
+                );
+
+                // Bowstring
+                let str_w = 2.0 * scale;
+                mesh.add_quad_vertices(
+                    [[nock_top[0] - str_w, nock_top[1]], [nock_top[0] + str_w, nock_top[1]], [nock_bot[0] + str_w, nock_bot[1]], [nock_bot[0] - str_w, nock_bot[1]]],
+                    white_uv,
+                    [[0.95, 0.95, 0.95, 0.92]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_arrow {
+                // -----------------------------------------------------------------
+                // 3D HELD ARROW: 3D shaft, pointed arrowhead, and feather fletching
+                // -----------------------------------------------------------------
+                let arrow_punch_x = -45.0 * scale * punch_swing;
+                let arrow_punch_y = 55.0 * scale * punch_swing;
+
+                let nock = [
+                    screen_w - 55.0 * scale + bob_x + arrow_punch_x,
+                    screen_h + 15.0 * scale + bob_y + arrow_punch_y,
+                ];
+                let head = [
+                    screen_w - 180.0 * scale + bob_x + arrow_punch_x * 1.4,
+                    screen_h - 200.0 * scale + bob_y + arrow_punch_y * 1.4,
+                ];
+
+                let dx = head[0] - nock[0];
+                let dy = head[1] - nock[1];
+                let len = (dx * dx + dy * dy).sqrt().max(0.001);
+                let dir = [dx / len, dy / len];
+                let norm = [-dir[1], dir[0]];
+
+                let shaft_w = 5.0 * scale;
+                let thick = [-6.0 * scale, -5.0 * scale];
+
+                // Shaft
+                let a0 = [nock[0] - norm[0] * shaft_w, nock[1] - norm[1] * shaft_w];
+                let a1 = [nock[0] + norm[0] * shaft_w, nock[1] + norm[1] * shaft_w];
+                let a2 = [head[0] + norm[0] * shaft_w, head[1] + norm[1] * shaft_w];
+                let a3 = [head[0] - norm[0] * shaft_w, head[1] - norm[1] * shaft_w];
+                mesh.add_quad_vertices([a0, a1, a2, a3], white_uv, [[0.65, 0.48, 0.30, 1.0]; 4]);
+                let a0_b = [a0[0] + thick[0], a0[1] + thick[1]];
+                let a3_b = [a3[0] + thick[0], a3[1] + thick[1]];
+                mesh.add_quad_vertices([a0_b, a0, a3, a3_b], white_uv, [[0.40, 0.28, 0.16, 1.0]; 4]);
+
+                // Flint / Iron Arrowhead (triangular tip)
+                let tip_pt = [head[0] + dir[0] * 32.0 * scale, head[1] + dir[1] * 32.0 * scale];
+                let hw = 16.0 * scale;
+                let h_l = [head[0] - norm[0] * hw, head[1] - norm[1] * hw];
+                let h_r = [head[0] + norm[0] * hw, head[1] + norm[1] * hw];
+                mesh.add_quad_vertices([h_l, h_r, tip_pt, h_l], white_uv, [[0.68, 0.70, 0.74, 1.0]; 4]);
+
+                // Feather Fletching Vanes
+                let fw = 14.0 * scale;
+                let flen = 35.0 * scale;
+                let f_base = [nock[0] + dir[0] * 10.0 * scale, nock[1] + dir[1] * 10.0 * scale];
+                let f_end = [f_base[0] + dir[0] * flen, f_base[1] + dir[1] * flen];
+                mesh.add_quad_vertices(
+                    [
+                        [f_base[0] - norm[0] * fw, f_base[1] - norm[1] * fw],
+                        [f_base[0] + norm[0] * fw, f_base[1] + norm[1] * fw],
+                        [f_end[0] + norm[0] * shaft_w, f_end[1] + norm[1] * shaft_w],
+                        [f_end[0] - norm[0] * shaft_w, f_end[1] - norm[1] * shaft_w],
+                    ],
+                    white_uv,
+                    [[0.90, 0.90, 0.92, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        screen_w - 75.0 * scale,
+                        screen_h - 45.0 * scale,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_bucket {
+                // -----------------------------------------------------------------
+                // 3D HELD BUCKET: 3D metallic iron bucket with arched bail & water surface
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 125.0 * scale + bob_x + item_punch_x,
+                    screen_h - 115.0 * scale + bob_y + item_punch_y,
+                ];
+                let bw_top = 58.0 * scale;
+                let bw_bot = 42.0 * scale;
+                let bh = 65.0 * scale;
+
+                // Rim Top Lip (diamond / ellipse)
+                let r_n = [bc[0], bc[1] - bh * 0.5 - 14.0 * scale];
+                let r_e = [bc[0] + bw_top, bc[1] - bh * 0.5];
+                let r_s = [bc[0], bc[1] - bh * 0.5 + 14.0 * scale];
+                let r_w = [bc[0] - bw_top, bc[1] - bh * 0.5];
+
+                // Water interior surface if Water Bucket
+                if active_slot.item_id == ItemId::WATER_BUCKET {
+                    let w_uv = TextureAtlas::get_uv_bounds(38); // water tile
+                    let water_uvs = [[w_uv[0], w_uv[1]], [w_uv[2], w_uv[1]], [w_uv[2], w_uv[3]], [w_uv[0], w_uv[3]]];
+                    mesh.add_quad_vertices([r_w, r_n, r_e, r_s], water_uvs, [[0.22, 0.55, 0.92, 0.95]; 4]);
+                } else {
+                    // Empty bucket dark interior
+                    mesh.add_quad_vertices([r_w, r_n, r_e, r_s], white_uv, [[0.30, 0.32, 0.36, 1.0]; 4]);
+                }
+
+                // Bucket Outer Body: Left Facet & Right Facet (tapered)
+                let b_bl = [bc[0] - bw_bot, bc[1] + bh * 0.5];
+                let b_bm = [bc[0], bc[1] + bh * 0.5 + 10.0 * scale];
+                let b_br = [bc[0] + bw_bot, bc[1] + bh * 0.5];
+
+                // Left body facet
+                mesh.add_quad_vertices([r_w, r_s, b_bm, b_bl], white_uv, [[0.76, 0.78, 0.82, 1.0]; 4]);
+                // Right body facet
+                mesh.add_quad_vertices([r_s, r_e, b_br, b_bm], white_uv, [[0.58, 0.60, 0.65, 1.0]; 4]);
+
+                // Metallic Rim Highlight
+                let rim_w = 4.0 * scale;
+                mesh.add_quad_vertices(
+                    [[r_w[0], r_w[1] - rim_w], [r_s[0], r_s[1] - rim_w], r_s, r_w],
+                    white_uv,
+                    [[0.90, 0.92, 0.96, 1.0]; 4],
+                );
+                mesh.add_quad_vertices(
+                    [r_s, [r_s[0], r_s[1] - rim_w], [r_e[0], r_e[1] - rim_w], r_e],
+                    white_uv,
+                    [[0.72, 0.74, 0.78, 1.0]; 4],
+                );
+
+                // Arched Wire Handle / Bail
+                let h_top = [bc[0] - 8.0 * scale, bc[1] - bh * 0.5 - 32.0 * scale];
+                let hw = 3.0 * scale;
+                mesh.add_quad_vertices(
+                    [[r_w[0] - hw, r_w[1]], [r_w[0] + hw, r_w[1]], [h_top[0] + hw, h_top[1]], [h_top[0] - hw, h_top[1]]],
+                    white_uv,
+                    [[0.50, 0.52, 0.56, 1.0]; 4],
+                );
+                mesh.add_quad_vertices(
+                    [[h_top[0] - hw, h_top[1]], [h_top[0] + hw, h_top[1]], [r_e[0] + hw, r_e[1]], [r_e[0] - hw, r_e[1]]],
+                    white_uv,
+                    [[0.40, 0.42, 0.46, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 15.0 * scale,
+                        bc[1] + bh * 0.40,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_bread {
+                // -----------------------------------------------------------------
+                // 3D HELD BREAD: 3D golden loaf with scoring cuts & crust bevels
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let bc = [
+                    screen_w - 130.0 * scale + bob_x + item_punch_x,
+                    screen_h - 110.0 * scale + bob_y + item_punch_y,
+                ];
+                let lw = 55.0 * scale;
+                let lh = 30.0 * scale;
+                let ld = 40.0 * scale;
+
+                // Loaf Top Rounded Crust
+                let t_nw = [bc[0] - lw * 0.75, bc[1] - ld * 0.6];
+                let t_ne = [bc[0] + lw * 0.75, bc[1] - ld * 0.6];
+                let t_se = [bc[0] + lw, bc[1] + ld * 0.2];
+                let t_sw = [bc[0] - lw, bc[1] + ld * 0.2];
+                mesh.add_quad_vertices([t_sw, t_nw, t_ne, t_se], white_uv, [[0.86, 0.62, 0.30, 1.0]; 4]);
+
+                // 3 Diagonal Scoring Slashes
+                for &offset in &[-0.4, 0.0, 0.4] {
+                    let sx = bc[0] + lw * offset;
+                    let sy = bc[1] - ld * 0.2;
+                    let sw = 5.0 * scale;
+                    let slen = 18.0 * scale;
+                    mesh.add_quad_vertices(
+                        [[sx - sw, sy + slen], [sx + sw, sy + slen], [sx + sw + 8.0 * scale, sy - slen], [sx - sw + 8.0 * scale, sy - slen]],
+                        white_uv,
+                        [[0.96, 0.82, 0.55, 1.0]; 4],
+                    );
+                }
+
+                // Front & Side Crust
+                let f_bl = [t_sw[0], t_sw[1] + lh];
+                let f_br = [t_se[0], t_se[1] + lh];
+                mesh.add_quad_vertices([t_sw, t_se, f_br, f_bl], white_uv, [[0.72, 0.48, 0.22, 1.0]; 4]);
+
+                let r_br = [t_ne[0], t_ne[1] + lh];
+                mesh.add_quad_vertices([t_se, t_ne, r_br, f_br], white_uv, [[0.55, 0.35, 0.16, 1.0]; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        bc[0] + 15.0 * scale,
+                        bc[1] + lh * 0.40,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else if is_apple {
+                // -----------------------------------------------------------------
+                // 3D HELD APPLE: 3D sculpted crimson fruit with stem and leaf
+                // -----------------------------------------------------------------
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
+
+                let ac = [
+                    screen_w - 130.0 * scale + bob_x + item_punch_x,
+                    screen_h - 110.0 * scale + bob_y + item_punch_y,
+                ];
+                let asize = 42.0 * scale;
+
+                // Apple Body: Faceted rounded isometric sphere
+                // Top Highlight Facet
+                let a_top = [ac[0], ac[1] - asize * 0.85];
+                let a_tl = [ac[0] - asize * 0.70, ac[1] - asize * 0.25];
+                let a_tr = [ac[0] + asize * 0.70, ac[1] - asize * 0.25];
+                let a_mid = [ac[0] + asize * 0.05, ac[1] + asize * 0.10];
+                mesh.add_quad_vertices([a_tl, a_top, a_tr, a_mid], white_uv, [[0.95, 0.26, 0.22, 1.0]; 4]);
+
+                // Lower-Left Facet
+                let a_bl = [ac[0] - asize * 0.55, ac[1] + asize * 0.75];
+                let a_bm = [ac[0], ac[1] + asize * 0.90];
+                mesh.add_quad_vertices([a_tl, a_mid, a_bm, a_bl], white_uv, [[0.80, 0.15, 0.15, 1.0]; 4]);
+
+                // Lower-Right Facet (shaded)
+                let a_br = [ac[0] + asize * 0.65, ac[1] + asize * 0.65];
+                mesh.add_quad_vertices([a_mid, a_tr, a_br, a_bm], white_uv, [[0.60, 0.08, 0.08, 1.0]; 4]);
+
+                // Stem sticking out from top indentation
+                let s_base = [a_top[0], a_top[1] + 5.0 * scale];
+                let s_tip = [s_base[0] - 6.0 * scale, s_base[1] - 18.0 * scale];
+                let sw = 2.5 * scale;
+                mesh.add_quad_vertices(
+                    [[s_base[0] - sw, s_base[1]], [s_base[0] + sw, s_base[1]], [s_tip[0] + sw, s_tip[1]], [s_tip[0] - sw, s_tip[1]]],
+                    white_uv,
+                    [[0.38, 0.22, 0.10, 1.0]; 4],
+                );
+
+                // Little green leaf on the stem
+                let l_tip = [s_tip[0] + 14.0 * scale, s_tip[1] - 2.0 * scale];
+                mesh.add_quad_vertices(
+                    [s_tip, [s_tip[0] + 7.0 * scale, s_tip[1] + 5.0 * scale], l_tip, [s_tip[0] + 7.0 * scale, s_tip[1] - 5.0 * scale]],
+                    white_uv,
+                    [[0.22, 0.75, 0.18, 1.0]; 4],
+                );
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        ac[0] + 15.0 * scale,
+                        ac[1] + asize * 0.40,
+                        30.0 * scale,
+                        active_slot.count,
+                    );
+                }
+            } else {
+                // -----------------------------------------------------------------
+                // UNIVERSAL VOLUMETRIC 3D ITEM: Angled in 3D perspective with depth & bevel thickness
+                // -----------------------------------------------------------------
+                let item_punch_x = -45.0 * scale * punch_swing;
+                let item_punch_y = 35.0 * scale * punch_swing;
+
+                let size = 95.0 * scale;
+                let cx = screen_w - 110.0 * scale + bob_x + item_punch_x;
+                let cy = screen_h - 110.0 * scale + bob_y + item_punch_y;
+
+                // 3D Isometric perspective holding angle (tilted ~30 degrees forward)
+                let tilt_x = size * 0.42;
+                let tilt_y = size * 0.18;
+                let h_half = size * 0.50;
+
+                let p_bl = [cx - tilt_x, cy + h_half - tilt_y];
+                let p_br = [cx + tilt_x, cy + h_half + tilt_y];
+                let p_tr = [cx + tilt_x, cy - h_half + tilt_y];
+                let p_tl = [cx - tilt_x, cy - h_half - tilt_y];
+
+                let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let icon_uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+
+                // 1. Front Isometric Face with authentic item sprite
+                mesh.add_quad_vertices([p_bl, p_br, p_tr, p_tl], icon_uvs, [[1.0, 1.0, 1.0, 1.0]; 4]);
+
+                // 2. Extrusion Depth (Side Thickness & Top Bevel)
+                let thick = [-9.0 * scale, -7.0 * scale];
+                let p_bl_b = [p_bl[0] + thick[0], p_bl[1] + thick[1]];
+                let p_tl_b = [p_tl[0] + thick[0], p_tl[1] + thick[1]];
+                let p_tr_b = [p_tr[0] + thick[0], p_tr[1] + thick[1]];
+
+                // Left side thickness facet (shaded)
+                mesh.add_quad_vertices([p_bl_b, p_bl, p_tl, p_tl_b], icon_uvs, [[0.65, 0.65, 0.68, 1.0]; 4]);
+
+                // Top edge thickness facet (illuminated)
+                mesh.add_quad_vertices([p_tl_b, p_tl, p_tr, p_tr_b], icon_uvs, [[0.82, 0.82, 0.85, 1.0]; 4]);
+
+                if active_slot.count > 1 {
+                    Self::draw_stack_number(
+                        mesh,
+                        cx + 15.0 * scale,
+                        cy + 25.0 * scale,
                         30.0 * scale,
                         active_slot.count,
                     );
@@ -8351,7 +9217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_hud_held_seagrass_flat_item() {
+    fn test_build_hud_held_seagrass_crossed_3d_plant() {
         let registry = ItemRegistry::new();
 
         // 3D Block (Dirt) generates 3 isometric faces (18 indices)
@@ -8360,11 +9226,76 @@ mod tests {
         let block_quads = mesh_block.indices.len() / 6;
         assert_eq!(block_quads, 3, "Solid blocks should generate 3 isometric cube faces");
 
-        // Plant item (Seagrass) generates 1 flat 2D sprite face (6 indices)
+        // Plant item (Seagrass) generates 3D crossed-quad in-world plant geometry with dirt clod (>= 2 quads)
         let mut mesh_seagrass = UiMesh::new();
         UiBuilder::draw_held_item(&mut mesh_seagrass, 1280.0, 720.0, ItemSlot::new(ItemId::SEAGRASS, 1), &registry, 0.0, 0.0);
         let seagrass_quads = mesh_seagrass.indices.len() / 6;
-        assert_eq!(seagrass_quads, 1, "Seagrass in hand should generate 1 flat 2D item sprite quad instead of a 3D cube");
+        assert!(seagrass_quads >= 2, "Seagrass in hand should generate 3D crossed-quad in-world plant geometry instead of a flat 2D sticker");
+    }
+
+    #[test]
+    fn test_build_hud_held_3d_stairs_fence_door_bed_flower() {
+        let registry = ItemRegistry::new();
+
+        // 3D Stairs
+        let mut mesh_stairs = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_stairs, 1280.0, 720.0, ItemSlot::new(ItemId::OAK_STAIRS, 1), &registry, 0.0, 0.0);
+        assert!(mesh_stairs.indices.len() / 6 >= 5, "Stairs in hand must generate 3D stepped facets");
+
+        // 3D Oak Fence
+        let mut mesh_fence = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_fence, 1280.0, 720.0, ItemSlot::new(ItemId::OAK_FENCE, 1), &registry, 0.0, 0.0);
+        assert!(mesh_fence.indices.len() / 6 >= 5, "Fence in hand must generate 3D post and cross-rails");
+
+        // 3D Oak Door
+        let mut mesh_door = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_door, 1280.0, 720.0, ItemSlot::new(ItemId::OAK_DOOR, 1), &registry, 0.0, 0.0);
+        assert!(mesh_door.indices.len() / 6 >= 3, "Door in hand must generate 3D upright door slab with thickness");
+
+        // 3D Bed
+        let mut mesh_bed = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_bed, 1280.0, 720.0, ItemSlot::new(ItemId::BED, 1), &registry, 0.0, 0.0);
+        assert!(mesh_bed.indices.len() / 6 >= 6, "Bed in hand must generate 3D pillow, mattress, frame, and legs");
+
+        // 3D Flower (Poppy)
+        let mut mesh_flower = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_flower, 1280.0, 720.0, ItemSlot::new(ItemId::POPPY, 1), &registry, 0.0, 0.0);
+        assert!(mesh_flower.indices.len() / 6 >= 2, "Flower in hand must generate 3D crossed billboard quads with base clod");
+    }
+
+    #[test]
+    fn test_build_hud_held_3d_fishing_rod_bow_bucket_food_and_volumetric() {
+        let registry = ItemRegistry::new();
+
+        // 3D Fishing Rod
+        let mut mesh_rod = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_rod, 1280.0, 720.0, ItemSlot::new(ItemId::WOODEN_FISHING_ROD, 1), &registry, 0.0, 0.0);
+        assert!(mesh_rod.indices.len() / 6 >= 5, "Fishing rod in hand must generate 3D pole, reel, line, and bobber");
+
+        // 3D Bow
+        let mut mesh_bow = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_bow, 1280.0, 720.0, ItemSlot::new(ItemId::BOW, 1), &registry, 0.0, 0.0);
+        assert!(mesh_bow.indices.len() / 6 >= 5, "Bow in hand must generate 3D curved stave and bowstring");
+
+        // 3D Water Bucket
+        let mut mesh_bucket = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_bucket, 1280.0, 720.0, ItemSlot::new(ItemId::WATER_BUCKET, 1), &registry, 0.0, 0.0);
+        assert!(mesh_bucket.indices.len() / 6 >= 5, "Bucket in hand must generate 3D body, rim, handle, and liquid");
+
+        // 3D Bread
+        let mut mesh_bread = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_bread, 1280.0, 720.0, ItemSlot::new(ItemId::BREAD, 1), &registry, 0.0, 0.0);
+        assert!(mesh_bread.indices.len() / 6 >= 4, "Bread in hand must generate 3D scored golden loaf");
+
+        // 3D Apple
+        let mut mesh_apple = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_apple, 1280.0, 720.0, ItemSlot::new(ItemId::APPLE, 1), &registry, 0.0, 0.0);
+        assert!(mesh_apple.indices.len() / 6 >= 4, "Apple in hand must generate 3D fruit facets, stem, and leaf");
+
+        // 3D Volumetric Extruded Item (Wheat Seeds)
+        let mut mesh_seeds = UiMesh::new();
+        UiBuilder::draw_held_item(&mut mesh_seeds, 1280.0, 720.0, ItemSlot::new(ItemId::WHEAT_SEEDS, 1), &registry, 0.0, 0.0);
+        assert_eq!(mesh_seeds.indices.len() / 6, 3, "Volumetric items in hand must generate 3D front face, side thickness, and top bevel");
     }
 
     #[test]
