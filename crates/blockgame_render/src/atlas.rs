@@ -776,97 +776,226 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
     });
 
     // 319..=325: 7 Flowers
-    // 319: Poppy (red)
+    // 319: Poppy (lush red petals, golden stamen, dark center, broad foliage leaves, sturdy stem)
     paint_flower_tile(atlas, 319, |px, py| {
-        let dx = px as i32 - 16;
-        let dy = py as i32 - 11;
-        let r2 = dx * dx + dy * dy;
-        if r2 <= 6 {
-            Some(Rgba([45, 30, 25, 255])) // Dark center
-        } else if r2 <= 42 {
-            Some(Rgba([220, 40, 35, 255])) // Red petals
-        } else if px >= 15 && px <= 16 && py >= 14 {
-            Some(Rgba([62, 138, 48, 255])) // Stem
-        } else if py >= 22 && py <= 26 && ((px >= 12 && px <= 14) || (px >= 17 && px <= 19)) {
-            Some(Rgba([72, 156, 56, 255])) // Leaves
-        } else {
-            None
+        let x = px as i32;
+        let y = py as i32;
+        let dx = x - 16;
+        let dy = y - 11;
+        let dist = ((dx * dx) as f32 * 1.0 + (dy * dy) as f32 * 1.5).sqrt();
+        if dist <= 3.2 {
+            let fleck = if (x + y) % 3 == 0 { 40 } else { 0 };
+            return Some(Rgba([38 + fleck, 24 + fleck / 2, 28, 255]));
         }
-    });
-
-    // 320: Dandelion (yellow)
-    paint_flower_tile(atlas, 320, |px, py| {
-        let dx = px as i32 - 16;
-        let dy = py as i32 - 12;
-        let r2 = dx * dx + dy * dy;
-        if r2 <= 30 {
-            Some(Rgba([250, 218, 40, 255]))
-        } else if px >= 15 && px <= 16 && py >= 16 {
-            Some(Rgba([65, 142, 48, 255]))
-        } else if py >= 23 && py <= 27 && (px >= 12 && px <= 14) {
-            Some(Rgba([76, 162, 58, 255]))
-        } else {
-            None
+        if dist <= 4.4 && ((x + y) % 2 == 0) {
+            return Some(Rgba([245, 205, 50, 255]));
         }
-    });
-
-    // 321: Blue Orchid
-    paint_flower_tile(atlas, 321, |px, py| {
-        let dx = px as i32 - 16;
-        let dy = py as i32 - 10;
-        if dx * dx + dy * dy <= 36 || ((px as i32 - 12).pow(2) + (py as i32 - 16).pow(2) <= 14) {
-            Some(Rgba([48, 172, 232, 255]))
-        } else if px >= 15 && px <= 16 && py >= 14 {
-            Some(Rgba([54, 130, 52, 255]))
-        } else {
-            None
-        }
-    });
-
-    // 322: Allium (purple pom-pom)
-    paint_flower_tile(atlas, 322, |px, py| {
-        let dx = px as i32 - 16;
-        let dy = py as i32 - 9;
-        let r2 = dx * dx + dy * dy;
-        if r2 <= 38 {
-            let shade = if (px + py) % 2 == 0 { 20 } else { -12 };
-            Some(Rgba([
-                clamp(178, shade),
-                clamp(88, shade / 2),
-                clamp(214, shade),
+        if dist <= 9.8 && y <= 18 {
+            let is_edge = dist > 8.5;
+            let fold = ((dx.abs() * 3 + dy * 2) % 7) - 3;
+            let base_r = if is_edge { 245 } else { 210 + fold * 8 };
+            let base_g = if is_edge { 55 } else { 30 + fold * 3 };
+            let base_b = if is_edge { 45 } else { 28 };
+            return Some(Rgba([
+                base_r.clamp(140, 255) as u8,
+                base_g.clamp(20, 90) as u8,
+                base_b.clamp(18, 70) as u8,
                 255,
-            ]))
-        } else if px >= 15 && px <= 16 && py >= 14 {
-            Some(Rgba([68, 148, 54, 255]))
-        } else {
-            None
+            ]));
         }
+        let is_left_leaf = x >= 6 && x <= 14 && y >= 19 && y <= 29 && (y - x <= 18) && (x + y >= 26);
+        let is_right_leaf = x >= 17 && x <= 25 && y >= 19 && y <= 29 && (x - y <= 4) && (x + y <= 50);
+        if is_left_leaf || is_right_leaf {
+            let vein = if (x == 10 && y >= 21) || (x == 21 && y >= 21) { 25 } else { 0 };
+            let shade = ((x * 3 + y * 2) % 5) * 6;
+            return Some(Rgba([
+                (55 + vein + shade).clamp(40, 110) as u8,
+                (135 + vein + shade).clamp(90, 180) as u8,
+                (42 + vein / 2).clamp(30, 80) as u8,
+                255,
+            ]));
+        }
+        if x >= 14 && x <= 17 && y >= 16 {
+            let shade: i32 = if x == 14 { -18 } else if x == 17 { 18 } else { 0 };
+            return Some(Rgba([
+                (60 + shade).clamp(40, 95) as u8,
+                (138 + shade).clamp(95, 175) as u8,
+                (46 + shade / 2).clamp(30, 75) as u8,
+                255,
+            ]));
+        }
+        None
     });
 
-    // 323: Orange Tulip
+    // 320: Dandelion (dense golden-yellow composite head with toothed basal leaves)
+    paint_flower_tile(atlas, 320, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let dx = x - 16;
+        let dy = y - 11;
+        let dist = ((dx * dx) as f32 + (dy * dy) as f32 * 1.3).sqrt();
+        if dist <= 9.6 && y <= 17 {
+            let is_edge = dist > 8.0;
+            let shade = ((dx.abs() * 4 + dy * 3) % 7) - 3;
+            let r = if is_edge { 255 } else { 240 + shade * 4 };
+            let g = if is_edge { 235 } else { 195 + shade * 10 };
+            let b = if is_edge { 80 } else { 24 + (shade + 3) * 6 };
+            return Some(Rgba([r.clamp(200, 255) as u8, g.clamp(150, 255) as u8, b.clamp(15, 110) as u8, 255]));
+        }
+        if y >= 16 && y <= 19 && x >= 12 && x <= 19 && (x - 16).abs() <= (y - 14) {
+            return Some(Rgba([72, 145, 48, 255]));
+        }
+        let is_left_leaf = x >= 5 && x <= 14 && y >= 20 && y <= 31 && (y - x <= 20);
+        let is_right_leaf = x >= 17 && x <= 26 && y >= 20 && y <= 31 && (x - y <= 4);
+        if is_left_leaf || is_right_leaf {
+            let tooth = ((x + y * 2) % 4 == 0) as i32 * 20;
+            return Some(Rgba([
+                (60 + tooth).clamp(45, 110) as u8,
+                (142 + tooth).clamp(100, 185) as u8,
+                (44 + tooth / 2).clamp(30, 80) as u8,
+                255,
+            ]));
+        }
+        if x >= 14 && x <= 17 && y >= 18 {
+            let shade: i32 = if x == 14 { -16 } else if x == 17 { 16 } else { 0 };
+            return Some(Rgba([
+                (65 + shade).clamp(45, 95) as u8,
+                (144 + shade).clamp(100, 175) as u8,
+                (48 + shade / 2).clamp(32, 75) as u8,
+                255,
+            ]));
+        }
+        None
+    });
+
+    // 321: Blue Orchid (vibrant tiered sky-blue blossoms with graceful leaves)
+    paint_flower_tile(atlas, 321, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let d1 = ((x - 16) * (x - 16) + (y - 8) * (y - 8)) as f32;
+        let d2 = ((x - 12) * (x - 12) + (y - 15) * (y - 15)) as f32;
+
+        if d1 <= 5.5 * 5.5 {
+            let dist = d1.sqrt();
+            let is_throat = dist <= 2.2;
+            if is_throat {
+                return Some(Rgba([240, 248, 255, 255]));
+            }
+            let is_edge = dist > 4.5;
+            let shade = ((x + y * 2) % 5) - 2;
+            let r = if is_edge { 140 } else { 42 + shade * 6 };
+            let g = if is_edge { 220 } else { 165 + shade * 8 };
+            let b = if is_edge { 255 } else { 242 };
+            return Some(Rgba([r.clamp(25, 180) as u8, g.clamp(120, 240) as u8, b.clamp(200, 255) as u8, 255]));
+        }
+        if d2 <= 4.2 * 4.2 {
+            let dist = d2.sqrt();
+            if dist <= 1.8 {
+                return Some(Rgba([240, 248, 255, 255]));
+            }
+            let is_edge = dist > 3.4;
+            let r = if is_edge { 130 } else { 38 };
+            let g = if is_edge { 210 } else { 158 };
+            return Some(Rgba([r, g, 244, 255]));
+        }
+        let is_left_leaf = x >= 6 && x <= 14 && y >= 21 && y <= 30 && (y - x <= 18);
+        let is_right_leaf = x >= 17 && x <= 25 && y >= 21 && y <= 30 && (x - y <= 2);
+        if is_left_leaf || is_right_leaf {
+            let shade = ((x * 2 + y) % 4) * 8;
+            return Some(Rgba([(52 + shade).clamp(0, 255) as u8, (128 + shade).clamp(0, 255) as u8, 56, 255]));
+        }
+        if x >= 14 && x <= 17 && y >= 12 {
+            let shade: i32 = if x == 14 { -14 } else if x == 17 { 14 } else { 0 };
+            return Some(Rgba([
+                (55 + shade).clamp(38, 85) as u8,
+                (132 + shade).clamp(90, 165) as u8,
+                (50 + shade / 2).clamp(32, 75) as u8,
+                255,
+            ]));
+        }
+        None
+    });
+
+    // 322: Allium (dense spherical pom-pom globe packed with star-like violet florets)
+    paint_flower_tile(atlas, 322, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        let dx = x - 16;
+        let dy = y - 10;
+        let dist = ((dx * dx + dy * dy) as f32).sqrt();
+        if dist <= 9.2 {
+            let is_star_tip = (x % 3 == 0) && (y % 3 == 0);
+            let is_shadow = dist > 7.5;
+            let pattern = (hash(px, py, 322) % 9) as i32 - 4;
+            let r = if is_star_tip { 235 } else if is_shadow { 135 + pattern * 6 } else { 185 + pattern * 8 };
+            let g = if is_star_tip { 170 } else if is_shadow { 42 + pattern * 3 } else { 85 + pattern * 6 };
+            let b = if is_star_tip { 255 } else if is_shadow { 180 + pattern * 6 } else { 228 + pattern * 5 };
+            return Some(Rgba([r.clamp(110, 255) as u8, g.clamp(30, 200) as u8, b.clamp(150, 255) as u8, 255]));
+        }
+        let is_left_leaf = x >= 7 && x <= 14 && y >= 22 && y <= 31 && (y - x <= 20);
+        let is_right_leaf = x >= 17 && x <= 24 && y >= 22 && y <= 31 && (x - y <= 2);
+        if is_left_leaf || is_right_leaf {
+            return Some(Rgba([60, 142, 52, 255]));
+        }
+        if x >= 14 && x <= 17 && y >= 17 {
+            let shade: i32 = if x == 14 { -16 } else if x == 17 { 16 } else { 0 };
+            return Some(Rgba([
+                (58 + shade).clamp(40, 90) as u8,
+                (136 + shade).clamp(92, 170) as u8,
+                (48 + shade / 2).clamp(32, 75) as u8,
+                255,
+            ]));
+        }
+        None
+    });
+
+    // 323: Orange Tulip (vibrant cup bloom with overlapping petals & clasping leaves)
     paint_flower_tile(atlas, 323, |px, py| {
-        paint_tulip_pixel(px, py, [242, 132, 34])
+        paint_tulip_pixel(px, py, [242, 115, 24], [255, 180, 42], [185, 58, 16])
     });
 
-    // 324: Pink Tulip
+    // 324: Pink Tulip (soft rose-pink petals with pastel highlights & clasping leaves)
     paint_flower_tile(atlas, 324, |px, py| {
-        paint_tulip_pixel(px, py, [244, 136, 178])
+        paint_tulip_pixel(px, py, [245, 132, 175], [255, 202, 224], [188, 62, 115])
     });
 
-    // 325: Oxeye Daisy
+    // 325: Oxeye Daisy (solid radiant white petals, rich gold button center, and serrated leaves)
     paint_flower_tile(atlas, 325, |px, py| {
-        let dx = px as i32 - 16;
-        let dy = py as i32 - 11;
-        let r2 = dx * dx + dy * dy;
-        if r2 <= 8 {
-            Some(Rgba([248, 210, 42, 255])) // Yellow center
-        } else if r2 <= 44 && (dx.abs() <= 2 || dy.abs() <= 2 || (dx.abs() - dy.abs()).abs() <= 2) {
-            Some(Rgba([244, 246, 250, 255])) // White petals
-        } else if px >= 15 && px <= 16 && py >= 14 {
-            Some(Rgba([64, 142, 50, 255]))
-        } else {
-            None
+        let x = px as i32;
+        let y = py as i32;
+        let dx = x - 16;
+        let dy = y - 11;
+        let dist = ((dx * dx) as f32 + (dy * dy) as f32 * 1.2).sqrt();
+        if dist <= 3.8 {
+            let ring = dist > 2.8;
+            let r = if ring { 220 } else { 252 };
+            let g = if ring { 165 } else { 210 };
+            return Some(Rgba([r, g, 28, 255]));
         }
+        if dist <= 9.8 && y <= 18 {
+            let is_edge = dist > 8.5;
+            let petal_shade = ((dx.abs() * 5 + dy.abs() * 3) % 7) == 0;
+            let r = if is_edge { 255 } else if petal_shade { 220 } else { 248 };
+            let g = if is_edge { 255 } else if petal_shade { 228 } else { 250 };
+            let b = if is_edge { 255 } else if petal_shade { 236 } else { 254 };
+            return Some(Rgba([r, g, b, 255]));
+        }
+        let is_left_leaf = x >= 6 && x <= 14 && y >= 19 && y <= 31 && (y - x <= 20);
+        let is_right_leaf = x >= 17 && x <= 25 && y >= 19 && y <= 31 && (x - y <= 4);
+        if is_left_leaf || is_right_leaf {
+            let shade = ((x + y * 2) % 4) * 8;
+            return Some(Rgba([(55 + shade).clamp(0, 255) as u8, (136 + shade).clamp(0, 255) as u8, 48, 255]));
+        }
+        if x >= 14 && x <= 17 && y >= 16 {
+            let shade: i32 = if x == 14 { -16 } else if x == 17 { 16 } else { 0 };
+            return Some(Rgba([
+                (58 + shade).clamp(40, 90) as u8,
+                (138 + shade).clamp(95, 170) as u8,
+                (46 + shade / 2).clamp(30, 75) as u8,
+                255,
+            ]));
+        }
+        None
     });
 
     // 326: Pumpkin Side (orange vertical ribs)
@@ -1474,21 +1603,62 @@ where
     atlas.paint_tile(tile_id, |px, py| f(px, py).unwrap_or(Rgba([0, 0, 0, 0])));
 }
 
-fn paint_tulip_pixel(px: u32, py: u32, petal_rgb: [u8; 3]) -> Option<Rgba<u8>> {
+fn paint_tulip_pixel(
+    px: u32,
+    py: u32,
+    main_rgb: [u8; 3],
+    hi_rgb: [u8; 3],
+    shadow_rgb: [u8; 3],
+) -> Option<Rgba<u8>> {
     let x = px as i32;
     let y = py as i32;
-    if y >= 6 && y <= 14 && x >= 12 && x <= 19 {
-        // Tulip cup with notched top
-        if y == 6 && (x == 14 || x == 17) {
+    // Tulip cup (rows 4..=17, cols 8..=23)
+    if y >= 4 && y <= 17 && x >= 8 && x <= 23 {
+        // Notched cup profile at the top
+        if y == 4 && !((10..=12).contains(&x) || (15..=17).contains(&x) || (20..=21).contains(&x)) {
             return None;
         }
-        return Some(Rgba([petal_rgb[0], petal_rgb[1], petal_rgb[2], 255]));
+        if y == 5 && (x == 8 || x == 13 || x == 19 || x == 23) {
+            return None;
+        }
+        let is_tip = y <= 6;
+        let is_shadow = (12..=14).contains(&x) || y >= 15;
+        let c = if is_tip {
+            hi_rgb
+        } else if is_shadow {
+            shadow_rgb
+        } else {
+            main_rgb
+        };
+        let grain = ((x * 3 + y * 2) % 5) - 2;
+        return Some(Rgba([
+            (c[0] as i32 + grain * 4).clamp(0, 255) as u8,
+            (c[1] as i32 + grain * 3).clamp(0, 255) as u8,
+            (c[2] as i32 + grain * 2).clamp(0, 255) as u8,
+            255,
+        ]));
     }
-    if x >= 15 && x <= 16 && y >= 15 {
-        return Some(Rgba([64, 142, 50, 255]));
+    // Broad wrap-around tulip leaves (rows 16..=31, cols 6..=26)
+    let is_left_leaf = x >= 6 && x <= 14 && y >= 16 && y <= 31 && (y - x <= 20) && (x + y >= 25);
+    let is_right_leaf = x >= 17 && x <= 25 && y >= 17 && y <= 31 && (x - y <= 4) && (x + y <= 52);
+    if is_left_leaf || is_right_leaf {
+        let vein = if (x == 10 && y >= 18) || (x == 21 && y >= 19) { 24 } else { 0 };
+        return Some(Rgba([
+            (62 + vein).clamp(45, 110) as u8,
+            (145 + vein).clamp(95, 185) as u8,
+            (50 + vein / 2).clamp(35, 80) as u8,
+            255,
+        ]));
     }
-    if y >= 21 && y <= 26 && ((x >= 12 && x <= 14) || (x >= 17 && x <= 19)) {
-        return Some(Rgba([74, 158, 58, 255]));
+    // Upright stem (cols 14..=17, rows 16..=31 to ground)
+    if x >= 14 && x <= 17 && y >= 16 {
+        let shade = if x == 14 { -16 } else if x == 17 { 16 } else { 0 };
+        return Some(Rgba([
+            (60 + shade).clamp(42, 95) as u8,
+            (138 + shade).clamp(95, 175) as u8,
+            (46 + shade / 2).clamp(30, 75) as u8,
+            255,
+        ]));
     }
     None
 }

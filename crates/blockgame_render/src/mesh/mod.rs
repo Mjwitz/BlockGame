@@ -842,16 +842,16 @@ impl<'a> ChunkMesher<'a> {
 
         // Crossed diagonal 2 (from (fx+1, fz) to (fx, fz+1))
         let diag2_front = [
-            [fx + 1.0, fy, fz],
-            [fx, fy, fz + 1.0],
-            [fx + 1.0, fy + 1.0, fz + 1.0],
-            [fx, fy + 1.0, fz],
-        ];
-        let diag2_back = [
             [fx, fy, fz + 1.0],
             [fx + 1.0, fy, fz],
             [fx + 1.0, fy + 1.0, fz],
             [fx, fy + 1.0, fz + 1.0],
+        ];
+        let diag2_back = [
+            [fx + 1.0, fy, fz],
+            [fx, fy, fz + 1.0],
+            [fx, fy + 1.0, fz + 1.0],
+            [fx + 1.0, fy + 1.0, fz],
         ];
         add_quad(diag2_front, uv_front, [0.707, 0.0, 0.707]);
         add_quad(diag2_back, uv_back, [-0.707, 0.0, -0.707]);
