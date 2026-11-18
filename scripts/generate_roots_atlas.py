@@ -463,6 +463,134 @@ def gen_wheat_crop(stage=7):
                     pix[bx, y] = (195, 160, 50, 255)
     return img
 
+def gen_wheat_seeds(seed=159):
+    """Handcrafted 32x item icon for wheat seeds (handful cluster of pointed golden-green grains)."""
+    img = create_tile_canvas()
+    pix = img.load()
+    husk_gold = (195, 198, 88, 255)
+    seed_green = (96, 154, 46, 255)
+    seed_dark = (42, 76, 20, 255)
+
+    # A cluster of 7 teardrop grains scattered naturally
+    seed_positions = [
+        (10, 11, 0.4),
+        (18, 9, -0.3),
+        (22, 14, 0.8),
+        (8, 18, -0.6),
+        (14, 16, 0.2),
+        (19, 21, 0.5),
+        (12, 23, -0.2),
+    ]
+
+    for sx, sy, rot in seed_positions:
+        cos_r = math.cos(rot)
+        sin_r = math.sin(rot)
+        for dy in range(-3, 4):
+            for dx in range(-2, 3):
+                rx = dx * cos_r - dy * sin_r
+                ry = dx * sin_r + dy * cos_r
+                if (rx / 1.6)**2 + (ry / 2.8)**2 <= 1.0:
+                    px = sx + dx
+                    py = sy + dy
+                    if 0 <= px < 32 and 0 <= py < 32:
+                        if ry < -1.0:
+                            pix[px, py] = husk_gold
+                        elif ry > 1.2 or rx > 1.0:
+                            pix[px, py] = seed_dark
+                        else:
+                            pix[px, py] = seed_green
+    return img
+
+def gen_cactus_side(seed=211):
+    """
+    Original 32x retro pixel art cactus side texture.
+    Fluted vertical ribs with rich desert green shading and sharp thorny spines.
+    """
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    green_deep = (45, 82, 24, 255)
+    green_mid = (78, 130, 42, 255)
+    green_hi = (112, 168, 58, 255)
+    spine_dark = (32, 48, 18, 255)
+    spine_tip = (238, 242, 218, 255)
+
+    # 4 distinct vertical fluted ribs across 32px (each rib is 8px wide)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            col_x = x % 8
+            if col_x in (0, 7):
+                base = green_deep
+            elif col_x in (1, 2):
+                base = green_hi
+            else:
+                base = green_mid
+            delta = int((h - 0.5) * 16)
+            pix[x, y] = noise_mod(base, delta)
+
+    # Staggered thorny spines along the ribs
+    for rib in range(4):
+        rib_center = rib * 8 + 4
+        y_offset = (rib % 2) * 4
+        for y_base in range(y_offset + 2, 32, 8):
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    px = (rib_center + dx) % 32
+                    py = (y_base + dy) % 32
+                    if dx == 0 and dy == 0:
+                        pix[px, py] = spine_dark
+                    elif abs(dx) + abs(dy) == 1:
+                        if (dx == 0 and dy == -1) or (dx == 1 and dy == 0):
+                            pix[px, py] = spine_tip
+                        else:
+                            pix[px, py] = spine_dark
+    return img
+
+def gen_cactus_top(seed=212):
+    """
+    Original 32x retro pixel art cactus top texture.
+    Radial grooves with pale fleshy central pith and perimeter spines.
+    """
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    pith_light = (138, 182, 85, 255)
+    pith_mid = (115, 160, 68, 255)
+    green_mid = (78, 130, 42, 255)
+    green_deep = (45, 82, 24, 255)
+    spine_tip = (238, 242, 218, 255)
+    spine_dark = (32, 48, 18, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            dist_center = math.hypot(x - 15.5, y - 15.5)
+            angle = math.atan2(y - 15.5, x - 15.5)
+            radial_rib = int((angle + math.pi) / (math.pi / 4)) % 2
+
+            if dist_center < 4.0:
+                base = pith_light if dist_center < 2.0 else pith_mid
+            elif radial_rib == 0:
+                base = green_deep
+            else:
+                base = green_mid
+
+            delta = int((h - 0.5) * 16)
+            pix[x, y] = noise_mod(base, delta)
+
+    # Perimeter spines along the outer edges
+    for i in range(2, 30, 4):
+        for side in range(4):
+            if side == 0: x, y = i, 0
+            elif side == 1: x, y = i, 31
+            elif side == 2: x, y = 0, i
+            else: x, y = 31, i
+            pix[x, y] = spine_tip
+            if side == 0: pix[x, y + 1] = spine_dark
+            elif side == 1: pix[x, y - 1] = spine_dark
+            elif side == 2: pix[x + 1, y] = spine_dark
+            else: pix[x - 1, y] = spine_dark
+    return img
+
 def gen_tool_icon(material_head, tool_type="pickaxe"):
     """Handcrafted 32x retro item icons with wooden handle and metallic head."""
     img = create_tile_canvas()
@@ -1123,6 +1251,7 @@ def generate_roots_atlas():
     place(156, gen_tool_icon(mat_stone, "hoe"))
     place(157, gen_tool_icon(mat_iron, "hoe"))
     place(158, gen_tool_icon(mat_diamond, "hoe"))
+    place(159, gen_wheat_seeds(159)) # Wheat seeds item icon
 
     # Food & Resources
     place(160, gen_wheat_crop(7)) # Wheat sheaf
@@ -1183,8 +1312,8 @@ def generate_roots_atlas():
     place(209, gen_planks(209, (195, 115, 65))) # Acacia planks
     place(210, gen_leaves(210, (115, 155, 45))) # Acacia leaves
 
-    place(211, gen_leaves(211, (75, 145, 45))) # Cactus side
-    place(212, gen_leaves(212, (95, 165, 55))) # Cactus top
+    place(211, gen_cactus_side(211)) # Cactus side
+    place(212, gen_cactus_top(212))  # Cactus top
     place(213, gen_sand(213, (205, 185, 125))) # Sandstone side
     place(214, gen_sand(214, (215, 195, 135))) # Sandstone top
     place(215, gen_sand(215, (185, 165, 110))) # Sandstone bottom

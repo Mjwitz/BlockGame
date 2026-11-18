@@ -2016,5 +2016,68 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_cactus_and_wheat_seeds_atlas_tiles() {
+        let atlas = TextureAtlas::generate_default();
+
+        // 1. Wheat Seeds (159): Transparent canvas with non-empty seed pixels
+        let ws_x = (159u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let ws_y = (159u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let mut opaque_seeds = 0;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                let px = atlas.image.get_pixel(ws_x + x, ws_y + y);
+                if px[3] > 0 {
+                    opaque_seeds += 1;
+                }
+            }
+        }
+        assert!(
+            opaque_seeds >= 20,
+            "Wheat seeds item icon (159) must have visible grain pixels, found {}",
+            opaque_seeds
+        );
+        // Corner must be transparent
+        assert_eq!(
+            atlas.image.get_pixel(ws_x, ws_y)[3],
+            0,
+            "Wheat seeds background corner must be transparent"
+        );
+
+        // 2. Cactus Side (211): 100% opaque, fluted vertical ribs
+        let cs_x = (211u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let cs_y = (211u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                let px = atlas.image.get_pixel(cs_x + x, cs_y + y);
+                assert_eq!(px[3], 255, "Cactus side must be 100% opaque");
+            }
+        }
+        let groove_green = atlas.image.get_pixel(cs_x, cs_y + 16)[1];
+        let ridge_green = atlas.image.get_pixel(cs_x + 1, cs_y + 16)[1];
+        assert!(
+            ridge_green > groove_green + 30,
+            "Cactus side must have fluted vertical ribs (ridge {} > groove {})",
+            ridge_green,
+            groove_green
+        );
+
+        // 3. Cactus Top (212): 100% opaque, pale central pith
+        let ct_x = (212u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let ct_y = (212u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                let px = atlas.image.get_pixel(ct_x + x, ct_y + y);
+                assert_eq!(px[3], 255, "Cactus top must be 100% opaque");
+            }
+        }
+        let center_green = atlas.image.get_pixel(ct_x + 16, ct_y + 16)[1];
+        let outer_groove_green = atlas.image.get_pixel(ct_x + 10, ct_y + 10)[1];
+        assert!(
+            center_green > outer_groove_green,
+            "Cactus top must have lighter central pith"
+        );
+    }
 }
 
