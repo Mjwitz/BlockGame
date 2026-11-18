@@ -1955,5 +1955,66 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_sea_lantern_and_animal_atlas_tiles() {
+        let atlas = TextureAtlas::generate_default();
+
+        // 1. Sea lantern (238) must be 100% opaque, luminescent cyan/aquamarine
+        let sl_x = (238u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let sl_y = (238u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                let px = atlas.image.get_pixel(sl_x + x, sl_y + y);
+                assert_eq!(
+                    px[3], 255,
+                    "Sea lantern pixel at ({}, {}) must be 100% opaque, not glass",
+                    x, y
+                );
+                assert!(
+                    px[2] >= 120,
+                    "Sea lantern pixel at ({}, {}) should have prominent blue/cyan channel",
+                    x, y
+                );
+            }
+        }
+
+        // 2. Cow tiles (170 hide, 185 head, 186 legs, 240 snout, 241 horns)
+        for tile_id in [170, 185, 186, 240, 241] {
+            let tx = (tile_id % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (tile_id / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            for y in 0..TILE_SIZE {
+                for x in 0..TILE_SIZE {
+                    let px = atlas.image.get_pixel(tx + x, ty + y);
+                    assert_eq!(px[3], 255, "Cow tile {} must be opaque", tile_id);
+                }
+            }
+        }
+
+        // 3. Pig tiles (171 hide, 187 head, 188 legs) must be opaque pink
+        for tile_id in [171, 187, 188] {
+            let tx = (tile_id % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (tile_id / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let center_px = atlas.image.get_pixel(tx + 16, ty + 16);
+            assert_eq!(center_px[3], 255, "Pig tile {} must be opaque", tile_id);
+            assert!(
+                center_px[0] > 180 && center_px[0] > center_px[2],
+                "Pig tile {} should have warm rosy pink tone",
+                tile_id
+            );
+        }
+
+        // 4. Chicken tiles (172 body/feathers, 189 head, 190 legs)
+        for tile_id in [172, 189, 190] {
+            let tx = (tile_id % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (tile_id / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            for y in 0..TILE_SIZE {
+                for x in 0..TILE_SIZE {
+                    let px = atlas.image.get_pixel(tx + x, ty + y);
+                    assert_eq!(px[3], 255, "Chicken tile {} must be opaque", tile_id);
+                }
+            }
+        }
+    }
 }
 

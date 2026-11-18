@@ -686,6 +686,268 @@ def gen_gui_food(fill_mode="full"):
                 pix[x, y] = bone
     return img
 
+# ---------------------------------------------------------------------------
+# Fauna & Luminescent Block Generators (Sea Lantern, Cow, Pig, Chicken)
+# ---------------------------------------------------------------------------
+
+def gen_sea_lantern(seed=238):
+    """
+    Original 32x luminescent sea lantern block.
+    100% opaque crystalline aquamarine core with prismarine teal border framing.
+    """
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    border_dark = (55, 115, 125, 255)
+    border_mid = (85, 155, 165, 255)
+    border_light = (130, 205, 215, 255)
+    core_base = (185, 238, 240, 255)
+    core_bright = (235, 252, 255, 255)
+    core_facet = (140, 212, 220, 255)
+    core_deep = (95, 175, 185, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            dist_edge = min(x, y, 31 - x, 31 - y)
+            if dist_edge == 0:
+                pix[x, y] = border_dark
+            elif dist_edge == 1:
+                pix[x, y] = border_mid if h > 0.3 else border_dark
+            elif dist_edge == 2:
+                pix[x, y] = border_light if h > 0.4 else border_mid
+            else:
+                cx = abs(x - 15.5) / 15.5
+                cy = abs(y - 15.5) / 15.5
+                center_dist = math.sqrt(cx * cx + cy * cy)
+                facet = ((x + y) % 6 == 0) or ((x - y + 32) % 6 == 0)
+                sub_shard = ((x * 2 + y) % 9 == 0)
+                delta = int((h - 0.5) * 24)
+                if center_dist < 0.4:
+                    c = blend(core_bright, core_base, center_dist / 0.4)
+                elif facet:
+                    c = core_bright if h > 0.5 else core_facet
+                elif sub_shard:
+                    c = core_deep
+                else:
+                    c = core_base
+                pix[x, y] = noise_mod(c, delta)
+    return img
+
+def gen_cow_hide(seed=170):
+    """Chocolate brown cow hide with organic creamy white dairy patches."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    brown_dark = (68, 48, 36, 255)
+    brown_mid = (88, 62, 48, 255)
+    white_base = (235, 230, 224, 255)
+    white_shadow = (205, 198, 192, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            patch_n = (math.sin(x * 0.28) * math.cos(y * 0.32) + 
+                       math.sin((x + y) * 0.22) * 0.5 + 
+                       hash2d(x // 4, y // 4, seed + 1) * 0.8)
+            is_white = patch_n > 0.35
+            delta = int((h - 0.5) * 18)
+            if is_white:
+                base = white_base if h > 0.4 else white_shadow
+            else:
+                base = brown_mid if h > 0.35 else brown_dark
+            pix[x, y] = noise_mod(base, delta)
+    return img
+
+def gen_cow_head(seed=185):
+    """Cow face with white forehead blaze and dark expressive eyes."""
+    img = gen_cow_hide(seed)
+    pix = img.load()
+    white_blaze = (238, 234, 228, 255)
+    eye_dark = (25, 22, 22, 255)
+    eye_glint = (255, 255, 255, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed + 10)
+            blaze_w = 4 if y > 20 else 5
+            if abs(x - 15.5) <= blaze_w and y < 24:
+                pix[x, y] = noise_mod(white_blaze, int((h - 0.5) * 14))
+            if (4 <= x <= 8) and (11 <= y <= 15):
+                pix[x, y] = eye_glint if (x == 5 and y == 12) else eye_dark
+            if (23 <= x <= 27) and (11 <= y <= 15):
+                pix[x, y] = eye_glint if (x == 24 and y == 12) else eye_dark
+    return img
+
+def gen_cow_legs(seed=186):
+    """Cow legs with chocolate brown fur and charcoal hooves at bottom."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    brown_mid = (84, 58, 44, 255)
+    hoof_charcoal = (38, 34, 34, 255)
+    hoof_rim = (58, 54, 54, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 16)
+            if y >= 22:
+                c = hoof_rim if y == 22 or (x in (15, 16)) else hoof_charcoal
+            else:
+                c = brown_mid
+            pix[x, y] = noise_mod(c, delta)
+    return img
+
+def gen_cow_snout(seed=240):
+    """Soft rosy mauve cow snout with dark nostrils."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    snout_pink = (212, 162, 156, 255)
+    snout_shadow = (185, 138, 132, 255)
+    nostril = (58, 32, 32, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 14)
+            if ((7 <= x <= 12) and (12 <= y <= 20)) or ((19 <= x <= 24) and (12 <= y <= 20)):
+                pix[x, y] = nostril
+            else:
+                base = snout_shadow if y >= 24 or x in (0, 31) else snout_pink
+                pix[x, y] = noise_mod(base, delta)
+    return img
+
+def gen_cow_horns(seed=241):
+    """Bone and ivory horn texture."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    horn_ivory = (228, 222, 204, 255)
+    horn_base = (175, 165, 145, 255)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 16)
+            c = horn_base if y > 24 else horn_ivory
+            pix[x, y] = noise_mod(c, delta)
+    return img
+
+def gen_pig_hide(seed=171):
+    """Rosy pink pig skin with subtle warmth and highlights."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    pink_base = (238, 155, 150, 255)
+    pink_shadow = (212, 130, 125, 255)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 20)
+            base = pink_shadow if (y % 4 == 0 and x % 3 == 0) else pink_base
+            pix[x, y] = noise_mod(base, delta)
+    return img
+
+def gen_pig_head(seed=187):
+    """Cute pig face with prominent snout, dark eyes, and pink skin."""
+    img = gen_pig_hide(seed)
+    pix = img.load()
+    snout_base = (220, 122, 118, 255)
+    nostril = (118, 52, 52, 255)
+    eye_dark = (36, 25, 28, 255)
+    eye_glint = (255, 255, 255, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed + 20)
+            if (3 <= x <= 6 and 12 <= y <= 15):
+                pix[x, y] = eye_glint if (x == 4 and y == 13) else eye_dark
+            elif (25 <= x <= 28 and 12 <= y <= 15):
+                pix[x, y] = eye_glint if (x == 26 and y == 13) else eye_dark
+            elif (9 <= x <= 22 and 17 <= y <= 27):
+                if (12 <= x <= 14 and 20 <= y <= 24) or (17 <= x <= 19 and 20 <= y <= 24):
+                    pix[x, y] = nostril
+                else:
+                    pix[x, y] = noise_mod(snout_base, int((h - 0.5) * 14))
+    return img
+
+def gen_pig_legs(seed=188):
+    """Pink pig legs with darker cloven trotters."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    pink_base = (235, 150, 145, 255)
+    trotter = (175, 95, 90, 255)
+    cleft = (125, 60, 55, 255)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 16)
+            if y >= 22:
+                c = cleft if x in (15, 16) else trotter
+            else:
+                c = pink_base
+            pix[x, y] = noise_mod(c, delta)
+    return img
+
+def gen_chicken_feathers(seed=172):
+    """Crisp layered white/cream feathers with soft scalloped shading."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    white_base = (248, 248, 248, 255)
+    white_shade = (218, 218, 224, 255)
+    white_dark = (195, 195, 204, 255)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            scallop = (x + (y // 4) * 3) % 8
+            delta = int((h - 0.5) * 16)
+            if y % 4 == 0:
+                base = white_dark
+            elif scallop == 0:
+                base = white_shade
+            else:
+                base = white_base
+            pix[x, y] = noise_mod(base, delta)
+    return img
+
+def gen_chicken_head(seed=189):
+    """White chicken head with bright red comb, side eyes, and red wattle."""
+    img = gen_chicken_feathers(seed)
+    pix = img.load()
+    red_comb = (228, 36, 36, 255)
+    comb_hi = (250, 68, 68, 255)
+    eye_dark = (26, 24, 24, 255)
+    eye_glint = (255, 255, 255, 255)
+    wattle = (215, 28, 28, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed + 30)
+            if (12 <= x <= 19 and 0 <= y <= 7):
+                pix[x, y] = comb_hi if (y == 0 or x in (13, 18)) else red_comb
+            elif (4 <= x <= 7 and 11 <= y <= 14):
+                pix[x, y] = eye_glint if (x == 5 and y == 12) else eye_dark
+            elif (24 <= x <= 27 and 11 <= y <= 14):
+                pix[x, y] = eye_glint if (x == 25 and y == 12) else eye_dark
+            elif (13 <= x <= 18 and 24 <= y <= 30):
+                pix[x, y] = wattle
+    return img
+
+def gen_chicken_legs(seed=190):
+    """Warm amber/yellow legs and feet with claw markings."""
+    img = Image.new("RGBA", (TILE_SIZE, TILE_SIZE), (0, 0, 0, 255))
+    pix = img.load()
+    amber_base = (245, 178, 32, 255)
+    amber_shade = (210, 142, 18, 255)
+    claw_dark = (175, 112, 12, 255)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 16)
+            if y >= 25:
+                base = claw_dark if (x % 5 == 0) else amber_shade
+            elif y % 4 == 0:
+                base = amber_shade
+            else:
+                base = amber_base
+            pix[x, y] = noise_mod(base, delta)
+    return img
+
 
 # ---------------------------------------------------------------------------
 # Font Glyph Generator
@@ -874,10 +1136,10 @@ def generate_roots_atlas():
     place(168, gen_planks(168, (145, 95, 55))) # Leather
     place(169, gen_tool_icon(mat_iron, "shovel")) # Feather
 
-    # Chest & Furnace
-    place(170, gen_dirt(170)) # Cow hide
-    place(171, gen_dirt(171)) # Pig hide
-    place(172, gen_snow())    # Chicken feathers
+    # Animal Textures & Crafting
+    place(170, gen_cow_hide(170))
+    place(171, gen_pig_hide(171))
+    place(172, gen_chicken_feathers(172))
     place(173, gen_chest_face(False)) # Chest top
     place(174, gen_chest_face(True))  # Chest front
     place(175, gen_chest_face(False)) # Chest side
@@ -890,12 +1152,12 @@ def generate_roots_atlas():
     place(182, gen_furnace_face(True))  # Furnace item icon
     place(183, gen_furnace_face(False)) # Flame container GUI
     place(184, gen_torch())             # Flame full GUI
-    place(185, gen_dirt(185)) # Cow head
-    place(186, gen_stone(186)) # Cow legs
-    place(187, gen_dirt(187)) # Pig head
-    place(188, gen_dirt(188)) # Pig legs
-    place(189, gen_snow())    # Chicken head
-    place(190, gen_sand(190)) # Chicken legs
+    place(185, gen_cow_head(185))
+    place(186, gen_cow_legs(186))
+    place(187, gen_pig_head(187))
+    place(188, gen_pig_legs(188))
+    place(189, gen_chicken_head(189))
+    place(190, gen_chicken_legs(190))
 
     # Biome Trees & Water
     place(191, gen_water())
@@ -952,10 +1214,10 @@ def generate_roots_atlas():
     place(235, gen_sand(235, (225, 95, 145))) # Brain coral
     place(236, gen_sand(236, (65, 125, 215))) # Tube coral
     place(237, gen_cobblestone(237))          # Prismarine
-    place(238, gen_glass())                   # Sea lantern
+    place(238, gen_sea_lantern(238))
     place(239, gen_tall_grass(239))           # Seagrass
-    place(240, gen_wheat_crop(0))             # Wheat seeds / cow snout
-    place(241, gen_snow())                    # Cow horns
+    place(240, gen_cow_snout(240))
+    place(241, gen_cow_horns(241))
 
     output_path = "crates/blockgame_render/assets/roots_atlas_512.png"
     atlas.save(output_path, "PNG")
