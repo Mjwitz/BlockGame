@@ -1,7 +1,7 @@
 use image::{Rgba, RgbaImage};
 
 /// Size of each square tile on the atlas in pixels.
-/// BlockGame uses 32x32 tiles matching the Faithful 32x texture pack.
+/// Roots & Ridges uses 32x32 tiles for its handcrafted retro pixel art style.
 pub const TILE_SIZE: u32 = 32;
 
 /// Number of tiles horizontally and vertically across the atlas grid.
@@ -12,8 +12,8 @@ pub const ATLAS_TILES_PER_ROW: u32 = 16;
 pub const ATLAS_WIDTH: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW; // 512
 pub const ATLAS_HEIGHT: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW * 2; // 1024
 
-/// Embedded high-resolution Faithful 32x texture atlas.
-const FAITHFUL_ATLAS_PNG: &[u8] = include_bytes!("../assets/faithful_atlas_512.png");
+/// Embedded handcrafted Roots & Ridges 32x retro pixel art texture atlas.
+const ROOTS_ATLAS_PNG: &[u8] = include_bytes!("../assets/roots_atlas_512.png");
 
 pub struct TextureAtlas {
     pub image: RgbaImage,
@@ -50,11 +50,11 @@ impl TextureAtlas {
         [u_min, v_min, u_max, v_max]
     }
 
-    /// Loads the authentic Faithful 32x texture atlas containing all blocks, items, tools,
-    /// entities, ores, crops, GUI components, and font glyphs.
+    /// Loads the handcrafted Roots & Ridges 32x retro pixel art texture atlas containing
+    /// blocks, items, tools, entities, ores, crops, GUI components, and fauna.
     pub fn generate_default() -> Self {
-        let dynamic_img = image::load_from_memory(FAITHFUL_ATLAS_PNG).expect(
-            "Failed to load embedded Faithful 32x texture atlas (assets/faithful_atlas_512.png)",
+        let dynamic_img = image::load_from_memory(ROOTS_ATLAS_PNG).expect(
+            "Failed to load embedded Roots & Ridges 32x texture atlas (assets/roots_atlas_512.png)",
         );
         let src_image = dynamic_img.to_rgba8();
         let mut atlas = Self::new();
