@@ -7,6 +7,8 @@ nostalgic retro pixel art style.
 """
 
 import math
+import os
+import re
 from PIL import Image
 
 ATLAS_SIZE = 512
@@ -684,6 +686,78 @@ def gen_gui_food(fill_mode="full"):
                 pix[x, y] = bone
     return img
 
+
+# ---------------------------------------------------------------------------
+# Font Glyph Generator
+# ---------------------------------------------------------------------------
+
+def load_font_data():
+    """Loads FONT_8X8 from font.rs and character widths from ui.rs."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    font_path = os.path.join(base_dir, "../crates/blockgame_render/src/font.rs")
+    with open(font_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    match = re.search(r'pub const FONT_8X8: \[\[u8; 8\]; 95\] = \[(.*?)\];', content, re.DOTALL)
+    glyphs = []
+    for line in match.group(1).strip().split('\n'):
+        line = line.strip()
+        if line.startswith('//'):
+            continue
+        if line.startswith('['):
+            glyphs.append([int(x.strip(), 16) for x in line.strip('[],').split(',') if x.strip()])
+
+    ui_path = os.path.join(base_dir, "../crates/blockgame_render/src/ui.rs")
+    with open(ui_path, "r", encoding="utf-8") as f:
+        uicontent = f.read()
+    wmatch = re.search(r'const WIDTHS: \[u8; 94\] = \[(.*?)\];', uicontent, re.DOTALL)
+    lines = [l.split('//')[0] for l in wmatch.group(1).split('\n')]
+    widths = [int(x.strip()) for x in ','.join(lines).split(',') if x.strip()]
+
+    return glyphs, widths
+
+def gen_font_glyph(c, glyphs, widths):
+    """
+    Renders a 32x32 crisp white pixel glyph for ASCII character `c` (32..127).
+    Aligns to the proportional kerning grid sampled by `ui.rs::draw_char`.
+    """
+    tile = create_tile_canvas()
+    if c <= 32 or c >= 127:
+        return tile
+
+    glyph_idx = c - 32
+    if glyph_idx >= len(glyphs):
+        return tile
+    g = glyphs[glyph_idx]
+
+    min_col = 8
+    max_col = -1
+    for r, b in enumerate(g):
+        for col in range(8):
+            if (b >> (7 - col)) & 1:
+                min_col = min(min_col, col)
+                max_col = max(max_col, col)
+    if max_col < 0:
+        return tile
+
+    raw_w = widths[c - 33] if (c - 33) < len(widths) else 10
+    sampled_w = 2 * (raw_w + 2)
+    glyph_target_w = max(2, sampled_w - 2)
+
+    num_cols = max_col - min_col + 1
+    pix = tile.load()
+    for r, b in enumerate(g):
+        for col in range(min_col, max_col + 1):
+            if (b >> (7 - col)) & 1:
+                rel_col = col - min_col
+                x0 = int(rel_col * glyph_target_w / num_cols)
+                x1 = max(x0 + 1, int((rel_col + 1) * glyph_target_w / num_cols))
+                y0 = r * 4
+                y1 = (r + 1) * 4
+                for y in range(y0, y1):
+                    for x in range(x0, x1):
+                        pix[x, y] = (255, 255, 255, 255)
+    return tile
+
 # ---------------------------------------------------------------------------
 # Atlas Assembly
 # ---------------------------------------------------------------------------
@@ -741,6 +815,11 @@ def generate_roots_atlas():
     place(29, gen_gui_food("full"))
     place(30, gen_gui_food("half"))
     place(31, gen_food_item("apple"))
+
+    # --- 3b. ASCII Font Glyphs (Tiles 32..127) ---
+    font_glyphs, char_widths = load_font_data()
+    for c in range(32, 128):
+        place(c, gen_font_glyph(c, font_glyphs, char_widths))
 
     # --- 4. Workstations & Ores (Row 8-9) ---
     place(128, gen_crafting_table_side(128))

@@ -1909,5 +1909,51 @@ mod tests {
             assert_eq!(atlas.image.get_pixel(tx, ty)[3], 0);
         }
     }
+
+    #[test]
+    fn test_font_ascii_atlas_tiles() {
+        let atlas = TextureAtlas::generate_default();
+
+        // Tile 32 (space) should be transparent
+        let tx32 = (32u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let ty32 = (32u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                assert_eq!(
+                    atlas.image.get_pixel(tx32 + x, ty32 + y)[3],
+                    0,
+                    "Space tile (32) must be completely transparent"
+                );
+            }
+        }
+
+        // Tiles 33..=126 ('!' to '~') must contain visible white pixel glyphs
+        for c in 33..=126u8 {
+            let tx = (c as u32 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let ty = (c as u32 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let mut non_zero_pixels = 0;
+            for y in 0..TILE_SIZE {
+                for x in 0..TILE_SIZE {
+                    let px = atlas.image.get_pixel(tx + x, ty + y);
+                    if px[3] > 0 {
+                        non_zero_pixels += 1;
+                        assert_eq!(
+                            [px[0], px[1], px[2]],
+                            [255, 255, 255],
+                            "ASCII char '{}' ({}) pixel must be pure white",
+                            c as char,
+                            c
+                        );
+                    }
+                }
+            }
+            assert!(
+                non_zero_pixels > 0,
+                "ASCII char '{}' ({}) must have visible pixels in the atlas",
+                c as char,
+                c
+            );
+        }
+    }
 }
 
