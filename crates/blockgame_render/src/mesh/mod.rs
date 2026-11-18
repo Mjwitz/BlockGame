@@ -1197,18 +1197,136 @@ impl<'a> ChunkMesher<'a> {
             _ => (0.05, 0.95, 0.0, 0.95),
         };
 
+        // Seam face direction to cull (direction pointing to the other half of the bed)
+        // facing: 0=PosZ (foot +Z, head -Z), 1=NegZ (foot -Z, head +Z), 2=PosX (foot +X, head -X), 3=NegX (foot -X, head +X)
+        let seam_dir = match (facing, is_head) {
+            (0, false) => Direction::NegZ,
+            (0, true) => Direction::PosZ,
+            (1, false) => Direction::PosZ,
+            (1, true) => Direction::NegZ,
+            (2, false) => Direction::NegX,
+            (2, true) => Direction::PosX,
+            (3, false) => Direction::PosX,
+            (3, true) => Direction::NegX,
+            _ => Direction::NegZ,
+        };
+
+        let bx0 = fx + x0;
+        let by0 = fy + 0.1875;
+        let bz0 = fz + z0;
+        let bx1 = fx + x1;
+        let by1 = fy + 0.5625;
+        let bz1 = fz + z1;
+
+        let mut add_quad = |positions: [[f32; 3]; 4], normal: [f32; 3], uvs: [[f32; 2]; 4], ao: f32| {
+            let start_idx = mesh.vertices.len() as u32;
+            for i in 0..4 {
+                mesh.vertices.push(VoxelVertex {
+                    position: positions[i],
+                    uv: uvs[i],
+                    normal,
+                    ao,
+                    light,
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                start_idx,
+                start_idx + 1,
+                start_idx + 2,
+                start_idx + 2,
+                start_idx + 3,
+                start_idx,
+            ]);
+        };
+
+        let get_default_uvs = |tile_id: u16| {
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
+            [
+                [u_min, v_max],
+                [u_max, v_max],
+                [u_max, v_min],
+                [u_min, v_min],
+            ]
+        };
+
+        // South (+Z)
+        if seam_dir != Direction::PosZ {
+            add_quad(
+                [[bx0, by0, bz1], [bx1, by0, bz1], [bx1, by1, bz1], [bx0, by1, bz1]],
+                [0.0, 0.0, 1.0],
+                get_default_uvs(318),
+                0.92,
+            );
+        }
+        // North (-Z)
+        if seam_dir != Direction::NegZ {
+            add_quad(
+                [[bx1, by0, bz0], [bx0, by0, bz0], [bx0, by1, bz0], [bx1, by1, bz0]],
+                [0.0, 0.0, -1.0],
+                get_default_uvs(318),
+                0.92,
+            );
+        }
+        // East (+X)
+        if seam_dir != Direction::PosX {
+            add_quad(
+                [[bx1, by0, bz1], [bx1, by0, bz0], [bx1, by1, bz0], [bx1, by1, bz1]],
+                [1.0, 0.0, 0.0],
+                get_default_uvs(318),
+                0.85,
+            );
+        }
+        // West (-X)
+        if seam_dir != Direction::NegX {
+            add_quad(
+                [[bx0, by0, bz0], [bx0, by0, bz1], [bx0, by1, bz1], [bx0, by1, bz0]],
+                [-1.0, 0.0, 0.0],
+                get_default_uvs(318),
+                0.85,
+            );
+        }
+        // Bottom (-Y): Oak Planks
+        add_quad(
+            [[bx0, by0, bz0], [bx1, by0, bz0], [bx1, by0, bz1], [bx0, by0, bz1]],
+            [0.0, -1.0, 0.0],
+            get_default_uvs(10),
+            0.75,
+        );
+        // Top (+Y): Head (342) or Foot (343)
         let top_tile = if is_head { 342 } else { 343 };
-        // [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
-        self.add_box(
-            mesh,
-            fx + x0,
-            fy + 0.1875,
-            fz + z0,
-            fx + x1,
-            fy + 0.5625,
-            fz + z1,
-            [318, 318, 318, 318, top_tile, 10],
-            light,
+        let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(top_tile);
+        // Orient pillow (v_min in tile 342) towards the head of the bed
+        let top_uvs = match facing {
+            1 => [
+                [u_min, v_min],
+                [u_max, v_min],
+                [u_max, v_max],
+                [u_min, v_max],
+            ],
+            2 => [
+                [u_max, v_min],
+                [u_max, v_max],
+                [u_min, v_max],
+                [u_min, v_min],
+            ],
+            3 => [
+                [u_min, v_max],
+                [u_min, v_min],
+                [u_max, v_min],
+                [u_max, v_max],
+            ],
+            _ => [
+                [u_min, v_max],
+                [u_max, v_max],
+                [u_max, v_min],
+                [u_min, v_min],
+            ],
+        };
+        add_quad(
+            [[bx0, by1, bz1], [bx1, by1, bz1], [bx1, by1, bz0], [bx0, by1, bz0]],
+            [0.0, 1.0, 0.0],
+            top_uvs,
+            1.0,
         );
 
         // 2 outer corner oak legs on this half (using Oak Planks tile 10)
@@ -3682,11 +3800,11 @@ mod tests {
         door_chunk.set(4, 5, 4, BlockId::OAK_DOOR_TOP_OPEN);
         assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 48);
 
-        // 2-block Bed: foot (1 mattress + 2 legs = 72) + head (1 mattress + 2 legs = 72) = 144 vertices
+        // 2-block Bed: foot (1 mattress (5 faces, seam culled) + 2 legs = 68) + head (1 mattress (5 faces, seam culled) + 2 legs = 68) = 136 vertices
         let mut bed_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         bed_chunk.set(4, 4, 4, BlockId::BED);
         bed_chunk.set(4, 4, 3, BlockId::BED_HEAD);
-        assert_eq!(mesher.mesh_chunk(&bed_chunk).vertices.len(), 144);
+        assert_eq!(mesher.mesh_chunk(&bed_chunk).vertices.len(), 136);
 
         // Flower (Poppy): crossed quads = 16 vertices
         let mut flower_chunk = Chunk::new(ChunkPos::new(0, 0, 0));

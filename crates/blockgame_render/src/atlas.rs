@@ -757,26 +757,21 @@ fn paint_decorative_tiles(atlas: &mut TextureAtlas) {
         }
     });
 
-    // 318: Bed Side (red blanket overhang + white mattress + oak frame & legs)
+    // 318: Bed Side (red blanket + white mattress trim + oak wood frame)
     atlas.paint_tile(318, |px, py| {
         let n = (hash(px, py, 318) % 11) - 5;
-        if py < 12 {
-            // Blanket overhang on right 2/3, white pillow/sheet on left 1/3
-            if px < 10 {
-                Rgba([clamp(234, n), clamp(236, n), clamp(240, n), 255])
-            } else {
-                Rgba([clamp(176, n), clamp(42, n / 2), clamp(36, n / 2), 255])
-            }
-        } else if py < 20 {
-            // Oak wood bed frame
-            Rgba([clamp(158, n), clamp(118, n), clamp(72, n), 255])
+        if py < 10 {
+            // Red blanket
+            let fold = if py == 0 || py == 9 { -14 } else { 0 };
+            Rgba([clamp(182, n + fold), clamp(44, n / 2), clamp(38, n / 2), 255])
+        } else if py < 16 {
+            // White mattress edge / sheet trim
+            let shade = if py == 15 { -15 } else { 0 };
+            Rgba([clamp(230, n + shade), clamp(232, n + shade), clamp(236, n + shade), 255])
         } else {
-            // Legs at ends, transparent underneath
-            if px < 5 || px >= 27 {
-                Rgba([clamp(132, n), clamp(96, n), clamp(56, n), 255])
-            } else {
-                Rgba([0, 0, 0, 0])
-            }
+            // Solid oak wood bed frame with grain
+            let grain = if px % 8 == 0 || py == 16 || py == 31 { -18 } else { 4 };
+            Rgba([clamp(158, n + grain), clamp(118, n + grain), clamp(72, n + grain), 255])
         }
     });
 

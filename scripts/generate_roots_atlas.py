@@ -701,22 +701,318 @@ def gen_food_item(food_type="bread"):
         pix[16, 6] = leaf
         pix[17, 5] = leaf
     elif food_type == "meat":
-        meat_pink = (215, 75, 85, 255)
-        meat_dark = (145, 35, 45, 255)
-        fat = (245, 235, 225, 255)
-        bone = (240, 240, 220, 255)
-        for y in range(9, 23):
-            for x in range(7, 25):
-                dist = math.hypot(x - 16.0, y - 16.0)
-                if dist <= 6.5:
-                    if x < 11:
-                        pix[x, y] = fat
-                    elif x > 21 and y > 18:
-                        pix[x, y] = bone
-                    elif dist > 5.5:
-                        pix[x, y] = meat_dark
+        return gen_raw_beef()
+    return img
+
+def gen_raw_beef(seed=162):
+    """Raw beef steak: deep red marbled meat with thick outer fat cap and marrow bone."""
+    img = create_tile_canvas()
+    pix = img.load()
+    beef_red = (195, 34, 45, 255)
+    beef_dark = (145, 20, 30, 255)
+    beef_hi = (225, 55, 65, 255)
+    fat_cream = (248, 244, 232, 255)
+    fat_edge = (215, 205, 185, 255)
+    bone_ring = (235, 235, 218, 255)
+    marrow = (130, 42, 38, 255)
+
+    for y in range(7, 26):
+        for x in range(6, 27):
+            dx = (x - 16.5) * 0.95
+            dy = (y - 16.5) * 1.15
+            dist = math.hypot(dx, dy)
+            if x > 18 and 14 <= y <= 18:
+                dist += 2.5
+            if dist <= 8.5:
+                if (x <= 10 or y <= 10) and dist > 5.5:
+                    pix[x, y] = fat_cream if dist <= 7.5 else fat_edge
+                elif dist > 7.5:
+                    pix[x, y] = beef_dark
+                else:
+                    h = hash2d(x, y, seed)
+                    if h > 0.75:
+                        pix[x, y] = beef_hi
+                    elif h < 0.25:
+                        pix[x, y] = beef_dark
                     else:
-                        pix[x, y] = meat_pink
+                        pix[x, y] = beef_red
+
+    for by in range(14, 18):
+        for bx in range(16, 20):
+            if (bx, by) in ((16, 14), (19, 14), (16, 17), (19, 17)):
+                continue
+            if bx in (17, 18) and by in (15, 16):
+                pix[bx, by] = marrow
+            else:
+                pix[bx, by] = bone_ring
+    return img
+
+def gen_cooked_steak(seed=163):
+    """Cooked steak: caramelized brown grilled steak with crosshatch char grill lines."""
+    img = create_tile_canvas()
+    pix = img.load()
+    steak_mid = (118, 64, 36, 255)
+    steak_dark = (82, 40, 20, 255)
+    steak_hi = (156, 92, 54, 255)
+    grill_char = (44, 22, 14, 255)
+    bone = (215, 208, 188, 255)
+    bone_center = (96, 52, 32, 255)
+
+    for y in range(7, 26):
+        for x in range(6, 27):
+            dx = (x - 16.5) * 0.95
+            dy = (y - 16.5) * 1.15
+            dist = math.hypot(dx, dy)
+            if x > 18 and 14 <= y <= 18:
+                dist += 2.5
+            if dist <= 8.5:
+                is_grill = (x + y) % 5 == 0 or (x - y) % 5 == 0
+                if dist > 7.5:
+                    pix[x, y] = grill_char
+                elif is_grill and dist < 7.0:
+                    pix[x, y] = grill_char
+                else:
+                    h = hash2d(x, y, seed)
+                    if h > 0.7:
+                        pix[x, y] = steak_hi
+                    elif h < 0.3:
+                        pix[x, y] = steak_dark
+                    else:
+                        pix[x, y] = steak_mid
+
+    for by in range(14, 18):
+        for bx in range(16, 20):
+            if (bx, by) in ((16, 14), (19, 14), (16, 17), (19, 17)):
+                continue
+            if bx in (17, 18) and by in (15, 16):
+                pix[bx, by] = bone_center
+            else:
+                pix[bx, by] = bone
+    return img
+
+def gen_raw_porkchop(seed=164):
+    """Raw porkchop: pale pink tender loin cut with white fat rim and bone nub."""
+    img = create_tile_canvas()
+    pix = img.load()
+    pork_pink = (238, 148, 158, 255)
+    pork_mid = (218, 122, 134, 255)
+    pork_dark = (188, 96, 110, 255)
+    fat_white = (252, 248, 242, 255)
+    fat_shade = (226, 216, 210, 255)
+    bone = (242, 240, 226, 255)
+
+    for y in range(8, 25):
+        for x in range(6, 26):
+            dx = (x - 15.0) * 1.1
+            dy = (y - 15.5) * 0.95
+            dist = math.hypot(dx, dy)
+            if dist <= 7.8:
+                if (x >= 15 or y <= 11) and dist > 5.2:
+                    pix[x, y] = fat_white if dist <= 7.0 else fat_shade
+                elif dist > 6.8:
+                    pix[x, y] = pork_dark
+                else:
+                    h = hash2d(x, y, seed)
+                    pix[x, y] = pork_pink if h > 0.5 else pork_mid
+
+    for bx in range(8, 12):
+        for by in range(21, 26):
+            if (bx - 9.5) ** 2 + (by - 23.5) ** 2 <= 3.5:
+                pix[bx, by] = bone
+    return img
+
+def gen_cooked_porkchop(seed=165):
+    """Cooked porkchop: golden-brown roasted chop with caramelized edges."""
+    img = create_tile_canvas()
+    pix = img.load()
+    roast_tan = (198, 145, 92, 255)
+    roast_mid = (168, 114, 66, 255)
+    roast_dark = (134, 82, 44, 255)
+    roast_sear = (96, 54, 26, 255)
+    bone = (212, 204, 182, 255)
+
+    for y in range(8, 25):
+        for x in range(6, 26):
+            dx = (x - 15.0) * 1.1
+            dy = (y - 15.5) * 0.95
+            dist = math.hypot(dx, dy)
+            if dist <= 7.8:
+                if dist > 6.8:
+                    pix[x, y] = roast_sear
+                elif (x >= 15 or y <= 11) and dist > 5.2:
+                    pix[x, y] = roast_dark
+                else:
+                    h = hash2d(x, y, seed)
+                    if h > 0.65:
+                        pix[x, y] = roast_tan
+                    elif h < 0.3:
+                        pix[x, y] = roast_dark
+                    else:
+                        pix[x, y] = roast_mid
+
+    for bx in range(8, 12):
+        for by in range(21, 26):
+            if (bx - 9.5) ** 2 + (by - 23.5) ** 2 <= 3.5:
+                pix[bx, by] = bone
+    return img
+
+def gen_raw_chicken(seed=166):
+    """Raw chicken: pale salmon fleshy drumstick with bone handle."""
+    img = create_tile_canvas()
+    pix = img.load()
+    flesh_pink = (242, 168, 152, 255)
+    flesh_mid = (222, 138, 124, 255)
+    flesh_dark = (192, 108, 96, 255)
+    bone = (248, 244, 232, 255)
+    bone_knob = (225, 218, 205, 255)
+
+    for i in range(8):
+        bx = 8 + i
+        by = 24 - i
+        pix[bx, by] = bone
+        pix[bx + 1, by] = bone
+        pix[bx, by + 1] = bone_knob
+    for kx in range(6, 10):
+        for ky in range(23, 27):
+            if (kx - 7.5) ** 2 + (ky - 24.5) ** 2 <= 3.5:
+                pix[kx, ky] = bone
+
+    for y in range(7, 21):
+        for x in range(12, 27):
+            dist = math.hypot(x - 19.5, y - 13.0)
+            if dist <= 6.8:
+                if dist > 5.8:
+                    pix[x, y] = flesh_dark
+                else:
+                    h = hash2d(x, y, seed)
+                    pix[x, y] = flesh_pink if h > 0.45 else flesh_mid
+    return img
+
+def gen_cooked_chicken(seed=167):
+    """Cooked chicken: crispy golden-brown roasted drumstick with bone handle."""
+    img = create_tile_canvas()
+    pix = img.load()
+    roast_gold = (212, 132, 42, 255)
+    roast_hi = (242, 172, 72, 255)
+    roast_mid = (172, 94, 26, 255)
+    roast_crisp = (118, 56, 16, 255)
+    bone = (238, 234, 220, 255)
+    bone_knob = (212, 206, 192, 255)
+
+    for i in range(8):
+        bx = 8 + i
+        by = 24 - i
+        pix[bx, by] = bone
+        pix[bx + 1, by] = bone
+        pix[bx, by + 1] = bone_knob
+    for kx in range(6, 10):
+        for ky in range(23, 27):
+            if (kx - 7.5) ** 2 + (ky - 24.5) ** 2 <= 3.5:
+                pix[kx, ky] = bone
+
+    for y in range(7, 21):
+        for x in range(12, 27):
+            dist = math.hypot(x - 19.5, y - 13.0)
+            if dist <= 6.8:
+                if dist > 5.8:
+                    pix[x, y] = roast_crisp
+                elif dist > 4.5 and y < 12:
+                    pix[x, y] = roast_crisp
+                else:
+                    h = hash2d(x, y, seed)
+                    if h > 0.7:
+                        pix[x, y] = roast_hi
+                    elif h < 0.35:
+                        pix[x, y] = roast_mid
+                    else:
+                        pix[x, y] = roast_gold
+    return img
+
+def gen_leather(seed=168):
+    """Tanned animal hide pelt: warm brown leather pelt with 4 leg flaps."""
+    img = create_tile_canvas()
+    pix = img.load()
+    leather_mid = (158, 98, 48, 255)
+    leather_dark = (118, 68, 28, 255)
+    leather_hi = (188, 126, 68, 255)
+    leather_edge = (86, 46, 18, 255)
+    stitch = (212, 156, 92, 255)
+
+    for y in range(5, 27):
+        for x in range(5, 27):
+            body_dist = math.hypot((x - 15.5) * 0.9, (y - 15.5) * 0.9)
+            tl = math.hypot(x - 7.5, y - 7.5) <= 3.8
+            tr = math.hypot(x - 23.5, y - 7.5) <= 3.8
+            bl = math.hypot(x - 7.5, y - 23.5) <= 3.8
+            br = math.hypot(x - 23.5, y - 23.5) <= 3.8
+            neck = (13 <= x <= 18) and (y <= 7)
+
+            if body_dist <= 8.5 or tl or tr or bl or br or neck:
+                is_edge = (
+                    math.hypot((x - 15.5) * 0.9, (y - 15.5) * 0.9) > 7.5
+                    and not (tl or tr or bl or br)
+                ) or (x in (5, 26) or y in (5, 26))
+
+                if is_edge:
+                    pix[x, y] = leather_edge
+                elif (x + y) % 6 == 0 and body_dist < 6.0:
+                    pix[x, y] = stitch
+                else:
+                    h = hash2d(x, y, seed)
+                    if h > 0.65:
+                        pix[x, y] = leather_hi
+                    elif h < 0.3:
+                        pix[x, y] = leather_dark
+                    else:
+                        pix[x, y] = leather_mid
+    return img
+
+def gen_feather(seed=169):
+    """Plume feather: crisp white/cream quill vane with angled barbs and calamus tip."""
+    img = create_tile_canvas()
+    pix = img.load()
+    feather_white = (255, 255, 255, 255)
+    feather_shade = (226, 232, 240, 255)
+    feather_edge = (186, 194, 206, 255)
+    quill_shaft = (212, 218, 226, 255)
+    quill_tip = (175, 182, 195, 255)
+
+    for i in range(28):
+        t = i / 27.0
+        qx = 6.0 + 19.0 * t
+        qy = 26.0 - 21.0 * t
+        ix, iy = int(round(qx)), int(round(qy))
+        if 0 <= ix < 32 and 0 <= iy < 32:
+            pix[ix, iy] = quill_tip if t < 0.25 else quill_shaft
+
+        if t < 0.20:
+            continue
+
+        vane_w = (math.sin(t * math.pi) * 6.5)
+        for w in range(1, int(vane_w) + 1):
+            lx = int(round(qx - w * 0.7))
+            ly = int(round(qy - w * 0.7))
+            rx = int(round(qx + w * 0.7))
+            ry = int(round(qy + w * 0.7))
+
+            if int(t * 10) == 6 and w > vane_w * 0.5:
+                continue
+
+            if 0 <= lx < 32 and 0 <= ly < 32:
+                if w == int(vane_w):
+                    pix[lx, ly] = feather_edge
+                elif w % 3 == 0:
+                    pix[lx, ly] = feather_shade
+                else:
+                    pix[lx, ly] = feather_white
+
+            if 0 <= rx < 32 and 0 <= ry < 32:
+                if w == int(vane_w):
+                    pix[rx, ry] = feather_edge
+                elif w % 2 == 0:
+                    pix[rx, ry] = feather_shade
+                else:
+                    pix[rx, ry] = feather_white
     return img
 
 def gen_gui_crosshair():
@@ -1256,14 +1552,14 @@ def generate_roots_atlas():
     # Food & Resources
     place(160, gen_wheat_crop(7)) # Wheat sheaf
     place(161, gen_food_item("bread"))
-    place(162, gen_food_item("meat")) # Raw beef
-    place(163, gen_food_item("meat")) # Cooked beef
-    place(164, gen_food_item("meat")) # Raw pork
-    place(165, gen_food_item("meat")) # Cooked pork
-    place(166, gen_food_item("meat")) # Raw chicken
-    place(167, gen_food_item("meat")) # Cooked chicken
-    place(168, gen_planks(168, (145, 95, 55))) # Leather
-    place(169, gen_tool_icon(mat_iron, "shovel")) # Feather
+    place(162, gen_raw_beef(162))
+    place(163, gen_cooked_steak(163))
+    place(164, gen_raw_porkchop(164))
+    place(165, gen_cooked_porkchop(165))
+    place(166, gen_raw_chicken(166))
+    place(167, gen_cooked_chicken(167))
+    place(168, gen_leather(168))
+    place(169, gen_feather(169))
 
     # Animal Textures & Crafting
     place(170, gen_cow_hide(170))

@@ -832,75 +832,71 @@ impl UiBuilder {
                 let h_face = bs * 1.10;
                 let h_half = h_face * 0.50;
 
-                // Diamond outer vertices of full block
+                // Diamond outer vertices and axis vectors
                 let p_top_n = [bc[0], bc[1] - bs * 0.65];
-                let p_top_e = [bc[0] + bs * 1.05, bc[1] - bs * 0.16];
-                let p_top_s = [bc[0], bc[1] + bs * 0.35];
-                let p_top_w = [bc[0] - bs * 1.05, bc[1] - bs * 0.16];
+                let u_vec = [bs * 1.05, bs * 0.51];
+                let v_vec = [-bs * 1.05, bs * 0.51];
+                let p_top_e = [p_top_n[0] + u_vec[0], p_top_n[1] + u_vec[1]];
+                let p_top_w = [p_top_n[0] + v_vec[0], p_top_n[1] + v_vec[1]];
+                let p_top_s = [p_top_w[0] + u_vec[0], p_top_w[1] + u_vec[1]];
 
-                let p_mid_w = [(p_top_w[0] + bc[0]) * 0.5, (p_top_w[1] + bc[1]) * 0.5];
-                let p_mid_e = [(p_top_e[0] + bc[0]) * 0.5, (p_top_e[1] + bc[1]) * 0.5];
+                let d_full = [0.0, h_face];
+                let d_half = [0.0, h_half];
 
-                // 1. Upper Step Top Face
                 let uvs_top = [[u0_t, v0_t], [u1_t, v0_t], [u1_t, v1_t], [u0_t, v1_t]];
-                mesh.add_quad_vertices(
-                    [p_mid_w, p_top_n, p_mid_e, bc],
-                    uvs_top,
-                    [[1.0, 1.0, 1.0, 1.0]; 4],
-                );
-
-                // 2. Vertical Riser between Upper and Lower Step
-                let p_tread_w = [p_mid_w[0], p_mid_w[1] + h_half];
-                let p_tread_c = [bc[0], bc[1] + h_half];
-                let p_tread_e = [p_mid_e[0], p_mid_e[1] + h_half];
                 let uvs_side = [[u0_s, v0_s], [u1_s, v0_s], [u1_s, v1_s], [u0_s, v1_s]];
-                mesh.add_quad_vertices(
-                    [p_mid_w, bc, p_tread_c, p_tread_w],
-                    uvs_side,
-                    [[0.82, 0.82, 0.82, 1.0]; 4],
-                );
                 let uvs_right = [[u0_r, v0_r], [u1_r, v0_r], [u1_r, v1_r], [u0_r, v1_r]];
-                mesh.add_quad_vertices(
-                    [bc, p_mid_e, p_tread_e, p_tread_c],
-                    uvs_right,
-                    [[0.68, 0.68, 0.68, 1.0]; 4],
-                );
 
-                // 3. Lower Step Top Tread Face
-                let p_step_s = [p_top_s[0], p_top_s[1] + h_half];
+                // 1. Upper Step Top Tread Face (from u=0 to u=0.5, full width along v)
+                let p_mid_n = [p_top_n[0] + 0.5 * u_vec[0], p_top_n[1] + 0.5 * u_vec[1]];
+                let p_mid_w = [p_top_w[0] + 0.5 * u_vec[0], p_top_w[1] + 0.5 * u_vec[1]];
                 mesh.add_quad_vertices(
-                    [p_tread_w, p_tread_c, p_tread_e, p_step_s],
+                    [p_top_w, p_top_n, p_mid_n, p_mid_w],
                     uvs_top,
                     [[1.0, 1.0, 1.0, 1.0]; 4],
                 );
 
-                // 4. Lower Step Front Faces
-                let p_bot_w = [p_top_w[0], p_top_w[1] + h_face];
-                let p_bot_s = [p_top_s[0], p_top_s[1] + h_face];
-                let p_bot_e = [p_top_e[0], p_top_e[1] + h_face];
+                // 2. Vertical Riser between Upper and Lower Step (facing front-right at u=0.5)
+                let r_bot_n = [p_mid_n[0] + d_half[0], p_mid_n[1] + d_half[1]];
+                let r_bot_w = [p_mid_w[0] + d_half[0], p_mid_w[1] + d_half[1]];
                 mesh.add_quad_vertices(
-                    [p_tread_w, p_step_s, p_bot_s, p_bot_w],
-                    uvs_side,
-                    [[0.82, 0.82, 0.82, 1.0]; 4],
-                );
-                mesh.add_quad_vertices(
-                    [p_step_s, p_tread_e, p_bot_e, p_bot_s],
+                    [p_mid_w, p_mid_n, r_bot_n, r_bot_w],
                     uvs_right,
-                    [[0.68, 0.68, 0.68, 1.0]; 4],
+                    [[0.75, 0.75, 0.78, 1.0]; 4],
                 );
 
-                // 5. Back Upper Side Faces
-                let p_top_w_mid = [p_top_w[0], p_top_w[1] + h_half];
+                // 3. Lower Step Top Tread Face (at d_half height, from u=0.5 to u=1.0)
+                let t_e = [p_top_e[0] + d_half[0], p_top_e[1] + d_half[1]];
+                let t_s = [p_top_s[0] + d_half[0], p_top_s[1] + d_half[1]];
                 mesh.add_quad_vertices(
-                    [p_top_w, p_mid_w, p_tread_w, p_top_w_mid],
-                    uvs_side,
-                    [[0.82, 0.82, 0.82, 1.0]; 4],
+                    [r_bot_w, r_bot_n, t_e, t_s],
+                    uvs_top,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
                 );
-                let p_top_e_mid = [p_top_e[0], p_top_e[1] + h_half];
+
+                // 4. Front Lower Step Riser Face (facing front-right at u=1.0)
+                let f_e = [p_top_e[0] + d_full[0], p_top_e[1] + d_full[1]];
+                let f_s = [p_top_s[0] + d_full[0], p_top_s[1] + d_full[1]];
                 mesh.add_quad_vertices(
-                    [p_mid_e, p_top_e, p_top_e_mid, p_tread_e],
+                    [t_s, t_e, f_e, f_s],
                     uvs_right,
-                    [[0.68, 0.68, 0.68, 1.0]; 4],
+                    [[0.68, 0.68, 0.70, 1.0]; 4],
+                );
+
+                // 5. Left Side Stepped L-Profile Faces (facing front-left along v=1)
+                // 5a. Upper back block (full height)
+                let p_bot_w = [p_top_w[0] + d_full[0], p_top_w[1] + d_full[1]];
+                let p_bot_mid_w = [p_mid_w[0] + d_full[0], p_mid_w[1] + d_full[1]];
+                mesh.add_quad_vertices(
+                    [p_top_w, p_mid_w, p_bot_mid_w, p_bot_w],
+                    uvs_side,
+                    [[0.85, 0.85, 0.88, 1.0]; 4],
+                );
+                // 5b. Lower front block (from d_half down to d_full)
+                mesh.add_quad_vertices(
+                    [r_bot_w, t_s, f_s, p_bot_mid_w],
+                    uvs_side,
+                    [[0.82, 0.82, 0.85, 1.0]; 4],
                 );
 
                 if active_slot.count > 1 {
@@ -1038,44 +1034,47 @@ impl UiBuilder {
                     screen_h - 130.0 * scale + bob_y + item_punch_y,
                 ];
                 let bs = 90.0 * scale;
-                let bed_h = bs * 0.48;
+                let bed_h = bs * 0.38;
 
-                // Diamond outer vertices of lowered bed
-                let p_top_n = [bc[0], bc[1] - bs * 0.45];
-                let p_top_e = [bc[0] + bs * 1.05, bc[1] + bs * 0.04];
-                let p_top_s = [bc[0], bc[1] + bs * 0.55];
-                let p_top_w = [bc[0] - bs * 1.05, bc[1] + bs * 0.04];
+                // 2:1 Elongated Bed Isometric Proportions (Length along U, Width along V)
+                let len_vec = [bs * 1.30, bs * 0.63];
+                let wid_vec = [-bs * 0.65, bs * 0.32];
 
-                // Pillow line at 35% from head (north)
-                let p_pil_w = [p_top_n[0] + (p_top_w[0] - p_top_n[0]) * 0.35, p_top_n[1] + (p_top_w[1] - p_top_n[1]) * 0.35];
-                let p_pil_e = [p_top_n[0] + (p_top_e[0] - p_top_n[0]) * 0.35, p_top_n[1] + (p_top_e[1] - p_top_n[1]) * 0.35];
+                let p_head_n = [bc[0] - bs * 0.15, bc[1] - bs * 0.50];
+                let p_head_w = [p_head_n[0] + wid_vec[0], p_head_n[1] + wid_vec[1]];
+                let p_foot_e = [p_head_n[0] + len_vec[0], p_head_n[1] + len_vec[1]];
+                let p_foot_s = [p_head_w[0] + len_vec[0], p_head_w[1] + len_vec[1]];
+
+                // Pillow line at 28% from headboard
+                let p_pil_n = [p_head_n[0] + len_vec[0] * 0.28, p_head_n[1] + len_vec[1] * 0.28];
+                let p_pil_w = [p_head_w[0] + len_vec[0] * 0.28, p_head_w[1] + len_vec[1] * 0.28];
 
                 // 1. White Pillow Top Face
-                mesh.add_quad_vertices([p_pil_w, p_top_n, p_top_e, p_pil_e], white_uv, [[0.92, 0.92, 0.95, 1.0]; 4]);
+                mesh.add_quad_vertices([p_head_w, p_head_n, p_pil_n, p_pil_w], white_uv, [[0.94, 0.94, 0.96, 1.0]; 4]);
 
                 // 2. Red Quilt / Blanket Top Face
                 let [u0_wool, v0_wool, u1_wool, v1_wool] = TextureAtlas::get_uv_bounds(111); // red wool
                 let wool_uv = [[u0_wool, v0_wool], [u1_wool, v0_wool], [u1_wool, v1_wool], [u0_wool, v1_wool]];
-                mesh.add_quad_vertices([p_top_w, p_pil_w, p_pil_e, p_top_s], wool_uv, [[0.88, 0.22, 0.22, 1.0]; 4]);
+                mesh.add_quad_vertices([p_pil_w, p_pil_n, p_foot_e, p_foot_s], wool_uv, [[0.88, 0.22, 0.22, 1.0]; 4]);
 
-                // 3. Left Face (Quilt upper half + Oak wooden frame lower half)
-                let p_left_bot_w = [p_top_w[0], p_top_w[1] + bed_h];
-                let p_left_bot_s = [p_top_s[0], p_top_s[1] + bed_h];
-                let p_left_mid_w = [p_top_w[0], p_top_w[1] + bed_h * 0.45];
-                let p_left_mid_s = [p_top_s[0], p_top_s[1] + bed_h * 0.45];
-                mesh.add_quad_vertices([p_top_w, p_top_s, p_left_mid_s, p_left_mid_w], white_uv, [[0.75, 0.18, 0.18, 1.0]; 4]);
-                mesh.add_quad_vertices([p_left_mid_w, p_left_mid_s, p_left_bot_s, p_left_bot_w], white_uv, [[0.46, 0.32, 0.18, 1.0]; 4]);
+                // 3. Left Long Side Face (facing front-left: blanket overhang + oak bed rail)
+                let p_bot_head_w = [p_head_w[0], p_head_w[1] + bed_h];
+                let p_bot_foot_s = [p_foot_s[0], p_foot_s[1] + bed_h];
+                let p_mid_head_w = [p_head_w[0], p_head_w[1] + bed_h * 0.45];
+                let p_mid_foot_s = [p_foot_s[0], p_foot_s[1] + bed_h * 0.45];
+                mesh.add_quad_vertices([p_head_w, p_foot_s, p_mid_foot_s, p_mid_head_w], white_uv, [[0.72, 0.18, 0.18, 1.0]; 4]);
+                mesh.add_quad_vertices([p_mid_head_w, p_mid_foot_s, p_bot_foot_s, p_bot_head_w], white_uv, [[0.46, 0.32, 0.18, 1.0]; 4]);
 
-                // 4. Right Face
-                let p_right_bot_e = [p_top_e[0], p_top_e[1] + bed_h];
-                let p_right_mid_e = [p_top_e[0], p_top_e[1] + bed_h * 0.45];
-                mesh.add_quad_vertices([p_top_s, p_top_e, p_right_mid_e, p_left_mid_s], white_uv, [[0.60, 0.14, 0.14, 1.0]; 4]);
-                mesh.add_quad_vertices([p_left_mid_s, p_right_mid_e, p_right_bot_e, p_left_bot_s], white_uv, [[0.36, 0.24, 0.13, 1.0]; 4]);
+                // 4. Footboard End Face (facing front-right: blanket overhang + oak footboard)
+                let p_bot_foot_e = [p_foot_e[0], p_foot_e[1] + bed_h];
+                let p_mid_foot_e = [p_foot_e[0], p_foot_e[1] + bed_h * 0.45];
+                mesh.add_quad_vertices([p_foot_s, p_foot_e, p_mid_foot_e, p_mid_foot_s], white_uv, [[0.58, 0.14, 0.14, 1.0]; 4]);
+                mesh.add_quad_vertices([p_mid_foot_s, p_mid_foot_e, p_bot_foot_e, p_bot_foot_s], white_uv, [[0.36, 0.24, 0.13, 1.0]; 4]);
 
                 // 5. Wooden Corner Legs
                 let leg_w = 7.0 * scale;
-                let leg_h = 12.0 * scale;
-                for &pt in &[p_left_bot_w, p_left_bot_s, p_right_bot_e] {
+                let leg_h = 14.0 * scale;
+                for &pt in &[p_bot_head_w, p_bot_foot_s, p_bot_foot_e] {
                     mesh.add_quad_vertices(
                         [[pt[0] - leg_w * 0.5, pt[1]], [pt[0] + leg_w * 0.5, pt[1]], [pt[0] + leg_w * 0.5, pt[1] + leg_h], [pt[0] - leg_w * 0.5, pt[1] + leg_h]],
                         white_uv,
@@ -1135,14 +1134,14 @@ impl UiBuilder {
                 let qa_br = [cx + ps * 0.55, cy + ps * 0.42 + ps * 0.12];
                 let qa_tr = [cx + ps * 0.55, cy - ps * 0.48 + ps * 0.12];
                 let qa_tl = [cx - ps * 0.55, cy - ps * 0.48 - ps * 0.12];
-                mesh.add_quad_vertices([qa_bl, qa_br, qa_tr, qa_tl], plant_uv, [[1.0, 1.0, 1.0, 1.0]; 4]);
+                mesh.add_quad_vertices([qa_tl, qa_tr, qa_br, qa_bl], plant_uv, [[1.0, 1.0, 1.0, 1.0]; 4]);
 
                 // Quad 2: Diagonal plane B (perpendicular cross: front-left to back-right)
                 let qb_bl = [cx - ps * 0.55, cy + ps * 0.42 + ps * 0.12];
                 let qb_br = [cx + ps * 0.55, cy + ps * 0.42 - ps * 0.12];
                 let qb_tr = [cx + ps * 0.55, cy - ps * 0.48 - ps * 0.12];
                 let qb_tl = [cx - ps * 0.55, cy - ps * 0.48 + ps * 0.12];
-                mesh.add_quad_vertices([qb_bl, qb_br, qb_tr, qb_tl], plant_uv, [[0.86, 0.86, 0.86, 1.0]; 4]);
+                mesh.add_quad_vertices([qb_tl, qb_tr, qb_br, qb_bl], plant_uv, [[0.86, 0.86, 0.86, 1.0]; 4]);
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
@@ -2684,48 +2683,120 @@ impl UiBuilder {
                 }
             } else {
                 // -----------------------------------------------------------------
-                // UNIVERSAL VOLUMETRIC 3D ITEM: Angled in 3D perspective with depth & bevel thickness
+                // HELD ITEM SPRITE WITH FIRST-PERSON HAND & ARM
                 // -----------------------------------------------------------------
-                let item_punch_x = -45.0 * scale * punch_swing;
-                let item_punch_y = 35.0 * scale * punch_swing;
+                let punch_x = -45.0 * scale * punch_swing;
+                let punch_y = -35.0 * scale * punch_swing;
+                let item_punch_x = -40.0 * scale * punch_swing;
+                let item_punch_y = 25.0 * scale * punch_swing;
 
-                let size = 95.0 * scale;
-                let cx = screen_w - 110.0 * scale + bob_x + item_punch_x;
-                let cy = screen_h - 110.0 * scale + bob_y + item_punch_y;
+                // 1. Arm & Sleeve coming in from bottom-right
+                let p_arm_bot_r = [
+                    screen_w + 35.0 * scale + bob_x + punch_x * 0.3,
+                    screen_h + 30.0 * scale,
+                ];
+                let p_arm_bot_l = [
+                    screen_w - 90.0 * scale + bob_x + punch_x * 0.3,
+                    screen_h + 30.0 * scale,
+                ];
+                let p_arm_bot_m = [
+                    (p_arm_bot_l[0] + p_arm_bot_r[0]) * 0.5,
+                    (p_arm_bot_l[1] + p_arm_bot_r[1]) * 0.5,
+                ];
 
-                // 3D Isometric perspective holding angle (tilted ~30 degrees forward)
-                let tilt_x = size * 0.42;
-                let tilt_y = size * 0.18;
-                let h_half = size * 0.50;
+                let p_sleeve_r = [
+                    screen_w - 25.0 * scale + bob_x + punch_x * 0.6,
+                    screen_h - 110.0 * scale + bob_y + punch_y * 0.6,
+                ];
+                let p_sleeve_l = [
+                    screen_w - 135.0 * scale + bob_x + punch_x * 0.6,
+                    screen_h - 70.0 * scale + bob_y + punch_y * 0.6,
+                ];
+                let p_sleeve_m = [
+                    (p_sleeve_l[0] + p_sleeve_r[0]) * 0.5,
+                    (p_sleeve_l[1] + p_sleeve_r[1]) * 0.5,
+                ];
 
-                let p_bl = [cx - tilt_x, cy + h_half - tilt_y];
-                let p_br = [cx + tilt_x, cy + h_half + tilt_y];
-                let p_tr = [cx + tilt_x, cy - h_half + tilt_y];
-                let p_tl = [cx - tilt_x, cy - h_half - tilt_y];
+                let p_wrist_r = [
+                    screen_w - 75.0 * scale + bob_x + punch_x,
+                    screen_h - 165.0 * scale + bob_y + punch_y,
+                ];
+                let p_wrist_l = [
+                    screen_w - 165.0 * scale + bob_x + punch_x,
+                    screen_h - 125.0 * scale + bob_y + punch_y,
+                ];
+                let p_wrist_m = [
+                    (p_wrist_l[0] + p_wrist_r[0]) * 0.5,
+                    (p_wrist_l[1] + p_wrist_r[1]) * 0.5,
+                ];
 
+                let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
+                let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
+                let col_skin_top = [0.88, 0.64, 0.48, 1.0];
+                let col_skin_side = [0.72, 0.48, 0.35, 1.0];
+
+                // Sleeve quads
+                mesh.add_quad_vertices(
+                    [p_arm_bot_l, p_arm_bot_m, p_sleeve_m, p_sleeve_l],
+                    white_uv,
+                    [col_sleeve_side; 4],
+                );
+                mesh.add_quad_vertices(
+                    [p_arm_bot_m, p_arm_bot_r, p_sleeve_r, p_sleeve_m],
+                    white_uv,
+                    [col_sleeve_top; 4],
+                );
+
+                // Forearm quads
+                mesh.add_quad_vertices(
+                    [p_sleeve_l, p_sleeve_m, p_wrist_m, p_wrist_l],
+                    white_uv,
+                    [col_skin_side; 4],
+                );
+                mesh.add_quad_vertices(
+                    [p_sleeve_m, p_sleeve_r, p_wrist_r, p_wrist_m],
+                    white_uv,
+                    [col_skin_top; 4],
+                );
+
+                // 2. The Clean Item Sprite (crisp upright 2D quad held by hand)
+                let item_size = 96.0 * scale;
+                let ix = screen_w - 180.0 * scale + bob_x + item_punch_x;
+                let iy = screen_h - 220.0 * scale + bob_y + item_punch_y;
                 let [u0, v0, u1, v1] = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
-                let icon_uvs = [[u0, v1], [u1, v1], [u1, v0], [u0, v0]];
+                let item_uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+                mesh.add_quad_vertices(
+                    [
+                        [ix, iy],
+                        [ix + item_size, iy],
+                        [ix + item_size, iy + item_size],
+                        [ix, iy + item_size],
+                    ],
+                    item_uvs,
+                    [[1.0, 1.0, 1.0, 1.0]; 4],
+                );
 
-                // 1. Front Isometric Face with authentic item sprite
-                mesh.add_quad_vertices([p_bl, p_br, p_tr, p_tl], icon_uvs, [[1.0, 1.0, 1.0, 1.0]; 4]);
-
-                // 2. Extrusion Depth (Side Thickness & Top Bevel)
-                let thick = [-9.0 * scale, -7.0 * scale];
-                let p_bl_b = [p_bl[0] + thick[0], p_bl[1] + thick[1]];
-                let p_tl_b = [p_tl[0] + thick[0], p_tl[1] + thick[1]];
-                let p_tr_b = [p_tr[0] + thick[0], p_tr[1] + thick[1]];
-
-                // Left side thickness facet (shaded)
-                mesh.add_quad_vertices([p_bl_b, p_bl, p_tl, p_tl_b], icon_uvs, [[0.65, 0.65, 0.68, 1.0]; 4]);
-
-                // Top edge thickness facet (illuminated)
-                mesh.add_quad_vertices([p_tl_b, p_tl, p_tr, p_tr_b], icon_uvs, [[0.82, 0.82, 0.85, 1.0]; 4]);
+                // 3. Thumb / Knuckles gripping the item
+                let col_skin_light = [0.93, 0.69, 0.53, 1.0];
+                let p_thumb = [ix + item_size * 0.45, iy + item_size * 0.70];
+                let p_fist_w = 26.0 * scale;
+                let p_fist_h = 24.0 * scale;
+                mesh.add_quad_vertices(
+                    [
+                        [p_thumb[0], p_thumb[1]],
+                        [p_thumb[0] + p_fist_w, p_thumb[1]],
+                        [p_thumb[0] + p_fist_w, p_thumb[1] + p_fist_h],
+                        [p_thumb[0], p_thumb[1] + p_fist_h],
+                    ],
+                    white_uv,
+                    [col_skin_light; 4],
+                );
 
                 if active_slot.count > 1 {
                     Self::draw_stack_number(
                         mesh,
-                        cx + 15.0 * scale,
-                        cy + 25.0 * scale,
+                        ix + item_size * 0.45,
+                        iy + item_size * 0.65,
                         30.0 * scale,
                         active_slot.count,
                     );
@@ -9292,10 +9363,10 @@ mod tests {
         UiBuilder::draw_held_item(&mut mesh_apple, 1280.0, 720.0, ItemSlot::new(ItemId::APPLE, 1), &registry, 0.0, 0.0);
         assert!(mesh_apple.indices.len() / 6 >= 4, "Apple in hand must generate 3D fruit facets, stem, and leaf");
 
-        // 3D Volumetric Extruded Item (Wheat Seeds)
+        // Held 2D Item with First-Person Arm & Hand (Wheat Seeds)
         let mut mesh_seeds = UiMesh::new();
         UiBuilder::draw_held_item(&mut mesh_seeds, 1280.0, 720.0, ItemSlot::new(ItemId::WHEAT_SEEDS, 1), &registry, 0.0, 0.0);
-        assert_eq!(mesh_seeds.indices.len() / 6, 3, "Volumetric items in hand must generate 3D front face, side thickness, and top bevel");
+        assert!(mesh_seeds.indices.len() / 6 >= 5, "Held item must render first-person arm, sleeve, knuckles, and item sprite");
     }
 
     #[test]
