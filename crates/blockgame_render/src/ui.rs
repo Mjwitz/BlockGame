@@ -4754,10 +4754,15 @@ impl UiBuilder {
         screen_h: f32,
         world_count: usize,
     ) -> (Vec<[f32; 4]>, [[f32; 4]; 4]) {
-        let list_w = 560.0_f32.min(screen_w - 60.0);
-        let list_x = (screen_w - list_w) * 0.5;
-        let list_top = 100.0;
-        let row_h = 58.0;
+        let modal_w = 700.0_f32.min(screen_w - 40.0);
+        let modal_h = 540.0_f32.min(screen_h - 60.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(30.0);
+
+        let list_w = modal_w - 48.0;
+        let list_x = modal_x + 24.0;
+        let list_top = modal_y + 78.0;
+        let row_h = 56.0;
         let row_gap = 8.0;
         let max_rows = world_count.min(5);
 
@@ -4767,14 +4772,14 @@ impl UiBuilder {
             rows.push([list_x, ry, list_w, row_h]);
         }
 
-        let btn_w = 272.0;
-        let btn_h = 40.0;
+        let btn_w = (list_w - 16.0) * 0.5;
+        let btn_h = 38.0;
         let col_gap = 16.0;
-        let row_btn_gap = 10.0;
-        let left_x = (screen_w - (btn_w * 2.0 + col_gap)) * 0.5;
+        let row_btn_gap = 8.0;
+        let left_x = list_x;
         let right_x = left_x + btn_w + col_gap;
-        let top_btn_y = (screen_h - 115.0).max(list_top + 5.0 * (row_h + row_gap) + 16.0);
-        let bot_btn_y = top_btn_y + btn_h + row_btn_gap;
+        let bot_btn_y = modal_y + modal_h - 48.0;
+        let top_btn_y = bot_btn_y - btn_h - row_btn_gap;
 
         let buttons = [
             [left_x, top_btn_y, btn_w, btn_h],  // Play Selected World
@@ -4797,59 +4802,115 @@ impl UiBuilder {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
-        // Darkened menu backdrop
+        // Subtle vignette over 3D world
         mesh.add_quad(
             0.0,
             0.0,
             screen_w,
             screen_h,
             white_uv,
-            [0.05, 0.06, 0.09, 0.78],
+            [0.03, 0.05, 0.08, 0.35],
+        );
+
+        let modal_w = 700.0_f32.min(screen_w - 40.0);
+        let modal_h = 540.0_f32.min(screen_h - 60.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(30.0);
+
+        // Drop shadow
+        mesh.add_quad(
+            modal_x + 3.0,
+            modal_y + 3.0,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.01, 0.02, 0.04, 0.65],
+        );
+        // Beveled slate border
+        mesh.add_quad(
+            modal_x,
+            modal_y,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.38, 0.42, 0.52, 0.85],
+        );
+        // Interior card background
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            modal_h - 3.0,
+            white_uv,
+            [0.07, 0.09, 0.13, 0.94],
+        );
+
+        // Top gold accent bar
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            3.0,
+            white_uv,
+            [0.85, 0.68, 0.28, 0.95],
         );
 
         // Screen Header
-        let header = "Select World";
+        let header = "EXPEDITION ARCHIVE";
         let header_w = Self::string_width(header, 14.0, 1.5);
         Self::draw_string(
             mesh,
-            (screen_w - header_w) * 0.5,
-            38.0,
+            modal_x + (modal_w - header_w) * 0.5,
+            modal_y + 16.0,
             header,
             14.0,
-            19.0,
+            18.0,
             1.5,
-            [1.0, 1.0, 1.0, 1.0],
+            [0.98, 0.98, 1.0, 1.0],
         );
 
-        let list_w = 560.0_f32.min(screen_w - 60.0);
-        let list_x = (screen_w - list_w) * 0.5;
-        let list_top = 92.0;
-        let list_h = 338.0;
-
-        // Inset list container panel
-        mesh.add_quad(
-            list_x - 8.0,
-            list_top,
-            list_w + 16.0,
-            list_h,
-            white_uv,
-            [0.02, 0.03, 0.05, 0.85],
+        let sub = "Select a recorded frontier journey or embark on a new expedition";
+        let sub_w = Self::string_width(sub, 8.5, 1.0);
+        Self::draw_string(
+            mesh,
+            modal_x + (modal_w - sub_w) * 0.5,
+            modal_y + 40.0,
+            sub,
+            8.5,
+            12.0,
+            1.0,
+            [0.95, 0.78, 0.30, 0.95],
         );
 
         let (row_rects, btn_rects) = Self::world_select_layout(screen_w, screen_h, worlds.len());
 
+        let list_w = modal_w - 48.0;
+        let list_x = modal_x + 24.0;
+        let list_top = modal_y + 68.0;
+        let list_h = 328.0;
+
+        // Inset list container backing
+        mesh.add_quad(
+            list_x - 4.0,
+            list_top,
+            list_w + 8.0,
+            list_h,
+            white_uv,
+            [0.04, 0.05, 0.08, 0.60],
+        );
+
         if worlds.is_empty() {
-            let empty_msg = "No saved worlds found. Click 'Create New World' to start!";
-            let ew = Self::string_width(empty_msg, 9.5, 1.0);
+            let empty_msg = "No saved expeditions found. Click 'New Expedition' below to forge your first world!";
+            let ew = Self::string_width(empty_msg, 9.0, 1.0);
             Self::draw_string(
                 mesh,
-                (screen_w - ew) * 0.5,
+                modal_x + (modal_w - ew) * 0.5,
                 list_top + list_h * 0.45,
                 empty_msg,
-                9.5,
-                14.0,
+                9.0,
+                13.0,
                 1.0,
-                [0.68, 0.70, 0.76, 0.95],
+                [0.72, 0.76, 0.85, 0.95],
             );
         } else {
             for (i, rect) in row_rects.iter().enumerate() {
@@ -4859,36 +4920,49 @@ impl UiBuilder {
                     Self::is_rect_hovered(cursor_pos, rect[0], rect[1], rect[2], rect[3]);
 
                 let border_color = if is_selected {
-                    [0.95, 0.85, 0.35, 1.0]
+                    [0.95, 0.78, 0.30, 1.0]
                 } else if is_hovered {
-                    [0.48, 0.52, 0.65, 0.95]
+                    [0.48, 0.54, 0.68, 0.90]
                 } else {
-                    [0.22, 0.24, 0.30, 0.90]
+                    [0.20, 0.22, 0.28, 0.80]
                 };
 
                 let fill_color = if is_selected {
-                    [0.16, 0.20, 0.32, 0.95]
+                    [0.15, 0.19, 0.28, 0.95]
                 } else if is_hovered {
-                    [0.12, 0.14, 0.22, 0.92]
+                    [0.12, 0.15, 0.22, 0.92]
                 } else {
-                    [0.08, 0.09, 0.13, 0.90]
+                    [0.09, 0.11, 0.16, 0.88]
                 };
 
+                let ind_color = if is_selected {
+                    [0.95, 0.78, 0.30, 1.0]
+                } else if is_hovered {
+                    [0.65, 0.55, 0.30, 0.80]
+                } else {
+                    [0.22, 0.25, 0.32, 0.70]
+                };
+
+                // Card shadow
+                mesh.add_quad(rect[0] + 2.0, rect[1] + 2.0, rect[2], rect[3], white_uv, [0.01, 0.02, 0.04, 0.40]);
+                // Border & fill
                 mesh.add_quad(
-                    rect[0] - 2.0,
-                    rect[1] - 2.0,
-                    rect[2] + 4.0,
-                    rect[3] + 4.0,
+                    rect[0] - 1.5,
+                    rect[1] - 1.5,
+                    rect[2] + 3.0,
+                    rect[3] + 3.0,
                     white_uv,
                     border_color,
                 );
                 mesh.add_quad(rect[0], rect[1], rect[2], rect[3], white_uv, fill_color);
+                // Left indicator bar
+                mesh.add_quad(rect[0], rect[1], 4.0, rect[3], white_uv, ind_color);
 
                 // World Name
                 Self::draw_string(
                     mesh,
-                    rect[0] + 14.0,
-                    rect[1] + 10.0,
+                    rect[0] + 16.0,
+                    rect[1] + 9.0,
                     &world.name,
                     11.0,
                     15.0,
@@ -4896,22 +4970,38 @@ impl UiBuilder {
                     [0.98, 0.98, 1.0, 1.0],
                 );
 
+                // Game Mode badge
+                let is_creative = world.game_mode.is_creative();
+                let mode_badge = if is_creative { "[ CREATIVE ]" } else { "[ SURVIVAL ]" };
+                let mode_color = if is_creative { [0.40, 0.85, 1.0, 1.0] } else { [1.0, 0.85, 0.35, 1.0] };
+                let mw = Self::string_width(mode_badge, 8.5, 0.8);
+                Self::draw_string(
+                    mesh,
+                    rect[0] + rect[2] - mw - 14.0,
+                    rect[1] + 10.0,
+                    mode_badge,
+                    8.5,
+                    12.0,
+                    0.8,
+                    mode_color,
+                );
+
                 // Folder & Seed details
                 let play_mins = (world.total_time / 60.0) as u32;
                 let play_secs = (world.total_time as u32) % 60;
                 let details = format!(
-                    "Folder: {}  |  Seed: {}  |  Played: {}m {}s",
+                    "Folder: {}  |  Seed: {}  |  Time: {}m {}s",
                     world.folder_name, world.seed, play_mins, play_secs
                 );
                 Self::draw_string(
                     mesh,
-                    rect[0] + 14.0,
-                    rect[1] + 33.0,
+                    rect[0] + 16.0,
+                    rect[1] + 32.0,
                     &details,
                     8.5,
                     12.0,
                     0.8,
-                    [0.65, 0.68, 0.75, 0.95],
+                    [0.72, 0.76, 0.85, 0.95],
                 );
             }
         }
@@ -4923,7 +5013,7 @@ impl UiBuilder {
             btn_rects[0][1],
             btn_rects[0][2],
             btn_rects[0][3],
-            "Play Selected World",
+            "> Resume Expedition",
             cursor_pos,
             has_selection,
         );
@@ -4933,7 +5023,7 @@ impl UiBuilder {
             btn_rects[1][1],
             btn_rects[1][2],
             btn_rects[1][3],
-            "Create New World",
+            "+ New Expedition",
             cursor_pos,
             true,
         );
@@ -4943,7 +5033,7 @@ impl UiBuilder {
             btn_rects[2][1],
             btn_rects[2][2],
             btn_rects[2][3],
-            "Delete World",
+            "Delete Expedition",
             cursor_pos,
             has_selection,
         );
@@ -4953,7 +5043,7 @@ impl UiBuilder {
             btn_rects[3][1],
             btn_rects[3][2],
             btn_rects[3][3],
-            "Back",
+            "< Back to Title",
             cursor_pos,
             true,
         );
@@ -4965,17 +5055,22 @@ impl UiBuilder {
         screen_w: f32,
         screen_h: f32,
     ) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
-        let box_w = 420.0;
-        let box_h = 42.0;
-        let box_x = (screen_w - box_w) * 0.5;
-        let name_y = screen_h * 0.27;
-        let seed_y = name_y + 95.0;
+        let modal_w = 640.0_f32.min(screen_w - 40.0);
+        let modal_h = 510.0_f32.min(screen_h - 60.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(30.0);
 
-        let btn_w = 202.0;
+        let box_w = modal_w - 60.0;
+        let box_h = 40.0;
+        let box_x = modal_x + 30.0;
+        let name_y = modal_y + 88.0;
+        let seed_y = name_y + 84.0;
+
+        let btn_w = (box_w - 16.0) * 0.5;
         let btn_h = 42.0;
         let gap = 16.0;
-        let btn_y = seed_y + 132.0;
-        let create_x = (screen_w - (btn_w * 2.0 + gap)) * 0.5;
+        let btn_y = modal_y + modal_h - 58.0;
+        let create_x = box_x;
         let cancel_x = create_x + btn_w + gap;
 
         (
@@ -4988,11 +5083,17 @@ impl UiBuilder {
 
     /// Returns the Game Mode toggle button rectangle on the Create New World screen.
     pub fn create_world_gamemode_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
-        let box_w = 420.0;
-        let box_x = (screen_w - box_w) * 0.5;
-        let name_y = screen_h * 0.27;
-        let seed_y = name_y + 95.0;
-        [box_x, seed_y + 66.0, box_w, 40.0]
+        let modal_w = 640.0_f32.min(screen_w - 40.0);
+        let modal_h = 510.0_f32.min(screen_h - 60.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(30.0);
+
+        let box_w = modal_w - 60.0;
+        let box_x = modal_x + 30.0;
+        let name_y = modal_y + 88.0;
+        let seed_y = name_y + 84.0;
+        let mode_y = seed_y + 82.0;
+        [box_x, mode_y, box_w, 62.0]
     }
 
     /// Builds the Create New World screen.
@@ -5010,27 +5111,83 @@ impl UiBuilder {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
-        // Darkened backdrop
+        // Subtle vignette over 3D background
         mesh.add_quad(
             0.0,
             0.0,
             screen_w,
             screen_h,
             white_uv,
-            [0.05, 0.06, 0.09, 0.80],
+            [0.03, 0.05, 0.08, 0.35],
         );
 
-        let header = "Create New World";
+        let modal_w = 640.0_f32.min(screen_w - 40.0);
+        let modal_h = 510.0_f32.min(screen_h - 60.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(30.0);
+
+        // Modal shadow
+        mesh.add_quad(
+            modal_x + 3.0,
+            modal_y + 3.0,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.01, 0.02, 0.04, 0.65],
+        );
+        // Beveled slate border
+        mesh.add_quad(
+            modal_x,
+            modal_y,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.38, 0.42, 0.52, 0.85],
+        );
+        // Interior card background
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            modal_h - 3.0,
+            white_uv,
+            [0.07, 0.09, 0.13, 0.94],
+        );
+
+        // Top gold accent bar
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            3.0,
+            white_uv,
+            [0.85, 0.68, 0.28, 0.95],
+        );
+
+        let header = "FORGE NEW EXPEDITION";
         let header_w = Self::string_width(header, 14.0, 1.5);
         Self::draw_string(
             mesh,
-            (screen_w - header_w) * 0.5,
-            52.0,
+            modal_x + (modal_w - header_w) * 0.5,
+            modal_y + 18.0,
             header,
             14.0,
-            19.0,
+            18.0,
             1.5,
-            [1.0, 1.0, 1.0, 1.0],
+            [0.98, 0.98, 1.0, 1.0],
+        );
+
+        let sub = "Chart uncharted mountain ridges, deep underground caverns, and dense woodlands";
+        let sub_w = Self::string_width(sub, 8.5, 1.0);
+        Self::draw_string(
+            mesh,
+            modal_x + (modal_w - sub_w) * 0.5,
+            modal_y + 42.0,
+            sub,
+            8.5,
+            12.0,
+            1.0,
+            [0.95, 0.78, 0.30, 0.95],
         );
 
         let (name_rect, seed_rect, create_rect, cancel_rect) =
@@ -5043,7 +5200,7 @@ impl UiBuilder {
             name_rect[1],
             name_rect[2],
             name_rect[3],
-            "World Name:",
+            "Expedition Name:",
             name_input,
             "New World",
             focused_field == 0,
@@ -5051,7 +5208,7 @@ impl UiBuilder {
         );
 
         let folder_preview = format!(
-            "Will be saved in: saves/{}",
+            "Directory: saves/{}",
             blockgame_core::save::sanitize_folder_name(if name_input.trim().is_empty() {
                 "New World"
             } else {
@@ -5061,12 +5218,12 @@ impl UiBuilder {
         Self::draw_string(
             mesh,
             name_rect[0],
-            name_rect[1] + name_rect[3] + 8.0,
+            name_rect[1] + name_rect[3] + 6.0,
             &folder_preview,
             8.5,
             12.0,
             0.8,
-            [0.60, 0.63, 0.70, 0.95],
+            [0.60, 0.75, 0.90, 0.95],
         );
 
         Self::draw_text_input_box(
@@ -5075,23 +5232,50 @@ impl UiBuilder {
             seed_rect[1],
             seed_rect[2],
             seed_rect[3],
-            "Seed for the World Generator (optional):",
+            "Expedition Seed (optional):",
             seed_input,
-            "Leave blank for a random seed",
+            "Leave blank for random procedural seed",
             focused_field == 1,
             cursor_pos,
         );
 
-        let mode_label = format!("Game Mode: {}", game_mode.display_name());
-        Self::draw_menu_button(
+        // Interactive Game Mode Selector Card
+        let mode_hovered = Self::is_rect_hovered(cursor_pos, gamemode_rect[0], gamemode_rect[1], gamemode_rect[2], gamemode_rect[3]);
+        let mode_border = if mode_hovered { [0.95, 0.78, 0.30, 0.95] } else { [0.32, 0.36, 0.48, 0.85] };
+        let mode_fill = if mode_hovered { [0.14, 0.18, 0.26, 0.96] } else { [0.10, 0.12, 0.18, 0.92] };
+        let is_creative = game_mode.is_creative();
+        let mode_ind = if is_creative { [0.40, 0.85, 1.0, 1.0] } else { [1.0, 0.85, 0.35, 1.0] };
+
+        mesh.add_quad(gamemode_rect[0] - 1.5, gamemode_rect[1] - 1.5, gamemode_rect[2] + 3.0, gamemode_rect[3] + 3.0, white_uv, mode_border);
+        mesh.add_quad(gamemode_rect[0], gamemode_rect[1], gamemode_rect[2], gamemode_rect[3], white_uv, mode_fill);
+        mesh.add_quad(gamemode_rect[0], gamemode_rect[1], 4.0, gamemode_rect[3], white_uv, mode_ind);
+
+        let mode_label = format!("Game Mode: {} (Click to toggle)", game_mode.display_name());
+        Self::draw_string(
             mesh,
-            gamemode_rect[0],
-            gamemode_rect[1],
-            gamemode_rect[2],
-            gamemode_rect[3],
+            gamemode_rect[0] + 16.0,
+            gamemode_rect[1] + 12.0,
             &mode_label,
-            cursor_pos,
-            true,
+            10.5,
+            14.0,
+            1.0,
+            if is_creative { [0.40, 0.85, 1.0, 1.0] } else { [1.0, 0.85, 0.35, 1.0] },
+        );
+
+        let mode_desc = if is_creative {
+            "Unlimited building blocks, instant block breaking, and free flight (F key)."
+        } else {
+            "Vitality & stamina gauges, hunger, hostile monsters, and crafting progression."
+        };
+        Self::draw_string(
+            mesh,
+            gamemode_rect[0] + 16.0,
+            gamemode_rect[1] + 36.0,
+            mode_desc,
+            8.5,
+            12.0,
+            0.8,
+            [0.72, 0.76, 0.85, 0.95],
         );
 
         Self::draw_menu_button(
@@ -5100,7 +5284,7 @@ impl UiBuilder {
             create_rect[1],
             create_rect[2],
             create_rect[3],
-            "Create New World",
+            "> Embark on Journey",
             cursor_pos,
             !name_input.trim().is_empty(),
         );
@@ -5110,7 +5294,7 @@ impl UiBuilder {
             cancel_rect[1],
             cancel_rect[2],
             cancel_rect[3],
-            "Cancel",
+            "< Return to Archive",
             cursor_pos,
             true,
         );
@@ -5270,24 +5454,32 @@ impl UiBuilder {
         );
     }
 
+    pub fn settings_modal_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
+        let modal_w = 760.0_f32.min(screen_w - 40.0);
+        let modal_h = 580.0_f32.min(screen_h - 40.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(20.0);
+        [modal_x, modal_y, modal_w, modal_h]
+    }
+
     /// Returns the tab button rectangle `[x, y, w, h]` for tab `0` (General) or `1` (Controls).
     pub fn settings_tab_rect(screen_w: f32, screen_h: f32, tab_idx: usize) -> [f32; 4] {
-        let col_w = 270.0;
-        let gap_x = 24.0;
-        let total_w = col_w * 2.0 + gap_x;
-        let start_x = (screen_w - total_w) * 0.5;
-        let y = screen_h * 0.13;
-        [start_x + (tab_idx as f32) * (col_w + gap_x), y, col_w, 34.0]
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let col_w = (m[2] - 64.0) * 0.5;
+        let gap_x = 16.0;
+        let start_x = m[0] + 24.0;
+        let y = m[1] + 68.0;
+        [start_x + (tab_idx as f32) * (col_w + gap_x), y, col_w, 36.0]
     }
 
     /// Returns the slider rectangle `[x, y, w, h]` for slider index `0..7`.
     pub fn settings_slider_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
-        let col_w = 270.0;
-        let gap_x = 24.0;
-        let total_w = col_w * 2.0 + gap_x;
-        let start_x = (screen_w - total_w) * 0.5;
-        let start_y = screen_h * 0.21;
-        let row_h = 28.0;
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let col_w = (m[2] - 64.0) * 0.5;
+        let gap_x = 16.0;
+        let start_x = m[0] + 24.0;
+        let start_y = m[1] + 118.0;
+        let row_h = 30.0;
         let gap_y = 10.0;
 
         let col = (index / 4) as f32;
@@ -5302,11 +5494,11 @@ impl UiBuilder {
 
     /// Returns the toggle button rectangle `[x, y, w, h]` for toggle index `0..7`.
     pub fn settings_toggle_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
-        let col_w = 270.0;
-        let gap_x = 24.0;
-        let total_w = col_w * 2.0 + gap_x;
-        let start_x = (screen_w - total_w) * 0.5;
-        let base_y = screen_h * 0.21 + 4.0 * (28.0 + 10.0) + 8.0;
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let col_w = (m[2] - 64.0) * 0.5;
+        let gap_x = 16.0;
+        let start_x = m[0] + 24.0;
+        let base_y = m[1] + 118.0 + 4.0 * (30.0 + 10.0) + 12.0;
         let row_h = 30.0;
         let gap_y = 8.0;
         let col = (index % 2) as f32;
@@ -5321,15 +5513,15 @@ impl UiBuilder {
 
     /// Returns the keybind button rectangle `[x, y, w, h]` for keybind index `0..14`.
     pub fn settings_keybind_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
-        let col_w = 270.0;
-        let gap_x = 24.0;
-        let total_w = col_w * 2.0 + gap_x;
-        let start_x = (screen_w - total_w) * 0.5;
-        let start_y = screen_h * 0.21;
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let col_w = (m[2] - 64.0) * 0.5;
+        let gap_x = 16.0;
+        let start_x = m[0] + 24.0;
+        let start_y = m[1] + 118.0;
         let row_h = 28.0;
-        let gap_y = 8.0;
-        let col = (index / 7) as f32;
-        let row = (index % 7) as f32;
+        let gap_y = 6.0;
+        let col = (index / 8) as f32;
+        let row = (index % 8) as f32;
         [
             start_x + col * (col_w + gap_x),
             start_y + row * (row_h + gap_y),
@@ -5340,20 +5532,19 @@ impl UiBuilder {
 
     /// Returns `[x, y, w, h]` for the `Reset to Defaults` button on the Settings screen.
     pub fn settings_reset_button_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
-        let col_w = 270.0;
-        let gap_x = 24.0;
-        let total_w = col_w * 2.0 + gap_x;
-        let start_x = (screen_w - total_w) * 0.5;
-        [start_x, screen_h * 0.82, col_w, 42.0]
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let col_w = (m[2] - 64.0) * 0.5;
+        let start_x = m[0] + 24.0;
+        [start_x, m[1] + m[3] - 52.0, col_w, 40.0]
     }
 
     /// Returns `[x, y, w, h]` for the `Done` button on the Settings screen.
     pub fn settings_done_button_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
-        let col_w = 270.0;
-        let gap_x = 24.0;
-        let total_w = col_w * 2.0 + gap_x;
-        let start_x = (screen_w - total_w) * 0.5;
-        [start_x + col_w + gap_x, screen_h * 0.82, col_w, 42.0]
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let col_w = (m[2] - 64.0) * 0.5;
+        let gap_x = 16.0;
+        let start_x = m[0] + 24.0;
+        [start_x + col_w + gap_x, m[1] + m[3] - 52.0, col_w, 40.0]
     }
 
     /// Builds the interactive Settings screen with General and Controls tabs.
@@ -5371,46 +5562,108 @@ impl UiBuilder {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
+        // Subtle vignette over 3D world
         mesh.add_quad(
             0.0,
             0.0,
             screen_w,
             screen_h,
             white_uv,
-            [0.05, 0.06, 0.09, 0.82],
+            [0.03, 0.05, 0.08, 0.35],
         );
 
-        let title = "Settings";
-        let tw = Self::string_width(title, 15.0, 1.5);
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let modal_x = m[0];
+        let modal_y = m[1];
+        let modal_w = m[2];
+        let modal_h = m[3];
+
+        // Drop shadow
+        mesh.add_quad(
+            modal_x + 3.0,
+            modal_y + 3.0,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.01, 0.02, 0.04, 0.65],
+        );
+        // Beveled slate border
+        mesh.add_quad(
+            modal_x,
+            modal_y,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.38, 0.42, 0.52, 0.85],
+        );
+        // Interior card background
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            modal_h - 3.0,
+            white_uv,
+            [0.07, 0.09, 0.13, 0.94],
+        );
+
+        // Top gold accent bar
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            3.0,
+            white_uv,
+            [0.85, 0.68, 0.28, 0.95],
+        );
+
+        let title = "EXPEDITION SETTINGS";
+        let tw = Self::string_width(title, 14.0, 1.5);
         Self::draw_string(
             mesh,
-            (screen_w - tw) * 0.5,
-            screen_h * 0.05,
+            modal_x + (modal_w - tw) * 0.5,
+            modal_y + 16.0,
             title,
-            15.0,
-            20.0,
+            14.0,
+            18.0,
             1.5,
-            [1.0, 1.0, 1.0, 1.0],
+            [0.98, 0.98, 1.0, 1.0],
         );
 
-        for (tab_idx, tab_label) in ["General", "Controls"].iter().enumerate() {
+        let sub = "Tune visual fidelity, soundscapes, audio devices, and control bindings";
+        let sub_w = Self::string_width(sub, 8.5, 1.0);
+        Self::draw_string(
+            mesh,
+            modal_x + (modal_w - sub_w) * 0.5,
+            modal_y + 40.0,
+            sub,
+            8.5,
+            12.0,
+            1.0,
+            [0.95, 0.78, 0.30, 0.95],
+        );
+
+        for (tab_idx, tab_label) in ["General & Audio", "Controls & Keybinds"].iter().enumerate() {
             let r = Self::settings_tab_rect(screen_w, screen_h, tab_idx);
             let is_active = settings_tab == tab_idx;
             let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
             let border = if is_active {
-                [0.92, 0.82, 0.45, 1.0]
+                [0.95, 0.78, 0.30, 1.0]
             } else if hovered {
-                [0.70, 0.74, 0.82, 0.95]
+                [0.55, 0.60, 0.75, 0.95]
             } else {
-                [0.34, 0.37, 0.44, 0.88]
+                [0.25, 0.28, 0.36, 0.85]
             };
             let bg = if is_active {
-                [0.20, 0.36, 0.28, 0.96]
+                [0.16, 0.20, 0.30, 0.96]
             } else {
-                [0.12, 0.14, 0.19, 0.92]
+                [0.10, 0.12, 0.16, 0.90]
             };
             mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
-            mesh.add_quad(r[0] + 2.0, r[1] + 2.0, r[2] - 4.0, r[3] - 4.0, white_uv, bg);
+            mesh.add_quad(r[0] + 1.5, r[1] + 1.5, r[2] - 3.0, r[3] - 3.0, white_uv, bg);
+            if is_active {
+                // Bottom gold active indicator
+                mesh.add_quad(r[0] + 1.5, r[1] + r[3] - 3.0, r[2] - 3.0, 3.0, white_uv, [1.0, 0.85, 0.35, 1.0]);
+            }
             let lw = Self::string_width(tab_label, 10.5, 1.0);
             Self::draw_string(
                 mesh,
@@ -5420,7 +5673,7 @@ impl UiBuilder {
                 10.5,
                 14.0,
                 1.0,
-                [1.0, 1.0, 1.0, 1.0],
+                if is_active { [1.0, 0.88, 0.40, 1.0] } else { [0.75, 0.78, 0.86, 0.95] },
             );
         }
 
@@ -5466,62 +5719,62 @@ impl UiBuilder {
                     || active_slider == Some(idx);
 
                 let border = if hovered {
-                    [0.88, 0.78, 0.42, 0.95]
+                    [0.95, 0.78, 0.30, 0.95]
                 } else {
-                    [0.34, 0.37, 0.44, 0.90]
+                    [0.26, 0.30, 0.40, 0.85]
                 };
                 mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
                 mesh.add_quad(
-                    r[0] + 2.0,
-                    r[1] + 2.0,
-                    r[2] - 4.0,
-                    r[3] - 4.0,
+                    r[0] + 1.5,
+                    r[1] + 1.5,
+                    r[2] - 3.0,
+                    r[3] - 3.0,
                     white_uv,
-                    [0.10, 0.12, 0.16, 0.96],
+                    [0.08, 0.10, 0.14, 0.96],
                 );
 
-                let fill_w = ((r[2] - 4.0) * *norm).max(0.0);
+                let fill_w = ((r[2] - 3.0) * *norm).max(0.0);
                 if fill_w > 0.0 {
                     mesh.add_quad(
-                        r[0] + 2.0,
-                        r[1] + 2.0,
+                        r[0] + 1.5,
+                        r[1] + 1.5,
                         fill_w,
-                        r[3] - 4.0,
+                        r[3] - 3.0,
                         white_uv,
                         if hovered {
-                            [0.24, 0.50, 0.34, 0.85]
+                            [0.85, 0.68, 0.28, 0.85]
                         } else {
-                            [0.18, 0.38, 0.28, 0.80]
+                            [0.65, 0.52, 0.22, 0.80]
                         },
                     );
                 }
 
                 let thumb_w = 8.0;
-                let thumb_x = (r[0] + 2.0 + (r[2] - 4.0 - thumb_w) * *norm)
-                    .clamp(r[0] + 2.0, r[0] + r[2] - 2.0 - thumb_w);
+                let thumb_x = (r[0] + 1.5 + (r[2] - 3.0 - thumb_w) * *norm)
+                    .clamp(r[0] + 1.5, r[0] + r[2] - 1.5 - thumb_w);
                 mesh.add_quad(
                     thumb_x,
-                    r[1] + 2.0,
+                    r[1] + 1.5,
                     thumb_w,
-                    r[3] - 4.0,
+                    r[3] - 3.0,
                     white_uv,
                     if hovered {
-                        [0.95, 0.88, 0.55, 1.0]
+                        [1.0, 0.90, 0.45, 1.0]
                     } else {
-                        [0.75, 0.78, 0.85, 0.95]
+                        [0.85, 0.75, 0.35, 0.95]
                     },
                 );
 
-                let lw = Self::string_width(label, 9.5, 1.0);
+                let lw = Self::string_width(label, 9.0, 1.0);
                 Self::draw_string(
                     mesh,
                     r[0] + (r[2] - lw) * 0.5,
                     r[1] + (r[3] - 13.0) * 0.5,
                     label,
-                    9.5,
+                    9.0,
                     13.0,
                     1.0,
-                    [1.0, 1.0, 1.0, 1.0],
+                    [0.98, 0.98, 1.0, 1.0],
                 );
             }
 
@@ -5593,26 +5846,26 @@ impl UiBuilder {
                         r[2],
                         r[3],
                         white_uv,
-                        [0.95, 0.82, 0.35, 1.0],
+                        [0.95, 0.78, 0.30, 1.0],
                     );
                     mesh.add_quad(
-                        r[0] + 2.0,
-                        r[1] + 2.0,
-                        r[2] - 4.0,
-                        r[3] - 4.0,
+                        r[0] + 1.5,
+                        r[1] + 1.5,
+                        r[2] - 3.0,
+                        r[3] - 3.0,
                         white_uv,
-                        [0.22, 0.20, 0.10, 0.96],
+                        [0.20, 0.16, 0.08, 0.96],
                     );
-                    let lw = Self::string_width(&label, 9.5, 1.0);
+                    let lw = Self::string_width(&label, 9.0, 1.0);
                     Self::draw_string(
                         mesh,
                         r[0] + (r[2] - lw) * 0.5,
                         r[1] + (r[3] - 13.0) * 0.5,
                         &label,
-                        9.5,
+                        9.0,
                         13.0,
                         1.0,
-                        [1.0, 0.95, 0.65, 1.0],
+                        [1.0, 0.90, 0.40, 1.0],
                     );
                 } else {
                     Self::draw_menu_button(
@@ -5641,7 +5894,7 @@ impl UiBuilder {
             done_r[1],
             done_r[2],
             done_r[3],
-            "Done",
+            "Done & Save",
             cursor_pos,
             true,
         );
@@ -5704,22 +5957,25 @@ impl UiBuilder {
         screen_w: f32,
         screen_h: f32,
     ) -> ([f32; 4], [f32; 4], [f32; 4], [[f32; 4]; 4]) {
+        let modal_w = 840.0_f32.min(screen_w - 40.0);
+        let modal_h = 560.0_f32.min(screen_h - 50.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(25.0);
+
         let left_w = 340.0;
-        let gap = 28.0;
-        let right_w = 430.0;
-        let total_w = left_w + gap + right_w;
-        let fx = ((screen_w - total_w) * 0.5).max(24.0);
+        let fx = modal_x + 24.0;
         let field_h = 34.0;
 
-        let user_rect = [fx, screen_h * 0.23, left_w, field_h];
-        let pass_rect = [fx, screen_h * 0.34, left_w, field_h];
-        let addr_rect = [fx, screen_h * 0.45, left_w, field_h];
+        let content_y = modal_y + 80.0;
+        let user_rect = [fx, content_y + 2.0, left_w, field_h];
+        let pass_rect = [fx, content_y + 58.0, left_w, field_h];
+        let addr_rect = [fx, content_y + 114.0, left_w, field_h];
 
-        let skin_btn = [fx, screen_h * 0.54, left_w, 36.0];
-        let half_w = (left_w - 10.0) * 0.5;
-        let join_btn = [fx, screen_h * 0.63, half_w, 40.0];
-        let host_btn = [fx + half_w + 10.0, screen_h * 0.63, half_w, 40.0];
-        let back_btn = [fx, screen_h * 0.72, left_w, 38.0];
+        let skin_btn = [fx, content_y + 172.0, left_w, 36.0];
+        let half_w = (left_w - 12.0) * 0.5;
+        let join_btn = [fx, content_y + 224.0, half_w, 40.0];
+        let host_btn = [fx + half_w + 12.0, content_y + 224.0, half_w, 40.0];
+        let back_btn = [fx, content_y + 278.0, left_w, 38.0];
 
         (
             user_rect,
@@ -5735,26 +5991,29 @@ impl UiBuilder {
         screen_w: f32,
         screen_h: f32,
     ) -> ([f32; 4], [f32; 4], [[f32; 4]; 6]) {
-        let left_w = 340.0;
-        let gap = 28.0;
-        let right_w = 430.0;
-        let total_w = left_w + gap + right_w;
-        let left_x = ((screen_w - total_w) * 0.5).max(24.0);
-        let right_x = left_x + left_w + gap;
+        let modal_w = 840.0_f32.min(screen_w - 40.0);
+        let modal_h = 560.0_f32.min(screen_h - 50.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(25.0);
 
-        let panel_y = screen_h * 0.205;
-        let panel_h = (screen_h * 0.59).max(380.0);
+        let left_w = 340.0;
+        let gap = 24.0;
+        let right_x = modal_x + 24.0 + left_w + gap;
+        let right_w = modal_w - (right_x - modal_x) - 24.0;
+
+        let panel_y = modal_y + 80.0;
+        let panel_h = 360.0;
         let panel_rect = [right_x, panel_y, right_w, panel_h];
         let refresh_btn = [right_x + right_w - 96.0, panel_y + 8.0, 86.0, 26.0];
 
         let mut rows = [[0.0; 4]; 6];
         let row_x = right_x + 10.0;
         let row_w = right_w - 20.0;
-        let row_h = 50.0;
+        let row_h = 46.0;
         let row_gap = 6.0;
-        let rows_start_y = panel_y + 42.0;
+        let rows_start_y = panel_y + 40.0;
         for (i, row) in rows.iter_mut().enumerate() {
-            *row = [row_x, rows_start_y + i as f32 * (row_h + row_gap), row_w, row_h];
+            *row = [row_x, rows_start_y + (i as f32) * (row_h + row_gap), row_w, row_h];
         }
 
         (panel_rect, refresh_btn, rows)
@@ -5781,40 +6040,83 @@ impl UiBuilder {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
-        // Dark translucent backdrop
+        // Subtle vignette over 3D world
         mesh.add_quad(
             0.0,
             0.0,
             screen_w,
             screen_h,
             white_uv,
-            [0.05, 0.06, 0.09, 0.82],
+            [0.03, 0.05, 0.08, 0.35],
         );
 
-        let header = "Multiplayer Server & Authentication";
-        let header_w = Self::string_width(header, 13.0, 1.5);
+        let modal_w = 840.0_f32.min(screen_w - 40.0);
+        let modal_h = 560.0_f32.min(screen_h - 50.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5).max(25.0);
+
+        // Modal drop shadow
+        mesh.add_quad(
+            modal_x + 3.0,
+            modal_y + 3.0,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.01, 0.02, 0.04, 0.65],
+        );
+        // Beveled slate border
+        mesh.add_quad(
+            modal_x,
+            modal_y,
+            modal_w,
+            modal_h,
+            white_uv,
+            [0.38, 0.42, 0.52, 0.85],
+        );
+        // Interior card background
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            modal_h - 3.0,
+            white_uv,
+            [0.07, 0.09, 0.13, 0.94],
+        );
+
+        // Top gold accent bar
+        mesh.add_quad(
+            modal_x + 1.5,
+            modal_y + 1.5,
+            modal_w - 3.0,
+            3.0,
+            white_uv,
+            [0.85, 0.68, 0.28, 0.95],
+        );
+
+        let header = "MULTIPLAYER REALMS";
+        let header_w = Self::string_width(header, 14.0, 1.5);
         Self::draw_string(
             mesh,
-            (screen_w - header_w) * 0.5,
-            screen_h * 0.08,
+            modal_x + (modal_w - header_w) * 0.5,
+            modal_y + 16.0,
             header,
-            13.0,
+            14.0,
             18.0,
             1.5,
-            [1.0, 1.0, 1.0, 1.0],
+            [0.98, 0.98, 1.0, 1.0],
         );
 
-        let sub = "Connect directly, host a world, or pick a discoverable server";
-        let sub_w = Self::string_width(sub, 8.0, 1.0);
+        let sub = "Connect to dedicated servers, explore player frontiers, or host a local LAN realm";
+        let sub_w = Self::string_width(sub, 8.5, 1.0);
         Self::draw_string(
             mesh,
-            (screen_w - sub_w) * 0.5,
-            screen_h * 0.125,
+            modal_x + (modal_w - sub_w) * 0.5,
+            modal_y + 40.0,
             sub,
-            8.0,
-            11.0,
+            8.5,
+            12.0,
             1.0,
-            [0.72, 0.78, 0.88, 0.90],
+            [0.95, 0.78, 0.30, 0.95],
         );
 
         let (user_r, pass_r, addr_r, btns) = Self::multiplayer_lobby_layout(screen_w, screen_h);
@@ -5825,23 +6127,23 @@ impl UiBuilder {
             user_r[1],
             user_r[2],
             user_r[3],
-            "Username (3-16 chars, alphanumeric/_):",
+            "Username (3-16 chars):",
             username_input,
-            "Player1",
+            "Adventurer",
             focused_field == 0,
             cursor_pos,
         );
 
-        let masked_pass: String = std::iter::repeat('*').take(password_input.len()).collect();
+        let masked_pass: String = "*".repeat(password_input.len());
         Self::draw_text_input_box(
             mesh,
             pass_r[0],
             pass_r[1],
             pass_r[2],
             pass_r[3],
-            "Account Password (salted SHA-256):",
+            "Account Password (optional):",
             &masked_pass,
-            "Leave blank or enter secret password",
+            "Enter world password",
             focused_field == 1,
             cursor_pos,
         );
@@ -5860,7 +6162,7 @@ impl UiBuilder {
         );
 
         let skin_label = format!(
-            "Character Skin: {}",
+            "Skin: {}",
             blockgame_core::net::player_skin_name(skin_id)
         );
         Self::draw_menu_button(
@@ -5874,7 +6176,7 @@ impl UiBuilder {
             true,
         );
 
-        // Draw 28x28 Character Face Avatar preview on the left side of the Skin button
+        // Character Face Avatar preview on the left side of the Skin button
         let face_tile = 272 + ((skin_id as u16) % 4) * 4;
         let face_uv = TextureAtlas::get_uv_bounds(face_tile);
         mesh.add_quad(
@@ -5895,7 +6197,7 @@ impl UiBuilder {
             btns[1][1],
             btns[1][2],
             btns[1][3],
-            "Join Server",
+            "> Join Realm",
             cursor_pos,
             can_connect,
         );
@@ -5905,7 +6207,7 @@ impl UiBuilder {
             btns[2][1],
             btns[2][2],
             btns[2][3],
-            "Host & Play",
+            "+ Host Realm",
             cursor_pos,
             username_input.trim().len() >= 3,
         );
@@ -5915,7 +6217,7 @@ impl UiBuilder {
             btns[3][1],
             btns[3][2],
             btns[3][3],
-            "Back to Title",
+            "< Back to Title",
             cursor_pos,
             true,
         );
@@ -5923,32 +6225,42 @@ impl UiBuilder {
         // Right-hand Discoverable Servers panel
         let (panel_r, refresh_r, row_rects) =
             Self::multiplayer_browser_layout(screen_w, screen_h);
+        
+        // Panel shadow & container
+        mesh.add_quad(
+            panel_r[0] + 2.0,
+            panel_r[1] + 2.0,
+            panel_r[2],
+            panel_r[3],
+            white_uv,
+            [0.01, 0.02, 0.04, 0.50],
+        );
         mesh.add_quad(
             panel_r[0],
             panel_r[1],
             panel_r[2],
             panel_r[3],
             white_uv,
-            [0.30, 0.34, 0.42, 0.90],
+            [0.32, 0.36, 0.46, 0.85],
         );
         mesh.add_quad(
-            panel_r[0] + 2.0,
-            panel_r[1] + 2.0,
-            panel_r[2] - 4.0,
-            panel_r[3] - 4.0,
+            panel_r[0] + 1.5,
+            panel_r[1] + 1.5,
+            panel_r[2] - 3.0,
+            panel_r[3] - 3.0,
             white_uv,
-            [0.08, 0.10, 0.14, 0.94],
+            [0.06, 0.08, 0.12, 0.94],
         );
 
         Self::draw_string(
             mesh,
-            panel_r[0] + 12.0,
+            panel_r[0] + 14.0,
             panel_r[1] + 13.0,
-            "Discoverable Servers",
+            "DISCOVERABLE REALMS",
             10.0,
             14.0,
             1.0,
-            [0.95, 0.96, 1.0, 1.0],
+            [0.95, 0.78, 0.30, 0.95],
         );
 
         Self::draw_menu_button(
@@ -5967,7 +6279,7 @@ impl UiBuilder {
                 mesh,
                 panel_r[0] + 16.0,
                 panel_r[1] + 64.0,
-                "Fetching server list...",
+                "Scanning public realm directory...",
                 9.0,
                 13.0,
                 1.0,
@@ -5983,7 +6295,7 @@ impl UiBuilder {
                 9.0,
                 13.0,
                 1.0,
-                [1.0, 0.50, 0.50, 1.0],
+                [1.0, 0.45, 0.45, 1.0],
             );
             Self::draw_string(
                 mesh,
@@ -6000,10 +6312,10 @@ impl UiBuilder {
                 mesh,
                 panel_r[0] + 16.0,
                 panel_r[1] + 64.0,
-                "No public servers online.",
-                9.0,
-                13.0,
-                1.0,
+                "No public servers found. Direct connect via IP or host above.",
+                8.5,
+                12.0,
+                0.8,
                 [0.70, 0.75, 0.84, 0.85],
             );
         } else {
@@ -6012,43 +6324,53 @@ impl UiBuilder {
                 let selected = selected_server_idx == Some(idx);
                 let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
                 let border = if selected {
-                    [0.95, 0.82, 0.35, 1.0]
+                    [0.95, 0.78, 0.30, 1.0]
                 } else if hovered {
-                    [0.65, 0.72, 0.86, 0.95]
+                    [0.55, 0.62, 0.78, 0.95]
                 } else {
-                    [0.24, 0.27, 0.34, 0.88]
+                    [0.22, 0.25, 0.32, 0.85]
                 };
                 let bg = if selected {
-                    [0.16, 0.24, 0.22, 0.96]
+                    [0.15, 0.20, 0.28, 0.96]
                 } else if hovered {
-                    [0.14, 0.17, 0.23, 0.94]
+                    [0.12, 0.15, 0.22, 0.94]
                 } else {
-                    [0.11, 0.13, 0.18, 0.90]
+                    [0.09, 0.11, 0.16, 0.90]
                 };
+                let ind = if selected {
+                    [0.95, 0.78, 0.30, 1.0]
+                } else if hovered {
+                    [0.65, 0.55, 0.30, 0.80]
+                } else {
+                    [0.22, 0.25, 0.32, 0.70]
+                };
+
+                mesh.add_quad(r[0] + 1.5, r[1] + 1.5, r[2], r[3], white_uv, [0.01, 0.02, 0.04, 0.35]);
                 mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
                 mesh.add_quad(
-                    r[0] + 2.0,
-                    r[1] + 2.0,
-                    r[2] - 4.0,
-                    r[3] - 4.0,
+                    r[0] + 1.5,
+                    r[1] + 1.5,
+                    r[2] - 3.0,
+                    r[3] - 3.0,
                     white_uv,
                     bg,
                 );
+                mesh.add_quad(r[0] + 1.5, r[1] + 1.5, 3.0, r[3] - 3.0, white_uv, ind);
 
                 let name_short: String = srv.name.chars().take(24).collect();
                 Self::draw_string(
                     mesh,
-                    r[0] + 8.0,
-                    r[1] + 7.0,
+                    r[0] + 10.0,
+                    r[1] + 6.0,
                     &name_short,
                     9.5,
                     13.0,
                     1.0,
-                    [1.0, 1.0, 1.0, 1.0],
+                    [0.98, 0.98, 1.0, 1.0],
                 );
 
                 let right_meta = if srv.voice_enabled {
-                    format!("{}/{} [Mic]", srv.players, srv.max_players)
+                    format!("{}/{} [Voice]", srv.players, srv.max_players)
                 } else {
                     format!("{}/{}", srv.players, srv.max_players)
                 };
@@ -6056,37 +6378,37 @@ impl UiBuilder {
                 Self::draw_string(
                     mesh,
                     r[0] + r[2] - meta_w - 8.0,
-                    r[1] + 8.0,
+                    r[1] + 7.0,
                     &right_meta,
                     8.5,
                     12.0,
                     1.0,
-                    [0.48, 0.92, 0.65, 1.0],
+                    [0.45, 0.92, 0.65, 1.0],
                 );
 
                 let motd_short: String = srv.motd.chars().take(34).collect();
                 Self::draw_colored_string(
                     mesh,
-                    r[0] + 8.0,
-                    r[1] + 27.0,
+                    r[0] + 10.0,
+                    r[1] + 24.0,
                     &motd_short,
                     8.0,
                     11.5,
-                    1.0,
+                    0.8,
                     [0.78, 0.82, 0.90, 0.95],
                 );
 
                 let addr_str = format!("{}:{}", srv.host, srv.port);
-                let addr_w = Self::string_width(&addr_str, 7.5, 1.0);
+                let addr_w = Self::string_width(&addr_str, 7.5, 0.8);
                 Self::draw_string(
                     mesh,
                     r[0] + r[2] - addr_w - 8.0,
-                    r[1] + 28.0,
+                    r[1] + 25.0,
                     &addr_str,
                     7.5,
                     11.0,
-                    1.0,
-                    [0.58, 0.64, 0.75, 0.85],
+                    0.8,
+                    [0.55, 0.65, 0.80, 0.85],
                 );
             }
         }
@@ -6098,10 +6420,13 @@ impl UiBuilder {
             } else {
                 [0.45, 0.95, 0.58, 1.0]
             };
+            let sx = modal_x + (modal_w - mw) * 0.5;
+            let sy = modal_y + modal_h - 40.0;
+            mesh.add_quad(sx - 12.0, sy - 4.0, mw + 24.0, 22.0, white_uv, [0.08, 0.10, 0.14, 0.90]);
             Self::draw_string(
                 mesh,
-                (screen_w - mw) * 0.5,
-                screen_h * 0.84,
+                sx,
+                sy,
                 msg,
                 9.0,
                 13.0,
