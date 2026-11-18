@@ -133,6 +133,95 @@ def gen_cobblestone(seed=105):
                 pix[x, y] = noise_mod(base, delta)
     return img
 
+def gen_mossy_cobblestone(seed=225):
+    """Mossy Cobblestone: weathered cobblestone overgrown with lush creeping moss and ivy."""
+    img = gen_cobblestone(seed=seed)
+    pix = img.load()
+    moss_tones = [
+        (52, 115, 34, 255),
+        (74, 148, 46, 255),
+        (96, 178, 58, 255),
+        (38, 88, 24, 255),
+        (62, 130, 40, 255),
+    ]
+    # Organic moss cluster centers
+    centers = [(6, 7), (18, 5), (10, 20), (24, 22), (22, 12)]
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            min_d = min(math.hypot(x - cx, y - cy) + (hash2d(x, y, seed + 1) - 0.5) * 2.8 for cx, cy in centers)
+            if min_d < 5.8:
+                t_idx = int(hash2d(x // 2, y // 2, seed + 2) * len(moss_tones))
+                c = moss_tones[t_idx % len(moss_tones)]
+                delta = int((h - 0.5) * 22)
+                pix[x, y] = noise_mod((c[0], c[1], c[2]), delta)
+    return img
+
+def gen_gravel(seed=216):
+    """Gravel: coarse aggregate of tiny multi-toned pebbles, flint flecks, and sandy grit."""
+    img = create_tile_canvas()
+    pix = img.load()
+    pebble_colors = [
+        (128, 126, 132), # mid gray
+        (102, 100, 108), # dark slate
+        (148, 146, 154), # light limestone
+        (84, 82, 90),    # flint dark
+        (138, 124, 115), # brown granite fleck
+        (165, 162, 170), # pale quartz
+    ]
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            px = (x + ((y // 3) % 2) * 2) // 3
+            py = y // 2
+            h_cell = hash2d(px, py, seed)
+            color_idx = int(h_cell * len(pebble_colors))
+            base = pebble_colors[color_idx % len(pebble_colors)]
+            h = hash2d(x, y, seed + 10)
+            delta = int((h - 0.5) * 28)
+            if (x % 3 == 0) or (y % 2 == 0):
+                delta += 14
+            elif (x % 3 == 2) or (y % 2 == 1):
+                delta -= 16
+            pix[x, y] = noise_mod(base, delta)
+    return img
+
+def gen_prismarine(seed=237):
+    """Prismarine: oceanic aquamarine and sea-green crystalline brick tiles."""
+    img = create_tile_canvas()
+    pix = img.load()
+    grout = (34, 76, 74, 255)
+    tile_tones = [
+        (92, 164, 154),
+        (74, 142, 134),
+        (112, 188, 176),
+        (64, 128, 120),
+        (126, 204, 192),
+    ]
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            row = y // 8
+            shift = 4 if row % 2 == 1 else 0
+            col = (x + shift) // 8
+            is_grout = (y % 8 == 0) or ((x + shift) % 8 == 0)
+            if is_grout:
+                h = hash2d(x, y, seed)
+                pix[x, y] = noise_mod(grout, int((h - 0.5) * 16))
+            else:
+                tone_idx = int(hash2d(col, row, seed) * len(tile_tones))
+                base = tile_tones[tone_idx % len(tile_tones)]
+                h = hash2d(x, y, seed + 5)
+                delta = int((h - 0.5) * 20)
+                rx = (x + shift) % 8
+                ry = y % 8
+                if rx == 1 or ry == 1:
+                    delta += 24
+                elif rx == 7 or ry == 7:
+                    delta -= 22
+                if (rx + ry) % 5 == 0:
+                    delta += 15
+                pix[x, y] = noise_mod(base, delta)
+    return img
+
 def gen_oak_log_side(seed=106):
     img = create_tile_canvas()
     pix = img.load()
@@ -169,6 +258,231 @@ def gen_oak_log_top(seed=107):
                 if dist < 2.5:
                     delta -= 25 # heartwood dark core
                 pix[x, y] = noise_mod(wood_base, delta)
+    return img
+
+def gen_birch_log_side(seed=192):
+    """Birch log side: papery white bark with distinct horizontal black/charcoal lenticels."""
+    img = create_tile_canvas()
+    pix = img.load()
+    white_bark = (235, 238, 240)
+    charcoal = (42, 44, 48)
+    charcoal_shade = (78, 80, 86)
+    lenticels = [
+        (3, 4, 6),
+        (7, 18, 5),
+        (11, 2, 8),
+        (15, 22, 6),
+        (18, 10, 7),
+        (22, 0, 5),
+        (26, 16, 8),
+        (29, 6, 6),
+    ]
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            h = hash2d(x, y, seed)
+            delta = int((h - 0.5) * 18)
+            if x % 8 == 0:
+                delta -= 12
+            pix[x, y] = noise_mod(white_bark, delta)
+
+    for ly, lx, llen in lenticels:
+        for i in range(llen):
+            x = (lx + i) % TILE_SIZE
+            h = hash2d(x, ly, seed + 1)
+            pix[x, ly] = noise_mod(charcoal, int((h - 0.5) * 14))
+            if ly > 0 and hash2d(x, ly - 1, seed) > 0.4:
+                pix[x, ly - 1] = charcoal_shade
+            if ly < TILE_SIZE - 1 and hash2d(x, ly + 1, seed) > 0.5:
+                pix[x, ly + 1] = charcoal_shade
+    return img
+
+def gen_birch_log_top(seed=193):
+    """Birch log top: creamy pale heartwood rings inside white paper bark rim."""
+    img = create_tile_canvas()
+    pix = img.load()
+    heartwood = (226, 214, 178)
+    bark_rim = (238, 240, 242, 255)
+    bark_fleck = (52, 54, 58, 255)
+    cx, cy = 15.5, 15.5
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            dist = math.hypot(x - cx, y - cy)
+            if dist >= 14.0:
+                h = hash2d(x, y, seed)
+                if (x + y) % 9 == 0 and h > 0.6:
+                    pix[x, y] = bark_fleck
+                else:
+                    pix[x, y] = noise_mod(bark_rim, int((h - 0.5) * 16))
+            else:
+                ring = int(dist * 1.5) % 2 == 0
+                h = hash2d(x, y, seed + 1)
+                delta = (12 if ring else -14) + int((h - 0.5) * 14)
+                if dist < 2.5:
+                    delta -= 20
+                pix[x, y] = noise_mod(heartwood, delta)
+    return img
+
+def gen_spruce_log_side(seed=196):
+    """Spruce log side: dark charcoal-brown conifer bark with rugged vertical fissures."""
+    img = create_tile_canvas()
+    pix = img.load()
+    pine_base = (58, 42, 28)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            groove = (x % 5 == 0) or ((x + (y // 3)) % 6 == 0)
+            h = hash2d(x, y, seed)
+            if groove:
+                delta = -26 + int(h * 10)
+            else:
+                delta = int((h - 0.5) * 22)
+                if x % 5 == 1:
+                    delta += 18
+            pix[x, y] = noise_mod(pine_base, delta)
+    return img
+
+def gen_spruce_log_top(seed=197):
+    """Spruce log top: muted earthy brown heartwood rings with dark pine bark rim."""
+    img = create_tile_canvas()
+    pix = img.load()
+    wood_base = (132, 98, 64)
+    bark_rim = (50, 36, 24, 255)
+    cx, cy = 15.5, 15.5
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            dist = math.hypot(x - cx, y - cy)
+            if dist >= 14.0:
+                h = hash2d(x, y, seed)
+                pix[x, y] = noise_mod(bark_rim, int((h - 0.5) * 18))
+            else:
+                ring = int(dist * 1.4) % 2 == 0
+                h = hash2d(x, y, seed + 1)
+                delta = (14 if ring else -16) + int((h - 0.5) * 16)
+                if dist < 2.5:
+                    delta -= 24
+                pix[x, y] = noise_mod(wood_base, delta)
+    return img
+
+def gen_acacia_log_side(seed=207):
+    """Acacia log side: cool silvery slate-gray exterior bark with fine vertical striations."""
+    img = create_tile_canvas()
+    pix = img.load()
+    gray_bark = (106, 102, 100)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            groove = (x % 4 == 0) or ((x + (y // 5)) % 5 == 0)
+            h = hash2d(x, y, seed)
+            if groove:
+                delta = -28 + int(h * 10)
+            else:
+                delta = int((h - 0.5) * 24)
+                if x % 4 == 1:
+                    delta += 22
+            pix[x, y] = noise_mod(gray_bark, delta)
+    return img
+
+def gen_acacia_log_top(seed=208):
+    """Acacia log top: vivid terracotta reddish-orange heartwood with silvery gray bark rim."""
+    img = create_tile_canvas()
+    pix = img.load()
+    orange_heart = (195, 96, 48)
+    gray_rim = (98, 94, 92, 255)
+    cx, cy = 15.5, 15.5
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            dist = math.hypot(x - cx, y - cy)
+            if dist >= 14.0:
+                h = hash2d(x, y, seed)
+                pix[x, y] = noise_mod(gray_rim, int((h - 0.5) * 18))
+            else:
+                ring = int(dist * 1.5) % 2 == 0
+                h = hash2d(x, y, seed + 1)
+                delta = (15 if ring else -18) + int((h - 0.5) * 16)
+                if dist < 2.5:
+                    delta -= 28
+                pix[x, y] = noise_mod(orange_heart, delta)
+    return img
+
+def gen_jungle_log_side(seed=217):
+    """Jungle log side: warm khaki-olive brown rainforest bark with subtle mossy undertones."""
+    img = create_tile_canvas()
+    pix = img.load()
+    jungle_base = (94, 78, 44)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            groove = (x % 6 == 0) or ((x * 2 + y // 3) % 7 == 0)
+            h = hash2d(x, y, seed)
+            if groove:
+                delta = -30 + int(h * 12)
+            else:
+                delta = int((h - 0.5) * 22)
+                if x % 6 == 1:
+                    delta += 18
+            if (x + y) % 7 == 0 and h > 0.55:
+                pix[x, y] = noise_mod((82, 88, 46), delta)
+            else:
+                pix[x, y] = noise_mod(jungle_base, delta)
+    return img
+
+def gen_jungle_log_top(seed=218):
+    """Jungle log top: golden-caramel heartwood rings with olive-brown bark rim."""
+    img = create_tile_canvas()
+    pix = img.load()
+    wood_base = (188, 142, 88)
+    bark_rim = (86, 70, 38, 255)
+    cx, cy = 15.5, 15.5
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            dist = math.hypot(x - cx, y - cy)
+            if dist >= 14.0:
+                h = hash2d(x, y, seed)
+                pix[x, y] = noise_mod(bark_rim, int((h - 0.5) * 18))
+            else:
+                ring = int(dist * 1.4) % 2 == 0
+                h = hash2d(x, y, seed + 1)
+                delta = (14 if ring else -16) + int((h - 0.5) * 16)
+                if dist < 2.5:
+                    delta -= 24
+                pix[x, y] = noise_mod(wood_base, delta)
+    return img
+
+def gen_dark_oak_log_side(seed=231):
+    """Dark oak log side: rich espresso and dark chocolate bark with wide rugged furrows."""
+    img = create_tile_canvas()
+    pix = img.load()
+    dark_bark = (42, 28, 16)
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            groove = (x % 7 == 0) or ((x + (y // 4)) % 6 == 0)
+            h = hash2d(x, y, seed)
+            if groove:
+                delta = -20 + int(h * 8)
+            else:
+                delta = int((h - 0.5) * 20)
+                if x % 7 == 1:
+                    delta += 18
+            pix[x, y] = noise_mod(dark_bark, delta)
+    return img
+
+def gen_dark_oak_log_top(seed=232):
+    """Dark oak log top: rich chestnut-amber heartwood rings with dark chocolate bark rim."""
+    img = create_tile_canvas()
+    pix = img.load()
+    heartwood = (98, 68, 42)
+    bark_rim = (36, 24, 14, 255)
+    cx, cy = 15.5, 15.5
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            dist = math.hypot(x - cx, y - cy)
+            if dist >= 14.0:
+                h = hash2d(x, y, seed)
+                pix[x, y] = noise_mod(bark_rim, int((h - 0.5) * 16))
+            else:
+                ring = int(dist * 1.4) % 2 == 0
+                h = hash2d(x, y, seed + 1)
+                delta = (12 if ring else -14) + int((h - 0.5) * 14)
+                if dist < 2.5:
+                    delta -= 22
+                pix[x, y] = noise_mod(heartwood, delta)
     return img
 
 def gen_leaves(seed=108, base_color=(75, 145, 45)):
@@ -1586,12 +1900,12 @@ def generate_roots_atlas():
 
     # Biome Trees & Water
     place(191, gen_water())
-    place(192, gen_sand(192, (235, 238, 242))) # Birch log side
-    place(193, gen_oak_log_top(193))            # Birch log top
+    place(192, gen_birch_log_side(192))
+    place(193, gen_birch_log_top(193))
     place(194, gen_planks(194, (225, 210, 175))) # Birch planks
     place(195, gen_leaves(195, (105, 175, 65)))  # Birch leaves
-    place(196, gen_oak_log_side(196))            # Spruce log side
-    place(197, gen_oak_log_top(197))             # Spruce log top
+    place(196, gen_spruce_log_side(196))
+    place(197, gen_spruce_log_top(197))
     place(198, gen_planks(198, (115, 85, 55)))   # Spruce planks
     place(199, gen_leaves(199, (55, 105, 55)))   # Spruce leaves
 
@@ -1603,8 +1917,8 @@ def generate_roots_atlas():
     place(205, gen_sand(205, (155, 165, 180))) # Clay
     place(206, gen_leaves(206, (65, 145, 55))) # Lily pad
 
-    place(207, gen_oak_log_side(207)) # Acacia log side
-    place(208, gen_oak_log_top(208))  # Acacia log top
+    place(207, gen_acacia_log_side(207))
+    place(208, gen_acacia_log_top(208))
     place(209, gen_planks(209, (195, 115, 65))) # Acacia planks
     place(210, gen_leaves(210, (115, 155, 45))) # Acacia leaves
 
@@ -1613,10 +1927,10 @@ def generate_roots_atlas():
     place(213, gen_sand(213, (205, 185, 125))) # Sandstone side
     place(214, gen_sand(214, (215, 195, 135))) # Sandstone top
     place(215, gen_sand(215, (185, 165, 110))) # Sandstone bottom
-    place(216, gen_cobblestone(216)) # Gravel
+    place(216, gen_gravel(216))
 
-    place(217, gen_oak_log_side(217)) # Jungle log side
-    place(218, gen_oak_log_top(218))  # Jungle log top
+    place(217, gen_jungle_log_side(217))
+    place(218, gen_jungle_log_top(218))
     place(219, gen_planks(219, (185, 130, 85))) # Jungle planks
     place(220, gen_leaves(220, (65, 165, 40)))  # Jungle leaves
 
@@ -1624,21 +1938,21 @@ def generate_roots_atlas():
     place(222, gen_sand(222, (195, 85, 45))) # Red Sand
     place(223, gen_dirt(223)) # Podzol side
     place(224, gen_dirt(224)) # Podzol top
-    place(225, gen_cobblestone(225)) # Mossy cobblestone
+    place(225, gen_mossy_cobblestone(225))
     place(226, gen_dirt(226)) # Mycelium side
     place(227, gen_sand(227, (135, 115, 140))) # Mycelium top
     place(228, gen_sand(228, (215, 45, 45)))   # Red mushroom cap
     place(229, gen_sand(229, (145, 95, 55)))   # Brown mushroom cap
     place(230, gen_sand(230, (215, 210, 195))) # Mushroom stem
 
-    place(231, gen_oak_log_side(231)) # Dark oak log side
-    place(232, gen_oak_log_top(232))  # Dark oak log top
+    place(231, gen_dark_oak_log_side(231))
+    place(232, gen_dark_oak_log_top(232))
     place(233, gen_planks(233, (75, 50, 30))) # Dark oak planks
     place(234, gen_leaves(234, (45, 85, 35))) # Dark oak leaves
 
     place(235, gen_sand(235, (225, 95, 145))) # Brain coral
     place(236, gen_sand(236, (65, 125, 215))) # Tube coral
-    place(237, gen_cobblestone(237))          # Prismarine
+    place(237, gen_prismarine(237))
     place(238, gen_sea_lantern(238))
     place(239, gen_tall_grass(239))           # Seagrass
     place(240, gen_cow_snout(240))
