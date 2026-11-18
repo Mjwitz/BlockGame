@@ -3964,7 +3964,8 @@ impl UiBuilder {
             && cursor_pos[1] <= y + h
     }
 
-    /// Draws a classic beveled voxel-styled button with drop-shadowed centered label.
+    /// Draws a sleek Roots & Ridges modal button with drop shadow, slate plate fill,
+    /// illuminated gold hover border, active indicator notch, and responsive typography/badges.
     pub fn draw_menu_button(
         mesh: &mut UiMesh,
         x: f32,
@@ -3978,67 +3979,286 @@ impl UiBuilder {
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
         let hovered = enabled && Self::is_rect_hovered(cursor_pos, x, y, w, h);
 
-        // Outer black frame
+        // 1. Drop shadow
         mesh.add_quad(
-            x - 2.0,
-            y - 2.0,
-            w + 4.0,
-            h + 4.0,
+            x + 2.0,
+            y + 2.0,
+            w,
+            h,
             white_uv,
-            [0.06, 0.06, 0.08, 0.96],
+            [0.02, 0.03, 0.05, 0.50],
         );
 
-        let (bg_color, top_highlight, bottom_shadow, text_color) = if !enabled {
+        let (bg, border, text_color, glyph_color, tab_color) = if !enabled {
             (
-                [0.16, 0.16, 0.19, 0.92],
-                [0.22, 0.22, 0.26, 0.92],
-                [0.10, 0.10, 0.12, 0.92],
-                [0.52, 0.52, 0.55, 0.95],
+                [0.10, 0.12, 0.16, 0.60],
+                [0.22, 0.25, 0.32, 0.60],
+                [0.45, 0.48, 0.55, 0.60],
+                [0.45, 0.48, 0.55, 0.60],
+                [0.25, 0.28, 0.35, 0.0],
             )
         } else if hovered {
             (
-                [0.34, 0.40, 0.62, 0.96],
-                [0.56, 0.64, 0.90, 0.98],
-                [0.20, 0.24, 0.42, 0.98],
-                [1.0, 1.0, 0.55, 1.0],
+                [0.16, 0.18, 0.24, 0.95],
+                [0.96, 0.78, 0.28, 1.0], // illuminated gold border
+                [1.0, 0.98, 0.95, 1.0],  // bright text
+                [1.0, 0.85, 0.35, 1.0],  // glowing gold glyph
+                [1.0, 0.80, 0.25, 1.0],  // prominent left active indicator notch
             )
         } else {
             (
-                [0.27, 0.28, 0.32, 0.95],
-                [0.45, 0.46, 0.52, 0.95],
-                [0.15, 0.16, 0.19, 0.95],
-                [0.95, 0.95, 0.97, 1.0],
+                [0.08, 0.10, 0.15, 0.88],
+                [0.28, 0.32, 0.42, 0.85],
+                [0.90, 0.92, 0.96, 0.95],
+                [0.85, 0.70, 0.30, 0.90],
+                [0.85, 0.70, 0.30, 0.0],
             )
         };
 
-        // Main button fill
-        mesh.add_quad(x, y, w, h, white_uv, bg_color);
-        // Top/left 3D bevel highlight
-        mesh.add_quad(x, y, w, 2.0, white_uv, top_highlight);
-        mesh.add_quad(x, y, 2.0, h, white_uv, top_highlight);
-        // Bottom/right 3D bevel shadow
-        mesh.add_quad(x, y + h - 3.0, w, 3.0, white_uv, bottom_shadow);
-        mesh.add_quad(x + w - 2.0, y, 2.0, h, white_uv, bottom_shadow);
+        // 2. Outer border
+        mesh.add_quad(x, y, w, h, white_uv, border);
+        // 3. Slate plate fill
+        mesh.add_quad(x + 1.0, y + 1.0, w - 2.0, h - 2.0, white_uv, bg);
 
-        let char_w = 11.0;
-        let char_h = 15.0;
-        let spacing = 1.0;
-        let text_w = Self::string_width(label, char_w, spacing);
-        let tx = x + (w - text_w) * 0.5;
-        let ty = y + (h - char_h) * 0.5;
+        // 4. Left active indicator notch (illuminates when hovered)
+        if hovered {
+            mesh.add_quad(x, y, 4.0, h, white_uv, tab_color);
+        }
 
-        // Text drop shadow
-        Self::draw_string(
-            mesh,
-            tx + 1.5,
-            ty + 1.5,
-            label,
-            char_w,
-            char_h,
-            spacing,
-            [0.08, 0.08, 0.10, 0.92],
-        );
-        Self::draw_string(mesh, tx, ty, label, char_w, char_h, spacing, text_color);
+        // 5. Intelligent Content Parsing & Typography
+        if label.contains(": ") {
+            // Key-Value toggle or setting
+            let parts: Vec<&str> = label.splitn(2, ": ").collect();
+            let key_label = parts[0];
+            let val_label = parts[1];
+
+            let (char_w, char_h) = if h >= 36.0 { (9.0, 12.5) } else { (8.0, 11.0) };
+            let ty = y + (h - char_h) * 0.5;
+            let tx = if key_label == "Skin" { x + 44.0 } else { x + 12.0 };
+
+            // Draw key label on left
+            Self::draw_string(
+                mesh,
+                tx + 1.0,
+                ty + 1.0,
+                key_label,
+                char_w,
+                char_h,
+                0.8,
+                [0.03, 0.04, 0.06, 0.90],
+            );
+            Self::draw_string(mesh, tx, ty, key_label, char_w, char_h, 0.8, text_color);
+
+            // Draw value pill badge on right
+            let badge_pad_x = 8.0;
+            let badge_char_w = 8.5;
+            let badge_char_h = 12.0;
+            let val_w = Self::string_width(val_label, badge_char_w, 0.8);
+            let badge_w = val_w + badge_pad_x * 2.0;
+            let badge_h = (h - 10.0).max(18.0);
+            let badge_x = x + w - badge_w - 8.0;
+            let badge_y = y + (h - badge_h) * 0.5;
+
+            let (badge_bg, badge_border, badge_text_col) = if val_label == "ON" {
+                (
+                    [0.08, 0.22, 0.12, 0.95],
+                    [0.35, 0.95, 0.55, 0.95],
+                    [0.55, 1.0, 0.70, 1.0],
+                )
+            } else if val_label == "OFF" {
+                (
+                    [0.11, 0.13, 0.17, 0.95],
+                    [0.32, 0.36, 0.44, 0.85],
+                    [0.60, 0.65, 0.75, 0.85],
+                )
+            } else {
+                (
+                    [0.14, 0.13, 0.10, 0.95],
+                    [0.85, 0.70, 0.30, 0.90],
+                    [1.0, 0.88, 0.40, 1.0],
+                )
+            };
+
+            mesh.add_quad(badge_x, badge_y, badge_w, badge_h, white_uv, badge_border);
+            mesh.add_quad(
+                badge_x + 1.0,
+                badge_y + 1.0,
+                badge_w - 2.0,
+                badge_h - 2.0,
+                white_uv,
+                badge_bg,
+            );
+            Self::draw_string(
+                mesh,
+                badge_x + (badge_w - val_w) * 0.5,
+                badge_y + (badge_h - badge_char_h) * 0.5,
+                val_label,
+                badge_char_w,
+                badge_char_h,
+                0.8,
+                badge_text_col,
+            );
+        } else if label.len() >= 2
+            && label.chars().nth(1) == Some(' ')
+            && matches!(
+                label.chars().next().unwrap(),
+                '>' | '+' | '<' | 'X' | '-' | '*' | '#' | '@' | '?' | '•'
+            )
+        {
+            let glyph_char = label.chars().next().unwrap();
+            let mut glyph_buf = [0u8; 4];
+            let glyph_str = glyph_char.encode_utf8(&mut glyph_buf);
+            let sub_text = &label[2..];
+
+            let (char_w, char_h) = if h >= 38.0 { (10.0, 13.5) } else { (8.5, 12.0) };
+            let glyph_char_w = char_w * 0.95;
+            let glyph_char_h = char_h;
+            let spacing = 1.0;
+
+            let text_w = Self::string_width(sub_text, char_w, spacing);
+            let glyph_w = Self::string_width(glyph_str, glyph_char_w, spacing);
+
+            if w >= 220.0 {
+                let gx = x + 14.0;
+                let gy = y + (h - glyph_char_h) * 0.5;
+                let tx = x + 34.0;
+                let ty = y + (h - char_h) * 0.5;
+
+                Self::draw_string(
+                    mesh,
+                    gx + 1.0,
+                    gy + 1.0,
+                    glyph_str,
+                    glyph_char_w,
+                    glyph_char_h,
+                    spacing,
+                    [0.03, 0.04, 0.06, 0.90],
+                );
+                Self::draw_string(
+                    mesh,
+                    gx,
+                    gy,
+                    glyph_str,
+                    glyph_char_w,
+                    glyph_char_h,
+                    spacing,
+                    glyph_color,
+                );
+
+                Self::draw_string(
+                    mesh,
+                    tx + 1.0,
+                    ty + 1.0,
+                    sub_text,
+                    char_w,
+                    char_h,
+                    spacing,
+                    [0.03, 0.04, 0.06, 0.90],
+                );
+                Self::draw_string(mesh, tx, ty, sub_text, char_w, char_h, spacing, text_color);
+            } else {
+                let total_w = glyph_w + 6.0 + text_w;
+                let start_x = x + (w - total_w) * 0.5;
+                let gy = y + (h - glyph_char_h) * 0.5;
+                let ty = y + (h - char_h) * 0.5;
+
+                Self::draw_string(
+                    mesh,
+                    start_x + 1.0,
+                    gy + 1.0,
+                    glyph_str,
+                    glyph_char_w,
+                    glyph_char_h,
+                    spacing,
+                    [0.03, 0.04, 0.06, 0.90],
+                );
+                Self::draw_string(
+                    mesh,
+                    start_x,
+                    gy,
+                    glyph_str,
+                    glyph_char_w,
+                    glyph_char_h,
+                    spacing,
+                    glyph_color,
+                );
+
+                let tx = start_x + glyph_w + 6.0;
+                Self::draw_string(
+                    mesh,
+                    tx + 1.0,
+                    ty + 1.0,
+                    sub_text,
+                    char_w,
+                    char_h,
+                    spacing,
+                    [0.03, 0.04, 0.06, 0.90],
+                );
+                Self::draw_string(mesh, tx, ty, sub_text, char_w, char_h, spacing, text_color);
+            }
+        } else if label.ends_with(" >") {
+            let sub_text = &label[..label.len() - 2];
+            let (char_w, char_h) = if h >= 38.0 { (10.0, 13.5) } else { (8.5, 12.0) };
+            let glyph_char_w = char_w * 0.95;
+            let glyph_char_h = char_h;
+            let spacing = 1.0;
+            let text_w = Self::string_width(sub_text, char_w, spacing);
+            let glyph_w = Self::string_width(">", glyph_char_w, spacing);
+            let total_w = text_w + 6.0 + glyph_w;
+            let start_x = x + (w - total_w) * 0.5;
+            let ty = y + (h - char_h) * 0.5;
+            let gy = y + (h - glyph_char_h) * 0.5;
+
+            Self::draw_string(
+                mesh,
+                start_x + 1.0,
+                ty + 1.0,
+                sub_text,
+                char_w,
+                char_h,
+                spacing,
+                [0.03, 0.04, 0.06, 0.90],
+            );
+            Self::draw_string(mesh, start_x, ty, sub_text, char_w, char_h, spacing, text_color);
+
+            let gx = start_x + text_w + 6.0;
+            Self::draw_string(
+                mesh,
+                gx + 1.0,
+                gy + 1.0,
+                ">",
+                glyph_char_w,
+                glyph_char_h,
+                spacing,
+                [0.03, 0.04, 0.06, 0.90],
+            );
+            Self::draw_string(mesh, gx, gy, ">", glyph_char_w, glyph_char_h, spacing, glyph_color);
+        } else {
+            let (mut char_w, mut char_h) = if h >= 38.0 { (10.0, 13.5) } else { (8.5, 12.0) };
+            let spacing = 1.0;
+            let max_w = (w - 20.0).max(10.0);
+            let nat_w = Self::string_width(label, char_w, spacing);
+            if nat_w > max_w {
+                let scale = max_w / nat_w;
+                char_w *= scale;
+                char_h *= scale;
+            }
+            let text_w = Self::string_width(label, char_w, spacing);
+            let tx = x + (w - text_w) * 0.5;
+            let ty = y + (h - char_h) * 0.5;
+
+            Self::draw_string(
+                mesh,
+                tx + 1.0,
+                ty + 1.0,
+                label,
+                char_w,
+                char_h,
+                spacing,
+                [0.03, 0.04, 0.06, 0.90],
+            );
+            Self::draw_string(mesh, tx, ty, label, char_w, char_h, spacing, text_color);
+        }
     }
 
     /// Draws a labeled text input box with blinking caret when focused.
@@ -5033,7 +5253,7 @@ impl UiBuilder {
             btn_rects[2][1],
             btn_rects[2][2],
             btn_rects[2][3],
-            "Delete Expedition",
+            "X Delete Expedition",
             cursor_pos,
             has_selection,
         );
@@ -5301,13 +5521,16 @@ impl UiBuilder {
     }
 
     /// Returns the 4 Pause Menu button rectangles:
-    /// `[Back to Game, Save World, Settings, Save & Quit to Title]`.
+    /// `[Resume Journey, Save Expedition, Expedition Settings, Save & Quit to Title]`.
     pub fn pause_menu_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 4] {
-        let btn_w = 320.0;
+        let card_w = 380.0_f32.min(screen_w - 40.0);
+        let card_h = 370.0_f32.min(screen_h - 40.0);
+        let card_y = (screen_h - card_h) * 0.5;
+        let btn_w = 320.0_f32.min(card_w - 40.0);
         let btn_h = 42.0;
-        let gap = 14.0;
+        let gap = 12.0;
         let btn_x = (screen_w - btn_w) * 0.5;
-        let start_y = screen_h * 0.34;
+        let start_y = card_y + 84.0;
         [
             [btn_x, start_y, btn_w, btn_h],
             [btn_x, start_y + (btn_h + gap), btn_w, btn_h],
@@ -5316,7 +5539,7 @@ impl UiBuilder {
         ]
     }
 
-    /// Builds the In-Game Pause Menu overlay.
+    /// Builds the Roots & Ridges In-Game Pause Menu overlay with centered modal docket.
     pub fn build_pause_menu(
         mesh: &mut UiMesh,
         screen_w: f32,
@@ -5327,35 +5550,122 @@ impl UiBuilder {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
-        // Translucent dark overlay over live 3D game world
+        // 1. Cinematic vignette darkening over live 3D game world
         mesh.add_quad(
             0.0,
             0.0,
             screen_w,
             screen_h,
             white_uv,
-            [0.04, 0.05, 0.08, 0.68],
+            [0.03, 0.05, 0.08, 0.72],
         );
 
-        let header = "Game Menu";
-        let header_w = Self::string_width(header, 14.0, 1.5);
+        let card_w = 380.0_f32.min(screen_w - 40.0);
+        let card_h = 370.0_f32.min(screen_h - 40.0);
+        let card_x = (screen_w - card_w) * 0.5;
+        let card_y = (screen_h - card_h) * 0.5;
+
+        // 2. Centered Modal Card Drop Shadow
+        mesh.add_quad(
+            card_x + 3.0,
+            card_y + 3.0,
+            card_w,
+            card_h,
+            white_uv,
+            [0.01, 0.02, 0.03, 0.55],
+        );
+
+        // 3. Modal Slate Border & Dark Interior Plate
+        mesh.add_quad(
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            white_uv,
+            [0.38, 0.42, 0.52, 0.85],
+        );
+        mesh.add_quad(
+            card_x + 1.5,
+            card_y + 1.5,
+            card_w - 3.0,
+            card_h - 3.0,
+            white_uv,
+            [0.07, 0.09, 0.13, 0.95],
+        );
+
+        // 4. Top Warm Amber / Gold Trim
+        mesh.add_quad(
+            card_x,
+            card_y,
+            card_w,
+            2.5,
+            white_uv,
+            [0.85, 0.68, 0.28, 0.95],
+        );
+
+        // 5. Header Emblem & Typography
+        mesh.add_quad(
+            card_x + (card_w - 36.0) * 0.5,
+            card_y + 14.0,
+            36.0,
+            2.0,
+            white_uv,
+            [0.95, 0.78, 0.30, 0.95],
+        );
+
+        let title = "EXPEDITION PAUSED";
+        let title_w = Self::string_width(title, 13.0, 1.5);
         Self::draw_string(
             mesh,
-            (screen_w - header_w) * 0.5,
-            screen_h * 0.22,
-            header,
-            14.0,
-            19.0,
+            card_x + (card_w - title_w) * 0.5 + 1.5,
+            card_y + 24.0 + 1.5,
+            title,
+            13.0,
+            17.0,
             1.5,
-            [1.0, 1.0, 1.0, 1.0],
+            [0.02, 0.03, 0.05, 0.95],
+        );
+        Self::draw_string(
+            mesh,
+            card_x + (card_w - title_w) * 0.5,
+            card_y + 24.0,
+            title,
+            13.0,
+            17.0,
+            1.5,
+            [0.98, 0.97, 0.94, 1.0],
         );
 
+        let sub_text = "ROOTS & RIDGES";
+        let sub_w = Self::string_width(sub_text, 7.5, 1.0);
+        Self::draw_string(
+            mesh,
+            card_x + (card_w - sub_w) * 0.5,
+            card_y + 46.0,
+            sub_text,
+            7.5,
+            10.5,
+            1.0,
+            [0.95, 0.78, 0.30, 0.95],
+        );
+
+        // Thin divider line
+        mesh.add_quad(
+            card_x + 24.0,
+            card_y + 66.0,
+            card_w - 48.0,
+            1.2,
+            white_uv,
+            [0.32, 0.36, 0.45, 0.65],
+        );
+
+        // 6. Navigation Action Buttons
         let rects = Self::pause_menu_button_rects(screen_w, screen_h);
         let labels = [
-            "Back to Game",
-            "Save World",
-            "Settings",
-            "Save & Quit to Title",
+            "> Resume Journey",
+            "* Save Expedition",
+            "# Expedition Settings",
+            "< Save & Quit to Title",
         ];
         for (rect, label) in rects.iter().zip(labels.iter()) {
             Self::draw_menu_button(
@@ -5370,17 +5680,53 @@ impl UiBuilder {
             );
         }
 
+        // 7. Toast / Status Message or ESC Reminder
         if let Some(msg) = status_message {
-            let mw = Self::string_width(msg, 10.0, 1.0);
+            let toast_h = 24.0;
+            let toast_w = card_w - 48.0;
+            let toast_x = card_x + 24.0;
+            let toast_y = card_y + card_h - 38.0;
+
+            mesh.add_quad(
+                toast_x,
+                toast_y,
+                toast_w,
+                toast_h,
+                white_uv,
+                [0.30, 0.80, 0.45, 0.80],
+            );
+            mesh.add_quad(
+                toast_x + 1.0,
+                toast_y + 1.0,
+                toast_w - 2.0,
+                toast_h - 2.0,
+                white_uv,
+                [0.05, 0.12, 0.08, 0.95],
+            );
+
+            let mw = Self::string_width(msg, 8.5, 0.8);
             Self::draw_string(
                 mesh,
-                (screen_w - mw) * 0.5,
-                rects[3][1] + rects[3][3] + 22.0,
+                toast_x + (toast_w - mw) * 0.5,
+                toast_y + (toast_h - 11.5) * 0.5,
                 msg,
-                10.0,
-                14.0,
-                1.0,
+                8.5,
+                11.5,
+                0.8,
                 [0.45, 0.95, 0.55, 1.0],
+            );
+        } else {
+            let esc_tip = "Press ESC to return to expedition";
+            let tw = Self::string_width(esc_tip, 7.5, 0.8);
+            Self::draw_string(
+                mesh,
+                card_x + (card_w - tw) * 0.5,
+                card_y + card_h - 30.0,
+                esc_tip,
+                7.5,
+                10.0,
+                0.8,
+                [0.48, 0.52, 0.62, 0.75],
             );
         }
     }
@@ -5448,7 +5794,7 @@ impl UiBuilder {
             back_rect[1],
             back_rect[2],
             back_rect[3],
-            "Done",
+            "< Return to Title",
             cursor_pos,
             true,
         );
@@ -5882,7 +6228,7 @@ impl UiBuilder {
             reset_r[1],
             reset_r[2],
             reset_r[3],
-            "Reset to Defaults",
+            "* Reset to Defaults",
             cursor_pos,
             true,
         );
@@ -5894,7 +6240,7 @@ impl UiBuilder {
             done_r[1],
             done_r[2],
             done_r[3],
-            "Done & Save",
+            "> Done & Save",
             cursor_pos,
             true,
         );
@@ -6269,7 +6615,7 @@ impl UiBuilder {
             refresh_r[1],
             refresh_r[2],
             refresh_r[3],
-            if directory_loading { "..." } else { "Refresh" },
+            if directory_loading { "..." } else { "* Refresh" },
             cursor_pos,
             !directory_loading,
         );
