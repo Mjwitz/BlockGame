@@ -961,20 +961,203 @@ def gen_tool_icon(material_head, tool_type="pickaxe"):
 def gen_ingot(color_light, color_mid, color_dark):
     img = create_tile_canvas()
     pix = img.load()
-    # Isometric retro metal ingot
-    for y in range(9, 23):
-        for x in range(5, 27):
-            in_top = (y <= 14)
-            if in_top:
-                if y == 9 or x == 5:
+    outline = (
+        max(0, color_dark[0] // 2),
+        max(0, color_dark[1] // 2),
+        max(0, color_dark[2] // 2),
+        255,
+    )
+    specular = (
+        min(255, color_light[0] + 20),
+        min(255, color_light[1] + 20),
+        min(255, color_light[2] + 20),
+        255,
+    )
+
+    # Angled isometric forged metal bar (trapezoidal top + front & right beveled faces)
+    def in_bar(x, y):
+        # Slanted bar running from bottom-left to top-right
+        u = (x - 16.0) * 0.82 - (y - 16.0) * 0.57
+        v = (x - 16.0) * 0.57 + (y - 16.0) * 0.82
+        return abs(u) <= 10.5 and abs(v) <= 5.4
+
+    mask = [[in_bar(x, y) for x in range(TILE_SIZE)] for y in range(TILE_SIZE)]
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            if not mask[y][x]:
+                continue
+            # Check 4-neighbor outline
+            is_edge = (
+                x == 0 or x == TILE_SIZE - 1 or y == 0 or y == TILE_SIZE - 1
+                or not mask[y - 1][x] or not mask[y + 1][x]
+                or not mask[y][x - 1] or not mask[y][x + 1]
+            )
+            if is_edge:
+                pix[x, y] = outline
+                continue
+
+            u = (x - 16.0) * 0.82 - (y - 16.0) * 0.57
+            v = (x - 16.0) * 0.57 + (y - 16.0) * 0.82
+
+            if v < -0.6:
+                # Top forged face with bright specular sheen band
+                if -2.5 <= u <= 1.8 and v < -1.5:
+                    pix[x, y] = specular
+                elif v < -2.8 or u < -6.5:
                     pix[x, y] = color_light
                 else:
-                    pix[x, y] = color_mid
-            else:
-                if y == 22 or x == 26:
+                    pix[x, y] = (
+                        (color_light[0] + color_mid[0]) // 2,
+                        (color_light[1] + color_mid[1]) // 2,
+                        (color_light[2] + color_mid[2]) // 2,
+                        255,
+                    )
+            elif v < 2.2:
+                # Front beveled face
+                if u > 5.0:
                     pix[x, y] = color_dark
                 else:
                     pix[x, y] = color_mid
+            else:
+                # Shaded lower bevel
+                pix[x, y] = color_dark
+    return img
+
+def gen_coal_item(seed=18):
+    img = create_tile_canvas()
+    pix = img.load()
+    # Irregular faceted lump of black coal (no stone block background)
+    lobes = [
+        (14.0, 13.0, 7.6),
+        (20.0, 15.5, 6.8),
+        (15.5, 20.0, 6.6),
+        (11.0, 18.0, 5.4),
+        (18.0, 10.5, 5.0),
+    ]
+
+    def inside_coal(x, y):
+        # Angular faceted distance distortion
+        n = hash2d(x // 2, y // 2, seed)
+        for cx, cy, r in lobes:
+            dx = x - cx
+            dy = y - cy
+            # Use L1/L2 blend for craggy crystal/coal facets
+            d = math.hypot(dx, dy) * 0.78 + (abs(dx) + abs(dy)) * 0.18
+            if d <= r + (n - 0.5) * 0.9:
+                return True
+        return False
+
+    mask = [[inside_coal(x, y) for x in range(TILE_SIZE)] for y in range(TILE_SIZE)]
+    outline = (10, 11, 14, 255)
+    deep_black = (18, 20, 24, 255)
+    mid_coal = (32, 35, 42, 255)
+    facet_light = (56, 60, 70, 255)
+    glint = (86, 92, 104, 255)
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            if not mask[y][x]:
+                continue
+            is_edge = (
+                x == 0 or x == TILE_SIZE - 1 or y == 0 or y == TILE_SIZE - 1
+                or not mask[y - 1][x] or not mask[y + 1][x]
+                or not mask[y][x - 1] or not mask[y][x + 1]
+            )
+            if is_edge:
+                pix[x, y] = outline
+                continue
+
+            # Facet plane shading: upper-left catches specular light, lower-right is deep soot
+            facet_id = ((x + y // 2) // 4 + (y - x // 2) // 5) % 3
+            light_bias = (16 - x) + (16 - y)
+            if light_bias > 7 and facet_id == 0:
+                pix[x, y] = glint
+            elif light_bias > 2:
+                pix[x, y] = facet_light if facet_id != 2 else mid_coal
+            elif light_bias > -5:
+                pix[x, y] = mid_coal if facet_id != 1 else deep_black
+            else:
+                pix[x, y] = deep_black
+    return img
+
+def gen_raw_ore_chunk(color_light, color_mid, color_dark, accent_color, seed=134):
+    img = create_tile_canvas()
+    pix = img.load()
+    # Multi-nugget craggy raw ore cluster (distinct irregular silhouette vs sleek ingot bar)
+    nodules = [
+        (11.5, 13.0, 5.8),
+        (19.5, 11.5, 5.6),
+        (15.5, 18.0, 6.2),
+        (22.0, 19.5, 5.0),
+        (10.0, 21.0, 4.6),
+    ]
+
+    def nodule_info(x, y):
+        best_i = -1
+        best_d = 999.0
+        second_d = 999.0
+        for i, (cx, cy, r) in enumerate(nodules):
+            dx = x - cx
+            dy = y - cy
+            d = (math.hypot(dx, dy) * 0.85 + max(abs(dx), abs(dy)) * 0.15) / r
+            if d < best_d:
+                second_d = best_d
+                best_d = d
+                best_i = i
+            elif d < second_d:
+                second_d = d
+        return best_i, best_d, second_d
+
+    mask = [[nodule_info(x, y)[1] <= 1.0 for x in range(TILE_SIZE)] for y in range(TILE_SIZE)]
+    outline = (
+        max(0, color_dark[0] // 2 - 8),
+        max(0, color_dark[1] // 2 - 8),
+        max(0, color_dark[2] // 2 - 8),
+        255,
+    )
+
+    for y in range(TILE_SIZE):
+        for x in range(TILE_SIZE):
+            if not mask[y][x]:
+                continue
+            is_edge = (
+                x == 0 or x == TILE_SIZE - 1 or y == 0 or y == TILE_SIZE - 1
+                or not mask[y - 1][x] or not mask[y + 1][x]
+                or not mask[y][x - 1] or not mask[y][x + 1]
+            )
+            if is_edge:
+                pix[x, y] = outline
+                continue
+
+            best_i, best_d, second_d = nodule_info(x, y)
+            cx, cy, _ = nodules[best_i]
+            # Crevice between fused nodules
+            if second_d - best_d < 0.08:
+                pix[x, y] = outline
+                continue
+
+            # Natural mineral accent flecks (e.g. verdigris on raw copper, rock matrix on raw iron)
+            fleck_val = hash2d(x // 2, y // 2, seed + 77)
+            if fleck_val < 0.22 and (best_i in (1, 3) or best_d > 0.65):
+                pix[x, y] = accent_color
+                continue
+
+            # Directional lighting per nodule
+            lx = x - cx
+            ly = y - cy
+            grain = int((hash2d(x, y, seed) - 0.5) * 16)
+            if lx + ly < -2.0:
+                base = color_light
+            elif lx + ly > 2.2 or best_d > 0.82:
+                base = color_dark
+            else:
+                base = color_mid
+            pix[x, y] = (
+                max(0, min(255, base[0] + grain)),
+                max(0, min(255, base[1] + grain)),
+                max(0, min(255, base[2] + grain)),
+                255,
+            )
     return img
 
 def gen_food_item(food_type="bread"):
@@ -1799,7 +1982,7 @@ def generate_roots_atlas():
     place(15, gen_tool_icon(mat_wood, "pickaxe"))
     place(16, gen_tool_icon(mat_stone, "pickaxe"))
     place(17, gen_crafting_table_top(117))
-    place(18, gen_ore([(45, 48, 52), (25, 28, 32), (12, 14, 16)], 18)) # coal item
+    place(18, gen_coal_item(18)) # Coal lump item
     place(19, gen_ingot(mat_iron[0], mat_iron[1], mat_iron[2]))
     place(20, gen_tool_icon(mat_iron, "pickaxe"))
 
@@ -1829,10 +2012,10 @@ def generate_roots_atlas():
     place(132, gen_ore([(255, 245, 110), (235, 195, 40), (175, 135, 20)], 132)) # Gold Ore
     place(133, gen_ore([(165, 250, 245), (75, 215, 205), (35, 155, 145)], 133)) # Diamond Ore
 
-    place(134, gen_ingot(mat_wood[0], (195, 110, 65, 255), (145, 75, 40, 255))) # Raw copper
+    place(134, gen_raw_ore_chunk((242, 146, 86), (196, 102, 54), (132, 62, 32), (66, 176, 138, 255), 134)) # Raw Copper (orange nuggets + verdigris)
     place(135, gen_ingot((245, 155, 105, 255), (205, 115, 75, 255), (155, 80, 45, 255))) # Copper Ingot
-    place(136, gen_ingot(mat_iron[0], mat_iron[1], (135, 120, 110, 255))) # Raw iron
-    place(137, gen_ingot(mat_gold[0], mat_gold[1], (175, 135, 20, 255))) # Raw gold
+    place(136, gen_raw_ore_chunk((226, 202, 176), (182, 150, 122), (118, 92, 74), (112, 116, 124, 255), 136)) # Raw Iron (warm tan ore nodules + stone matrix)
+    place(137, gen_raw_ore_chunk((255, 242, 118), (232, 182, 36), (164, 112, 18), (118, 78, 22, 255), 137)) # Raw Gold (craggy gold nugget cluster)
     place(138, gen_ingot(mat_gold[0], mat_gold[1], mat_gold[2])) # Gold Ingot
     place(139, gen_ingot(mat_diamond[0], mat_diamond[1], mat_diamond[2])) # Diamond Gem
     place(140, gen_tool_icon(mat_diamond, "pickaxe"))
