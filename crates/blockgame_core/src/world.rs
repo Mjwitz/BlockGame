@@ -140,6 +140,10 @@ pub struct World {
     pub light_sources: HashSet<IVec3>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
+    pub power_nodes: HashSet<IVec3>,
+    pub coal_generators: HashMap<IVec3, crate::power::CoalGeneratorState>,
+    pub batteries: HashMap<IVec3, crate::power::BatteryState>,
+    pub electric_furnaces: HashMap<IVec3, crate::power::ElectricFurnaceState>,
 }
 
 impl World {
@@ -150,6 +154,10 @@ impl World {
             light_sources: HashSet::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
+            power_nodes: HashSet::new(),
+            coal_generators: HashMap::new(),
+            batteries: HashMap::new(),
+            electric_furnaces: HashMap::new(),
         }
     }
 
@@ -187,6 +195,42 @@ impl World {
         self.furnaces.remove(&pos)
     }
 
+    pub fn get_or_create_coal_generator(&mut self, pos: IVec3) -> &mut crate::power::CoalGeneratorState {
+        self.coal_generators
+            .entry(pos)
+            .or_insert_with(crate::power::CoalGeneratorState::new)
+    }
+
+    pub fn remove_coal_generator(&mut self, pos: IVec3) -> Option<crate::power::CoalGeneratorState> {
+        self.coal_generators.remove(&pos)
+    }
+
+    pub fn get_or_create_battery(&mut self, pos: IVec3) -> &mut crate::power::BatteryState {
+        self.batteries
+            .entry(pos)
+            .or_insert_with(crate::power::BatteryState::new)
+    }
+
+    pub fn remove_battery(&mut self, pos: IVec3) -> Option<crate::power::BatteryState> {
+        self.batteries.remove(&pos)
+    }
+
+    pub fn get_or_create_electric_furnace(
+        &mut self,
+        pos: IVec3,
+    ) -> &mut crate::power::ElectricFurnaceState {
+        self.electric_furnaces
+            .entry(pos)
+            .or_insert_with(crate::power::ElectricFurnaceState::new)
+    }
+
+    pub fn remove_electric_furnace(
+        &mut self,
+        pos: IVec3,
+    ) -> Option<crate::power::ElectricFurnaceState> {
+        self.electric_furnaces.remove(&pos)
+    }
+
     #[inline]
     pub fn get_block(&self, world_pos: IVec3) -> BlockId {
         let (cpos, lx, ly, lz) = world_to_chunk_coords(world_pos);
@@ -210,6 +254,11 @@ impl World {
                     self.light_sources.insert(world_pos);
                 } else {
                     self.light_sources.remove(&world_pos);
+                }
+                if block_id.is_power_block() {
+                    self.power_nodes.insert(world_pos);
+                } else {
+                    self.power_nodes.remove(&world_pos);
                 }
             }
             ok
@@ -253,7 +302,7 @@ impl World {
 
     #[inline]
     pub fn insert_chunk(&mut self, chunk: Chunk) -> Option<Chunk> {
-        // Index any light sources in this chunk
+        // Index any light sources and power blocks in this chunk
         let origin = chunk.pos.to_world_origin();
         for y in 0..CHUNK_SIZE_Y {
             for z in 0..CHUNK_SIZE_Z {
@@ -261,6 +310,10 @@ impl World {
                     let block = chunk.get_unchecked(x, y, z);
                     if block.is_emissive() {
                         self.light_sources
+                            .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
+                    }
+                    if block.is_power_block() {
+                        self.power_nodes
                             .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
                     }
                 }
@@ -279,6 +332,10 @@ impl World {
     #[inline]
     pub fn remove_chunk(&mut self, pos: ChunkPos) -> Option<Chunk> {
         self.light_sources.retain(|p| {
+            let (cp, _, _, _) = world_to_chunk_coords(*p);
+            cp != pos
+        });
+        self.power_nodes.retain(|p| {
             let (cp, _, _, _) = world_to_chunk_coords(*p);
             cp != pos
         });

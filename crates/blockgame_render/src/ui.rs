@@ -4225,6 +4225,433 @@ impl UiBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn draw_power_screen_inv_and_chrome<'a>(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        start_x: f32,
+        inv_y: f32,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &'a ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+        hovered_item_name: &mut Option<&'a str>,
+    ) {
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        let highlight_uv = TextureAtlas::get_uv_bounds(Self::SLOT_HIGHLIGHT_TILE);
+
+        Self::draw_string(
+            mesh,
+            start_x,
+            inv_y - 18.0,
+            "Inventory",
+            8.0,
+            10.0,
+            1.0,
+            [0.95, 0.95, 0.95, 1.0],
+        );
+
+        for row in 0..3 {
+            for col in 0..9 {
+                let slot_idx = 9 + row * 9 + col;
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+                let item_slot = inventory.get(slot_idx);
+                if !item_slot.is_empty() {
+                    if let Some(def) = registry.get(item_slot.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        let icon_pad = 6.0;
+                        mesh.add_quad(
+                            sx + icon_pad,
+                            sy + icon_pad,
+                            slot_size - icon_pad * 2.0,
+                            slot_size - icon_pad * 2.0,
+                            icon_uv,
+                            [1.0, 1.0, 1.0, 1.0],
+                        );
+                        Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                        Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
+                        if cursor_pos[0] >= sx
+                            && cursor_pos[0] <= sx + slot_size
+                            && cursor_pos[1] >= sy
+                            && cursor_pos[1] <= sy + slot_size
+                        {
+                            *hovered_item_name = Some(def.display_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+        for i in 0..9 {
+            let sx = start_x + (i as f32) * (slot_size + slot_gap);
+            let sy = hotbar_y;
+            mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+            if i == active_hotbar_slot {
+                let hl_pad = 2.0;
+                mesh.add_quad(
+                    sx - hl_pad,
+                    sy - hl_pad,
+                    slot_size + hl_pad * 2.0,
+                    slot_size + hl_pad * 2.0,
+                    highlight_uv,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+            }
+            let item_slot = inventory.get(i);
+            if !item_slot.is_empty() {
+                if let Some(def) = registry.get(item_slot.item_id) {
+                    let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                    let icon_pad = 6.0;
+                    mesh.add_quad(
+                        sx + icon_pad,
+                        sy + icon_pad,
+                        slot_size - icon_pad * 2.0,
+                        slot_size - icon_pad * 2.0,
+                        icon_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                    Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
+                    if cursor_pos[0] >= sx
+                        && cursor_pos[0] <= sx + slot_size
+                        && cursor_pos[1] >= sy
+                        && cursor_pos[1] <= sy + slot_size
+                    {
+                        *hovered_item_name = Some(def.display_name);
+                    }
+                }
+            }
+        }
+
+        if let Some(jei) = jei_params {
+            Self::draw_jei_panel(
+                mesh,
+                screen_w,
+                screen_h,
+                jei,
+                cursor_pos,
+                registry,
+                hovered_item_name,
+            );
+        }
+        if let Some(modal) = recipe_modal {
+            Self::draw_recipe_modal(
+                mesh,
+                screen_w,
+                screen_h,
+                modal,
+                cursor_pos,
+                registry,
+                hovered_item_name,
+            );
+        }
+        if !cursor_held.is_empty() {
+            if let Some(def) = registry.get(cursor_held.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let hold_size = 36.0;
+                let hx = cursor_pos[0] - hold_size * 0.5;
+                let hy = cursor_pos[1] - hold_size * 0.5;
+                mesh.add_quad(hx, hy, hold_size, hold_size, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                Self::draw_stack_number(mesh, hx, hy, hold_size, cursor_held.count);
+                Self::draw_durability_bar(mesh, hx, hy, hold_size, *cursor_held, registry);
+            }
+        }
+        if let Some(name) = *hovered_item_name {
+            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
+        }
+    }
+
+    /// Builds the Coal Generator UI screen (Fuel slot, flame bar, live output & grid stats).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_coal_generator_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        gen: &blockgame_core::power::CoalGeneratorState,
+        summary: &blockgame_core::power::PowerNetworkSummary,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+        let mut hovered_item_name: Option<&str> = None;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let top_y = screen_h * 0.5 - 220.0;
+
+        Self::draw_string(
+            mesh,
+            start_x,
+            top_y - 20.0,
+            "Coal Generator",
+            8.0,
+            10.0,
+            1.0,
+            [0.98, 0.88, 0.65, 1.0],
+        );
+
+        // Fuel slot centered-left
+        let fuel_x = start_x + 40.0;
+        let fuel_y = top_y + 42.0;
+        Self::draw_string(mesh, fuel_x, fuel_y - 16.0, "Fuel", 7.0, 9.0, 1.0, [0.85, 0.85, 0.85, 1.0]);
+        mesh.add_quad(fuel_x, fuel_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        if !gen.fuel.is_empty() {
+            if let Some(def) = registry.get(gen.fuel.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let pad = 6.0;
+                mesh.add_quad(fuel_x + pad, fuel_y + pad, slot_size - pad * 2.0, slot_size - pad * 2.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                Self::draw_stack_number(mesh, fuel_x, fuel_y, slot_size, gen.fuel.count);
+                if cursor_pos[0] >= fuel_x && cursor_pos[0] <= fuel_x + slot_size && cursor_pos[1] >= fuel_y && cursor_pos[1] <= fuel_y + slot_size {
+                    hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // Burn flame meter next to fuel slot
+        let flame_x = fuel_x + slot_size + 22.0;
+        let flame_y = fuel_y + 10.0;
+        let flame_size = 28.0;
+        mesh.add_quad(flame_x, flame_y, flame_size, flame_size, TextureAtlas::get_uv_bounds(Self::FLAME_CONTAINER_TILE), [0.35, 0.35, 0.35, 0.85]);
+        let ratio = gen.burn_progress();
+        if ratio > 0.0 {
+            let active_h = flame_size * ratio;
+            let active_y = flame_y + (flame_size - active_h);
+            let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(Self::FLAME_FULL_TILE);
+            let v_top = v_max - (v_max - v_min) * ratio;
+            mesh.add_quad(flame_x, active_y, flame_size, active_h, [u_min, v_top, u_max, v_max], [1.0, 1.0, 1.0, 1.0]);
+        }
+
+        // Live power readout panel on the right
+        let info_x = flame_x + flame_size + 28.0;
+        let status_txt = if gen.current_output_w > 0.0 {
+            format!("Output: {:.0} W (Active)", gen.current_output_w)
+        } else {
+            "Output: 0 W (Standby)".to_string()
+        };
+        let status_col = if gen.current_output_w > 0.0 { [0.40, 0.95, 0.55, 1.0] } else { [0.75, 0.78, 0.82, 1.0] };
+        Self::draw_string(mesh, info_x, top_y + 34.0, &status_txt, 7.5, 9.5, 1.0, status_col);
+        let grid_txt = format!("Grid: {:.0}W Gen / {:.0}W Use", summary.total_gen_w, summary.total_demand_w);
+        Self::draw_string(mesh, info_x, top_y + 56.0, &grid_txt, 7.0, 9.0, 1.0, [0.85, 0.90, 0.95, 1.0]);
+        let bat_txt = format!("Stored: {:.0} / {:.0} EU", summary.total_stored_eu, summary.total_capacity_eu);
+        Self::draw_string(mesh, info_x, top_y + 76.0, &bat_txt, 7.0, 9.0, 1.0, [0.65, 0.92, 0.78, 1.0]);
+
+        let inv_y = top_y + 10.0 + slot_size + 8.0 + 24.0 + 8.0 + slot_size + 24.0;
+        Self::draw_power_screen_inv_and_chrome(
+            mesh, screen_w, screen_h, start_x, inv_y, inventory, active_hotbar_slot,
+            cursor_held, cursor_pos, registry, jei_params, recipe_modal, &mut hovered_item_name,
+        );
+    }
+
+    /// Builds the Battery Box UI screen (large charge bar, net flow rate, and grid summary).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_battery_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        bat: &blockgame_core::power::BatteryState,
+        summary: &blockgame_core::power::PowerNetworkSummary,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+        let mut hovered_item_name: Option<&str> = None;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let top_y = screen_h * 0.5 - 220.0;
+
+        Self::draw_string(
+            mesh,
+            start_x,
+            top_y - 20.0,
+            "Battery Box",
+            8.0,
+            10.0,
+            1.0,
+            [0.55, 0.98, 0.72, 1.0],
+        );
+
+        // Large visual energy bar
+        let bar_x = start_x + 20.0;
+        let bar_y = top_y + 24.0;
+        let bar_w = inv_w - 40.0;
+        let bar_h = 30.0;
+        mesh.add_quad(bar_x - 2.0, bar_y - 2.0, bar_w + 4.0, bar_h + 4.0, white_uv, [0.18, 0.22, 0.26, 0.95]);
+        mesh.add_quad(bar_x, bar_y, bar_w, bar_h, white_uv, [0.08, 0.10, 0.12, 0.95]);
+        let ratio = bat.charge_ratio();
+        if ratio > 0.0 {
+            mesh.add_quad(bar_x, bar_y, bar_w * ratio, bar_h, white_uv, [0.22, 0.86, 0.48, 1.0]);
+        }
+
+        let pct_txt = format!("{:.0} / {:.0} EU ({:.0}%)", bat.stored_eu, bat.capacity_eu, ratio * 100.0);
+        Self::draw_string(mesh, bar_x + 8.0, bar_y + 9.0, &pct_txt, 7.5, 9.5, 1.0, [0.98, 0.98, 0.98, 1.0]);
+
+        let flow_txt = if bat.last_net_w > 0.5 {
+            format!("Status: Charging (+{:.0} W)", bat.last_net_w)
+        } else if bat.last_net_w < -0.5 {
+            format!("Status: Discharging ({:.0} W)", bat.last_net_w)
+        } else {
+            "Status: Standby (0 W)".to_string()
+        };
+        let flow_col = if bat.last_net_w > 0.5 {
+            [0.35, 0.95, 0.55, 1.0]
+        } else if bat.last_net_w < -0.5 {
+            [0.98, 0.72, 0.32, 1.0]
+        } else {
+            [0.78, 0.82, 0.86, 1.0]
+        };
+        Self::draw_string(mesh, bar_x, bar_y + 44.0, &flow_txt, 7.5, 9.5, 1.0, flow_col);
+
+        let grid_txt = format!(
+            "Network: {:.0}W Gen  |  {:.0}W Demand  |  {} Nodes",
+            summary.total_gen_w, summary.total_demand_w, summary.node_count
+        );
+        Self::draw_string(mesh, bar_x, bar_y + 66.0, &grid_txt, 7.0, 9.0, 1.0, [0.85, 0.90, 0.95, 1.0]);
+
+        let inv_y = top_y + 10.0 + slot_size + 8.0 + 24.0 + 8.0 + slot_size + 24.0;
+        Self::draw_power_screen_inv_and_chrome(
+            mesh, screen_w, screen_h, start_x, inv_y, inventory, active_hotbar_slot,
+            cursor_held, cursor_pos, registry, jei_params, recipe_modal, &mut hovered_item_name,
+        );
+    }
+
+    /// Builds the Electric Furnace UI screen (Input, fast cook bar, Output, power indicator).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_electric_furnace_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        ef: &blockgame_core::power::ElectricFurnaceState,
+        summary: &blockgame_core::power::PowerNetworkSummary,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+        let mut hovered_item_name: Option<&str> = None;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let top_y = screen_h * 0.5 - 220.0;
+
+        Self::draw_string(
+            mesh,
+            start_x,
+            top_y - 20.0,
+            "Electric Furnace (2.5x Speed)",
+            8.0,
+            10.0,
+            1.0,
+            [0.45, 0.92, 0.98, 1.0],
+        );
+
+        let input_x = start_x + (inv_w - slot_size) * 0.5 - 80.0;
+        let slot_y = top_y + 34.0;
+        let output_x = input_x + slot_size + 112.0;
+
+        // Input Slot
+        mesh.add_quad(input_x, slot_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        if !ef.input.is_empty() {
+            if let Some(def) = registry.get(ef.input.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let pad = 6.0;
+                mesh.add_quad(input_x + pad, slot_y + pad, slot_size - pad * 2.0, slot_size - pad * 2.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                Self::draw_stack_number(mesh, input_x, slot_y, slot_size, ef.input.count);
+                if cursor_pos[0] >= input_x && cursor_pos[0] <= input_x + slot_size && cursor_pos[1] >= slot_y && cursor_pos[1] <= slot_y + slot_size {
+                    hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // Progress bar between Input and Output
+        let bar_x = input_x + slot_size + 18.0;
+        let bar_y = slot_y + (slot_size - 14.0) * 0.5;
+        let bar_w = 76.0;
+        let bar_h = 14.0;
+        mesh.add_quad(bar_x, bar_y, bar_w, bar_h, white_uv, [0.16, 0.20, 0.26, 0.95]);
+        let prog = ef.cook_progress();
+        if prog > 0.0 {
+            mesh.add_quad(bar_x, bar_y, bar_w * prog, bar_h, white_uv, [0.25, 0.85, 0.98, 1.0]);
+        }
+
+        // Output Slot
+        mesh.add_quad(output_x, slot_y, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+        if !ef.output.is_empty() {
+            if let Some(def) = registry.get(ef.output.item_id) {
+                let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                let pad = 6.0;
+                mesh.add_quad(output_x + pad, slot_y + pad, slot_size - pad * 2.0, slot_size - pad * 2.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                Self::draw_stack_number(mesh, output_x, slot_y, slot_size, ef.output.count);
+                if cursor_pos[0] >= output_x && cursor_pos[0] <= output_x + slot_size && cursor_pos[1] >= slot_y && cursor_pos[1] <= slot_y + slot_size {
+                    hovered_item_name = Some(def.display_name);
+                }
+            }
+        }
+
+        // Power status line below slots
+        let pwr_txt = if ef.is_powered {
+            "Power: Connected (30 W)".to_string()
+        } else if ef.can_smelt() {
+            "Power: Insufficient (Needs 30 W)".to_string()
+        } else {
+            format!("Grid: {:.0}W Gen / {:.0}W Use | {:.0} EU", summary.total_gen_w, summary.total_demand_w, summary.total_stored_eu)
+        };
+        let pwr_col = if ef.is_powered {
+            [0.35, 0.95, 0.98, 1.0]
+        } else if ef.can_smelt() {
+            [0.98, 0.42, 0.35, 1.0]
+        } else {
+            [0.82, 0.86, 0.92, 1.0]
+        };
+        Self::draw_string(mesh, start_x + 20.0, slot_y + slot_size + 18.0, &pwr_txt, 7.0, 9.0, 1.0, pwr_col);
+
+        let inv_y = top_y + 10.0 + slot_size + 8.0 + 24.0 + 8.0 + slot_size + 24.0;
+        Self::draw_power_screen_inv_and_chrome(
+            mesh, screen_w, screen_h, start_x, inv_y, inventory, active_hotbar_slot,
+            cursor_held, cursor_pos, registry, jei_params, recipe_modal, &mut hovered_item_name,
+        );
+    }
+
     /// Draws the JEI (Just Enough Items) Item Index Grid, Pagination, and Search Bar on the right side.
     pub fn draw_jei_panel(
         mesh: &mut UiMesh,

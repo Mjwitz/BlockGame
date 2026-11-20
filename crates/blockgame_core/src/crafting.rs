@@ -2128,6 +2128,118 @@ impl CraftingManager {
                 output: ItemSlot::new(output, 1),
             });
         }
+
+        // --- Power & Electric Machine Recipes (Issues #14 & #15) ---
+        self.register(Recipe::Shaped {
+            name: "Copper Wire",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::COPPER_INGOT),
+                Some(ItemId::COPPER_INGOT),
+                Some(ItemId::COPPER_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::COPPER_WIRE, 6),
+        });
+        self.register(Recipe::Shaped {
+            name: "Copper Cable",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::COPPER_WIRE),
+                Some(ItemId::COPPER_WIRE),
+                Some(ItemId::COPPER_WIRE),
+            ],
+            output: ItemSlot::new(ItemId::COPPER_CABLE, 8),
+        });
+        self.register(Recipe::Shaped {
+            name: "Power Core",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::COPPER_WIRE), Some(ItemId::IRON_INGOT), Some(ItemId::COPPER_WIRE),
+                Some(ItemId::IRON_INGOT),  Some(ItemId::GOLD_INGOT), Some(ItemId::IRON_INGOT),
+                Some(ItemId::COPPER_WIRE), Some(ItemId::IRON_INGOT), Some(ItemId::COPPER_WIRE),
+            ],
+            output: ItemSlot::new(ItemId::POWER_CORE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Coal Generator",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT),  Some(ItemId::IRON_INGOT),  Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT),  Some(ItemId::FURNACE),     Some(ItemId::IRON_INGOT),
+                Some(ItemId::COBBLESTONE), Some(ItemId::COPPER_WIRE), Some(ItemId::COBBLESTONE),
+            ],
+            output: ItemSlot::new(ItemId::COAL_GENERATOR, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Solar Panel",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::GLASS),       Some(ItemId::GLASS),       Some(ItemId::GLASS),
+                Some(ItemId::COPPER_WIRE), Some(ItemId::COPPER_WIRE), Some(ItemId::COPPER_WIRE),
+                Some(ItemId::IRON_INGOT),  Some(ItemId::POWER_CORE),  Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::SOLAR_PANEL, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Wind Turbine",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None,                     Some(ItemId::IRON_INGOT), None,
+                Some(ItemId::IRON_INGOT), Some(ItemId::POWER_CORE), Some(ItemId::IRON_INGOT),
+                None,                     Some(ItemId::STICK),      None,
+            ],
+            output: ItemSlot::new(ItemId::WIND_TURBINE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Water Wheel",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::PLANKS), Some(ItemId::PLANKS),      Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), Some(ItemId::POWER_CORE),  Some(ItemId::PLANKS),
+                Some(ItemId::PLANKS), Some(ItemId::COPPER_WIRE), Some(ItemId::PLANKS),
+            ],
+            output: ItemSlot::new(ItemId::WATER_WHEEL, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Battery Box",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT), Some(ItemId::COPPER_WIRE), Some(ItemId::IRON_INGOT),
+                Some(ItemId::GOLD_INGOT), Some(ItemId::POWER_CORE),  Some(ItemId::GOLD_INGOT),
+                Some(ItemId::IRON_INGOT), Some(ItemId::COPPER_WIRE), Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::BATTERY_BOX, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Electric Furnace",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT),  Some(ItemId::POWER_CORE), Some(ItemId::IRON_INGOT),
+                Some(ItemId::COPPER_WIRE), Some(ItemId::FURNACE),    Some(ItemId::COPPER_WIRE),
+                Some(ItemId::IRON_INGOT),  Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::ELECTRIC_FURNACE, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Electric Lamp",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                None,                Some(ItemId::GLASS),       None,
+                Some(ItemId::GLASS), Some(ItemId::TORCH),       Some(ItemId::GLASS),
+                None,                Some(ItemId::COPPER_WIRE), None,
+            ],
+            output: ItemSlot::new(ItemId::ELECTRIC_LAMP, 2),
+        });
     }
 }
 

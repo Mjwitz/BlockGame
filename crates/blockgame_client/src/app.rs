@@ -148,6 +148,9 @@ pub struct AppState {
     pub inventory_open: bool,
     pub active_chest_pos: Option<IVec3>,
     pub active_furnace_pos: Option<IVec3>,
+    pub active_coal_gen_pos: Option<IVec3>,
+    pub active_battery_pos: Option<IVec3>,
+    pub active_electric_furnace_pos: Option<IVec3>,
     pub shift_down: bool,
     pub jei_search_text: String,
     pub jei_search_focused: bool,
@@ -672,6 +675,9 @@ impl AppState {
         self.inventory_open = false;
         self.active_chest_pos = None;
         self.active_furnace_pos = None;
+        self.active_coal_gen_pos = None;
+        self.active_battery_pos = None;
+        self.active_electric_furnace_pos = None;
         self.jei_recipe_modal = None;
         self.jei_search_focused = false;
         self.cursor_held = ItemSlot::EMPTY;
@@ -892,6 +898,9 @@ impl AppState {
         self.inventory_open = false;
         self.active_chest_pos = None;
         self.active_furnace_pos = None;
+        self.active_coal_gen_pos = None;
+        self.active_battery_pos = None;
+        self.active_electric_furnace_pos = None;
         self.jei_recipe_modal = None;
         self.jei_search_focused = false;
         self.cursor_held = ItemSlot::EMPTY;
@@ -960,6 +969,9 @@ impl AppState {
         self.inventory_open = false;
         self.active_chest_pos = None;
         self.active_furnace_pos = None;
+        self.active_coal_gen_pos = None;
+        self.active_battery_pos = None;
+        self.active_electric_furnace_pos = None;
         self.jei_recipe_modal = None;
         self.jei_search_focused = false;
         self.cursor_held = ItemSlot::EMPTY;
@@ -1254,6 +1266,9 @@ impl ApplicationHandler for BlockGameApp {
             inventory_open: false,
             active_chest_pos: None,
             active_furnace_pos: None,
+            active_coal_gen_pos: None,
+            active_battery_pos: None,
+            active_electric_furnace_pos: None,
             shift_down: false,
             jei_search_text: String::new(),
             jei_search_focused: false,
@@ -2195,6 +2210,12 @@ impl ApplicationHandler for BlockGameApp {
                                     );
                                 }
                             }
+                        } else if state.active_coal_gen_pos.is_some() {
+                            handle_coal_generator_click(state, is_right);
+                        } else if state.active_battery_pos.is_some() {
+                            handle_battery_click(state, is_right);
+                        } else if state.active_electric_furnace_pos.is_some() {
+                            handle_electric_furnace_click(state, is_right);
                         } else if state.active_chest_pos.is_some() {
                             handle_chest_click(state, is_right);
                             if let (Some(pos), Some(client)) =
@@ -2524,7 +2545,45 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 state.active_furnace_pos = None;
+                                state.active_coal_gen_pos = None;
+                                state.active_battery_pos = None;
+                                state.active_electric_furnace_pos = None;
                                 state.active_chest_pos = Some(hit.hit_voxel);
+                                state.inventory_open = true;
+                                state.mouse_captured = false;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
+                                return;
+                            }
+                            if block_id == BlockId::COAL_GENERATOR
+                                || block_id == BlockId::BATTERY_BOX
+                                || block_id == BlockId::ELECTRIC_FURNACE
+                            {
+                                state.mouse_left_down = false;
+                                state.break_progress = 0.0;
+                                state.breaking_voxel = None;
+                                state.cracking_buffer = None;
+                                {
+                                    let mut world_guard =
+                                        state.world_manager.world().lock().unwrap();
+                                    if block_id == BlockId::COAL_GENERATOR {
+                                        world_guard.get_or_create_coal_generator(hit.hit_voxel);
+                                    } else if block_id == BlockId::BATTERY_BOX {
+                                        world_guard.get_or_create_battery(hit.hit_voxel);
+                                    } else {
+                                        world_guard.get_or_create_electric_furnace(hit.hit_voxel);
+                                    }
+                                }
+                                state.active_chest_pos = None;
+                                state.active_furnace_pos = None;
+                                state.active_coal_gen_pos =
+                                    (block_id == BlockId::COAL_GENERATOR).then_some(hit.hit_voxel);
+                                state.active_battery_pos =
+                                    (block_id == BlockId::BATTERY_BOX).then_some(hit.hit_voxel);
+                                state.active_electric_furnace_pos =
+                                    (block_id == BlockId::ELECTRIC_FURNACE).then_some(hit.hit_voxel);
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
                                 let _ = state
@@ -3625,6 +3684,9 @@ impl ApplicationHandler for BlockGameApp {
                     state.cracking_buffer = None;
                     state.active_chest_pos = None;
                     state.active_furnace_pos = None;
+                    state.active_coal_gen_pos = None;
+                    state.active_battery_pos = None;
+                    state.active_electric_furnace_pos = None;
                     state.jei_recipe_modal = None;
                     state.jei_search_focused = false;
                     if state.inventory_open {
@@ -3724,6 +3786,9 @@ impl ApplicationHandler for BlockGameApp {
                             state.cracking_buffer = None;
                             state.active_chest_pos = None;
                             state.active_furnace_pos = None;
+                            state.active_coal_gen_pos = None;
+                            state.active_battery_pos = None;
+                            state.active_electric_furnace_pos = None;
                             if state.skills_open {
                                 state.skills_open = false;
                                 state.mouse_captured = true;
@@ -4902,6 +4967,13 @@ impl ApplicationHandler for BlockGameApp {
                     state
                         .world_manager
                         .update_furnaces(dt, &state.device, &state.pipeline);
+                    let is_daytime = state.day_night.sun_direction().y > 0.0;
+                    state.world_manager.update_power_networks(
+                        dt,
+                        is_daytime,
+                        &state.device,
+                        &state.pipeline,
+                    );
                     state
                         .world_manager
                         .update_falling_blocks(dt, &state.device, &state.pipeline);
@@ -5611,6 +5683,96 @@ impl ApplicationHandler for BlockGameApp {
                                 screen_w,
                                 screen_h,
                                 &furnace,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                ui_cursor,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if let Some(gen_pos) = state.active_coal_gen_pos {
+                            let is_daytime = state.day_night.sun_direction().y > 0.0;
+                            let (gen_state, summary) = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                let g = world_guard
+                                    .coal_generators
+                                    .get(&gen_pos)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let s = blockgame_core::power::get_network_summary(
+                                    &world_guard,
+                                    gen_pos,
+                                    is_daytime,
+                                );
+                                (g, s)
+                            };
+                            UiBuilder::build_coal_generator_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &gen_state,
+                                &summary,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                ui_cursor,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if let Some(bat_pos) = state.active_battery_pos {
+                            let is_daytime = state.day_night.sun_direction().y > 0.0;
+                            let (bat_state, summary) = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                let b = world_guard
+                                    .batteries
+                                    .get(&bat_pos)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let s = blockgame_core::power::get_network_summary(
+                                    &world_guard,
+                                    bat_pos,
+                                    is_daytime,
+                                );
+                                (b, s)
+                            };
+                            UiBuilder::build_battery_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &bat_state,
+                                &summary,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                ui_cursor,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if let Some(ef_pos) = state.active_electric_furnace_pos {
+                            let is_daytime = state.day_night.sun_direction().y > 0.0;
+                            let (ef_state, summary) = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                let ef = world_guard
+                                    .electric_furnaces
+                                    .get(&ef_pos)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let s = blockgame_core::power::get_network_summary(
+                                    &world_guard,
+                                    ef_pos,
+                                    is_daytime,
+                                );
+                                (ef, s)
+                            };
+                            UiBuilder::build_electric_furnace_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &ef_state,
+                                &summary,
                                 &state.inventory,
                                 state.active_hotbar_slot,
                                 &state.cursor_held,
@@ -6759,6 +6921,166 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
     }
 }
 
+fn handle_power_screen_inv_click(state: &mut AppState, is_right_click: bool) {
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+    let top_y = screen_h * 0.5 - 220.0;
+    let inv_y = top_y + 10.0 + slot_size + 8.0 + 24.0 + 8.0 + slot_size + 24.0;
+    let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+
+    // Backpack (9..36)
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = 9 + row * 9 + col;
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                click_slot_raw(
+                    &mut state.inventory.slots[slot_idx],
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
+                return;
+            }
+        }
+    }
+    // Hotbar (0..9)
+    for i in 0..9 {
+        let sx = start_x + (i as f32) * (slot_size + slot_gap);
+        let sy = hotbar_y;
+        if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+            click_slot_raw(
+                &mut state.inventory.slots[i],
+                &mut state.cursor_held,
+                is_right_click,
+                &state.item_registry,
+            );
+            return;
+        }
+    }
+}
+
+fn handle_coal_generator_click(state: &mut AppState, is_right_click: bool) {
+    let Some(gen_pos) = state.active_coal_gen_pos else {
+        return;
+    };
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+    let top_y = screen_h * 0.5 - 220.0;
+    let fuel_x = start_x + 40.0;
+    let fuel_y = top_y + 42.0;
+
+    if cx >= fuel_x && cx < fuel_x + slot_size && cy >= fuel_y && cy < fuel_y + slot_size {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        let gen = world_guard.get_or_create_coal_generator(gen_pos);
+        if state.shift_down {
+            let item = gen.fuel;
+            if !item.is_empty() {
+                if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                    gen.fuel = rem;
+                } else {
+                    gen.fuel = ItemSlot::EMPTY;
+                }
+            }
+        } else {
+            click_slot_raw(
+                &mut gen.fuel,
+                &mut state.cursor_held,
+                is_right_click,
+                &state.item_registry,
+            );
+        }
+        return;
+    }
+
+    handle_power_screen_inv_click(state, is_right_click);
+}
+
+fn handle_battery_click(state: &mut AppState, is_right_click: bool) {
+    handle_power_screen_inv_click(state, is_right_click);
+}
+
+fn handle_electric_furnace_click(state: &mut AppState, is_right_click: bool) {
+    let Some(ef_pos) = state.active_electric_furnace_pos else {
+        return;
+    };
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+    let top_y = screen_h * 0.5 - 220.0;
+    let input_x = start_x + (inv_w - slot_size) * 0.5 - 80.0;
+    let slot_y = top_y + 34.0;
+    let output_x = input_x + slot_size + 112.0;
+
+    // Input slot
+    if cx >= input_x && cx < input_x + slot_size && cy >= slot_y && cy < slot_y + slot_size {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        let ef = world_guard.get_or_create_electric_furnace(ef_pos);
+        if state.shift_down {
+            let item = ef.input;
+            if !item.is_empty() {
+                if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                    ef.input = rem;
+                } else {
+                    ef.input = ItemSlot::EMPTY;
+                }
+            }
+        } else {
+            click_slot_raw(
+                &mut ef.input,
+                &mut state.cursor_held,
+                is_right_click,
+                &state.item_registry,
+            );
+        }
+        return;
+    }
+
+    // Output slot (take only)
+    if cx >= output_x && cx < output_x + slot_size && cy >= slot_y && cy < slot_y + slot_size {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        let ef = world_guard.get_or_create_electric_furnace(ef_pos);
+        let out = ef.output;
+        if !out.is_empty() {
+            if state.shift_down {
+                if let Some(rem) = state.inventory.add_item(out, &state.item_registry) {
+                    ef.output = rem;
+                } else {
+                    ef.output = ItemSlot::EMPTY;
+                }
+            } else if state.cursor_held.is_empty() {
+                state.cursor_held = out;
+                ef.output = ItemSlot::EMPTY;
+            } else if state.cursor_held.item_id == out.item_id {
+                let max_s = state
+                    .item_registry
+                    .get(out.item_id)
+                    .map(|d| d.max_stack)
+                    .unwrap_or(64);
+                let space = max_s.saturating_sub(state.cursor_held.count);
+                let take = out.count.min(space);
+                state.cursor_held.count += take;
+                ef.output.count -= take;
+                if ef.output.count == 0 {
+                    ef.output = ItemSlot::EMPTY;
+                }
+            }
+        }
+        return;
+    }
+
+    handle_power_screen_inv_click(state, is_right_click);
+}
+
 fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
     let Some(furnace_pos) = state.active_furnace_pos else {
         return;
@@ -7462,7 +7784,11 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
     }
 
     // 3. Check Backpack and Hotbar
-    let inv_start_y = if state.active_furnace_pos.is_some() {
+    let inv_start_y = if state.active_furnace_pos.is_some()
+        || state.active_coal_gen_pos.is_some()
+        || state.active_battery_pos.is_some()
+        || state.active_electric_furnace_pos.is_some()
+    {
         let furnace_top_y = screen_h * 0.5 - 220.0;
         let input_y = furnace_top_y + 10.0;
         let flame_size = 24.0;

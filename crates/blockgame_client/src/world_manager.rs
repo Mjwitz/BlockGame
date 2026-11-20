@@ -992,6 +992,32 @@ impl WorldManager {
                 } else {
                     Vec::new()
                 }
+            } else if current == BlockId::COAL_GENERATOR {
+                if let Some(g) = world.remove_coal_generator(pos) {
+                    if !g.fuel.is_empty() {
+                        vec![g.fuel]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else if current == BlockId::BATTERY_BOX {
+                world.remove_battery(pos);
+                Vec::new()
+            } else if current == BlockId::ELECTRIC_FURNACE {
+                if let Some(ef) = world.remove_electric_furnace(pos) {
+                    let mut items = Vec::new();
+                    if !ef.input.is_empty() {
+                        items.push(ef.input);
+                    }
+                    if !ef.output.is_empty() {
+                        items.push(ef.output);
+                    }
+                    items
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             };
@@ -2421,6 +2447,55 @@ impl WorldManager {
         }
 
         if !changed_chunks.is_empty() {
+            let registry = Arc::clone(&self.registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                    }
+                }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
+    }
+
+    /// Ticks all electrical networks (generators, copper cables, batteries, electric furnaces,
+    /// and electric lamps) and remeshes chunks affected by lighting state changes.
+    pub fn update_power_networks(
+        &mut self,
+        dt: f32,
+        is_daytime: bool,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let changed_blocks = {
+            let mut world = self.world.lock().unwrap();
+            blockgame_core::power::tick_power_networks(&mut world, dt, is_daytime)
+        };
+
+        if !changed_blocks.is_empty() {
+            let mut changed_chunks = HashSet::new();
+            for pos in changed_blocks {
+                let (cp, _, _, _) = world_to_chunk_coords(pos);
+                changed_chunks.insert(cp);
+                // Light level 15 can illuminate adjacent chunks too
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            changed_chunks.insert(blockgame_core::chunk::ChunkPos::new(
+                                cp.0.x + dx,
+                                cp.0.y + dy,
+                                cp.0.z + dz,
+                            ));
+                        }
+                    }
+                }
+            }
+
             let registry = Arc::clone(&self.registry);
             let mut meshes = Vec::new();
             {

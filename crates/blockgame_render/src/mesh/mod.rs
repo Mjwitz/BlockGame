@@ -199,6 +199,34 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    if block_id == BlockId::COPPER_CABLE {
+                        self.build_copper_cable(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            &light_map,
+                            &query_block,
+                        );
+                        continue;
+                    }
+
+                    if block_id == BlockId::SOLAR_PANEL {
+                        self.build_solar_panel(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                        continue;
+                    }
+
+                    if block_id == BlockId::WIND_TURBINE {
+                        self.build_wind_turbine(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                        continue;
+                    }
+
+                    if block_id == BlockId::WATER_WHEEL {
+                        self.build_water_wheel(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                        continue;
+                    }
+
                     if block_id.is_door() {
                         self.build_door(
                             &mut mesh,
@@ -1116,6 +1144,127 @@ impl<'a> ChunkMesher<'a> {
             self.add_box(mesh, fx + 0.4375, fy + 0.75, fz, fx + 0.5625, fy + 0.9375, fz + 0.375, [tile; 6], light);
             self.add_box(mesh, fx + 0.4375, fy + 0.375, fz, fx + 0.5625, fy + 0.5625, fz + 0.375, [tile; 6], light);
         }
+    }
+
+    fn build_copper_cable<F>(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+        query_block: &F,
+    ) where
+        F: Fn(i32, i32, i32) -> BlockId,
+    {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let tile = 410u16;
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Central junction hub (0.36..0.64)
+        self.add_box(mesh, fx + 0.36, fy + 0.36, fz + 0.36, fx + 0.64, fy + 0.64, fz + 0.64, [tile; 6], light);
+
+        let connects = |nx: i32, ny: i32, nz: i32| -> bool {
+            query_block(nx, ny, nz).is_power_block()
+        };
+
+        // 6-way automatic conduit arms (0.40..0.60)
+        if connects(x + 1, y, z) {
+            self.add_box(mesh, fx + 0.64, fy + 0.40, fz + 0.40, fx + 1.0, fy + 0.60, fz + 0.60, [tile; 6], light);
+        }
+        if connects(x - 1, y, z) {
+            self.add_box(mesh, fx, fy + 0.40, fz + 0.40, fx + 0.36, fy + 0.60, fz + 0.60, [tile; 6], light);
+        }
+        if connects(x, y + 1, z) {
+            self.add_box(mesh, fx + 0.40, fy + 0.64, fz + 0.40, fx + 0.60, fy + 1.0, fz + 0.60, [tile; 6], light);
+        }
+        if connects(x, y - 1, z) {
+            self.add_box(mesh, fx + 0.40, fy, fz + 0.40, fx + 0.60, fy + 0.36, fz + 0.60, [tile; 6], light);
+        }
+        if connects(x, y, z + 1) {
+            self.add_box(mesh, fx + 0.40, fy + 0.40, fz + 0.64, fx + 0.60, fy + 0.60, fz + 1.0, [tile; 6], light);
+        }
+        if connects(x, y, z - 1) {
+            self.add_box(mesh, fx + 0.40, fy + 0.40, fz, fx + 0.60, fy + 0.60, fz + 0.36, [tile; 6], light);
+        }
+    }
+
+    fn build_solar_panel(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Support pedestal base
+        self.add_box(mesh, fx + 0.30, fy, fz + 0.30, fx + 0.70, fy + 0.22, fz + 0.70, [425, 425, 414, 414, 414, 414], light);
+        // Slim photovoltaic panel slab on top
+        self.add_box(mesh, fx + 0.03, fy + 0.22, fz + 0.03, fx + 0.97, fy + 0.38, fz + 0.97, [413, 425, 414, 414, 414, 414], light);
+    }
+
+    fn build_wind_turbine(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Vertical steel tower mast
+        self.add_box(mesh, fx + 0.38, fy, fz + 0.38, fx + 0.62, fy + 0.45, fz + 0.62, [416, 425, 416, 416, 416, 416], light);
+        // Aerodynamic nacelle housing
+        self.add_box(mesh, fx + 0.26, fy + 0.42, fz + 0.22, fx + 0.74, fy + 0.84, fz + 0.80, [416, 425, 415, 416, 416, 416], light);
+        // Rotor hub + vertical & horizontal blades on the front (+Z)
+        self.add_box(mesh, fx + 0.42, fy + 0.06, fz + 0.80, fx + 0.58, fy + 0.98, fz + 0.90, [416; 6], light);
+        self.add_box(mesh, fx + 0.04, fy + 0.55, fz + 0.80, fx + 0.96, fy + 0.71, fz + 0.90, [416; 6], light);
+    }
+
+    fn build_water_wheel(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Central timber drum & axle
+        self.add_box(mesh, fx + 0.22, fy + 0.22, fz + 0.22, fx + 0.78, fy + 0.78, fz + 0.78, [418, 418, 417, 417, 417, 417], light);
+        // Projecting wooden paddles (top, bottom, left, right)
+        self.add_box(mesh, fx + 0.40, fy + 0.78, fz + 0.14, fx + 0.60, fy + 0.98, fz + 0.86, [418; 6], light);
+        self.add_box(mesh, fx + 0.40, fy + 0.02, fz + 0.14, fx + 0.60, fy + 0.22, fz + 0.86, [418; 6], light);
+        self.add_box(mesh, fx + 0.02, fy + 0.40, fz + 0.14, fx + 0.22, fy + 0.60, fz + 0.86, [418; 6], light);
+        self.add_box(mesh, fx + 0.78, fy + 0.40, fz + 0.14, fx + 0.98, fy + 0.60, fz + 0.86, [418; 6], light);
     }
 
     #[allow(clippy::too_many_arguments)]

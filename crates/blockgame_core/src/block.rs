@@ -111,9 +111,43 @@ impl BlockId {
     pub const OAK_DOOR_TOP_OPEN: Self = Self(97);
     pub const BED_HEAD: Self = Self(98);
 
+    // Power & Electric Machine blocks (Issues #14 & #15)
+    pub const COPPER_CABLE: Self = Self(99);
+    pub const COAL_GENERATOR: Self = Self(100);
+    pub const SOLAR_PANEL: Self = Self(101);
+    pub const WIND_TURBINE: Self = Self(102);
+    pub const WATER_WHEEL: Self = Self(103);
+    pub const BATTERY_BOX: Self = Self(104);
+    pub const ELECTRIC_FURNACE: Self = Self(105);
+    pub const ELECTRIC_LAMP: Self = Self(106);
+    pub const ELECTRIC_LAMP_LIT: Self = Self(107);
+
     #[inline]
     pub const fn is_air(&self) -> bool {
         self.0 == 0
+    }
+
+    #[inline]
+    pub const fn is_power_block(&self) -> bool {
+        self.0 >= Self::COPPER_CABLE.0 && self.0 <= Self::ELECTRIC_LAMP_LIT.0
+    }
+
+    #[inline]
+    pub const fn is_cable(&self) -> bool {
+        self.0 == Self::COPPER_CABLE.0
+    }
+
+    #[inline]
+    pub const fn is_generator(&self) -> bool {
+        matches!(
+            *self,
+            Self::COAL_GENERATOR | Self::SOLAR_PANEL | Self::WIND_TURBINE | Self::WATER_WHEEL
+        )
+    }
+
+    #[inline]
+    pub const fn is_electric_lamp(&self) -> bool {
+        matches!(*self, Self::ELECTRIC_LAMP | Self::ELECTRIC_LAMP_LIT)
     }
 
     #[inline]
@@ -204,10 +238,11 @@ impl BlockId {
     #[inline]
     pub const fn luminance(&self) -> u8 {
         match self.0 {
-            13 => 14, // TORCH
-            27 => 13, // FURNACE_LIT
-            62 => 15, // SEA_LANTERN
-            94 => 15, // JACK_O_LANTERN
+            13 => 14,  // TORCH
+            27 => 13,  // FURNACE_LIT
+            62 => 15,  // SEA_LANTERN
+            94 => 15,  // JACK_O_LANTERN
+            107 => 15, // ELECTRIC_LAMP_LIT
             _ => 0,
         }
     }
@@ -1534,6 +1569,139 @@ impl BlockRegistry {
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::MELON_SLICE),
             drop_count: (3, 5),
+        });
+
+        // Power & Electric Machine blocks (Issues #14 & #15)
+        registry.register(BlockDefinition {
+            id: BlockId::COPPER_CABLE,
+            name: "Copper Cable",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [410; 6],
+            hardness: 0.4,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::COPPER_CABLE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::COAL_GENERATOR,
+            name: "Coal Generator",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 412, NegY: 425, PosZ: 411 (front), other sides: 412
+            textures: [412, 425, 411, 412, 412, 412],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COAL_GENERATOR),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::SOLAR_PANEL,
+            name: "Solar Panel",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            // PosY: 413 (photovoltaic cells), NegY: 425, Sides: 414
+            textures: [413, 425, 414, 414, 414, 414],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::SOLAR_PANEL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::WIND_TURBINE,
+            name: "Wind Turbine",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            // PosY: 416, NegY: 425, PosZ: 415 (hub), other sides: 416
+            textures: [416, 425, 415, 416, 416, 416],
+            hardness: 2.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::WIND_TURBINE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::WATER_WHEEL,
+            name: "Water Wheel",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            // PosY: 418, NegY: 418, Sides: 417
+            textures: [418, 418, 417, 417, 417, 417],
+            hardness: 2.0,
+            required_tool: Some(ToolType::Axe),
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::WATER_WHEEL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BATTERY_BOX,
+            name: "Battery Box",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 420, NegY: 425, PosZ: 419 (front LED meter), other sides: 420
+            textures: [420, 425, 419, 420, 420, 420],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::BATTERY_BOX),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ELECTRIC_FURNACE,
+            name: "Electric Furnace",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 422, NegY: 425, PosZ: 421 (front coils), other sides: 422
+            textures: [422, 425, 421, 422, 422, 422],
+            hardness: 3.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::ELECTRIC_FURNACE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ELECTRIC_LAMP,
+            name: "Electric Lamp",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [423; 6],
+            hardness: 1.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::ELECTRIC_LAMP),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ELECTRIC_LAMP_LIT,
+            name: "Electric Lamp",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 15,
+            textures: [424; 6],
+            hardness: 1.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::ELECTRIC_LAMP),
+            drop_count: (1, 1),
         });
 
         registry

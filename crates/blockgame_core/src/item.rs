@@ -210,6 +210,18 @@ impl ItemId {
     pub const SUSHI_ROLL: Self = Self(198);
     pub const FISH_STEW: Self = Self(199);
 
+    // Power & Electric Machine items (Issues #14 & #15)
+    pub const COPPER_WIRE: Self = Self(200);
+    pub const POWER_CORE: Self = Self(201);
+    pub const COPPER_CABLE: Self = Self(202);
+    pub const COAL_GENERATOR: Self = Self(203);
+    pub const SOLAR_PANEL: Self = Self(204);
+    pub const WIND_TURBINE: Self = Self(205);
+    pub const WATER_WHEEL: Self = Self(206);
+    pub const BATTERY_BOX: Self = Self(207);
+    pub const ELECTRIC_FURNACE: Self = Self(208);
+    pub const ELECTRIC_LAMP: Self = Self(209);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
@@ -2259,6 +2271,33 @@ impl ItemRegistry {
             if let Some((fp, sat)) = food {
                 self.register_food(id, FoodDef::new(fp, sat));
             }
+        }
+
+        // Power & Electric Machine items (Issues #14 & #15)
+        let power_item_defs = [
+            (ItemId::COPPER_WIRE, None, "blockgame:copper_wire", "Copper Wire", 426),
+            (ItemId::POWER_CORE, None, "blockgame:power_core", "Power Core", 427),
+            (ItemId::COPPER_CABLE, Some(BlockId::COPPER_CABLE), "blockgame:copper_cable", "Copper Cable", 410),
+            (ItemId::COAL_GENERATOR, Some(BlockId::COAL_GENERATOR), "blockgame:coal_generator", "Coal Generator", 411),
+            (ItemId::SOLAR_PANEL, Some(BlockId::SOLAR_PANEL), "blockgame:solar_panel", "Solar Panel", 413),
+            (ItemId::WIND_TURBINE, Some(BlockId::WIND_TURBINE), "blockgame:wind_turbine", "Wind Turbine", 415),
+            (ItemId::WATER_WHEEL, Some(BlockId::WATER_WHEEL), "blockgame:water_wheel", "Water Wheel", 417),
+            (ItemId::BATTERY_BOX, Some(BlockId::BATTERY_BOX), "blockgame:battery_box", "Battery Box", 419),
+            (ItemId::ELECTRIC_FURNACE, Some(BlockId::ELECTRIC_FURNACE), "blockgame:electric_furnace", "Electric Furnace", 421),
+            (ItemId::ELECTRIC_LAMP, Some(BlockId::ELECTRIC_LAMP), "blockgame:electric_lamp", "Electric Lamp", 424),
+        ];
+        for (id, placeable_block, name, display_name, icon_tile) in power_item_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 64,
+                placeable_block,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
         }
     }
 }

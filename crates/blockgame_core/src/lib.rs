@@ -16,6 +16,7 @@ pub mod net;
 pub mod permissions;
 pub mod physics;
 pub mod player;
+pub mod power;
 pub mod raycast;
 pub mod save;
 pub mod skills;
@@ -64,6 +65,11 @@ pub use permissions::{
 };
 pub use physics::{PlayerPhysics, AABB};
 pub use player::{GameMode, PlayerStats};
+pub use power::{
+    get_network_summary, solar_panel_output_w, tick_power_networks, water_wheel_output_w,
+    wind_turbine_output_w, BatteryState, CoalGeneratorState, ElectricFurnaceState,
+    PowerNetworkSummary,
+};
 pub use raycast::{raycast_voxel, RaycastHit};
 pub use save::{
     delete_player_data, delete_saved_world, list_saved_players, list_saved_worlds, load_player_data,

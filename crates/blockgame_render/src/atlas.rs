@@ -93,6 +93,7 @@ impl TextureAtlas {
 
         // Paint fishing rods, lines, lures, bait, fish, and crafted dishes (384..=409)
         paint_fishing_tiles(&mut atlas);
+        paint_power_tiles(&mut atlas);
 
         atlas
     }
@@ -1969,6 +1970,314 @@ fn paint_fishing_tiles(atlas: &mut TextureAtlas) {
             return Rgba([235, 240, 245, 175]);
         }
         Rgba([0, 0, 0, 0])
+    });
+}
+
+/// Paints handcrafted 32x32 textures for the Power & Electric Machine system (tiles 410..=427).
+fn paint_power_tiles(atlas: &mut TextureAtlas) {
+    let hash = |x: u32, y: u32, seed: u32| -> i32 {
+        let mut v = x.wrapping_mul(374761393)
+            ^ y.wrapping_mul(668265263)
+            ^ seed.wrapping_mul(1442695041);
+        v = (v ^ (v >> 13)).wrapping_mul(1274126177);
+        ((v ^ (v >> 16)) & 0x7FFF) as i32
+    };
+    let clamp = |base: i32, d: i32| -> u8 { (base + d).clamp(0, 255) as u8 };
+
+    // 410: Copper Cable (insulated dark-rubber jacket with gleaming copper bands)
+    atlas.paint_tile(410, |px, py| {
+        let n = (hash(px, py, 410) % 9) - 4;
+        let is_band = (px % 8 <= 2) || (py % 8 <= 2);
+        let is_rim = px < 2 || px >= 30 || py < 2 || py >= 30;
+        if is_rim {
+            Rgba([clamp(38, n), clamp(40, n), clamp(46, n), 255])
+        } else if is_band {
+            let sheen = if (px + py) % 5 == 0 { 22 } else { 0 };
+            Rgba([clamp(218, n + sheen), clamp(118, n + sheen / 2), clamp(66, n), 255])
+        } else {
+            Rgba([clamp(56, n), clamp(58, n), clamp(66, n), 255])
+        }
+    });
+
+    // 411: Coal Generator Front (dark steel housing, glowing orange firebox grate, copper coils)
+    atlas.paint_tile(411, |px, py| {
+        let n = (hash(px, py, 411) % 11) - 5;
+        let is_border = px < 3 || px >= 29 || py < 3 || py >= 29;
+        if is_border {
+            let rivet = ((px == 1 || px == 30) && (py % 8 == 4)) || ((py == 1 || py == 30) && (px % 8 == 4));
+            let d = if rivet { 28 } else { n };
+            return Rgba([clamp(62, d), clamp(66, d), clamp(74, d), 255]);
+        }
+        // Top copper coil window (py 5..12)
+        if py >= 5 && py <= 12 && px >= 5 && px <= 26 {
+            if py == 5 || py == 12 || px == 5 || px == 26 {
+                return Rgba([34, 36, 42, 255]);
+            }
+            let coil = if px % 3 == 0 { -22 } else { 18 };
+            return Rgba([clamp(212, coil + n), clamp(112, coil / 2 + n), clamp(60, n), 255]);
+        }
+        // Lower firebox grate with warm amber embers (py 16..26)
+        if py >= 16 && py <= 26 && px >= 6 && px <= 25 {
+            if py % 3 == 0 || px == 6 || px == 25 {
+                return Rgba([32, 34, 38, 255]); // Iron grate bars
+            }
+            let glow = if py >= 20 { 25 } else { 0 };
+            return Rgba([clamp(235, glow + n), clamp(120, glow + n), clamp(32, n), 255]);
+        }
+        Rgba([clamp(88, n), clamp(92, n), clamp(102, n), 255])
+    });
+
+    // 412: Coal Generator Side/Top (riveted steel machine plates + copper vents)
+    atlas.paint_tile(412, |px, py| {
+        let n = (hash(px, py, 412) % 11) - 5;
+        let is_border = px < 3 || px >= 29 || py < 3 || py >= 29;
+        if is_border {
+            return Rgba([clamp(60, n), clamp(64, n), clamp(72, n), 255]);
+        }
+        if py >= 9 && py <= 22 && px >= 7 && px <= 24 && py % 4 == 0 {
+            return Rgba([clamp(196, n), clamp(104, n), clamp(56, n), 255]);
+        }
+        Rgba([clamp(92, n), clamp(96, n), clamp(106, n), 255])
+    });
+
+    // 413: Solar Panel Top (deep cobalt photovoltaic grid with silver busbars & aluminum frame)
+    atlas.paint_tile(413, |px, py| {
+        let n = (hash(px, py, 413) % 9) - 4;
+        if px < 2 || px >= 30 || py < 2 || py >= 30 {
+            return Rgba([clamp(178, n), clamp(186, n), clamp(198, n), 255]); // Aluminum frame
+        }
+        if px == 15 || px == 16 || py == 15 || py == 16 || px % 8 == 0 || py % 8 == 0 {
+            return Rgba([clamp(192, n), clamp(206, n), clamp(222, n), 255]); // Silver busbars
+        }
+        let shimmer = if (px + py) % 9 == 0 { 16 } else { 0 };
+        Rgba([clamp(22, n + shimmer), clamp(52, n + shimmer), clamp(138, n + shimmer), 255])
+    });
+
+    // 414: Solar Panel Side (anodized steel frame + copper terminal)
+    atlas.paint_tile(414, |px, py| {
+        let n = (hash(px, py, 414) % 9) - 4;
+        if py >= 12 && py <= 19 && px >= 12 && px <= 19 {
+            return Rgba([clamp(210, n), clamp(116, n), clamp(64, n), 255]);
+        }
+        Rgba([clamp(76, n), clamp(82, n), clamp(94, n), 255])
+    });
+
+    // 415: Wind Turbine Front/Hub (silver-white aerodynamic nacelle + copper stator + spinner hub)
+    atlas.paint_tile(415, |px, py| {
+        let n = (hash(px, py, 415) % 9) - 4;
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 16;
+        let d2 = dx * dx + dy * dy;
+        if d2 <= 20 {
+            return Rgba([clamp(58, n), clamp(64, n), clamp(74, n), 255]); // Central rotor hub
+        }
+        if d2 <= 56 {
+            return Rgba([clamp(215, n), clamp(118, n), clamp(62, n), 255]); // Copper stator ring
+        }
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(138, n), clamp(144, n), clamp(154, n), 255]);
+        }
+        Rgba([clamp(218, n), clamp(224, n), clamp(232, n), 255])
+    });
+
+    // 416: Wind Turbine Side/Blade (brushed light alloy)
+    atlas.paint_tile(416, |px, py| {
+        let n = (hash(px, py, 416) % 9) - 4;
+        let stripe = if px < 2 || px >= 30 || py < 2 || py >= 30 { -34 } else if py == 15 || py == 16 { -18 } else { 0 };
+        Rgba([clamp(212, n + stripe), clamp(218, n + stripe), clamp(226, n + stripe), 255])
+    });
+
+    // 417: Water Wheel Side (timber wheel with iron rim & axle)
+    atlas.paint_tile(417, |px, py| {
+        let n = (hash(px, py, 417) % 11) - 5;
+        let dx = px as i32 - 16;
+        let dy = py as i32 - 16;
+        let d2 = dx * dx + dy * dy;
+        if d2 <= 18 {
+            return Rgba([clamp(76, n), clamp(80, n), clamp(88, n), 255]); // Iron axle
+        }
+        if d2 >= 140 && d2 <= 210 {
+            return Rgba([clamp(82, n), clamp(86, n), clamp(94, n), 255]); // Iron rim band
+        }
+        let spoke = dx.abs() <= 2 || dy.abs() <= 2 || (dx.abs() - dy.abs()).abs() <= 2;
+        if spoke {
+            return Rgba([clamp(146, n), clamp(102, n), clamp(58, n), 255]); // Oak timber spokes
+        }
+        Rgba([clamp(104, n), clamp(72, n), clamp(40, n), 255])
+    });
+
+    // 418: Water Wheel Housing (sturdy oak timber + iron brackets)
+    atlas.paint_tile(418, |px, py| {
+        let n = (hash(px, py, 418) % 11) - 5;
+        if (px < 4 || px >= 28) && (py < 4 || py >= 28) {
+            return Rgba([clamp(76, n), clamp(80, n), clamp(88, n), 255]);
+        }
+        let plank = if py % 8 == 0 { -22 } else { 0 };
+        Rgba([clamp(142, n + plank), clamp(98, n + plank), clamp(56, n + plank), 255])
+    });
+
+    // 419: Battery Box Front (industrial steel cell + bright emerald LED charge bars + copper terminals)
+    atlas.paint_tile(419, |px, py| {
+        let n = (hash(px, py, 419) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(56, n), clamp(60, n), clamp(68, n), 255]);
+        }
+        // Top & bottom copper bus terminals
+        if (py <= 5 || py >= 26) && px >= 10 && px <= 21 {
+            return Rgba([clamp(218, n), clamp(118, n), clamp(62, n), 255]);
+        }
+        // Central LED charge gauge recess (px 8..23, py 8..23)
+        if px >= 8 && px <= 23 && py >= 8 && py <= 23 {
+            if px == 8 || px == 23 || py == 8 || py == 23 {
+                return Rgba([24, 28, 34, 255]);
+            }
+            if py % 4 == 0 {
+                return Rgba([28, 34, 38, 255]); // Segment divider
+            }
+            return Rgba([clamp(52, n), clamp(228, n), clamp(118, n), 255]); // Glowing green energy cells
+        }
+        Rgba([clamp(82, n), clamp(88, n), clamp(98, n), 255])
+    });
+
+    // 420: Battery Box Side/Top (dark steel + yellow/black hazard trim + copper terminal)
+    atlas.paint_tile(420, |px, py| {
+        let n = (hash(px, py, 420) % 9) - 4;
+        if py >= 25 && py <= 28 && px >= 3 && px <= 28 {
+            let stripe = ((px + py) / 4) % 2 == 0;
+            return if stripe {
+                Rgba([228, 186, 36, 255])
+            } else {
+                Rgba([34, 36, 40, 255])
+            };
+        }
+        if px >= 12 && px <= 19 && py >= 12 && py <= 19 {
+            return Rgba([clamp(214, n), clamp(116, n), clamp(62, n), 255]);
+        }
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(54, n), clamp(58, n), clamp(66, n), 255]);
+        }
+        Rgba([clamp(84, n), clamp(90, n), clamp(100, n), 255])
+    });
+
+    // 421: Electric Furnace Front (brushed steel + glowing cyan/amber heating coils + status bar)
+    atlas.paint_tile(421, |px, py| {
+        let n = (hash(px, py, 421) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(70, n), clamp(76, n), clamp(88, n), 255]);
+        }
+        // Top digital status LED strip
+        if py >= 5 && py <= 8 && px >= 7 && px <= 24 {
+            if px <= 14 {
+                return Rgba([58, 220, 245, 255]); // Cyan power indicator
+            }
+            return Rgba([34, 42, 52, 255]);
+        }
+        // Glowing electric heating chamber (py 12..25, px 6..25)
+        if py >= 12 && py <= 25 && px >= 6 && px <= 25 {
+            if py == 12 || py == 25 || px == 6 || px == 25 {
+                return Rgba([30, 34, 40, 255]);
+            }
+            if py == 16 || py == 21 {
+                return Rgba([255, 162, 52, 255]); // Glowing heating coils
+            }
+            return Rgba([clamp(46, n), clamp(52, n), clamp(64, n), 255]);
+        }
+        Rgba([clamp(118, n), clamp(126, n), clamp(138, n), 255])
+    });
+
+    // 422: Electric Furnace Side/Top (brushed steel + copper heat sinks)
+    atlas.paint_tile(422, |px, py| {
+        let n = (hash(px, py, 422) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(72, n), clamp(78, n), clamp(90, n), 255]);
+        }
+        if px >= 8 && px <= 23 && py >= 8 && py <= 23 && px % 4 == 0 {
+            return Rgba([clamp(205, n), clamp(112, n), clamp(62, n), 255]);
+        }
+        Rgba([clamp(124, n), clamp(132, n), clamp(144, n), 255])
+    });
+
+    // 423: Electric Lamp Off (frosted unlit glass inside dark iron cage)
+    atlas.paint_tile(423, |px, py| {
+        let n = (hash(px, py, 423) % 9) - 4;
+        let is_cage = px < 3 || px >= 29 || py < 3 || py >= 29 || px == 15 || px == 16 || py == 15 || py == 16;
+        if is_cage {
+            return Rgba([clamp(54, n), clamp(58, n), clamp(66, n), 255]);
+        }
+        Rgba([clamp(142, n), clamp(150, n), clamp(160, n), 255])
+    });
+
+    // 424: Electric Lamp Lit (radiant warm-white glowing glass inside dark iron cage)
+    atlas.paint_tile(424, |px, py| {
+        let n = (hash(px, py, 424) % 7) - 3;
+        let is_cage = px < 3 || px >= 29 || py < 3 || py >= 29 || px == 15 || px == 16 || py == 15 || py == 16;
+        if is_cage {
+            return Rgba([clamp(64, n), clamp(62, n), clamp(60, n), 255]);
+        }
+        let dx = (px as i32 - 16).abs();
+        let dy = (py as i32 - 16).abs();
+        let bright = if dx < 10 && dy < 10 { 12 } else { -8 };
+        Rgba([clamp(252, bright + n), clamp(244, bright + n), clamp(204, bright + n), 255])
+    });
+
+    // 425: Machine Base Plate (dark riveted industrial steel)
+    atlas.paint_tile(425, |px, py| {
+        let n = (hash(px, py, 425) % 9) - 4;
+        let rim = if px < 3 || px >= 29 || py < 3 || py >= 29 { -14 } else { 0 };
+        Rgba([clamp(58, n + rim), clamp(62, n + rim), clamp(70, n + rim), 255])
+    });
+
+    // 426: Copper Wire Item Icon (coiled gleaming orange copper wire on transparent background)
+    atlas.paint_tile(426, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = py as f32 - 15.5;
+        let r = (dx * dx + dy * dy).sqrt();
+        // Coil ring + loose copper wire ends
+        let in_coil = (r >= 6.2 && r <= 11.2) || (r >= 3.2 && r <= 5.0);
+        let in_lead = (py >= 22 && py <= 26 && px >= 18 && px <= 26)
+            || (py >= 6 && py <= 9 && px >= 5 && px <= 13);
+        if !in_coil && !in_lead {
+            return Rgba([0, 0, 0, 0]);
+        }
+        let is_edge = (in_coil && ((r - 6.2).abs() < 0.9 || (11.2 - r).abs() < 0.9))
+            || (in_lead && (py == 22 || py == 26 || py == 6 || py == 9));
+        if is_edge {
+            return Rgba([112, 48, 22, 255]);
+        }
+        let hi = if dx + dy < -2.0 { 26 } else if dx + dy > 4.0 { -22 } else { 0 };
+        Rgba([clamp(228, hi), clamp(122, hi / 2), clamp(64, hi / 3), 255])
+    });
+
+    // 427: Power Core / Electronic Circuit Item Icon (green PCB + gold traces + glowing cyan core)
+    atlas.paint_tile(427, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Copper connector pins on left/right
+        let is_pin = (x >= 3 && x <= 5 || x >= 26 && x <= 28) && (y == 10 || y == 16 || y == 22);
+        if is_pin {
+            return Rgba([228, 128, 66, 255]);
+        }
+        if x < 6 || x > 25 || y < 6 || y > 25 {
+            return Rgba([0, 0, 0, 0]);
+        }
+        if x == 6 || x == 25 || y == 6 || y == 25 {
+            return Rgba([22, 58, 34, 255]); // Dark PCB outline
+        }
+        // Central glowing cyan power core
+        if x >= 12 && x <= 19 && y >= 12 && y <= 19 {
+            if x == 12 || x == 19 || y == 12 || y == 19 {
+                return Rgba([235, 195, 52, 255]); // Gold core frame
+            }
+            let hi = if x <= 15 && y <= 15 { 24 } else { -12 };
+            return Rgba([clamp(76, hi), clamp(228, hi), clamp(248, hi), 255]);
+        }
+        // Gold circuit traces radiating to pins
+        if y == 10 || y == 16 || y == 22 || x == 15 || x == 16 {
+            return Rgba([232, 192, 54, 255]);
+        }
+        // Green PCB substrate
+        let n = (hash(px, py, 427) % 9) - 4;
+        Rgba([clamp(38, n), clamp(126, n), clamp(64, n), 255])
     });
 }
 

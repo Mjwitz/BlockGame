@@ -94,6 +94,9 @@ pub struct WorldSaveData {
     pub modified_chunks: HashMap<ChunkPos, Vec<(u16, BlockId)>>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
+    pub coal_generators: HashMap<IVec3, crate::power::CoalGeneratorState>,
+    pub batteries: HashMap<IVec3, crate::power::BatteryState>,
+    pub electric_furnaces: HashMap<IVec3, crate::power::ElectricFurnaceState>,
     pub item_drops: Vec<ItemDrop>,
     pub falling_blocks: Vec<FallingBlock>,
     pub animals: Vec<AnimalEntity>,
@@ -113,6 +116,9 @@ impl WorldSaveData {
             modified_chunks: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
+            coal_generators: HashMap::new(),
+            batteries: HashMap::new(),
+            electric_furnaces: HashMap::new(),
             item_drops: Vec::new(),
             falling_blocks: Vec::new(),
             animals: Vec::new(),
@@ -125,7 +131,7 @@ impl WorldSaveData {
         }
     }
 
-    /// Captures all dirty chunks, chests, and furnaces from `World` into this `WorldSaveData`.
+    /// Captures all dirty chunks, chests, furnaces, and power machines from `World` into this `WorldSaveData`.
     pub fn capture_from_world(&mut self, world: &World) {
         for &cpos in &world.dirty_chunks {
             if let Some(chunk) = world.get_chunk(cpos) {
@@ -135,9 +141,12 @@ impl WorldSaveData {
         }
         self.chest_containers = world.chest_containers.clone();
         self.furnaces = world.furnaces.clone();
+        self.coal_generators = world.coal_generators.clone();
+        self.batteries = world.batteries.clone();
+        self.electric_furnaces = world.electric_furnaces.clone();
     }
 
-    /// Applies saved modified chunks, chests, and furnaces into `World`.
+    /// Applies saved modified chunks, chests, furnaces, and power machines into `World`.
     pub fn apply_to_world(&self, world: &mut World) {
         for (&cpos, rle) in &self.modified_chunks {
             let chunk = decode_chunk_rle(cpos, rle);
@@ -145,6 +154,9 @@ impl WorldSaveData {
         }
         world.chest_containers = self.chest_containers.clone();
         world.furnaces = self.furnaces.clone();
+        world.coal_generators = self.coal_generators.clone();
+        world.batteries = self.batteries.clone();
+        world.electric_furnaces = self.electric_furnaces.clone();
     }
 }
 
@@ -689,6 +701,117 @@ pub fn load_containers_file(
     Ok(Some((chests, furnaces)))
 }
 
+/// Saves power machine states (coal generators, batteries, electric furnaces) to `<world_dir>/power.bin`.
+pub fn save_power_file(
+    world_dir: &Path,
+    coal_generators: &HashMap<IVec3, crate::power::CoalGeneratorState>,
+    batteries: &HashMap<IVec3, crate::power::BatteryState>,
+    electric_furnaces: &HashMap<IVec3, crate::power::ElectricFurnaceState>,
+) -> io::Result<()> {
+    let path = world_dir.join("power.bin");
+    let mut w = BufWriter::new(File::create(&path)?);
+
+    write_u32(&mut w, coal_generators.len() as u32)?;
+    for (&pos, gen) in coal_generators {
+        write_ivec3(&mut w, pos)?;
+        write_item_slot(&mut w, gen.fuel)?;
+        write_f32(&mut w, gen.burn_time)?;
+        write_f32(&mut w, gen.max_burn_time)?;
+    }
+
+    write_u32(&mut w, batteries.len() as u32)?;
+    for (&pos, bat) in batteries {
+        write_ivec3(&mut w, pos)?;
+        write_f32(&mut w, bat.stored_eu)?;
+        write_f32(&mut w, bat.capacity_eu)?;
+    }
+
+    write_u32(&mut w, electric_furnaces.len() as u32)?;
+    for (&pos, ef) in electric_furnaces {
+        write_ivec3(&mut w, pos)?;
+        write_item_slot(&mut w, ef.input)?;
+        write_item_slot(&mut w, ef.output)?;
+        write_f32(&mut w, ef.cook_time)?;
+        write_f32(&mut w, ef.max_cook_time)?;
+    }
+
+    w.flush()?;
+    Ok(())
+}
+
+/// Loads power machine states from `<world_dir>/power.bin`.
+pub fn load_power_file(
+    world_dir: &Path,
+) -> io::Result<
+    Option<(
+        HashMap<IVec3, crate::power::CoalGeneratorState>,
+        HashMap<IVec3, crate::power::BatteryState>,
+        HashMap<IVec3, crate::power::ElectricFurnaceState>,
+    )>,
+> {
+    let path = world_dir.join("power.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut r = BufReader::new(File::open(&path)?);
+
+    let gen_count = read_u32(&mut r)? as usize;
+    let mut coal_generators = HashMap::with_capacity(gen_count);
+    for _ in 0..gen_count {
+        let pos = read_ivec3(&mut r)?;
+        let fuel = read_item_slot(&mut r, 2)?;
+        let burn_time = read_f32(&mut r)?;
+        let max_burn_time = read_f32(&mut r)?;
+        coal_generators.insert(
+            pos,
+            crate::power::CoalGeneratorState {
+                fuel,
+                burn_time,
+                max_burn_time,
+                current_output_w: 0.0,
+            },
+        );
+    }
+
+    let bat_count = read_u32(&mut r)? as usize;
+    let mut batteries = HashMap::with_capacity(bat_count);
+    for _ in 0..bat_count {
+        let pos = read_ivec3(&mut r)?;
+        let stored_eu = read_f32(&mut r)?;
+        let capacity_eu = read_f32(&mut r)?;
+        batteries.insert(
+            pos,
+            crate::power::BatteryState {
+                stored_eu,
+                capacity_eu,
+                last_net_w: 0.0,
+            },
+        );
+    }
+
+    let ef_count = read_u32(&mut r)? as usize;
+    let mut electric_furnaces = HashMap::with_capacity(ef_count);
+    for _ in 0..ef_count {
+        let pos = read_ivec3(&mut r)?;
+        let input = read_item_slot(&mut r, 2)?;
+        let output = read_item_slot(&mut r, 2)?;
+        let cook_time = read_f32(&mut r)?;
+        let max_cook_time = read_f32(&mut r)?;
+        electric_furnaces.insert(
+            pos,
+            crate::power::ElectricFurnaceState {
+                input,
+                output,
+                cook_time,
+                max_cook_time,
+                is_powered: false,
+            },
+        );
+    }
+
+    Ok(Some((coal_generators, batteries, electric_furnaces)))
+}
+
 /// Saves entities to `<world_dir>/entities.bin`.
 pub fn save_entities_file(
     world_dir: &Path,
@@ -946,6 +1069,14 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
     // 4. Write containers.bin (chests & furnaces)
     save_containers_file(&world_dir, &data.chest_containers, &data.furnaces)?;
 
+    // 4b. Write power.bin (coal generators, batteries, electric furnaces)
+    save_power_file(
+        &world_dir,
+        &data.coal_generators,
+        &data.batteries,
+        &data.electric_furnaces,
+    )?;
+
     // 5. Write entities.bin (drops, falling blocks, animals, spawned columns)
     save_entities_file(
         &world_dir,
@@ -1108,6 +1239,13 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         data.chest_containers = chests;
         data.furnaces = furnaces;
         loaded_containers = true;
+    }
+
+    // 4b. Load power machine states (optional for backward compatibility)
+    if let Ok(Some((coal_generators, batteries, electric_furnaces))) = load_power_file(&world_dir) {
+        data.coal_generators = coal_generators;
+        data.batteries = batteries;
+        data.electric_furnaces = electric_furnaces;
     }
 
     // 5. Load entities
@@ -1872,6 +2010,9 @@ mod tests {
             modified_chunks: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
+            coal_generators: HashMap::new(),
+            batteries: HashMap::new(),
+            electric_furnaces: HashMap::new(),
             item_drops: Vec::new(),
             falling_blocks: Vec::new(),
             animals: Vec::new(),
