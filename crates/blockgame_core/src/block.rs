@@ -116,7 +116,6 @@ impl BlockId {
     pub const COAL_GENERATOR: Self = Self(100);
     pub const SOLAR_PANEL: Self = Self(101);
     pub const WIND_TURBINE: Self = Self(102);
-    pub const WATER_WHEEL: Self = Self(103);
     pub const BATTERY_BOX: Self = Self(104);
     pub const ELECTRIC_FURNACE: Self = Self(105);
     pub const ELECTRIC_LAMP: Self = Self(106);
@@ -129,7 +128,17 @@ impl BlockId {
 
     #[inline]
     pub const fn is_power_block(&self) -> bool {
-        self.0 >= Self::COPPER_CABLE.0 && self.0 <= Self::ELECTRIC_LAMP_LIT.0
+        matches!(
+            *self,
+            Self::COPPER_CABLE
+                | Self::COAL_GENERATOR
+                | Self::SOLAR_PANEL
+                | Self::WIND_TURBINE
+                | Self::BATTERY_BOX
+                | Self::ELECTRIC_FURNACE
+                | Self::ELECTRIC_LAMP
+                | Self::ELECTRIC_LAMP_LIT
+        )
     }
 
     #[inline]
@@ -141,7 +150,7 @@ impl BlockId {
     pub const fn is_generator(&self) -> bool {
         matches!(
             *self,
-            Self::COAL_GENERATOR | Self::SOLAR_PANEL | Self::WIND_TURBINE | Self::WATER_WHEEL
+            Self::COAL_GENERATOR | Self::SOLAR_PANEL | Self::WIND_TURBINE
         )
     }
 
@@ -1628,21 +1637,6 @@ impl BlockRegistry {
             required_tool: Some(ToolType::Pickaxe),
             min_tier: ToolTier::Wood,
             drop_item: Some(ItemId::WIND_TURBINE),
-            drop_count: (1, 1),
-        });
-
-        registry.register(BlockDefinition {
-            id: BlockId::WATER_WHEEL,
-            name: "Water Wheel",
-            is_solid: true,
-            is_transparent: true,
-            luminance: 0,
-            // PosY: 418, NegY: 418, Sides: 417
-            textures: [418, 418, 417, 417, 417, 417],
-            hardness: 2.0,
-            required_tool: Some(ToolType::Axe),
-            min_tier: ToolTier::None,
-            drop_item: Some(ItemId::WATER_WHEEL),
             drop_count: (1, 1),
         });
 

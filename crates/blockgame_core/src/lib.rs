@@ -66,9 +66,8 @@ pub use permissions::{
 pub use physics::{PlayerPhysics, AABB};
 pub use player::{GameMode, PlayerStats};
 pub use power::{
-    get_network_summary, solar_panel_output_w, tick_power_networks, water_wheel_output_w,
-    wind_turbine_output_w, BatteryState, CoalGeneratorState, ElectricFurnaceState,
-    PowerNetworkSummary,
+    get_network_summary, solar_panel_output_eu_s, tick_power_networks, wind_turbine_output_eu_s,
+    BatteryState, CoalGeneratorState, ElectricFurnaceState, PowerNetworkSummary,
 };
 pub use raycast::{raycast_voxel, RaycastHit};
 pub use save::{

@@ -4443,14 +4443,14 @@ impl UiBuilder {
 
         // Live power readout panel on the right
         let info_x = flame_x + flame_size + 28.0;
-        let status_txt = if gen.current_output_w > 0.0 {
-            format!("Output: {:.0} W (Active)", gen.current_output_w)
+        let status_txt = if gen.current_output_eu_s > 0.0 {
+            format!("Provides: +{:.0} EU/s (Active)", gen.current_output_eu_s)
         } else {
-            "Output: 0 W (Standby)".to_string()
+            "Provides: 0 / +40 EU/s (Standby)".to_string()
         };
-        let status_col = if gen.current_output_w > 0.0 { [0.40, 0.95, 0.55, 1.0] } else { [0.75, 0.78, 0.82, 1.0] };
+        let status_col = if gen.current_output_eu_s > 0.0 { [0.40, 0.95, 0.55, 1.0] } else { [0.75, 0.78, 0.82, 1.0] };
         Self::draw_string(mesh, info_x, top_y + 34.0, &status_txt, 7.5, 9.5, 1.0, status_col);
-        let grid_txt = format!("Grid: {:.0}W Gen / {:.0}W Use", summary.total_gen_w, summary.total_demand_w);
+        let grid_txt = format!("Grid: +{:.0} EU/s Gen / -{:.0} EU/s Use", summary.total_gen_eu_s, summary.total_demand_eu_s);
         Self::draw_string(mesh, info_x, top_y + 56.0, &grid_txt, 7.0, 9.0, 1.0, [0.85, 0.90, 0.95, 1.0]);
         let bat_txt = format!("Stored: {:.0} / {:.0} EU", summary.total_stored_eu, summary.total_capacity_eu);
         Self::draw_string(mesh, info_x, top_y + 76.0, &bat_txt, 7.0, 9.0, 1.0, [0.65, 0.92, 0.78, 1.0]);
@@ -4462,7 +4462,7 @@ impl UiBuilder {
         );
     }
 
-    /// Builds the Battery Box UI screen (large charge bar, net flow rate, and grid summary).
+    /// Builds the Battery Box UI screen (large charge bar, net EU/s flow, and grid summary).
     #[allow(clippy::too_many_arguments)]
     pub fn build_battery_screen(
         mesh: &mut UiMesh,
@@ -4494,7 +4494,7 @@ impl UiBuilder {
             mesh,
             start_x,
             top_y - 20.0,
-            "Battery Box",
+            "Battery Box (Max +/-100 EU/s)",
             8.0,
             10.0,
             1.0,
@@ -4516,16 +4516,16 @@ impl UiBuilder {
         let pct_txt = format!("{:.0} / {:.0} EU ({:.0}%)", bat.stored_eu, bat.capacity_eu, ratio * 100.0);
         Self::draw_string(mesh, bar_x + 8.0, bar_y + 9.0, &pct_txt, 7.5, 9.5, 1.0, [0.98, 0.98, 0.98, 1.0]);
 
-        let flow_txt = if bat.last_net_w > 0.5 {
-            format!("Status: Charging (+{:.0} W)", bat.last_net_w)
-        } else if bat.last_net_w < -0.5 {
-            format!("Status: Discharging ({:.0} W)", bat.last_net_w)
+        let flow_txt = if bat.last_net_eu_s > 0.5 {
+            format!("Status: Charging (+{:.0} EU/s)", bat.last_net_eu_s)
+        } else if bat.last_net_eu_s < -0.5 {
+            format!("Status: Discharging ({:.0} EU/s)", bat.last_net_eu_s)
         } else {
-            "Status: Standby (0 W)".to_string()
+            "Status: Standby (0 EU/s)".to_string()
         };
-        let flow_col = if bat.last_net_w > 0.5 {
+        let flow_col = if bat.last_net_eu_s > 0.5 {
             [0.35, 0.95, 0.55, 1.0]
-        } else if bat.last_net_w < -0.5 {
+        } else if bat.last_net_eu_s < -0.5 {
             [0.98, 0.72, 0.32, 1.0]
         } else {
             [0.78, 0.82, 0.86, 1.0]
@@ -4533,8 +4533,8 @@ impl UiBuilder {
         Self::draw_string(mesh, bar_x, bar_y + 44.0, &flow_txt, 7.5, 9.5, 1.0, flow_col);
 
         let grid_txt = format!(
-            "Network: {:.0}W Gen  |  {:.0}W Demand  |  {} Nodes",
-            summary.total_gen_w, summary.total_demand_w, summary.node_count
+            "Network: +{:.0} EU/s Gen | -{:.0} EU/s Use | {} Nodes",
+            summary.total_gen_eu_s, summary.total_demand_eu_s, summary.node_count
         );
         Self::draw_string(mesh, bar_x, bar_y + 66.0, &grid_txt, 7.0, 9.0, 1.0, [0.85, 0.90, 0.95, 1.0]);
 
@@ -4545,7 +4545,7 @@ impl UiBuilder {
         );
     }
 
-    /// Builds the Electric Furnace UI screen (Input, fast cook bar, Output, power indicator).
+    /// Builds the Electric Furnace UI screen (Input, fast cook bar, Output, EU/s consumption).
     #[allow(clippy::too_many_arguments)]
     pub fn build_electric_furnace_screen(
         mesh: &mut UiMesh,
@@ -4578,7 +4578,7 @@ impl UiBuilder {
             mesh,
             start_x,
             top_y - 20.0,
-            "Electric Furnace (2.5x Speed)",
+            "Electric Furnace (2.5x Speed | -30 EU/s)",
             8.0,
             10.0,
             1.0,
@@ -4630,11 +4630,11 @@ impl UiBuilder {
 
         // Power status line below slots
         let pwr_txt = if ef.is_powered {
-            "Power: Connected (30 W)".to_string()
+            format!("Consuming: -30 EU/s | Grid: +{:.0} EU/s", summary.total_gen_eu_s)
         } else if ef.can_smelt() {
-            "Power: Insufficient (Needs 30 W)".to_string()
+            "Insufficient Power (Needs 30 EU/s)".to_string()
         } else {
-            format!("Grid: {:.0}W Gen / {:.0}W Use | {:.0} EU", summary.total_gen_w, summary.total_demand_w, summary.total_stored_eu)
+            format!("Grid: +{:.0} EU/s Gen / -{:.0} EU/s Use | {:.0} EU", summary.total_gen_eu_s, summary.total_demand_eu_s, summary.total_stored_eu)
         };
         let pwr_col = if ef.is_powered {
             [0.35, 0.95, 0.98, 1.0]

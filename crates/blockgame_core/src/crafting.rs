@@ -2197,17 +2197,6 @@ impl CraftingManager {
             output: ItemSlot::new(ItemId::WIND_TURBINE, 1),
         });
         self.register(Recipe::Shaped {
-            name: "Water Wheel",
-            width: 3,
-            height: 3,
-            pattern: vec![
-                Some(ItemId::PLANKS), Some(ItemId::PLANKS),      Some(ItemId::PLANKS),
-                Some(ItemId::PLANKS), Some(ItemId::POWER_CORE),  Some(ItemId::PLANKS),
-                Some(ItemId::PLANKS), Some(ItemId::COPPER_WIRE), Some(ItemId::PLANKS),
-            ],
-            output: ItemSlot::new(ItemId::WATER_WHEEL, 1),
-        });
-        self.register(Recipe::Shaped {
             name: "Battery Box",
             width: 3,
             height: 3,

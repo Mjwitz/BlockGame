@@ -2592,6 +2592,79 @@ impl ApplicationHandler for BlockGameApp {
                                 state.window.set_cursor_visible(true);
                                 return;
                             }
+                            if matches!(
+                                block_id,
+                                BlockId::SOLAR_PANEL
+                                    | BlockId::WIND_TURBINE
+                                    | BlockId::ELECTRIC_LAMP
+                                    | BlockId::ELECTRIC_LAMP_LIT
+                                    | BlockId::COPPER_CABLE
+                            ) {
+                                let held_is_placeable = {
+                                    let slot = state.inventory.get(state.active_hotbar_slot);
+                                    !slot.is_empty()
+                                        && state
+                                            .item_registry
+                                            .get(slot.item_id)
+                                            .and_then(|d| d.placeable_block)
+                                            .is_some()
+                                };
+                                if !held_is_placeable {
+                                    let is_daytime = state.day_night.sun_direction().y > 0.0;
+                                    let msg = {
+                                        let world_guard =
+                                            state.world_manager.world().lock().unwrap();
+                                        let s = blockgame_core::power::get_network_summary(
+                                            &world_guard,
+                                            hit.hit_voxel,
+                                            is_daytime,
+                                        );
+                                        let block_line = match block_id {
+                                            BlockId::SOLAR_PANEL => {
+                                                let out = blockgame_core::power::solar_panel_output_eu_s(
+                                                    &world_guard,
+                                                    hit.hit_voxel,
+                                                    is_daytime,
+                                                );
+                                                format!("Solar Panel: Provides +{:.0} EU/s", out)
+                                            }
+                                            BlockId::WIND_TURBINE => {
+                                                let out = blockgame_core::power::wind_turbine_output_eu_s(
+                                                    &world_guard,
+                                                    hit.hit_voxel,
+                                                );
+                                                format!("Wind Turbine: Provides +{:.0} EU/s", out)
+                                            }
+                                            BlockId::ELECTRIC_LAMP_LIT => {
+                                                "Electric Lamp: Consumes -5 EU/s (Lit)".to_string()
+                                            }
+                                            BlockId::ELECTRIC_LAMP => {
+                                                "Electric Lamp: Consumes -5 EU/s (Unpowered)"
+                                                    .to_string()
+                                            }
+                                            _ => "Copper Cable (Power Grid)".to_string(),
+                                        };
+                                        format!(
+                                            "{} | Grid: +{:.0} EU/s Gen / -{:.0} EU/s Use | Stored: {:.0}/{:.0} EU",
+                                            block_line,
+                                            s.total_gen_eu_s,
+                                            s.total_demand_eu_s,
+                                            s.total_stored_eu,
+                                            s.total_capacity_eu
+                                        )
+                                    };
+                                    state.local_chat_messages.push(
+                                        blockgame_core::net::ChatEntry {
+                                            sender: "Power".to_string(),
+                                            prefix: String::new(),
+                                            message: msg,
+                                            is_system: true,
+                                            age: 0.0,
+                                        },
+                                    );
+                                    return;
+                                }
+                            }
                             if block_id == BlockId::CRAFTING_TABLE {
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;

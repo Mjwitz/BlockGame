@@ -2087,35 +2087,6 @@ fn paint_power_tiles(atlas: &mut TextureAtlas) {
         Rgba([clamp(212, n + stripe), clamp(218, n + stripe), clamp(226, n + stripe), 255])
     });
 
-    // 417: Water Wheel Side (timber wheel with iron rim & axle)
-    atlas.paint_tile(417, |px, py| {
-        let n = (hash(px, py, 417) % 11) - 5;
-        let dx = px as i32 - 16;
-        let dy = py as i32 - 16;
-        let d2 = dx * dx + dy * dy;
-        if d2 <= 18 {
-            return Rgba([clamp(76, n), clamp(80, n), clamp(88, n), 255]); // Iron axle
-        }
-        if d2 >= 140 && d2 <= 210 {
-            return Rgba([clamp(82, n), clamp(86, n), clamp(94, n), 255]); // Iron rim band
-        }
-        let spoke = dx.abs() <= 2 || dy.abs() <= 2 || (dx.abs() - dy.abs()).abs() <= 2;
-        if spoke {
-            return Rgba([clamp(146, n), clamp(102, n), clamp(58, n), 255]); // Oak timber spokes
-        }
-        Rgba([clamp(104, n), clamp(72, n), clamp(40, n), 255])
-    });
-
-    // 418: Water Wheel Housing (sturdy oak timber + iron brackets)
-    atlas.paint_tile(418, |px, py| {
-        let n = (hash(px, py, 418) % 11) - 5;
-        if (px < 4 || px >= 28) && (py < 4 || py >= 28) {
-            return Rgba([clamp(76, n), clamp(80, n), clamp(88, n), 255]);
-        }
-        let plank = if py % 8 == 0 { -22 } else { 0 };
-        Rgba([clamp(142, n + plank), clamp(98, n + plank), clamp(56, n + plank), 255])
-    });
-
     // 419: Battery Box Front (industrial steel cell + bright emerald LED charge bars + copper terminals)
     atlas.paint_tile(419, |px, py| {
         let n = (hash(px, py, 419) % 9) - 4;

@@ -7,29 +7,29 @@ use crate::crafting::{get_fuel_burn_time, get_smelting_output};
 use crate::item::ItemSlot;
 use crate::world::World;
 
-/// Output of a Coal Generator in Watts (EU per second) while burning fuel.
-pub const COAL_GENERATOR_OUTPUT_W: f32 = 40.0;
-/// Output of a Solar Panel in Watts during daytime with clear sky above.
-pub const SOLAR_PANEL_OUTPUT_W: f32 = 25.0;
-/// Base output of a Wind Turbine in Watts at sea level (scales up with elevation).
-pub const WIND_TURBINE_BASE_W: f32 = 15.0;
-/// Power draw of an Electric Furnace while actively smelting.
-pub const ELECTRIC_FURNACE_DRAW_W: f32 = 30.0;
+/// Output of a Coal Generator in EU per second while burning fuel.
+pub const COAL_GENERATOR_OUTPUT_EU_S: f32 = 40.0;
+/// Output of a Solar Panel in EU per second during daytime with clear sky above.
+pub const SOLAR_PANEL_OUTPUT_EU_S: f32 = 25.0;
+/// Base output of a Wind Turbine in EU per second at sea level (scales up with elevation).
+pub const WIND_TURBINE_BASE_EU_S: f32 = 15.0;
+/// Power draw of an Electric Furnace in EU per second while actively smelting.
+pub const ELECTRIC_FURNACE_DRAW_EU_S: f32 = 30.0;
 /// Smelt time in seconds for an Electric Furnace (2.5x faster than the 10s stone furnace).
 pub const ELECTRIC_FURNACE_COOK_TIME: f32 = 4.0;
-/// Power draw of an Electric Lamp in Watts.
-pub const ELECTRIC_LAMP_DRAW_W: f32 = 5.0;
+/// Power draw of an Electric Lamp in EU per second.
+pub const ELECTRIC_LAMP_DRAW_EU_S: f32 = 5.0;
 /// Default energy storage capacity of a Battery Box in EU.
 pub const BATTERY_DEFAULT_CAPACITY_EU: f32 = 20_000.0;
-/// Maximum charge/discharge rate per Battery Box in Watts.
-pub const BATTERY_MAX_IO_W: f32 = 100.0;
+/// Maximum charge/discharge rate per Battery Box in EU per second.
+pub const BATTERY_MAX_IO_EU_S: f32 = 100.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoalGeneratorState {
     pub fuel: ItemSlot,
     pub burn_time: f32,
     pub max_burn_time: f32,
-    pub current_output_w: f32,
+    pub current_output_eu_s: f32,
 }
 
 impl Default for CoalGeneratorState {
@@ -44,7 +44,7 @@ impl CoalGeneratorState {
             fuel: ItemSlot::EMPTY,
             burn_time: 0.0,
             max_burn_time: 0.0,
-            current_output_w: 0.0,
+            current_output_eu_s: 0.0,
         }
     }
 
@@ -65,8 +65,8 @@ impl CoalGeneratorState {
 pub struct BatteryState {
     pub stored_eu: f32,
     pub capacity_eu: f32,
-    /// Net power flow in Watts during the last tick (+ charging, - discharging).
-    pub last_net_w: f32,
+    /// Net EU/s flow during the last tick (+ charging, - discharging).
+    pub last_net_eu_s: f32,
 }
 
 impl Default for BatteryState {
@@ -80,7 +80,7 @@ impl BatteryState {
         Self {
             stored_eu: 0.0,
             capacity_eu: BATTERY_DEFAULT_CAPACITY_EU,
-            last_net_w: 0.0,
+            last_net_eu_s: 0.0,
         }
     }
 
@@ -154,11 +154,11 @@ impl ElectricFurnaceState {
     }
 }
 
-/// Live summary of a connected electrical network for UI readouts.
+/// Live summary of a connected electrical network for UI readouts (all rates in EU/s).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PowerNetworkSummary {
-    pub total_gen_w: f32,
-    pub total_demand_w: f32,
+    pub total_gen_eu_s: f32,
+    pub total_demand_eu_s: f32,
     pub total_stored_eu: f32,
     pub total_capacity_eu: f32,
     pub node_count: usize,
@@ -173,8 +173,8 @@ const NEIGHBORS_6: [IVec3; 6] = [
     IVec3::NEG_Z,
 ];
 
-/// Computes live output (Watts) of a Solar Panel at `pos`.
-pub fn solar_panel_output_w(world: &World, pos: IVec3, is_daytime: bool) -> f32 {
+/// Computes live output (EU/s) of a Solar Panel at `pos`.
+pub fn solar_panel_output_eu_s(world: &World, pos: IVec3, is_daytime: bool) -> f32 {
     if !is_daytime {
         return 0.0;
     }
@@ -185,11 +185,11 @@ pub fn solar_panel_output_w(world: &World, pos: IVec3, is_daytime: bool) -> f32 
             return 0.0;
         }
     }
-    SOLAR_PANEL_OUTPUT_W
+    SOLAR_PANEL_OUTPUT_EU_S
 }
 
-/// Computes live output (Watts) of a Wind Turbine at `pos`.
-pub fn wind_turbine_output_w(world: &World, pos: IVec3) -> f32 {
+/// Computes live output (EU/s) of a Wind Turbine at `pos`.
+pub fn wind_turbine_output_eu_s(world: &World, pos: IVec3) -> f32 {
     // Needs clear horizontal airflow around the rotor
     for offset in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
         let b = world.get_block(pos + offset);
@@ -198,33 +198,7 @@ pub fn wind_turbine_output_w(world: &World, pos: IVec3) -> f32 {
         }
     }
     let elevation_bonus = ((pos.y - 60).clamp(0, 90) as f32) * 0.5;
-    WIND_TURBINE_BASE_W + elevation_bonus
-}
-
-/// Computes live output (Watts) of a Water Wheel at `pos`.
-pub fn water_wheel_output_w(world: &World, pos: IVec3) -> f32 {
-    let mut water_count = 0u32;
-    for offset in [
-        IVec3::X,
-        IVec3::NEG_X,
-        IVec3::Y,
-        IVec3::NEG_Y,
-        IVec3::Z,
-        IVec3::NEG_Z,
-        IVec3::new(1, 0, 1),
-        IVec3::new(1, 0, -1),
-        IVec3::new(-1, 0, 1),
-        IVec3::new(-1, 0, -1),
-    ] {
-        if world.get_block(pos + offset).is_water() {
-            water_count += 1;
-        }
-    }
-    if water_count == 0 {
-        0.0
-    } else {
-        25.0 + (water_count.min(4) as f32) * 5.0
-    }
+    WIND_TURBINE_BASE_EU_S + elevation_bonus
 }
 
 /// Collects all connected power block positions reachable from `start` via 6-neighbor adjacency.
@@ -264,17 +238,14 @@ pub fn get_network_summary(world: &World, start_pos: IVec3, is_daytime: bool) ->
         match block {
             BlockId::COAL_GENERATOR => {
                 if let Some(gen) = world.coal_generators.get(&pos) {
-                    summary.total_gen_w += gen.current_output_w;
+                    summary.total_gen_eu_s += gen.current_output_eu_s;
                 }
             }
             BlockId::SOLAR_PANEL => {
-                summary.total_gen_w += solar_panel_output_w(world, pos, is_daytime);
+                summary.total_gen_eu_s += solar_panel_output_eu_s(world, pos, is_daytime);
             }
             BlockId::WIND_TURBINE => {
-                summary.total_gen_w += wind_turbine_output_w(world, pos);
-            }
-            BlockId::WATER_WHEEL => {
-                summary.total_gen_w += water_wheel_output_w(world, pos);
+                summary.total_gen_eu_s += wind_turbine_output_eu_s(world, pos);
             }
             BlockId::BATTERY_BOX => {
                 if let Some(bat) = world.batteries.get(&pos) {
@@ -287,12 +258,12 @@ pub fn get_network_summary(world: &World, start_pos: IVec3, is_daytime: bool) ->
             BlockId::ELECTRIC_FURNACE => {
                 if let Some(ef) = world.electric_furnaces.get(&pos) {
                     if ef.can_smelt() {
-                        summary.total_demand_w += ELECTRIC_FURNACE_DRAW_W;
+                        summary.total_demand_eu_s += ELECTRIC_FURNACE_DRAW_EU_S;
                     }
                 }
             }
             BlockId::ELECTRIC_LAMP | BlockId::ELECTRIC_LAMP_LIT => {
-                summary.total_demand_w += ELECTRIC_LAMP_DRAW_W;
+                summary.total_demand_eu_s += ELECTRIC_LAMP_DRAW_EU_S;
             }
             _ => {}
         }
@@ -335,19 +306,16 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         let mut batteries = Vec::new();
         let mut electric_furnaces = Vec::new();
         let mut lamps = Vec::new();
-        let mut passive_gen_w = 0.0f32;
+        let mut passive_gen_eu_s = 0.0f32;
 
         for &pos in &component {
             match world.get_block(pos) {
                 BlockId::COAL_GENERATOR => coal_gens.push(pos),
                 BlockId::SOLAR_PANEL => {
-                    passive_gen_w += solar_panel_output_w(world, pos, is_daytime);
+                    passive_gen_eu_s += solar_panel_output_eu_s(world, pos, is_daytime);
                 }
                 BlockId::WIND_TURBINE => {
-                    passive_gen_w += wind_turbine_output_w(world, pos);
-                }
-                BlockId::WATER_WHEEL => {
-                    passive_gen_w += water_wheel_output_w(world, pos);
+                    passive_gen_eu_s += wind_turbine_output_eu_s(world, pos);
                 }
                 BlockId::BATTERY_BOX => batteries.push(pos),
                 BlockId::ELECTRIC_FURNACE => electric_furnaces.push(pos),
@@ -360,11 +328,11 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         let mut battery_headroom_eu = 0.0f32;
         for &pos in &batteries {
             let bat = world.get_or_create_battery(pos);
-            bat.last_net_w = 0.0;
+            bat.last_net_eu_s = 0.0;
             battery_headroom_eu += (bat.capacity_eu - bat.stored_eu).max(0.0);
         }
 
-        // Compute total active consumer demand (Watts).
+        // Compute total active consumer demand (EU/s).
         let mut active_furnaces = Vec::new();
         for &pos in &electric_furnaces {
             let ef = world.get_or_create_electric_furnace(pos);
@@ -375,21 +343,21 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                 ef.is_powered = false;
             }
         }
-        let lamp_demand_w = lamps.len() as f32 * ELECTRIC_LAMP_DRAW_W;
-        let furnace_demand_w = active_furnaces.len() as f32 * ELECTRIC_FURNACE_DRAW_W;
-        let total_demand_w = lamp_demand_w + furnace_demand_w;
+        let lamp_demand_eu_s = lamps.len() as f32 * ELECTRIC_LAMP_DRAW_EU_S;
+        let furnace_demand_eu_s = active_furnaces.len() as f32 * ELECTRIC_FURNACE_DRAW_EU_S;
+        let total_demand_eu_s = lamp_demand_eu_s + furnace_demand_eu_s;
 
         // Determine whether Coal Generators need to ignite new fuel.
         let network_needs_fuel_gen =
-            (total_demand_w > passive_gen_w) || (battery_headroom_eu > 1.0);
+            (total_demand_eu_s > passive_gen_eu_s) || (battery_headroom_eu > 1.0);
 
-        let mut coal_gen_w = 0.0f32;
+        let mut coal_gen_eu_s = 0.0f32;
         for &pos in &coal_gens {
             let gen = world.get_or_create_coal_generator(pos);
             if gen.burn_time > 0.0 {
                 gen.burn_time = (gen.burn_time - dt).max(0.0);
-                gen.current_output_w = COAL_GENERATOR_OUTPUT_W;
-                coal_gen_w += COAL_GENERATOR_OUTPUT_W;
+                gen.current_output_eu_s = COAL_GENERATOR_OUTPUT_EU_S;
+                coal_gen_eu_s += COAL_GENERATOR_OUTPUT_EU_S;
             } else if network_needs_fuel_gen && !gen.fuel.is_empty() {
                 let burn_dur = get_fuel_burn_time(gen.fuel.item_id);
                 if burn_dur > 0.0 {
@@ -399,25 +367,25 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                     }
                     gen.burn_time = (burn_dur - dt).max(0.0);
                     gen.max_burn_time = burn_dur;
-                    gen.current_output_w = COAL_GENERATOR_OUTPUT_W;
-                    coal_gen_w += COAL_GENERATOR_OUTPUT_W;
+                    gen.current_output_eu_s = COAL_GENERATOR_OUTPUT_EU_S;
+                    coal_gen_eu_s += COAL_GENERATOR_OUTPUT_EU_S;
                 } else {
-                    gen.current_output_w = 0.0;
+                    gen.current_output_eu_s = 0.0;
                 }
             } else {
-                gen.current_output_w = 0.0;
+                gen.current_output_eu_s = 0.0;
             }
         }
 
-        let total_gen_eu = (passive_gen_w + coal_gen_w) * dt;
-        let total_demand_eu = total_demand_w * dt;
+        let total_gen_eu = (passive_gen_eu_s + coal_gen_eu_s) * dt;
+        let total_demand_eu = total_demand_eu_s * dt;
 
         // Balance generation, demand, and batteries.
         let mut supplied_eu = total_gen_eu.min(total_demand_eu);
         if total_gen_eu > total_demand_eu && !batteries.is_empty() {
             // Charge batteries with surplus energy.
             let mut surplus_eu = total_gen_eu - total_demand_eu;
-            let per_bat_cap = BATTERY_MAX_IO_W * dt;
+            let per_bat_cap = BATTERY_MAX_IO_EU_S * dt;
             for &pos in &batteries {
                 if surplus_eu <= 0.0 {
                     break;
@@ -426,13 +394,13 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                 let space = (bat.capacity_eu - bat.stored_eu).max(0.0);
                 let add = surplus_eu.min(space).min(per_bat_cap);
                 bat.stored_eu += add;
-                bat.last_net_w = add / dt;
+                bat.last_net_eu_s = add / dt;
                 surplus_eu -= add;
             }
         } else if total_demand_eu > total_gen_eu && !batteries.is_empty() {
             // Discharge batteries to cover the shortfall.
             let mut shortfall_eu = total_demand_eu - total_gen_eu;
-            let per_bat_cap = BATTERY_MAX_IO_W * dt;
+            let per_bat_cap = BATTERY_MAX_IO_EU_S * dt;
             for &pos in &batteries {
                 if shortfall_eu <= 0.0 {
                     break;
@@ -440,7 +408,7 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                 let bat = world.get_or_create_battery(pos);
                 let take = shortfall_eu.min(bat.stored_eu).min(per_bat_cap);
                 bat.stored_eu -= take;
-                bat.last_net_w = -(take / dt);
+                bat.last_net_eu_s = -(take / dt);
                 supplied_eu += take;
                 shortfall_eu -= take;
             }

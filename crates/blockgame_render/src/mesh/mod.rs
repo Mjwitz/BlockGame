@@ -222,11 +222,6 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::WATER_WHEEL {
-                        self.build_water_wheel(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
-                        continue;
-                    }
-
                     if block_id.is_door() {
                         self.build_door(
                             &mut mesh,
@@ -1240,31 +1235,6 @@ impl<'a> ChunkMesher<'a> {
         // Rotor hub + vertical & horizontal blades on the front (+Z)
         self.add_box(mesh, fx + 0.42, fy + 0.06, fz + 0.80, fx + 0.58, fy + 0.98, fz + 0.90, [416; 6], light);
         self.add_box(mesh, fx + 0.04, fy + 0.55, fz + 0.80, fx + 0.96, fy + 0.71, fz + 0.90, [416; 6], light);
-    }
-
-    fn build_water_wheel(
-        &self,
-        mesh: &mut ChunkMesh,
-        chunk_pos: blockgame_core::chunk::ChunkPos,
-        x: i32,
-        y: i32,
-        z: i32,
-        light_map: &blockgame_core::lighting::ChunkLightMap,
-    ) {
-        let origin = chunk_pos.to_world_origin();
-        let fx = (origin.x + x) as f32;
-        let fy = (origin.y + y) as f32;
-        let fz = (origin.z + z) as f32;
-        let lv = light_map.get(x as usize, y as usize, z as usize);
-        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
-
-        // Central timber drum & axle
-        self.add_box(mesh, fx + 0.22, fy + 0.22, fz + 0.22, fx + 0.78, fy + 0.78, fz + 0.78, [418, 418, 417, 417, 417, 417], light);
-        // Projecting wooden paddles (top, bottom, left, right)
-        self.add_box(mesh, fx + 0.40, fy + 0.78, fz + 0.14, fx + 0.60, fy + 0.98, fz + 0.86, [418; 6], light);
-        self.add_box(mesh, fx + 0.40, fy + 0.02, fz + 0.14, fx + 0.60, fy + 0.22, fz + 0.86, [418; 6], light);
-        self.add_box(mesh, fx + 0.02, fy + 0.40, fz + 0.14, fx + 0.22, fy + 0.60, fz + 0.86, [418; 6], light);
-        self.add_box(mesh, fx + 0.78, fy + 0.40, fz + 0.14, fx + 0.98, fy + 0.60, fz + 0.86, [418; 6], light);
     }
 
     #[allow(clippy::too_many_arguments)]

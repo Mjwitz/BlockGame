@@ -768,7 +768,7 @@ pub fn load_power_file(
                 fuel,
                 burn_time,
                 max_burn_time,
-                current_output_w: 0.0,
+                current_output_eu_s: 0.0,
             },
         );
     }
@@ -784,7 +784,7 @@ pub fn load_power_file(
             crate::power::BatteryState {
                 stored_eu,
                 capacity_eu,
-                last_net_w: 0.0,
+                last_net_eu_s: 0.0,
             },
         );
     }
