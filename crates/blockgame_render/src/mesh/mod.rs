@@ -212,8 +212,8 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::SOLAR_PANEL {
-                        self.build_solar_panel(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                    if block_id.is_solar_panel() {
+                        self.build_solar_panel(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
                         continue;
                     }
 
@@ -1197,6 +1197,7 @@ impl<'a> ChunkMesher<'a> {
         x: i32,
         y: i32,
         z: i32,
+        block_id: BlockId,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
         let origin = chunk_pos.to_world_origin();
@@ -1205,6 +1206,12 @@ impl<'a> ChunkMesher<'a> {
         let fz = (origin.z + z) as f32;
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        let (top_tile, side_tile) = if block_id == BlockId::ADVANCED_SOLAR_PANEL {
+            (428u16, 429u16)
+        } else {
+            (413u16, 414u16)
+        };
 
         // add_box face order: [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
         // Support pedestal base
@@ -1216,10 +1223,10 @@ impl<'a> ChunkMesher<'a> {
             fx + 0.70,
             fy + 0.22,
             fz + 0.70,
-            [414, 414, 414, 414, 425, 425],
+            [side_tile, side_tile, side_tile, side_tile, 425, 425],
             light,
         );
-        // Slim photovoltaic panel slab on top (413 blue solar cell grid on Top +Y!)
+        // Slim photovoltaic panel slab on top (solar cell grid on Top +Y!)
         self.add_box(
             mesh,
             fx + 0.03,
@@ -1228,7 +1235,7 @@ impl<'a> ChunkMesher<'a> {
             fx + 0.97,
             fy + 0.38,
             fz + 0.97,
-            [414, 414, 414, 414, 413, 425],
+            [side_tile, side_tile, side_tile, side_tile, top_tile, 425],
             light,
         );
     }

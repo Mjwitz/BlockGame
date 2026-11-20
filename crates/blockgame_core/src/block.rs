@@ -120,6 +120,9 @@ impl BlockId {
     pub const ELECTRIC_FURNACE: Self = Self(105);
     pub const ELECTRIC_LAMP: Self = Self(106);
     pub const ELECTRIC_LAMP_LIT: Self = Self(107);
+    pub const ADVANCED_SOLAR_PANEL: Self = Self(108);
+    pub const ADVANCED_BATTERY_BOX: Self = Self(109);
+    pub const QUANTUM_BATTERY_BOX: Self = Self(110);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -133,8 +136,11 @@ impl BlockId {
             Self::COPPER_CABLE
                 | Self::COAL_GENERATOR
                 | Self::SOLAR_PANEL
+                | Self::ADVANCED_SOLAR_PANEL
                 | Self::WIND_TURBINE
                 | Self::BATTERY_BOX
+                | Self::ADVANCED_BATTERY_BOX
+                | Self::QUANTUM_BATTERY_BOX
                 | Self::ELECTRIC_FURNACE
                 | Self::ELECTRIC_LAMP
                 | Self::ELECTRIC_LAMP_LIT
@@ -147,10 +153,26 @@ impl BlockId {
     }
 
     #[inline]
+    pub const fn is_solar_panel(&self) -> bool {
+        matches!(*self, Self::SOLAR_PANEL | Self::ADVANCED_SOLAR_PANEL)
+    }
+
+    #[inline]
+    pub const fn is_battery_box(&self) -> bool {
+        matches!(
+            *self,
+            Self::BATTERY_BOX | Self::ADVANCED_BATTERY_BOX | Self::QUANTUM_BATTERY_BOX
+        )
+    }
+
+    #[inline]
     pub const fn is_generator(&self) -> bool {
         matches!(
             *self,
-            Self::COAL_GENERATOR | Self::SOLAR_PANEL | Self::WIND_TURBINE
+            Self::COAL_GENERATOR
+                | Self::SOLAR_PANEL
+                | Self::ADVANCED_SOLAR_PANEL
+                | Self::WIND_TURBINE
         )
     }
 
@@ -1695,6 +1717,51 @@ impl BlockRegistry {
             required_tool: None,
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::ELECTRIC_LAMP),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ADVANCED_SOLAR_PANEL,
+            name: "Advanced Solar Panel",
+            is_solid: true,
+            is_transparent: true,
+            luminance: 0,
+            // PosY: 428 (monocrystalline gold-grid), NegY: 425, Sides: 429
+            textures: [428, 425, 429, 429, 429, 429],
+            hardness: 2.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::ADVANCED_SOLAR_PANEL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ADVANCED_BATTERY_BOX,
+            name: "Advanced Battery Box",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 431, NegY: 425, PosZ: 430 (front cyan LED meter), other sides: 431
+            textures: [431, 425, 430, 431, 431, 431],
+            hardness: 3.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::ADVANCED_BATTERY_BOX),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::QUANTUM_BATTERY_BOX,
+            name: "Quantum Battery Box",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 433, NegY: 425, PosZ: 432 (front plasma LED meter), other sides: 433
+            textures: [433, 425, 432, 433, 433, 433],
+            hardness: 4.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::QUANTUM_BATTERY_BOX),
             drop_count: (1, 1),
         });
 

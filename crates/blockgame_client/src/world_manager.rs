@@ -1002,7 +1002,7 @@ impl WorldManager {
                 } else {
                     Vec::new()
                 }
-            } else if current == BlockId::BATTERY_BOX {
+            } else if current.is_battery_box() {
                 world.remove_battery(pos);
                 Vec::new()
             } else if current == BlockId::ELECTRIC_FURNACE {

@@ -206,9 +206,10 @@ impl World {
     }
 
     pub fn get_or_create_battery(&mut self, pos: IVec3) -> &mut crate::power::BatteryState {
+        let block = self.get_block(pos);
         self.batteries
             .entry(pos)
-            .or_insert_with(crate::power::BatteryState::new)
+            .or_insert_with(|| crate::power::BatteryState::for_block(block))
     }
 
     pub fn remove_battery(&mut self, pos: IVec3) -> Option<crate::power::BatteryState> {

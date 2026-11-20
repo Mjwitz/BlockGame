@@ -2562,7 +2562,7 @@ impl ApplicationHandler for BlockGameApp {
                                 return;
                             }
                             if block_id == BlockId::COAL_GENERATOR
-                                || block_id == BlockId::BATTERY_BOX
+                                || block_id.is_battery_box()
                                 || block_id == BlockId::ELECTRIC_FURNACE
                             {
                                 state.mouse_left_down = false;
@@ -2574,7 +2574,7 @@ impl ApplicationHandler for BlockGameApp {
                                         state.world_manager.world().lock().unwrap();
                                     if block_id == BlockId::COAL_GENERATOR {
                                         world_guard.get_or_create_coal_generator(hit.hit_voxel);
-                                    } else if block_id == BlockId::BATTERY_BOX {
+                                    } else if block_id.is_battery_box() {
                                         world_guard.get_or_create_battery(hit.hit_voxel);
                                     } else {
                                         world_guard.get_or_create_electric_furnace(hit.hit_voxel);
@@ -2585,7 +2585,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.active_coal_gen_pos =
                                     (block_id == BlockId::COAL_GENERATOR).then_some(hit.hit_voxel);
                                 state.active_battery_pos =
-                                    (block_id == BlockId::BATTERY_BOX).then_some(hit.hit_voxel);
+                                    block_id.is_battery_box().then_some(hit.hit_voxel);
                                 state.active_electric_furnace_pos =
                                     (block_id == BlockId::ELECTRIC_FURNACE).then_some(hit.hit_voxel);
                                 state.inventory_open = true;
@@ -2599,6 +2599,7 @@ impl ApplicationHandler for BlockGameApp {
                             if matches!(
                                 block_id,
                                 BlockId::SOLAR_PANEL
+                                    | BlockId::ADVANCED_SOLAR_PANEL
                                     | BlockId::WIND_TURBINE
                                     | BlockId::ELECTRIC_LAMP
                                     | BlockId::ELECTRIC_LAMP_LIT
@@ -2631,6 +2632,14 @@ impl ApplicationHandler for BlockGameApp {
                                                     is_daytime,
                                                 );
                                                 format!("Solar Panel: Provides +{:.0} EU/s", out)
+                                            }
+                                            BlockId::ADVANCED_SOLAR_PANEL => {
+                                                let out = blockgame_core::power::solar_panel_output_eu_s(
+                                                    &world_guard,
+                                                    hit.hit_voxel,
+                                                    is_daytime,
+                                                );
+                                                format!("Advanced Solar Panel: Provides +{:.0} EU/s", out)
                                             }
                                             BlockId::WIND_TURBINE => {
                                                 let out = blockgame_core::power::wind_turbine_output_eu_s(

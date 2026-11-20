@@ -9,8 +9,10 @@ use crate::world::World;
 
 /// Output of a Coal Generator in EU per second while burning fuel.
 pub const COAL_GENERATOR_OUTPUT_EU_S: f32 = 40.0;
-/// Output of a Solar Panel in EU per second during daytime with clear sky above.
+/// Output of a Tier 1 Solar Panel in EU per second during daytime with clear sky above.
 pub const SOLAR_PANEL_OUTPUT_EU_S: f32 = 25.0;
+/// Output of a Tier 2 Advanced Solar Panel in EU per second during daytime with clear sky above.
+pub const ADVANCED_SOLAR_PANEL_OUTPUT_EU_S: f32 = 75.0;
 /// Base output of a Wind Turbine in EU per second at sea level (scales up with elevation).
 pub const WIND_TURBINE_BASE_EU_S: f32 = 15.0;
 /// Power draw of an Electric Furnace in EU per second while actively smelting.
@@ -19,10 +21,31 @@ pub const ELECTRIC_FURNACE_DRAW_EU_S: f32 = 30.0;
 pub const ELECTRIC_FURNACE_COOK_TIME: f32 = 4.0;
 /// Power draw of an Electric Lamp in EU per second.
 pub const ELECTRIC_LAMP_DRAW_EU_S: f32 = 5.0;
-/// Default energy storage capacity of a Battery Box in EU.
+/// Tier 1 Battery Box capacity (EU) and max I/O rate (EU/s).
 pub const BATTERY_DEFAULT_CAPACITY_EU: f32 = 20_000.0;
-/// Maximum charge/discharge rate per Battery Box in EU per second.
 pub const BATTERY_MAX_IO_EU_S: f32 = 100.0;
+/// Tier 2 Advanced Battery Box capacity (EU) and max I/O rate (EU/s).
+pub const ADVANCED_BATTERY_CAPACITY_EU: f32 = 100_000.0;
+pub const ADVANCED_BATTERY_MAX_IO_EU_S: f32 = 300.0;
+/// Tier 3 Quantum Battery Box capacity (EU) and max I/O rate (EU/s).
+pub const QUANTUM_BATTERY_CAPACITY_EU: f32 = 500_000.0;
+pub const QUANTUM_BATTERY_MAX_IO_EU_S: f32 = 1_000.0;
+
+pub const fn battery_capacity_eu(block: BlockId) -> f32 {
+    match block {
+        BlockId::ADVANCED_BATTERY_BOX => ADVANCED_BATTERY_CAPACITY_EU,
+        BlockId::QUANTUM_BATTERY_BOX => QUANTUM_BATTERY_CAPACITY_EU,
+        _ => BATTERY_DEFAULT_CAPACITY_EU,
+    }
+}
+
+pub const fn battery_max_io_eu_s(block: BlockId) -> f32 {
+    match block {
+        BlockId::ADVANCED_BATTERY_BOX => ADVANCED_BATTERY_MAX_IO_EU_S,
+        BlockId::QUANTUM_BATTERY_BOX => QUANTUM_BATTERY_MAX_IO_EU_S,
+        _ => BATTERY_MAX_IO_EU_S,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoalGeneratorState {
@@ -77,9 +100,13 @@ impl Default for BatteryState {
 
 impl BatteryState {
     pub fn new() -> Self {
+        Self::for_block(BlockId::BATTERY_BOX)
+    }
+
+    pub fn for_block(block: BlockId) -> Self {
         Self {
             stored_eu: 0.0,
-            capacity_eu: BATTERY_DEFAULT_CAPACITY_EU,
+            capacity_eu: battery_capacity_eu(block),
             last_net_eu_s: 0.0,
         }
     }
@@ -173,7 +200,7 @@ const NEIGHBORS_6: [IVec3; 6] = [
     IVec3::NEG_Z,
 ];
 
-/// Computes live output (EU/s) of a Solar Panel at `pos`.
+/// Computes live output (EU/s) of a Solar Panel (Tier 1 or Tier 2) at `pos`.
 pub fn solar_panel_output_eu_s(world: &World, pos: IVec3, is_daytime: bool) -> f32 {
     if !is_daytime {
         return 0.0;
@@ -185,7 +212,11 @@ pub fn solar_panel_output_eu_s(world: &World, pos: IVec3, is_daytime: bool) -> f
             return 0.0;
         }
     }
-    SOLAR_PANEL_OUTPUT_EU_S
+    if world.get_block(pos) == BlockId::ADVANCED_SOLAR_PANEL {
+        ADVANCED_SOLAR_PANEL_OUTPUT_EU_S
+    } else {
+        SOLAR_PANEL_OUTPUT_EU_S
+    }
 }
 
 /// Computes live output (EU/s) of a Wind Turbine at `pos` (base power port).
@@ -249,18 +280,20 @@ pub fn get_network_summary(world: &World, start_pos: IVec3, is_daytime: bool) ->
                     summary.total_gen_eu_s += gen.current_output_eu_s;
                 }
             }
-            BlockId::SOLAR_PANEL => {
+            BlockId::SOLAR_PANEL | BlockId::ADVANCED_SOLAR_PANEL => {
                 summary.total_gen_eu_s += solar_panel_output_eu_s(world, pos, is_daytime);
             }
             BlockId::WIND_TURBINE => {
                 summary.total_gen_eu_s += wind_turbine_output_eu_s(world, pos);
             }
-            BlockId::BATTERY_BOX => {
+            BlockId::BATTERY_BOX
+            | BlockId::ADVANCED_BATTERY_BOX
+            | BlockId::QUANTUM_BATTERY_BOX => {
                 if let Some(bat) = world.batteries.get(&pos) {
                     summary.total_stored_eu += bat.stored_eu;
                     summary.total_capacity_eu += bat.capacity_eu;
                 } else {
-                    summary.total_capacity_eu += BATTERY_DEFAULT_CAPACITY_EU;
+                    summary.total_capacity_eu += battery_capacity_eu(block);
                 }
             }
             BlockId::ELECTRIC_FURNACE => {
@@ -311,21 +344,24 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
 
         // Categorize nodes in this connected network.
         let mut coal_gens = Vec::new();
-        let mut batteries = Vec::new();
+        let mut batteries: Vec<(IVec3, BlockId)> = Vec::new();
         let mut electric_furnaces = Vec::new();
         let mut lamps = Vec::new();
         let mut passive_gen_eu_s = 0.0f32;
 
         for &pos in &component {
-            match world.get_block(pos) {
+            let block = world.get_block(pos);
+            match block {
                 BlockId::COAL_GENERATOR => coal_gens.push(pos),
-                BlockId::SOLAR_PANEL => {
+                BlockId::SOLAR_PANEL | BlockId::ADVANCED_SOLAR_PANEL => {
                     passive_gen_eu_s += solar_panel_output_eu_s(world, pos, is_daytime);
                 }
                 BlockId::WIND_TURBINE => {
                     passive_gen_eu_s += wind_turbine_output_eu_s(world, pos);
                 }
-                BlockId::BATTERY_BOX => batteries.push(pos),
+                BlockId::BATTERY_BOX
+                | BlockId::ADVANCED_BATTERY_BOX
+                | BlockId::QUANTUM_BATTERY_BOX => batteries.push((pos, block)),
                 BlockId::ELECTRIC_FURNACE => electric_furnaces.push(pos),
                 BlockId::ELECTRIC_LAMP | BlockId::ELECTRIC_LAMP_LIT => lamps.push(pos),
                 _ => {}
@@ -334,7 +370,7 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
 
         // Ensure battery states exist and compute total free battery headroom.
         let mut battery_headroom_eu = 0.0f32;
-        for &pos in &batteries {
+        for &(pos, _block) in &batteries {
             let bat = world.get_or_create_battery(pos);
             bat.last_net_eu_s = 0.0;
             battery_headroom_eu += (bat.capacity_eu - bat.stored_eu).max(0.0);
@@ -388,16 +424,16 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         let total_gen_eu = (passive_gen_eu_s + coal_gen_eu_s) * dt;
         let total_demand_eu = total_demand_eu_s * dt;
 
-        // Balance generation, demand, and batteries.
+        // Balance generation, demand, and batteries (respecting each battery tier's max I/O rate).
         let mut supplied_eu = total_gen_eu.min(total_demand_eu);
         if total_gen_eu > total_demand_eu && !batteries.is_empty() {
             // Charge batteries with surplus energy.
             let mut surplus_eu = total_gen_eu - total_demand_eu;
-            let per_bat_cap = BATTERY_MAX_IO_EU_S * dt;
-            for &pos in &batteries {
+            for &(pos, block) in &batteries {
                 if surplus_eu <= 0.0 {
                     break;
                 }
+                let per_bat_cap = battery_max_io_eu_s(block) * dt;
                 let bat = world.get_or_create_battery(pos);
                 let space = (bat.capacity_eu - bat.stored_eu).max(0.0);
                 let add = surplus_eu.min(space).min(per_bat_cap);
@@ -408,11 +444,11 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         } else if total_demand_eu > total_gen_eu && !batteries.is_empty() {
             // Discharge batteries to cover the shortfall.
             let mut shortfall_eu = total_demand_eu - total_gen_eu;
-            let per_bat_cap = BATTERY_MAX_IO_EU_S * dt;
-            for &pos in &batteries {
+            for &(pos, block) in &batteries {
                 if shortfall_eu <= 0.0 {
                     break;
                 }
+                let per_bat_cap = battery_max_io_eu_s(block) * dt;
                 let bat = world.get_or_create_battery(pos);
                 let take = shortfall_eu.min(bat.stored_eu).min(per_bat_cap);
                 bat.stored_eu -= take;

@@ -2229,6 +2229,39 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::ELECTRIC_LAMP, 2),
         });
+        self.register(Recipe::Shaped {
+            name: "Advanced Solar Panel",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::SOLAR_PANEL), Some(ItemId::DIAMOND),     Some(ItemId::SOLAR_PANEL),
+                Some(ItemId::GOLD_INGOT),  Some(ItemId::POWER_CORE),  Some(ItemId::GOLD_INGOT),
+                Some(ItemId::IRON_INGOT),  Some(ItemId::COPPER_WIRE), Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::ADVANCED_SOLAR_PANEL, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Advanced Battery Box",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::GOLD_INGOT),  Some(ItemId::POWER_CORE),  Some(ItemId::GOLD_INGOT),
+                Some(ItemId::BATTERY_BOX), Some(ItemId::COPPER_WIRE), Some(ItemId::BATTERY_BOX),
+                Some(ItemId::GOLD_INGOT),  Some(ItemId::IRON_INGOT),  Some(ItemId::GOLD_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::ADVANCED_BATTERY_BOX, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Quantum Battery Box",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::DIAMOND),              Some(ItemId::POWER_CORE),  Some(ItemId::DIAMOND),
+                Some(ItemId::ADVANCED_BATTERY_BOX), Some(ItemId::GOLD_INGOT),  Some(ItemId::ADVANCED_BATTERY_BOX),
+                Some(ItemId::DIAMOND),              Some(ItemId::POWER_CORE),  Some(ItemId::DIAMOND),
+            ],
+            output: ItemSlot::new(ItemId::QUANTUM_BATTERY_BOX, 1),
+        });
     }
 }
 

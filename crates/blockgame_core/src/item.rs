@@ -220,6 +220,9 @@ impl ItemId {
     pub const BATTERY_BOX: Self = Self(207);
     pub const ELECTRIC_FURNACE: Self = Self(208);
     pub const ELECTRIC_LAMP: Self = Self(209);
+    pub const ADVANCED_SOLAR_PANEL: Self = Self(210);
+    pub const ADVANCED_BATTERY_BOX: Self = Self(211);
+    pub const QUANTUM_BATTERY_BOX: Self = Self(212);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -2283,6 +2286,9 @@ impl ItemRegistry {
             (ItemId::BATTERY_BOX, Some(BlockId::BATTERY_BOX), "blockgame:battery_box", "Battery Box (20,000 EU)", 419),
             (ItemId::ELECTRIC_FURNACE, Some(BlockId::ELECTRIC_FURNACE), "blockgame:electric_furnace", "Electric Furnace (-30 EU/s)", 421),
             (ItemId::ELECTRIC_LAMP, Some(BlockId::ELECTRIC_LAMP), "blockgame:electric_lamp", "Electric Lamp (-5 EU/s)", 424),
+            (ItemId::ADVANCED_SOLAR_PANEL, Some(BlockId::ADVANCED_SOLAR_PANEL), "blockgame:advanced_solar_panel", "Advanced Solar Panel (+75 EU/s)", 428),
+            (ItemId::ADVANCED_BATTERY_BOX, Some(BlockId::ADVANCED_BATTERY_BOX), "blockgame:advanced_battery_box", "Advanced Battery Box (100,000 EU)", 430),
+            (ItemId::QUANTUM_BATTERY_BOX, Some(BlockId::QUANTUM_BATTERY_BOX), "blockgame:quantum_battery_box", "Quantum Battery Box (500,000 EU)", 432),
         ];
         for (id, placeable_block, name, display_name, icon_tile) in power_item_defs {
             self.register(ItemDef {

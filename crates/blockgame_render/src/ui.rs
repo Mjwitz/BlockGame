@@ -4490,15 +4490,35 @@ impl UiBuilder {
         let start_x = (screen_w - inv_w) * 0.5;
         let top_y = screen_h * 0.5 - 220.0;
 
+        let (title_txt, title_col, bar_col) = if bat.capacity_eu >= 400_000.0 {
+            (
+                "Quantum Battery Box (Max +/-1,000 EU/s)",
+                [0.84, 0.56, 0.99, 1.0],
+                [0.74, 0.36, 0.96, 1.0],
+            )
+        } else if bat.capacity_eu >= 80_000.0 {
+            (
+                "Advanced Battery Box (Max +/-300 EU/s)",
+                [0.45, 0.92, 0.99, 1.0],
+                [0.20, 0.80, 0.96, 1.0],
+            )
+        } else {
+            (
+                "Battery Box (Max +/-100 EU/s)",
+                [0.55, 0.98, 0.72, 1.0],
+                [0.22, 0.86, 0.48, 1.0],
+            )
+        };
+
         Self::draw_string(
             mesh,
             start_x,
             top_y - 20.0,
-            "Battery Box (Max +/-100 EU/s)",
+            title_txt,
             8.0,
             10.0,
             1.0,
-            [0.55, 0.98, 0.72, 1.0],
+            title_col,
         );
 
         // Large visual energy bar
@@ -4510,7 +4530,7 @@ impl UiBuilder {
         mesh.add_quad(bar_x, bar_y, bar_w, bar_h, white_uv, [0.08, 0.10, 0.12, 0.95]);
         let ratio = bat.charge_ratio();
         if ratio > 0.0 {
-            mesh.add_quad(bar_x, bar_y, bar_w * ratio, bar_h, white_uv, [0.22, 0.86, 0.48, 1.0]);
+            mesh.add_quad(bar_x, bar_y, bar_w * ratio, bar_h, white_uv, bar_col);
         }
 
         let pct_txt = format!("{:.0} / {:.0} EU ({:.0}%)", bat.stored_eu, bat.capacity_eu, ratio * 100.0);

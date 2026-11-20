@@ -2250,6 +2250,102 @@ fn paint_power_tiles(atlas: &mut TextureAtlas) {
         let n = (hash(px, py, 427) % 9) - 4;
         Rgba([clamp(38, n), clamp(126, n), clamp(64, n), 255])
     });
+
+    // 428: Advanced Solar Panel Top (deep violet-indigo monocrystalline cells + gleaming gold busbars & frame)
+    atlas.paint_tile(428, |px, py| {
+        let n = (hash(px, py, 428) % 9) - 4;
+        if px < 2 || px >= 30 || py < 2 || py >= 30 {
+            return Rgba([clamp(218, n), clamp(174, n), clamp(52, n), 255]); // Gold alloy frame
+        }
+        if px == 15 || px == 16 || py == 15 || py == 16 || px % 8 == 0 || py % 8 == 0 {
+            return Rgba([clamp(238, n), clamp(202, n), clamp(78, n), 255]); // Gold busbars
+        }
+        let shimmer = if (px + py) % 7 == 0 { 22 } else { 0 };
+        Rgba([clamp(42, n + shimmer), clamp(28, n + shimmer), clamp(118, n + shimmer), 255])
+    });
+
+    // 429: Advanced Solar Panel Side (dark steel + gold trim + copper terminal)
+    atlas.paint_tile(429, |px, py| {
+        let n = (hash(px, py, 429) % 9) - 4;
+        if py <= 3 || py >= 28 {
+            return Rgba([clamp(212, n), clamp(168, n), clamp(48, n), 255]);
+        }
+        if py >= 12 && py <= 19 && px >= 12 && px <= 19 {
+            return Rgba([clamp(228, n), clamp(126, n), clamp(64, n), 255]);
+        }
+        Rgba([clamp(54, n), clamp(58, n), clamp(74, n), 255])
+    });
+
+    // 430: Advanced Battery Box Front (gold-trimmed steel + bright cyan-blue LED charge bars)
+    atlas.paint_tile(430, |px, py| {
+        let n = (hash(px, py, 430) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(214, n), clamp(170, n), clamp(50, n), 255]); // Gold frame
+        }
+        if (py <= 5 || py >= 26) && px >= 10 && px <= 21 {
+            return Rgba([clamp(222, n), clamp(120, n), clamp(64, n), 255]); // Copper busbars
+        }
+        if px >= 8 && px <= 23 && py >= 8 && py <= 23 {
+            if px == 8 || px == 23 || py == 8 || py == 23 {
+                return Rgba([20, 26, 36, 255]);
+            }
+            if py % 4 == 0 {
+                return Rgba([24, 34, 46, 255]);
+            }
+            return Rgba([clamp(46, n), clamp(212, n), clamp(248, n), 255]); // Glowing cyan cells
+        }
+        Rgba([clamp(68, n), clamp(76, n), clamp(92, n), 255])
+    });
+
+    // 431: Advanced Battery Box Side/Top (dark steel + gold trim + copper terminal)
+    atlas.paint_tile(431, |px, py| {
+        let n = (hash(px, py, 431) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(206, n), clamp(164, n), clamp(48, n), 255]);
+        }
+        if px >= 12 && px <= 19 && py >= 12 && py <= 19 {
+            return Rgba([clamp(46, n), clamp(208, n), clamp(244, n), 255]);
+        }
+        Rgba([clamp(64, n), clamp(72, n), clamp(88, n), 255])
+    });
+
+    // 432: Quantum Battery Box Front (obsidian-alloy + radiant violet/diamond-cyan plasma core bars)
+    atlas.paint_tile(432, |px, py| {
+        let n = (hash(px, py, 432) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            let corner = (px < 5 || px >= 27) && (py < 5 || py >= 27);
+            if corner {
+                return Rgba([clamp(92, n), clamp(238, n), clamp(245, n), 255]); // Diamond corner nodes
+            }
+            return Rgba([clamp(34, n), clamp(28, n), clamp(48, n), 255]);
+        }
+        if (py <= 5 || py >= 26) && px >= 10 && px <= 21 {
+            return Rgba([clamp(108, n), clamp(242, n), clamp(248, n), 255]); // Diamond conduits
+        }
+        if px >= 7 && px <= 24 && py >= 7 && py <= 24 {
+            if px == 7 || px == 24 || py == 7 || py == 24 {
+                return Rgba([18, 14, 28, 255]);
+            }
+            if py % 4 == 0 {
+                return Rgba([28, 20, 44, 255]);
+            }
+            let pulse = if (px + py) % 6 < 2 { 24 } else { 0 };
+            return Rgba([clamp(192, n + pulse), clamp(86, n + pulse), clamp(250, n), 255]); // Radiant violet plasma
+        }
+        Rgba([clamp(46, n), clamp(40, n), clamp(66, n), 255])
+    });
+
+    // 433: Quantum Battery Box Side/Top (obsidian-alloy + diamond-cyan trim + violet core port)
+    atlas.paint_tile(433, |px, py| {
+        let n = (hash(px, py, 433) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(76, n), clamp(218, n), clamp(232, n), 255]);
+        }
+        if px >= 12 && px <= 19 && py >= 12 && py <= 19 {
+            return Rgba([clamp(186, n), clamp(82, n), clamp(248, n), 255]);
+        }
+        Rgba([clamp(42, n), clamp(36, n), clamp(60, n), 255])
+    });
 }
 
 #[cfg(test)]
