@@ -3,6 +3,7 @@
 - [[Getting Started|Getting-Started]]
 - [[Controls and UI|Controls-and-UI]]
 - [[Gameplay and Survival|Gameplay-and-Survival]]
+- [[Power and Storage|Power-and-Storage]]
 - [[Mobs and Breeding|Mobs-and-Breeding]]
 - [[World and Biomes|World-and-Biomes]]
 - [[Multiplayer and Server Guide|Multiplayer-and-Server-Guide]]

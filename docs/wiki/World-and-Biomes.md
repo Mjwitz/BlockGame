@@ -31,7 +31,7 @@ Worlds are generated deterministically from a 32-bit seed using domain-warped Vo
 - **Translucent Water & Ice**: Water and Ice render in a dedicated translucent pass with proper depth sorting and seamless chunk-border face culling.
 - **Water & Buckets**: Flowing water inflow physics and Buckets for picking up and placing water.
 - **Gravity & Support**: Sand and Gravel fall when unsupported; attached blocks (torches, crops, flowers) break if their supporting block is removed.
-- **Modular World Saves**: Singleplayer and server worlds are stored under `saves/<world_name>/` with chunk regions, world metadata, and per-player data (including per-world MMO skills).
+- **Modular World Saves & Block Orientation Persistence**: Singleplayer and server worlds are stored under `saves/<world_name>/` with v2 chunk regions (preserving exact placed facing directions for Stairs, Beds, Furnaces, Chests, Wind Turbines, Generators, Battery Boxes, Electric Machines, and Storage Terminals), world metadata, power grids, unique backpacks (`backpack.bin`), and per-player data (including per-world MMO skills).
 
 ## Chunk Streaming & Rendering Performance
 

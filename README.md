@@ -15,13 +15,21 @@ A procedural voxel sandbox survival game written in **Rust** with **wgpu** for m
 - **Day/Night Cycle & Beds**: Dynamic skybox with moving sun and moon, dusk-to-dawn monster spawning, and 2-block-long beds to skip the night (requires $\ge 50\%$ of players sleeping in multiplayer).
 - **Survival, Creative Mode, Crafting & Smelting**:
   - Health, hunger, fall damage, drowning, and underwater visual effects, plus **Creative Mode** (world creation toggle or `/gamemode`).
-  - 2x2 inventory crafting, 3x3 Crafting Table, Furnace smelting, Chests, and an integrated JEI-style recipe/usage browser (`R` / `U` on hovered items).
+  - 2x2 inventory crafting, 3x3 Crafting Table, Furnace smelting, and an integrated JEI-style recipe/usage browser (`R` / `U` on hovered items).
   - Tool durability across Wood, Stone, Iron, Gold, and Diamond tiers, plus 16-piece Armor sets (Leather, Iron, Gold, Diamond) and Bow & Arrow combat.
+- **Electrical Power System (EU/s)**:
+  - **Generators**: Coal Generator (`+40 EU/s`), Solar Panel (`+15 EU/s`), Advanced Solar Panel (`+60 EU/s`), and 4-block animated **Wind Turbine** (up to `+45 EU/s` with bottom power port).
+  - **Storage & Distribution**: Tiered **Battery Boxes** (`10k` / `50k` / `250k EU`) and tiered **Power Cables** (Copper `200 EU/s`, Gold `1,000 EU/s`, Diamond `5,000 EU/s`).
+  - **Electric Machines**: **Electric Furnace** (`-25 EU/s`) and **Electric Lamp** (`-5 EU/s`).
+- **Tiered Storage, Sorting & Portable Backpacks**:
+  - **Upgraded Chests**: Wooden (27), Iron (45), Gold (63), and Diamond (81) paginated chests.
+  - **Powered Storage Network**: Link chests via green **Storage Cables** to one or more **Storage Terminals** with live search, sorting, and complexity-scaled EU/s draw.
+  - **Unique Portable Backpacks**: Leather (18), Iron (27), and Diamond (36) non-stackable, per-instance unique backpacks (`B` or Right Click).
 - **Passive & Hostile Mobs**:
   - **Passive Animals**: Cows, Pigs, Chickens, and Sheep (shearing/wool drops, plus Wheat breeding with baby scaling, heart particles, and a 5-minute cooldown).
   - **Hostile Monsters**: Zombies, Skeletons (ranged bow AI), and Spiders with light-gated spawning and animated 3D flame visuals when burning in sunlight.
 - **Custom Stereo Soundtrack & Spatial Audio**: Embedded stereo MP3 soundtrack with contextual triggers (adventuring, mining, and anytime background tracks) alongside 3D spatial SFX and proximity voice chat.
-- **Multiplayer & Dedicated Server**: TCP client/server architecture (`blockgame_server`) with modular world saves, player accounts, groups/ranks, permissions, and server console/in-game slash commands.
+- **Multiplayer & Dedicated Server**: TCP client/server architecture (`blockgame_server`) with modular world saves (including v2 block facing persistence), player accounts, groups/ranks, permissions, and server console/in-game slash commands.
 
 ---
 
@@ -32,8 +40,8 @@ BlockGame/
 ├── .github/workflows/
 │   └── release.yml         # Automated Windows & Linux release builds
 ├── crates/
-│   ├── blockgame_core/     # Voxels, chunks, AABB physics, DDA raycasting, mobs, items, net, commands
-│   ├── blockgame_gen/      # Seeded terrain noise, caves, 16 biomes, trees & feature generation
+│   ├── blockgame_core/     # Voxels, chunks, AABB physics, DDA raycasting, mobs, items, power, storage, net
+│   ├── blockgame_gen/      # Seeded terrain noise, caves, 20 biomes, trees & feature generation
 │   ├── blockgame_render/   # wgpu pipelines, chunk/mob meshing, celestial sky, 32x atlas, UI
 │   ├── blockgame_client/   # Desktop client (winit + wgpu + rodio audio)
 │   └── blockgame_server/   # Headless dedicated multiplayer server CLI
@@ -88,9 +96,11 @@ cargo run --release -p blockgame_server -- --port 25565 --world "MyWorld" --seed
 | `Space` | Jump / Swim up / Fly up |
 | `Left Ctrl` | Sprint |
 | `Left Click` | Break block / Attack |
-| `Right Click` | Place block / Interact (Bed, Chest, Furnace, Crafting Table) / Shoot Bow / Feed Animal |
+| `Right Click` | Place block / Interact (Bed, Chest, Storage Terminal, Furnace, Crafting Table, Power Machine, Backpack) / Shoot Bow / Feed Animal |
 | `1` - `9` / Scroll | Select hotbar slot |
 | `E` | Open / Close Inventory |
+| `B` | Open / Close Portable Backpack |
+| `K` | Open / Close Skills & Milestones Menu |
 | `R` / `U` | View Recipe / Usages for hovered item (in Inventory) |
 | `T` | Open Chat / Slash Commands |
 | `F` | Toggle Flight mode |

@@ -11,11 +11,12 @@
 - **Mining Hardness**: Blocks have material hardness and preferred tool types (e.g., Pickaxe for Stone/Ores, Axe for Wood, Shovel for Dirt/Sand/Gravel).
 - **Bow & Arrow**: Craft a Bow and Arrows, then `Right Click` with the Bow selected to fire arrows at mobs or targets.
 
-## Crafting, Smelting & Storage
+## Crafting, Smelting, Power & Storage
 - **2x2 Inventory Crafting**: Available anytime by pressing `E`.
-- **3x3 Crafting Table**: Place and `Right Click` to unlock full 3x3 recipes (tools, armor, beds, bows, buckets, chests, furnaces).
-- **Furnace**: Place and `Right Click` to smelt ores and cook food using fuel (Coal, Wood Planks, Logs, Sticks).
-- **Chest**: Place and `Right Click` for persistent 27-slot item storage.
+- **3x3 Crafting Table**: Place and `Right Click` to unlock full 3x3 recipes (tools, armor, beds, bows, buckets, chests, furnaces, power machines, and backpacks).
+- **Furnace & Electric Furnace**: Smelt ores and cook food with coal/wood fuel in a standard Furnace, or use EU power in an **Electric Furnace** (`-25 EU/s`).
+- **Upgraded Chests**: Store items in **Wooden** (27 slots), **Iron** (45 slots), **Gold** (63 slots), or **Diamond** (81 slots) Chests.
+- **Powered Storage & Backpacks**: Link chests together using **Storage Cables** and a powered **Storage Terminal** with live search and sorting, or carry unique **Leather / Iron / Diamond Backpacks** (`B`). See **[Power and Storage](Power-and-Storage)** for full details.
 
 ## Day/Night Cycle & Sleeping in Beds
 - A full day/night cycle spans `24000` ticks, with a **Sun** and **Moon** moving across the sky to show the time of day.
