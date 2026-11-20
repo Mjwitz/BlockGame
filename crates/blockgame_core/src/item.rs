@@ -223,6 +223,8 @@ impl ItemId {
     pub const ADVANCED_SOLAR_PANEL: Self = Self(210);
     pub const ADVANCED_BATTERY_BOX: Self = Self(211);
     pub const QUANTUM_BATTERY_BOX: Self = Self(212);
+    pub const GOLD_CABLE: Self = Self(213);
+    pub const DIAMOND_CABLE: Self = Self(214);
 
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
@@ -2279,7 +2281,9 @@ impl ItemRegistry {
         let power_item_defs = [
             (ItemId::COPPER_WIRE, None, "blockgame:copper_wire", "Copper Wire", 426),
             (ItemId::POWER_CORE, None, "blockgame:power_core", "Power Core", 427),
-            (ItemId::COPPER_CABLE, Some(BlockId::COPPER_CABLE), "blockgame:copper_cable", "Copper Cable (Transfers EU)", 410),
+            (ItemId::COPPER_CABLE, Some(BlockId::COPPER_CABLE), "blockgame:copper_cable", "Copper Cable (200 EU/s)", 410),
+            (ItemId::GOLD_CABLE, Some(BlockId::GOLD_CABLE), "blockgame:gold_cable", "Gold Cable (1,000 EU/s)", 434),
+            (ItemId::DIAMOND_CABLE, Some(BlockId::DIAMOND_CABLE), "blockgame:diamond_cable", "Diamond Cable (5,000 EU/s)", 435),
             (ItemId::COAL_GENERATOR, Some(BlockId::COAL_GENERATOR), "blockgame:coal_generator", "Coal Generator (+40 EU/s)", 411),
             (ItemId::SOLAR_PANEL, Some(BlockId::SOLAR_PANEL), "blockgame:solar_panel", "Solar Panel (+25 EU/s)", 413),
             (ItemId::WIND_TURBINE, Some(BlockId::WIND_TURBINE), "blockgame:wind_turbine", "Wind Turbine (+15-60 EU/s)", 415),

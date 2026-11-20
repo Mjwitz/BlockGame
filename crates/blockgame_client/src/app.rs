@@ -2604,6 +2604,8 @@ impl ApplicationHandler for BlockGameApp {
                                     | BlockId::ELECTRIC_LAMP
                                     | BlockId::ELECTRIC_LAMP_LIT
                                     | BlockId::COPPER_CABLE
+                                    | BlockId::GOLD_CABLE
+                                    | BlockId::DIAMOND_CABLE
                             ) {
                                 let held_is_placeable = {
                                     let slot = state.inventory.get(state.active_hotbar_slot);
@@ -2655,13 +2657,24 @@ impl ApplicationHandler for BlockGameApp {
                                                 "Electric Lamp: Consumes -5 EU/s (Unpowered)"
                                                     .to_string()
                                             }
-                                            _ => "Copper Cable (Power Grid)".to_string(),
+                                            BlockId::GOLD_CABLE => {
+                                                "Gold Cable: Max 1,000 EU/s".to_string()
+                                            }
+                                            BlockId::DIAMOND_CABLE => {
+                                                "Diamond Cable: Max 5,000 EU/s".to_string()
+                                            }
+                                            _ => "Copper Cable: Max 200 EU/s".to_string(),
+                                        };
+                                        let cap_note = match s.cable_limit_eu_s {
+                                            Some(lim) => format!(" | Cable Cap: {:.0} EU/s", lim),
+                                            None => String::new(),
                                         };
                                         format!(
-                                            "{} | Grid: +{:.0} EU/s Gen / -{:.0} EU/s Use | Stored: {:.0}/{:.0} EU",
+                                            "{} | Grid: +{:.0} EU/s Gen / -{:.0} EU/s Use{} | Stored: {:.0}/{:.0} EU",
                                             block_line,
                                             s.total_gen_eu_s,
                                             s.total_demand_eu_s,
+                                            cap_note,
                                             s.total_stored_eu,
                                             s.total_capacity_eu
                                         )

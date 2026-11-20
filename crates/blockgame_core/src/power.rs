@@ -39,6 +39,22 @@ pub const fn battery_capacity_eu(block: BlockId) -> f32 {
     }
 }
 
+/// Tier 1 Copper Cable max throughput (EU/s).
+pub const COPPER_CABLE_MAX_EU_S: f32 = 200.0;
+/// Tier 2 Gold Cable max throughput (EU/s).
+pub const GOLD_CABLE_MAX_EU_S: f32 = 1_000.0;
+/// Tier 3 Diamond Cable max throughput (EU/s).
+pub const DIAMOND_CABLE_MAX_EU_S: f32 = 5_000.0;
+
+pub const fn cable_max_eu_s(block: BlockId) -> f32 {
+    match block {
+        BlockId::COPPER_CABLE => COPPER_CABLE_MAX_EU_S,
+        BlockId::GOLD_CABLE => GOLD_CABLE_MAX_EU_S,
+        BlockId::DIAMOND_CABLE => DIAMOND_CABLE_MAX_EU_S,
+        _ => f32::INFINITY,
+    }
+}
+
 pub const fn battery_max_io_eu_s(block: BlockId) -> f32 {
     match block {
         BlockId::ADVANCED_BATTERY_BOX => ADVANCED_BATTERY_MAX_IO_EU_S,
@@ -188,6 +204,7 @@ pub struct PowerNetworkSummary {
     pub total_demand_eu_s: f32,
     pub total_stored_eu: f32,
     pub total_capacity_eu: f32,
+    pub cable_limit_eu_s: Option<f32>,
     pub node_count: usize,
 }
 
@@ -274,6 +291,13 @@ pub fn get_network_summary(world: &World, start_pos: IVec3, is_daytime: bool) ->
 
     for pos in nodes {
         let block = world.get_block(pos);
+        if block.is_cable() {
+            let cap = cable_max_eu_s(block);
+            summary.cable_limit_eu_s = Some(match summary.cable_limit_eu_s {
+                Some(prev) => prev.min(cap),
+                None => cap,
+            });
+        }
         match block {
             BlockId::COAL_GENERATOR => {
                 if let Some(gen) = world.coal_generators.get(&pos) {
@@ -342,15 +366,19 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         }
         let component = collect_network(world, start, &mut visited);
 
-        // Categorize nodes in this connected network.
+        // Categorize nodes in this connected network and find the cable throughput limit.
         let mut coal_gens = Vec::new();
         let mut batteries: Vec<(IVec3, BlockId)> = Vec::new();
         let mut electric_furnaces = Vec::new();
         let mut lamps = Vec::new();
         let mut passive_gen_eu_s = 0.0f32;
+        let mut cable_limit_eu_s = f32::INFINITY;
 
         for &pos in &component {
             let block = world.get_block(pos);
+            if block.is_cable() {
+                cable_limit_eu_s = cable_limit_eu_s.min(cable_max_eu_s(block));
+            }
             match block {
                 BlockId::COAL_GENERATOR => coal_gens.push(pos),
                 BlockId::SOLAR_PANEL | BlockId::ADVANCED_SOLAR_PANEL => {
@@ -421,10 +449,12 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
             }
         }
 
-        let total_gen_eu = (passive_gen_eu_s + coal_gen_eu_s) * dt;
+        // Enforce tiered cable throughput cap (e.g., 200 / 1,000 / 5,000 EU/s).
+        let max_transfer_eu = cable_limit_eu_s * dt;
+        let total_gen_eu = ((passive_gen_eu_s + coal_gen_eu_s) * dt).min(max_transfer_eu);
         let total_demand_eu = total_demand_eu_s * dt;
 
-        // Balance generation, demand, and batteries (respecting each battery tier's max I/O rate).
+        // Balance generation, demand, and batteries (respecting cable & battery I/O caps).
         let mut supplied_eu = total_gen_eu.min(total_demand_eu);
         if total_gen_eu > total_demand_eu && !batteries.is_empty() {
             // Charge batteries with surplus energy.
@@ -442,8 +472,9 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                 surplus_eu -= add;
             }
         } else if total_demand_eu > total_gen_eu && !batteries.is_empty() {
-            // Discharge batteries to cover the shortfall.
-            let mut shortfall_eu = total_demand_eu - total_gen_eu;
+            // Discharge batteries to cover the shortfall (up to remaining cable bandwidth).
+            let mut shortfall_eu =
+                (total_demand_eu - total_gen_eu).min((max_transfer_eu - supplied_eu).max(0.0));
             for &(pos, block) in &batteries {
                 if shortfall_eu <= 0.0 {
                     break;

@@ -2346,6 +2346,36 @@ fn paint_power_tiles(atlas: &mut TextureAtlas) {
         }
         Rgba([clamp(42, n), clamp(36, n), clamp(60, n), 255])
     });
+
+    // 434: Gold Cable (Tier 2: dark rubber insulation + gleaming gold conductor bands)
+    atlas.paint_tile(434, |px, py| {
+        let n = (hash(px, py, 434) % 9) - 4;
+        let is_band = (px % 8 <= 2) || (py % 8 <= 2);
+        let is_rim = px < 2 || px >= 30 || py < 2 || py >= 30;
+        if is_rim {
+            Rgba([clamp(36, n), clamp(36, n), clamp(44, n), 255])
+        } else if is_band {
+            let sheen = if (px + py) % 5 == 0 { 24 } else { 0 };
+            Rgba([clamp(236, n + sheen), clamp(192, n + sheen / 2), clamp(46, n), 255])
+        } else {
+            Rgba([clamp(50, n), clamp(52, n), clamp(62, n), 255])
+        }
+    });
+
+    // 435: Diamond Cable (Tier 3: obsidian insulation + glowing diamond-cyan superconductive bands)
+    atlas.paint_tile(435, |px, py| {
+        let n = (hash(px, py, 435) % 9) - 4;
+        let is_band = (px % 8 <= 2) || (py % 8 <= 2);
+        let is_rim = px < 2 || px >= 30 || py < 2 || py >= 30;
+        if is_rim {
+            Rgba([clamp(26, n), clamp(24, n), clamp(38, n), 255])
+        } else if is_band {
+            let sheen = if (px + py) % 5 == 0 { 26 } else { 0 };
+            Rgba([clamp(76, n + sheen), clamp(232, n + sheen / 2), clamp(244, n), 255])
+        } else {
+            Rgba([clamp(38, n), clamp(36, n), clamp(56, n), 255])
+        }
+    });
 }
 
 #[cfg(test)]

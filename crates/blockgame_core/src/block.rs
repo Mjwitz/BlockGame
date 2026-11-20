@@ -123,6 +123,8 @@ impl BlockId {
     pub const ADVANCED_SOLAR_PANEL: Self = Self(108);
     pub const ADVANCED_BATTERY_BOX: Self = Self(109);
     pub const QUANTUM_BATTERY_BOX: Self = Self(110);
+    pub const GOLD_CABLE: Self = Self(111);
+    pub const DIAMOND_CABLE: Self = Self(112);
 
     #[inline]
     pub const fn is_air(&self) -> bool {
@@ -134,6 +136,8 @@ impl BlockId {
         matches!(
             *self,
             Self::COPPER_CABLE
+                | Self::GOLD_CABLE
+                | Self::DIAMOND_CABLE
                 | Self::COAL_GENERATOR
                 | Self::SOLAR_PANEL
                 | Self::ADVANCED_SOLAR_PANEL
@@ -149,7 +153,10 @@ impl BlockId {
 
     #[inline]
     pub const fn is_cable(&self) -> bool {
-        self.0 == Self::COPPER_CABLE.0
+        matches!(
+            *self,
+            Self::COPPER_CABLE | Self::GOLD_CABLE | Self::DIAMOND_CABLE
+        )
     }
 
     #[inline]
@@ -1762,6 +1769,34 @@ impl BlockRegistry {
             required_tool: Some(ToolType::Pickaxe),
             min_tier: ToolTier::Iron,
             drop_item: Some(ItemId::QUANTUM_BATTERY_BOX),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::GOLD_CABLE,
+            name: "Gold Cable",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [434; 6],
+            hardness: 0.5,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::GOLD_CABLE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DIAMOND_CABLE,
+            name: "Diamond Cable",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [435; 6],
+            hardness: 0.6,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::DIAMOND_CABLE),
             drop_count: (1, 1),
         });
 

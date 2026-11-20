@@ -2262,6 +2262,26 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::QUANTUM_BATTERY_BOX, 1),
         });
+        self.register(Recipe::Shaped {
+            name: "Gold Cable",
+            width: 3,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::GOLD_INGOT),   Some(ItemId::GOLD_INGOT),   Some(ItemId::GOLD_INGOT),
+                Some(ItemId::COPPER_CABLE), Some(ItemId::COPPER_CABLE), Some(ItemId::COPPER_CABLE),
+            ],
+            output: ItemSlot::new(ItemId::GOLD_CABLE, 6),
+        });
+        self.register(Recipe::Shaped {
+            name: "Diamond Cable",
+            width: 3,
+            height: 2,
+            pattern: vec![
+                Some(ItemId::DIAMOND),    Some(ItemId::POWER_CORE), Some(ItemId::DIAMOND),
+                Some(ItemId::GOLD_CABLE), Some(ItemId::GOLD_CABLE), Some(ItemId::GOLD_CABLE),
+            ],
+            output: ItemSlot::new(ItemId::DIAMOND_CABLE, 8),
+        });
     }
 }
 

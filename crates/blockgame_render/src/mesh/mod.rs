@@ -199,13 +199,14 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::COPPER_CABLE {
+                    if block_id.is_cable() {
                         self.build_copper_cable(
                             &mut mesh,
                             chunk.pos,
                             ix,
                             iy,
                             iz,
+                            block_id,
                             &light_map,
                             &query_block,
                         );
@@ -1148,6 +1149,7 @@ impl<'a> ChunkMesher<'a> {
         x: i32,
         y: i32,
         z: i32,
+        block_id: BlockId,
         light_map: &blockgame_core::lighting::ChunkLightMap,
         query_block: &F,
     ) where
@@ -1158,7 +1160,11 @@ impl<'a> ChunkMesher<'a> {
         let fy = (origin.y + y) as f32;
         let fz = (origin.z + z) as f32;
 
-        let tile = 410u16;
+        let tile = match block_id {
+            BlockId::GOLD_CABLE => 434u16,
+            BlockId::DIAMOND_CABLE => 435u16,
+            _ => 410u16,
+        };
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
