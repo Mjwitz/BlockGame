@@ -2462,17 +2462,17 @@ fn paint_power_tiles(atlas: &mut TextureAtlas) {
         Rgba([clamp(80, n), clamp(88, n), clamp(102, n), 255])
     });
 
-    // 444: Storage Cable (dark slate conduit with glowing teal data fiber bands)
+    // 444: Storage Cable (dark green conduit with glowing emerald/lime data fiber bands)
     atlas.paint_tile(444, |px, py| {
         let n = (hash(px, py, 444) % 9) - 4;
         let is_band = (px % 8 <= 2) || (py % 8 <= 2);
         let is_rim = px < 2 || px >= 30 || py < 2 || py >= 30;
         if is_rim {
-            Rgba([clamp(32, n), clamp(38, n), clamp(48, n), 255])
+            Rgba([clamp(20, n), clamp(52, n), clamp(26, n), 255])
         } else if is_band {
-            Rgba([clamp(56, n), clamp(214, n), clamp(232, n), 255])
+            Rgba([clamp(68, n), clamp(228, n), clamp(96, n), 255])
         } else {
-            Rgba([clamp(46, n), clamp(54, n), clamp(68, n), 255])
+            Rgba([clamp(32, n), clamp(92, n), clamp(44, n), 255])
         }
     });
 
