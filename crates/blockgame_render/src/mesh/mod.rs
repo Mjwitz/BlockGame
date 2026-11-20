@@ -213,6 +213,19 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    if block_id == BlockId::STORAGE_CABLE {
+                        self.build_storage_cable(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            &light_map,
+                            &query_block,
+                        );
+                        continue;
+                    }
+
                     if block_id.is_solar_panel() {
                         self.build_solar_panel(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
                         continue;
@@ -1193,6 +1206,55 @@ impl<'a> ChunkMesher<'a> {
         }
         if connects(x, y, z - 1) {
             self.add_box(mesh, fx + 0.40, fy + 0.40, fz, fx + 0.60, fy + 0.60, fz + 0.36, [tile; 6], light);
+        }
+    }
+
+    fn build_storage_cable<F>(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+        query_block: &F,
+    ) where
+        F: Fn(i32, i32, i32) -> BlockId,
+    {
+        let origin = chunk_pos.to_world_origin();
+        let fx = (origin.x + x) as f32;
+        let fy = (origin.y + y) as f32;
+        let fz = (origin.z + z) as f32;
+
+        let tile = 444u16;
+        let lv = light_map.get(x as usize, y as usize, z as usize);
+        let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
+
+        // Central data hub (0.37..0.63)
+        self.add_box(mesh, fx + 0.37, fy + 0.37, fz + 0.37, fx + 0.63, fy + 0.63, fz + 0.63, [tile; 6], light);
+
+        let connects = |nx: i32, ny: i32, nz: i32| -> bool {
+            query_block(nx, ny, nz).is_storage_node()
+        };
+
+        // 6-way automatic data conduit arms to adjacent Storage Cables, Terminals, and Chests
+        if connects(x + 1, y, z) {
+            self.add_box(mesh, fx + 0.63, fy + 0.41, fz + 0.41, fx + 1.0, fy + 0.59, fz + 0.59, [tile; 6], light);
+        }
+        if connects(x - 1, y, z) {
+            self.add_box(mesh, fx, fy + 0.41, fz + 0.41, fx + 0.37, fy + 0.59, fz + 0.59, [tile; 6], light);
+        }
+        if connects(x, y + 1, z) {
+            self.add_box(mesh, fx + 0.41, fy + 0.63, fz + 0.41, fx + 0.59, fy + 1.0, fz + 0.59, [tile; 6], light);
+        }
+        if connects(x, y - 1, z) {
+            self.add_box(mesh, fx + 0.41, fy, fz + 0.41, fx + 0.59, fy + 0.37, fz + 0.59, [tile; 6], light);
+        }
+        if connects(x, y, z + 1) {
+            self.add_box(mesh, fx + 0.41, fy + 0.41, fz + 0.63, fx + 0.59, fy + 0.59, fz + 1.0, [tile; 6], light);
+        }
+        if connects(x, y, z - 1) {
+            self.add_box(mesh, fx + 0.41, fy + 0.41, fz, fx + 0.59, fy + 0.59, fz + 0.37, [tile; 6], light);
         }
     }
 

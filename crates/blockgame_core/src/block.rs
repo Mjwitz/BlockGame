@@ -126,9 +126,39 @@ impl BlockId {
     pub const GOLD_CABLE: Self = Self(111);
     pub const DIAMOND_CABLE: Self = Self(112);
 
+    // Item Storage & Sorting System blocks (Issue #13)
+    pub const IRON_CHEST: Self = Self(113);
+    pub const GOLD_CHEST: Self = Self(114);
+    pub const DIAMOND_CHEST: Self = Self(115);
+    pub const STORAGE_TERMINAL: Self = Self(116);
+    pub const STORAGE_CABLE: Self = Self(117);
+
     #[inline]
     pub const fn is_air(&self) -> bool {
         self.0 == 0
+    }
+
+    #[inline]
+    pub const fn is_chest(&self) -> bool {
+        matches!(
+            *self,
+            Self::CHEST | Self::IRON_CHEST | Self::GOLD_CHEST | Self::DIAMOND_CHEST
+        )
+    }
+
+    #[inline]
+    pub const fn chest_slot_count(&self) -> usize {
+        match *self {
+            Self::IRON_CHEST => 45,
+            Self::GOLD_CHEST => 63,
+            Self::DIAMOND_CHEST => 81,
+            _ => 27,
+        }
+    }
+
+    #[inline]
+    pub const fn is_storage_node(&self) -> bool {
+        matches!(*self, Self::STORAGE_TERMINAL | Self::STORAGE_CABLE) || self.is_chest()
     }
 
     #[inline]
@@ -148,6 +178,7 @@ impl BlockId {
                 | Self::ELECTRIC_FURNACE
                 | Self::ELECTRIC_LAMP
                 | Self::ELECTRIC_LAMP_LIT
+                | Self::STORAGE_TERMINAL
         )
     }
 
@@ -1797,6 +1828,81 @@ impl BlockRegistry {
             required_tool: None,
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::DIAMOND_CABLE),
+            drop_count: (1, 1),
+        });
+
+        // Item Storage & Sorting System blocks (Issue #13)
+        registry.register(BlockDefinition {
+            id: BlockId::IRON_CHEST,
+            name: "Iron Chest",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 437, NegY: 437, PosZ: 436 (front latch), other sides: 437
+            textures: [437, 437, 436, 437, 437, 437],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::IRON_CHEST),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::GOLD_CHEST,
+            name: "Gold Chest",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 439, NegY: 439, PosZ: 438 (front latch), other sides: 439
+            textures: [439, 439, 438, 439, 439, 439],
+            hardness: 3.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::GOLD_CHEST),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DIAMOND_CHEST,
+            name: "Diamond Chest",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 441, NegY: 441, PosZ: 440 (front latch), other sides: 441
+            textures: [441, 441, 440, 441, 441, 441],
+            hardness: 4.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::DIAMOND_CHEST),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::STORAGE_TERMINAL,
+            name: "Storage Terminal",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: 443, NegY: 425, PosZ: 442 (front display screen), other sides: 443
+            textures: [443, 425, 442, 443, 443, 443],
+            hardness: 3.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::STORAGE_TERMINAL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::STORAGE_CABLE,
+            name: "Storage Cable",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [444; 6],
+            hardness: 0.4,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::STORAGE_CABLE),
             drop_count: (1, 1),
         });
 

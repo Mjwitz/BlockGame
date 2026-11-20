@@ -974,7 +974,7 @@ impl WorldManager {
                 return None;
             }
             let is_light_source = current.is_emissive();
-            let dropped_chest_items = if current == BlockId::CHEST {
+            let dropped_chest_items = if current.is_chest() {
                 world.remove_chest(pos).unwrap_or_default()
             } else if current == BlockId::FURNACE || current == BlockId::FURNACE_LIT {
                 if let Some(f) = world.remove_furnace(pos) {

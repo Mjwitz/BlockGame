@@ -880,6 +880,40 @@ pub fn load_power_file(
     Ok(Some((coal_generators, batteries, electric_furnaces)))
 }
 
+/// Saves the player's wearable portable backpack to `<world_dir>/backpack.bin`.
+pub fn save_backpack_file(
+    world_dir: &Path,
+    backpack: &crate::storage::BackpackState,
+) -> io::Result<()> {
+    let path = world_dir.join("backpack.bin");
+    let mut w = BufWriter::new(File::create(&path)?);
+    write_u8(&mut w, backpack.tier)?;
+    write_u32(&mut w, backpack.slots.len() as u32)?;
+    for &slot in &backpack.slots {
+        write_item_slot(&mut w, slot)?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+/// Loads the player's wearable portable backpack from `<world_dir>/backpack.bin`.
+pub fn load_backpack_file(world_dir: &Path) -> io::Result<Option<crate::storage::BackpackState>> {
+    let path = world_dir.join("backpack.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut r = BufReader::new(File::open(&path)?);
+    let tier = read_u8(&mut r)?;
+    let count = read_u32(&mut r)? as usize;
+    let mut slots = Vec::with_capacity(count);
+    for _ in 0..count {
+        slots.push(read_item_slot(&mut r, 2)?);
+    }
+    let mut bp = crate::storage::BackpackState { tier, slots };
+    bp.ensure_tier(tier);
+    Ok(Some(bp))
+}
+
 /// Saves entities to `<world_dir>/entities.bin`.
 pub fn save_entities_file(
     world_dir: &Path,

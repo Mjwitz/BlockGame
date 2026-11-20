@@ -330,6 +330,9 @@ pub fn get_network_summary(world: &World, start_pos: IVec3, is_daytime: bool) ->
             BlockId::ELECTRIC_LAMP | BlockId::ELECTRIC_LAMP_LIT => {
                 summary.total_demand_eu_s += ELECTRIC_LAMP_DRAW_EU_S;
             }
+            BlockId::STORAGE_TERMINAL => {
+                summary.total_demand_eu_s += crate::storage::terminal_power_draw_eu_s(world, pos);
+            }
             _ => {}
         }
     }
@@ -343,6 +346,7 @@ pub fn get_network_summary(world: &World, start_pos: IVec3, is_daytime: bool) ->
 /// and remesh affected chunks.
 pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<IVec3> {
     if dt <= 0.0 || world.power_nodes.is_empty() {
+        world.powered_storage_terminals.clear();
         return Vec::new();
     }
 
@@ -354,6 +358,7 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
             valid_nodes.push(pos);
         } else {
             world.power_nodes.remove(&pos);
+            world.powered_storage_terminals.remove(&pos);
         }
     }
 
@@ -371,6 +376,7 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         let mut batteries: Vec<(IVec3, BlockId)> = Vec::new();
         let mut electric_furnaces = Vec::new();
         let mut lamps = Vec::new();
+        let mut storage_terminals: Vec<(IVec3, f32)> = Vec::new();
         let mut passive_gen_eu_s = 0.0f32;
         let mut cable_limit_eu_s = f32::INFINITY;
 
@@ -392,6 +398,10 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                 | BlockId::QUANTUM_BATTERY_BOX => batteries.push((pos, block)),
                 BlockId::ELECTRIC_FURNACE => electric_furnaces.push(pos),
                 BlockId::ELECTRIC_LAMP | BlockId::ELECTRIC_LAMP_LIT => lamps.push(pos),
+                BlockId::STORAGE_TERMINAL => {
+                    let draw = crate::storage::terminal_power_draw_eu_s(world, pos);
+                    storage_terminals.push((pos, draw));
+                }
                 _ => {}
             }
         }
@@ -417,7 +427,8 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         }
         let lamp_demand_eu_s = lamps.len() as f32 * ELECTRIC_LAMP_DRAW_EU_S;
         let furnace_demand_eu_s = active_furnaces.len() as f32 * ELECTRIC_FURNACE_DRAW_EU_S;
-        let total_demand_eu_s = lamp_demand_eu_s + furnace_demand_eu_s;
+        let storage_demand_eu_s: f32 = storage_terminals.iter().map(|&(_, d)| d).sum();
+        let total_demand_eu_s = lamp_demand_eu_s + furnace_demand_eu_s + storage_demand_eu_s;
 
         // Determine whether Coal Generators need to ignite new fuel.
         let network_needs_fuel_gen =
@@ -494,6 +505,16 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
         } else {
             1.0
         };
+
+        // Update Storage Terminals powered state (require >= 80% of requested EU/s)
+        let storage_online = total_demand_eu > 0.0 && power_ratio >= 0.8;
+        for &(pos, _) in &storage_terminals {
+            if storage_online {
+                world.powered_storage_terminals.insert(pos);
+            } else {
+                world.powered_storage_terminals.remove(&pos);
+            }
+        }
 
         // Update Electric Lamps (require at least 50% power ratio to stay lit).
         let lamps_lit = total_demand_eu > 0.0 && power_ratio >= 0.5;

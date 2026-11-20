@@ -4672,6 +4672,240 @@ impl UiBuilder {
         );
     }
 
+    /// Builds a paginated Chest UI screen supporting Wooden (27), Iron (45), Gold (63), and Diamond (81) chests.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_chest_screen_paged(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        title: &str,
+        chest_slots: &[ItemSlot],
+        page: usize,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+        let mut hovered_item_name: Option<&str> = None;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let chest_y = screen_h * 0.5 - 220.0;
+
+        Self::draw_string(mesh, start_x, chest_y - 20.0, title, 8.0, 10.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+
+        let total_pages = (chest_slots.len() + 26) / 27;
+        let page = page.min(total_pages.saturating_sub(1));
+        if total_pages > 1 {
+            let btn_y = chest_y - 24.0;
+            let next_x = start_x + inv_w - 26.0;
+            let prev_x = next_x - 86.0;
+            mesh.add_quad(prev_x, btn_y, 24.0, 20.0, white_uv, [0.22, 0.26, 0.32, 0.95]);
+            Self::draw_string(mesh, prev_x + 8.0, btn_y + 5.0, "<", 7.0, 9.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+            let ptxt = format!("{}/{}", page + 1, total_pages);
+            Self::draw_string(mesh, prev_x + 30.0, btn_y + 5.0, &ptxt, 7.0, 9.0, 1.0, [0.90, 0.94, 0.98, 1.0]);
+            mesh.add_quad(next_x, btn_y, 24.0, 20.0, white_uv, [0.22, 0.26, 0.32, 0.95]);
+            Self::draw_string(mesh, next_x + 8.0, btn_y + 5.0, ">", 7.0, 9.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+        }
+
+        let base_idx = page * 27;
+        for row in 0..3 {
+            for col in 0..9 {
+                let idx = base_idx + row * 9 + col;
+                if idx >= chest_slots.len() {
+                    continue;
+                }
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = chest_y + (row as f32) * (slot_size + slot_gap);
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+                let item_slot = chest_slots[idx];
+                if !item_slot.is_empty() {
+                    if let Some(def) = registry.get(item_slot.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        let pad = 6.0;
+                        mesh.add_quad(sx + pad, sy + pad, slot_size - pad * 2.0, slot_size - pad * 2.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                        Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                        Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
+                        if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size {
+                            hovered_item_name = Some(def.display_name);
+                        }
+                    }
+                }
+            }
+        }
+
+        let inv_y = chest_y + 3.0 * (slot_size + slot_gap) + 26.0;
+        Self::draw_power_screen_inv_and_chrome(
+            mesh, screen_w, screen_h, start_x, inv_y, inventory, active_hotbar_slot,
+            cursor_held, cursor_pos, registry, jei_params, recipe_modal, &mut hovered_item_name,
+        );
+    }
+
+    /// Builds the Powered Storage Terminal UI screen (linked chests, search, sort, power cost).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_storage_terminal_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        info: &blockgame_core::storage::StorageNetworkInfo,
+        items: &[blockgame_core::storage::AggregatedStorageItem],
+        search_text: &str,
+        search_focused: bool,
+        sort_mode: blockgame_core::storage::StorageSortMode,
+        page: usize,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+        let mut hovered_item_name: Option<&str> = None;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let grid_y = screen_h * 0.5 - 205.0;
+
+        // Header line: Title + Online/Offline power badge
+        let header_y = grid_y - 52.0;
+        let power_badge = if info.is_powered {
+            format!("Storage Terminal [ONLINE -{:.0} EU/s]", info.power_draw_eu_s)
+        } else {
+            format!("Storage Terminal [OFFLINE - Needs {:.0} EU/s]", info.power_draw_eu_s)
+        };
+        let badge_col = if info.is_powered {
+            [0.35, 0.95, 0.98, 1.0]
+        } else {
+            [0.98, 0.38, 0.35, 1.0]
+        };
+        Self::draw_string(mesh, start_x, header_y, &power_badge, 7.5, 9.5, 1.0, badge_col);
+
+        let stats_txt = format!(
+            "Terminals: {} | Chests: {} | Slots: {}/{}",
+            info.terminals.len(),
+            info.chests.len(),
+            info.used_slots,
+            info.total_slots
+        );
+        Self::draw_string(mesh, start_x, header_y + 15.0, &stats_txt, 6.5, 8.5, 1.0, [0.80, 0.86, 0.92, 1.0]);
+
+        // Controls row: Search box + Sort button + Page buttons
+        let ctrl_y = grid_y - 24.0;
+        let search_w = 210.0;
+        let search_col = if search_focused { [0.16, 0.28, 0.36, 0.98] } else { [0.12, 0.16, 0.22, 0.95] };
+        mesh.add_quad(start_x, ctrl_y, search_w, 20.0, white_uv, search_col);
+        let search_display = if search_text.is_empty() {
+            if search_focused { "|" } else { "Search items..." }
+        } else {
+            search_text
+        };
+        let search_txt_col = if search_text.is_empty() && !search_focused {
+            [0.55, 0.60, 0.68, 1.0]
+        } else {
+            [0.95, 0.98, 1.0, 1.0]
+        };
+        Self::draw_string(mesh, start_x + 6.0, ctrl_y + 5.0, search_display, 6.5, 8.5, 1.0, search_txt_col);
+
+        let sort_x = start_x + search_w + 8.0;
+        let sort_w = 104.0;
+        mesh.add_quad(sort_x, ctrl_y, sort_w, 20.0, white_uv, [0.20, 0.28, 0.36, 0.95]);
+        Self::draw_string(mesh, sort_x + 6.0, ctrl_y + 5.0, sort_mode.label(), 6.5, 8.5, 1.0, [0.92, 0.96, 1.0, 1.0]);
+
+        let total_pages = ((items.len() + 26) / 27).max(1);
+        let page = page.min(total_pages - 1);
+        let next_x = start_x + inv_w - 24.0;
+        let prev_x = next_x - 82.0;
+        mesh.add_quad(prev_x, ctrl_y, 24.0, 20.0, white_uv, [0.22, 0.26, 0.32, 0.95]);
+        Self::draw_string(mesh, prev_x + 8.0, ctrl_y + 5.0, "<", 7.0, 9.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+        let ptxt = format!("{}/{}", page + 1, total_pages);
+        Self::draw_string(mesh, prev_x + 28.0, ctrl_y + 5.0, &ptxt, 6.5, 8.5, 1.0, [0.90, 0.94, 0.98, 1.0]);
+        mesh.add_quad(next_x, ctrl_y, 24.0, 20.0, white_uv, [0.22, 0.26, 0.32, 0.95]);
+        Self::draw_string(mesh, next_x + 8.0, ctrl_y + 5.0, ">", 7.0, 9.0, 1.0, [0.95, 0.95, 0.95, 1.0]);
+
+        // 3x9 unified storage grid
+        let base_idx = page * 27;
+        for row in 0..3 {
+            for col in 0..9 {
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = grid_y + (row as f32) * (slot_size + slot_gap);
+                let tint = if info.is_powered { [1.0, 1.0, 1.0, 0.95] } else { [0.55, 0.45, 0.45, 0.85] };
+                mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, tint);
+
+                if info.is_powered {
+                    let idx = base_idx + row * 9 + col;
+                    if let Some(entry) = items.get(idx) {
+                        if let Some(def) = registry.get(entry.item_id) {
+                            let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                            let pad = 6.0;
+                            mesh.add_quad(sx + pad, sy + pad, slot_size - pad * 2.0, slot_size - pad * 2.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                            Self::draw_stack_number(mesh, sx, sy, slot_size, entry.total_count.min(9999) as u16);
+                            if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size {
+                                hovered_item_name = Some(def.display_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let inv_y = screen_h * 0.5 - 220.0 + 3.0 * (slot_size + slot_gap) + 26.0;
+        Self::draw_power_screen_inv_and_chrome(
+            mesh, screen_w, screen_h, start_x, inv_y, inventory, active_hotbar_slot,
+            cursor_held, cursor_pos, registry, jei_params, recipe_modal, &mut hovered_item_name,
+        );
+    }
+
+    /// Builds the portable wearable Backpack UI screen (18 / 27 / 36 slots).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_backpack_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        backpack: &blockgame_core::storage::BackpackState,
+        page: usize,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        Self::build_chest_screen_paged(
+            mesh,
+            screen_w,
+            screen_h,
+            backpack.title(),
+            &backpack.slots,
+            page,
+            inventory,
+            active_hotbar_slot,
+            cursor_held,
+            cursor_pos,
+            registry,
+            jei_params,
+            recipe_modal,
+        );
+    }
+
     /// Draws the JEI (Just Enough Items) Item Index Grid, Pagination, and Search Bar on the right side.
     pub fn draw_jei_panel(
         mesh: &mut UiMesh,

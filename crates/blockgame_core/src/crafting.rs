@@ -2282,6 +2282,96 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::DIAMOND_CABLE, 8),
         });
+
+        // --- Item Storage & Sorting System + Backpacks (Issue #13) ---
+        self.register(Recipe::Shaped {
+            name: "Iron Chest",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT), Some(ItemId::CHEST),      Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::IRON_CHEST, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Gold Chest",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::GOLD_INGOT), Some(ItemId::GOLD_INGOT), Some(ItemId::GOLD_INGOT),
+                Some(ItemId::GOLD_INGOT), Some(ItemId::IRON_CHEST), Some(ItemId::GOLD_INGOT),
+                Some(ItemId::GOLD_INGOT), Some(ItemId::GOLD_INGOT), Some(ItemId::GOLD_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::GOLD_CHEST, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Diamond Chest",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::GLASS),   Some(ItemId::DIAMOND),    Some(ItemId::GLASS),
+                Some(ItemId::DIAMOND), Some(ItemId::GOLD_CHEST), Some(ItemId::DIAMOND),
+                Some(ItemId::GLASS),   Some(ItemId::DIAMOND),    Some(ItemId::GLASS),
+            ],
+            output: ItemSlot::new(ItemId::DIAMOND_CHEST, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Storage Cable",
+            width: 3,
+            height: 1,
+            pattern: vec![
+                Some(ItemId::GLASS),
+                Some(ItemId::COPPER_WIRE),
+                Some(ItemId::GLASS),
+            ],
+            output: ItemSlot::new(ItemId::STORAGE_CABLE, 8),
+        });
+        self.register(Recipe::Shaped {
+            name: "Storage Terminal",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT),  Some(ItemId::GLASS),      Some(ItemId::IRON_INGOT),
+                Some(ItemId::COPPER_WIRE), Some(ItemId::POWER_CORE), Some(ItemId::COPPER_WIRE),
+                Some(ItemId::IRON_INGOT),  Some(ItemId::IRON_CHEST), Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::STORAGE_TERMINAL, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Leather Backpack",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::LEATHER), Some(ItemId::STRING),  Some(ItemId::LEATHER),
+                Some(ItemId::LEATHER), Some(ItemId::CHEST),   Some(ItemId::LEATHER),
+                Some(ItemId::LEATHER), Some(ItemId::LEATHER), Some(ItemId::LEATHER),
+            ],
+            output: ItemSlot::new(ItemId::LEATHER_BACKPACK, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Iron Backpack",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::IRON_INGOT), Some(ItemId::STRING),           Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT), Some(ItemId::LEATHER_BACKPACK), Some(ItemId::IRON_INGOT),
+                Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),       Some(ItemId::IRON_INGOT),
+            ],
+            output: ItemSlot::new(ItemId::IRON_BACKPACK, 1),
+        });
+        self.register(Recipe::Shaped {
+            name: "Diamond Backpack",
+            width: 3,
+            height: 3,
+            pattern: vec![
+                Some(ItemId::DIAMOND),    Some(ItemId::GOLD_INGOT),    Some(ItemId::DIAMOND),
+                Some(ItemId::GOLD_INGOT), Some(ItemId::IRON_BACKPACK), Some(ItemId::GOLD_INGOT),
+                Some(ItemId::DIAMOND),    Some(ItemId::GOLD_INGOT),    Some(ItemId::DIAMOND),
+            ],
+            output: ItemSlot::new(ItemId::DIAMOND_BACKPACK, 1),
+        });
     }
 }
 

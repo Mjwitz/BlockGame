@@ -2376,6 +2376,152 @@ fn paint_power_tiles(atlas: &mut TextureAtlas) {
             Rgba([clamp(38, n), clamp(36, n), clamp(56, n), 255])
         }
     });
+
+    // Helper for metallic chest tiles (front with latch vs side/top)
+    let paint_chest = |atlas: &mut TextureAtlas,
+                       tile_id: u16,
+                       base: [i32; 3],
+                       border: [i32; 3],
+                       latch: [i32; 3],
+                       is_front: bool| {
+        atlas.paint_tile(tile_id, |px, py| {
+            let n = (hash(px, py, tile_id as u32) % 11) - 5;
+            if is_front && px >= 13 && px <= 18 && py >= 10 && py <= 17 {
+                let rim = if px == 13 || px == 18 || py == 10 || py == 17 { -30 } else { 15 };
+                return Rgba([
+                    clamp(latch[0], rim + n / 2),
+                    clamp(latch[1], rim + n / 2),
+                    clamp(latch[2], rim + n / 2),
+                    255,
+                ]);
+            }
+            let is_seam = py == 11 || py == 12;
+            let is_border = px < 3 || px >= 29 || py < 3 || py >= 29;
+            if is_seam {
+                return Rgba([clamp(border[0] - 28, n), clamp(border[1] - 28, n), clamp(border[2] - 28, n), 255]);
+            }
+            if is_border {
+                let rivet = ((px == 1 || px == 30) && (py % 8 == 4)) || ((py == 1 || py == 30) && (px % 8 == 4));
+                let d = if rivet { 28 } else { n };
+                return Rgba([clamp(border[0], d), clamp(border[1], d), clamp(border[2], d), 255]);
+            }
+            let hi = if px < 14 && py < 11 { 12 } else { 0 };
+            Rgba([clamp(base[0], n + hi), clamp(base[1], n + hi), clamp(base[2], n + hi), 255])
+        });
+    };
+
+    // 436..=441: Iron, Gold, and Diamond Chests
+    paint_chest(atlas, 436, [186, 194, 206], [116, 122, 134], [238, 212, 92], true);
+    paint_chest(atlas, 437, [186, 194, 206], [116, 122, 134], [238, 212, 92], false);
+    paint_chest(atlas, 438, [238, 194, 46], [166, 118, 22], [92, 232, 245], true);
+    paint_chest(atlas, 439, [238, 194, 46], [166, 118, 22], [92, 232, 245], false);
+    paint_chest(atlas, 440, [68, 218, 226], [38, 92, 122], [238, 242, 250], true);
+    paint_chest(atlas, 441, [68, 218, 226], [38, 92, 122], [238, 242, 250], false);
+
+    // 442: Storage Terminal Front (dark console + glowing teal digital inventory screen)
+    atlas.paint_tile(442, |px, py| {
+        let n = (hash(px, py, 442) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(56, n), clamp(64, n), clamp(76, n), 255]);
+        }
+        // Screen bezel & glowing teal item-grid display (px 5..26, py 5..21)
+        if px >= 5 && px <= 26 && py >= 5 && py <= 21 {
+            if px == 5 || px == 26 || py == 5 || py == 21 {
+                return Rgba([22, 28, 36, 255]);
+            }
+            let grid_line = (px - 6) % 5 == 0 || (py - 6) % 5 == 0;
+            if grid_line {
+                return Rgba([32, 110, 128, 255]);
+            }
+            let cell_lit = ((px / 5) + (py / 5)) % 2 == 0;
+            if cell_lit {
+                return Rgba([clamp(62, n), clamp(224, n), clamp(238, n), 255]);
+            }
+            return Rgba([clamp(28, n), clamp(78, n), clamp(98, n), 255]);
+        }
+        // Lower keyboard / status LED strip (py 24..27)
+        if py >= 24 && py <= 27 && px >= 6 && px <= 25 {
+            if px <= 10 {
+                return Rgba([58, 236, 138, 255]); // Online LED
+            }
+            let key = if px % 3 == 0 { 20 } else { -12 };
+            return Rgba([clamp(46, key), clamp(54, key), clamp(66, key), 255]);
+        }
+        Rgba([clamp(82, n), clamp(90, n), clamp(104, n), 255])
+    });
+
+    // 443: Storage Terminal Side/Top (dark steel console casing + teal data stripe)
+    atlas.paint_tile(443, |px, py| {
+        let n = (hash(px, py, 443) % 9) - 4;
+        if px < 3 || px >= 29 || py < 3 || py >= 29 {
+            return Rgba([clamp(54, n), clamp(62, n), clamp(74, n), 255]);
+        }
+        if py == 15 || py == 16 {
+            return Rgba([clamp(52, n), clamp(210, n), clamp(228, n), 255]);
+        }
+        Rgba([clamp(80, n), clamp(88, n), clamp(102, n), 255])
+    });
+
+    // 444: Storage Cable (dark slate conduit with glowing teal data fiber bands)
+    atlas.paint_tile(444, |px, py| {
+        let n = (hash(px, py, 444) % 9) - 4;
+        let is_band = (px % 8 <= 2) || (py % 8 <= 2);
+        let is_rim = px < 2 || px >= 30 || py < 2 || py >= 30;
+        if is_rim {
+            Rgba([clamp(32, n), clamp(38, n), clamp(48, n), 255])
+        } else if is_band {
+            Rgba([clamp(56, n), clamp(214, n), clamp(232, n), 255])
+        } else {
+            Rgba([clamp(46, n), clamp(54, n), clamp(68, n), 255])
+        }
+    });
+
+    // 445..=447: Leather, Iron, and Diamond Wearable Backpack item icons
+    let paint_backpack = |atlas: &mut TextureAtlas,
+                          tile_id: u16,
+                          body: [i32; 3],
+                          flap: [i32; 3],
+                          buckle: [i32; 3]| {
+        atlas.paint_tile(tile_id, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            // Top handle loop
+            let in_handle = y >= 4 && y <= 7 && ((x >= 11 && x <= 13) || (x >= 18 && x <= 20) || (y <= 5 && x >= 11 && x <= 20));
+            // Main rounded pack body
+            let in_body = x >= 6 && x <= 25 && y >= 8 && y <= 27
+                && !((x == 6 || x == 25) && (y == 8 || y == 27));
+            if !in_handle && !in_body {
+                return Rgba([0, 0, 0, 0]);
+            }
+            if in_handle && !in_body {
+                return Rgba([clamp(flap[0] - 24, 0), clamp(flap[1] - 24, 0), clamp(flap[2] - 24, 0), 255]);
+            }
+            let is_edge = x == 6 || x == 25 || y == 8 || y == 27;
+            if is_edge {
+                return Rgba([clamp(body[0] - 58, 0), clamp(body[1] - 58, 0), clamp(body[2] - 58, 0), 255]);
+            }
+            let n = (hash(px, py, tile_id as u32) % 9) - 4;
+            // Metallic buckle clasps
+            if (x >= 10 && x <= 12 || x >= 19 && x <= 21) && y >= 15 && y <= 18 {
+                return Rgba([clamp(buckle[0], n), clamp(buckle[1], n), clamp(buckle[2], n), 255]);
+            }
+            // Top lid flap
+            if y <= 15 {
+                let hi = if y <= 10 { 14 } else { 0 };
+                return Rgba([clamp(flap[0], n + hi), clamp(flap[1], n + hi), clamp(flap[2], n + hi), 255]);
+            }
+            // Front lower pocket
+            if x >= 9 && x <= 22 && y >= 20 && y <= 25 {
+                let p_edge = if x == 9 || x == 22 || y == 20 || y == 25 { -24 } else { 8 };
+                return Rgba([clamp(flap[0], n + p_edge), clamp(flap[1], n + p_edge), clamp(flap[2], n + p_edge), 255]);
+            }
+            Rgba([clamp(body[0], n), clamp(body[1], n), clamp(body[2], n), 255])
+        });
+    };
+
+    paint_backpack(atlas, 445, [148, 92, 46], [176, 114, 60], [232, 194, 62]); // Leather Backpack
+    paint_backpack(atlas, 446, [158, 166, 180], [194, 202, 214], [238, 204, 68]); // Iron Backpack
+    paint_backpack(atlas, 447, [56, 192, 208], [88, 228, 240], [244, 208, 72]); // Diamond Backpack
 }
 
 #[cfg(test)]

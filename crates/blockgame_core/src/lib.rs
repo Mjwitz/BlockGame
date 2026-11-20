@@ -20,6 +20,7 @@ pub mod power;
 pub mod raycast;
 pub mod save;
 pub mod skills;
+pub mod storage;
 pub mod tool;
 pub mod voice;
 pub mod world;

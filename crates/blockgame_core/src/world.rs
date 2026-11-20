@@ -144,6 +144,7 @@ pub struct World {
     pub coal_generators: HashMap<IVec3, crate::power::CoalGeneratorState>,
     pub batteries: HashMap<IVec3, crate::power::BatteryState>,
     pub electric_furnaces: HashMap<IVec3, crate::power::ElectricFurnaceState>,
+    pub powered_storage_terminals: HashSet<IVec3>,
 }
 
 impl World {
@@ -158,13 +159,20 @@ impl World {
             coal_generators: HashMap::new(),
             batteries: HashMap::new(),
             electric_furnaces: HashMap::new(),
+            powered_storage_terminals: HashSet::new(),
         }
     }
 
     pub fn get_or_create_chest(&mut self, pos: IVec3) -> &mut Vec<ItemSlot> {
-        self.chest_containers
+        let target_len = self.get_block(pos).chest_slot_count();
+        let entry = self
+            .chest_containers
             .entry(pos)
-            .or_insert_with(|| vec![ItemSlot::EMPTY; 27])
+            .or_insert_with(|| vec![ItemSlot::EMPTY; target_len]);
+        if entry.len() < target_len {
+            entry.resize(target_len, ItemSlot::EMPTY);
+        }
+        entry
     }
 
     pub fn get_chest(&self, pos: IVec3) -> Option<&Vec<ItemSlot>> {

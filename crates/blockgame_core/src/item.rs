@@ -226,6 +226,16 @@ impl ItemId {
     pub const GOLD_CABLE: Self = Self(213);
     pub const DIAMOND_CABLE: Self = Self(214);
 
+    // Item Storage & Sorting System + Backpacks (Issue #13)
+    pub const IRON_CHEST: Self = Self(215);
+    pub const GOLD_CHEST: Self = Self(216);
+    pub const DIAMOND_CHEST: Self = Self(217);
+    pub const STORAGE_TERMINAL: Self = Self(218);
+    pub const STORAGE_CABLE: Self = Self(219);
+    pub const LEATHER_BACKPACK: Self = Self(220);
+    pub const IRON_BACKPACK: Self = Self(221);
+    pub const DIAMOND_BACKPACK: Self = Self(222);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
@@ -2293,6 +2303,12 @@ impl ItemRegistry {
             (ItemId::ADVANCED_SOLAR_PANEL, Some(BlockId::ADVANCED_SOLAR_PANEL), "blockgame:advanced_solar_panel", "Advanced Solar Panel (+75 EU/s)", 428),
             (ItemId::ADVANCED_BATTERY_BOX, Some(BlockId::ADVANCED_BATTERY_BOX), "blockgame:advanced_battery_box", "Advanced Battery Box (100,000 EU)", 430),
             (ItemId::QUANTUM_BATTERY_BOX, Some(BlockId::QUANTUM_BATTERY_BOX), "blockgame:quantum_battery_box", "Quantum Battery Box (500,000 EU)", 432),
+            // Item Storage & Sorting System (Issue #13)
+            (ItemId::IRON_CHEST, Some(BlockId::IRON_CHEST), "blockgame:iron_chest", "Iron Chest (45 Slots)", 436),
+            (ItemId::GOLD_CHEST, Some(BlockId::GOLD_CHEST), "blockgame:gold_chest", "Gold Chest (63 Slots)", 438),
+            (ItemId::DIAMOND_CHEST, Some(BlockId::DIAMOND_CHEST), "blockgame:diamond_chest", "Diamond Chest (81 Slots)", 440),
+            (ItemId::STORAGE_TERMINAL, Some(BlockId::STORAGE_TERMINAL), "blockgame:storage_terminal", "Storage Terminal (-15+ EU/s)", 442),
+            (ItemId::STORAGE_CABLE, Some(BlockId::STORAGE_CABLE), "blockgame:storage_cable", "Storage Cable (-1 EU/s)", 444),
         ];
         for (id, placeable_block, name, display_name, icon_tile) in power_item_defs {
             self.register(ItemDef {
@@ -2301,6 +2317,26 @@ impl ItemRegistry {
                 display_name,
                 max_stack: 64,
                 placeable_block,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Wearable Backpacks (max_stack = 1)
+        let backpack_defs = [
+            (ItemId::LEATHER_BACKPACK, "blockgame:leather_backpack", "Leather Backpack (18 Slots)", 445),
+            (ItemId::IRON_BACKPACK, "blockgame:iron_backpack", "Iron Backpack (27 Slots)", 446),
+            (ItemId::DIAMOND_BACKPACK, "blockgame:diamond_backpack", "Diamond Backpack (36 Slots)", 447),
+        ];
+        for (id, name, display_name, icon_tile) in backpack_defs {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
                 durability: None,
                 tool_type: None,
                 tool_tier: None,

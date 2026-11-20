@@ -151,6 +151,15 @@ pub struct AppState {
     pub active_coal_gen_pos: Option<IVec3>,
     pub active_battery_pos: Option<IVec3>,
     pub active_electric_furnace_pos: Option<IVec3>,
+    pub active_storage_terminal_pos: Option<IVec3>,
+    pub storage_search_text: String,
+    pub storage_search_focused: bool,
+    pub storage_sort_mode: blockgame_core::storage::StorageSortMode,
+    pub storage_page: usize,
+    pub chest_page: usize,
+    pub backpack: blockgame_core::storage::BackpackState,
+    pub backpack_open: bool,
+    pub backpack_page: usize,
     pub shift_down: bool,
     pub jei_search_text: String,
     pub jei_search_focused: bool,
@@ -679,6 +688,9 @@ impl AppState {
         self.active_coal_gen_pos = None;
         self.active_battery_pos = None;
         self.active_electric_furnace_pos = None;
+        self.active_storage_terminal_pos = None;
+        self.storage_search_focused = false;
+        self.backpack_open = false;
         self.jei_recipe_modal = None;
         self.jei_search_focused = false;
         self.cursor_held = ItemSlot::EMPTY;
@@ -816,6 +828,7 @@ impl AppState {
         let mut save_data = self.world_manager.capture_save_data(meta, player_state);
         match save_world_to_dir(&self.saves_root, &mut save_data) {
             Ok(path) => {
+                let _ = blockgame_core::save::save_backpack_file(&path, &self.backpack);
                 log::info!(
                     "Saved world '{}' to {:?}",
                     save_data.metadata.name,
@@ -902,6 +915,9 @@ impl AppState {
         self.active_coal_gen_pos = None;
         self.active_battery_pos = None;
         self.active_electric_furnace_pos = None;
+        self.active_storage_terminal_pos = None;
+        self.storage_search_focused = false;
+        self.backpack_open = false;
         self.jei_recipe_modal = None;
         self.jei_search_focused = false;
         self.cursor_held = ItemSlot::EMPTY;
@@ -930,6 +946,11 @@ impl AppState {
                 return;
             }
         };
+        let world_dir = self.saves_root.join(folder_name);
+        self.backpack = blockgame_core::save::load_backpack_file(&world_dir)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
 
         let seed = save_data.metadata.seed;
         let mut world_manager =
@@ -973,6 +994,9 @@ impl AppState {
         self.active_coal_gen_pos = None;
         self.active_battery_pos = None;
         self.active_electric_furnace_pos = None;
+        self.active_storage_terminal_pos = None;
+        self.storage_search_focused = false;
+        self.backpack_open = false;
         self.jei_recipe_modal = None;
         self.jei_search_focused = false;
         self.cursor_held = ItemSlot::EMPTY;
@@ -1270,6 +1294,15 @@ impl ApplicationHandler for BlockGameApp {
             active_coal_gen_pos: None,
             active_battery_pos: None,
             active_electric_furnace_pos: None,
+            active_storage_terminal_pos: None,
+            storage_search_text: String::new(),
+            storage_search_focused: false,
+            storage_sort_mode: blockgame_core::storage::StorageSortMode::CountDesc,
+            storage_page: 0,
+            chest_page: 0,
+            backpack: blockgame_core::storage::BackpackState::default(),
+            backpack_open: false,
+            backpack_page: 0,
             shift_down: false,
             jei_search_text: String::new(),
             jei_search_focused: false,
@@ -2220,6 +2253,10 @@ impl ApplicationHandler for BlockGameApp {
                             handle_battery_click(state, is_right);
                         } else if state.active_electric_furnace_pos.is_some() {
                             handle_electric_furnace_click(state, is_right);
+                        } else if state.active_storage_terminal_pos.is_some() {
+                            handle_storage_terminal_click(state, is_right);
+                        } else if state.backpack_open {
+                            handle_backpack_click(state, is_right);
                         } else if state.active_chest_pos.is_some() {
                             handle_chest_click(state, is_right);
                             if let (Some(pos), Some(client)) =
@@ -2536,7 +2573,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.window.set_cursor_visible(true);
                                 return;
                             }
-                            if block_id == BlockId::CHEST {
+                            if block_id.is_chest() {
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;
                                 state.breaking_voxel = None;
@@ -2552,7 +2589,33 @@ impl ApplicationHandler for BlockGameApp {
                                 state.active_coal_gen_pos = None;
                                 state.active_battery_pos = None;
                                 state.active_electric_furnace_pos = None;
+                                state.active_storage_terminal_pos = None;
+                                state.backpack_open = false;
                                 state.active_chest_pos = Some(hit.hit_voxel);
+                                state.chest_page = 0;
+                                state.inventory_open = true;
+                                state.mouse_captured = false;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
+                                return;
+                            }
+                            if block_id == BlockId::STORAGE_TERMINAL {
+                                state.mouse_left_down = false;
+                                state.break_progress = 0.0;
+                                state.breaking_voxel = None;
+                                state.cracking_buffer = None;
+                                state.active_chest_pos = None;
+                                state.active_furnace_pos = None;
+                                state.active_coal_gen_pos = None;
+                                state.active_battery_pos = None;
+                                state.active_electric_furnace_pos = None;
+                                state.backpack_open = false;
+                                state.active_storage_terminal_pos = Some(hit.hit_voxel);
+                                state.storage_page = 0;
+                                state.storage_search_text.clear();
+                                state.storage_search_focused = false;
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
                                 let _ = state
@@ -2847,6 +2910,53 @@ impl ApplicationHandler for BlockGameApp {
                         }
 
                         let held_slot = state.inventory.get(state.active_hotbar_slot);
+
+                        // 1a. Wearable Backpack Equip/Upgrade & Open
+                        let held_bp_tier =
+                            blockgame_core::storage::BackpackState::tier_for_item(held_slot.item_id);
+                        if held_bp_tier > 0 {
+                            if held_bp_tier > state.backpack.tier {
+                                state.backpack.ensure_tier(held_bp_tier);
+                                if !state.player_stats.game_mode.is_creative() {
+                                    let mut s = state.inventory.get(state.active_hotbar_slot);
+                                    s.count = s.count.saturating_sub(1);
+                                    state.inventory.set(
+                                        state.active_hotbar_slot,
+                                        if s.count == 0 { ItemSlot::EMPTY } else { s },
+                                    );
+                                }
+                                state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                                    sender: "Storage".to_string(),
+                                    prefix: String::new(),
+                                    message: format!(
+                                        "Equipped {}! Press B anytime to open.",
+                                        state.backpack.title()
+                                    ),
+                                    is_system: true,
+                                    age: 0.0,
+                                });
+                            }
+                            state.mouse_left_down = false;
+                            state.break_progress = 0.0;
+                            state.breaking_voxel = None;
+                            state.cracking_buffer = None;
+                            state.active_chest_pos = None;
+                            state.active_furnace_pos = None;
+                            state.active_coal_gen_pos = None;
+                            state.active_battery_pos = None;
+                            state.active_electric_furnace_pos = None;
+                            state.active_storage_terminal_pos = None;
+                            state.storage_search_focused = false;
+                            state.backpack_open = true;
+                            state.backpack_page = 0;
+                            state.inventory_open = true;
+                            state.mouse_captured = false;
+                            let _ = state
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None);
+                            state.window.set_cursor_visible(true);
+                            return;
+                        }
 
                         // 1b. Bow Firing (consumes 1 Arrow from inventory)
                         if held_slot.item_id == ItemId::BOW {
@@ -3644,6 +3754,26 @@ impl ApplicationHandler for BlockGameApp {
                     return;
                 }
 
+                // Storage Terminal search bar text entry when focused
+                if state.storage_search_focused && state.inventory_open {
+                    if pressed {
+                        if key == KeyCode::Escape || key == KeyCode::Enter {
+                            state.storage_search_focused = false;
+                        } else if key == KeyCode::Backspace {
+                            state.storage_search_text.pop();
+                            state.storage_page = 0;
+                        } else if let Some(t) = text {
+                            for ch in t.chars() {
+                                if !ch.is_control() {
+                                    state.storage_search_text.push(ch);
+                                    state.storage_page = 0;
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 // Search Bar text entry when focused
                 if state.jei_search_focused && state.inventory_open {
                     if pressed {
@@ -3786,6 +3916,9 @@ impl ApplicationHandler for BlockGameApp {
                     state.active_coal_gen_pos = None;
                     state.active_battery_pos = None;
                     state.active_electric_furnace_pos = None;
+                    state.active_storage_terminal_pos = None;
+                    state.storage_search_focused = false;
+                    state.backpack_open = false;
                     state.jei_recipe_modal = None;
                     state.jei_search_focused = false;
                     if state.inventory_open {
@@ -3888,6 +4021,9 @@ impl ApplicationHandler for BlockGameApp {
                             state.active_coal_gen_pos = None;
                             state.active_battery_pos = None;
                             state.active_electric_furnace_pos = None;
+                            state.active_storage_terminal_pos = None;
+                            state.storage_search_focused = false;
+                            state.backpack_open = false;
                             if state.skills_open {
                                 state.skills_open = false;
                                 state.mouse_captured = true;
@@ -3945,6 +4081,96 @@ impl ApplicationHandler for BlockGameApp {
                                     .window
                                     .set_cursor_grab(winit::window::CursorGrabMode::None);
                                 state.window.set_cursor_visible(true);
+                            }
+                        }
+                        KeyCode::KeyB
+                            if pressed
+                                && !state.skills_open
+                                && !state.jei_search_focused
+                                && !state.storage_search_focused =>
+                        {
+                            if state.backpack_open && state.inventory_open {
+                                if !state.cursor_held.is_empty() {
+                                    let held =
+                                        std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                                    if let Some(rem) =
+                                        state.inventory.add_item(held, &state.item_registry)
+                                    {
+                                        state.spawn_drop_synced(
+                                            state.player.position,
+                                            Vec3::new(0.0, 2.0, 0.0),
+                                            rem,
+                                        );
+                                    }
+                                }
+                                state.backpack_open = false;
+                                state.inventory_open = false;
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            } else if !modal_open {
+                                // Auto-equip or upgrade from inventory if player carries a better backpack
+                                let mut best_slot: Option<(usize, u8)> = None;
+                                for idx in 0..state.inventory.len() {
+                                    let t = blockgame_core::storage::BackpackState::tier_for_item(
+                                        state.inventory.get(idx).item_id,
+                                    );
+                                    if t > state.backpack.tier
+                                        && best_slot.map_or(true, |(_, bt)| t > bt)
+                                    {
+                                        best_slot = Some((idx, t));
+                                    }
+                                }
+                                if let Some((slot_idx, tier)) = best_slot {
+                                    state.backpack.ensure_tier(tier);
+                                    if !state.player_stats.game_mode.is_creative() {
+                                        let mut s = state.inventory.get(slot_idx);
+                                        s.count = s.count.saturating_sub(1);
+                                        state.inventory.set(
+                                            slot_idx,
+                                            if s.count == 0 { ItemSlot::EMPTY } else { s },
+                                        );
+                                    }
+                                    state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                                        sender: "Storage".to_string(),
+                                        prefix: String::new(),
+                                        message: format!("Equipped {}!", state.backpack.title()),
+                                        is_system: true,
+                                        age: 0.0,
+                                    });
+                                }
+                                if state.backpack.tier > 0 {
+                                    state.mouse_left_down = false;
+                                    state.break_progress = 0.0;
+                                    state.breaking_voxel = None;
+                                    state.cracking_buffer = None;
+                                    state.active_chest_pos = None;
+                                    state.active_furnace_pos = None;
+                                    state.active_coal_gen_pos = None;
+                                    state.active_battery_pos = None;
+                                    state.active_electric_furnace_pos = None;
+                                    state.active_storage_terminal_pos = None;
+                                    state.storage_search_focused = false;
+                                    state.backpack_open = true;
+                                    state.backpack_page = 0;
+                                    state.inventory_open = true;
+                                    state.mouse_captured = false;
+                                    let _ = state
+                                        .window
+                                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                    state.window.set_cursor_visible(true);
+                                } else {
+                                    state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                                        sender: "Storage".to_string(),
+                                        prefix: String::new(),
+                                        message: "Craft a Leather, Iron, or Diamond Backpack first!"
+                                            .to_string(),
+                                        is_system: true,
+                                        age: 0.0,
+                                    });
+                                }
                             }
                         }
                         KeyCode::KeyY if pressed && !modal_open => {
@@ -5880,19 +6106,86 @@ impl ApplicationHandler for BlockGameApp {
                                 Some(&jei_params),
                                 modal_params.as_ref(),
                             );
-                        } else if let Some(chest_pos) = state.active_chest_pos {
-                            let chest_slots = {
+                        } else if let Some(term_pos) = state.active_storage_terminal_pos {
+                            let (info, items) = {
                                 let world_guard = state.world_manager.world().lock().unwrap();
-                                world_guard
-                                    .get_chest(chest_pos)
-                                    .cloned()
-                                    .unwrap_or_else(|| vec![ItemSlot::EMPTY; 27])
+                                let info = blockgame_core::storage::collect_storage_network(
+                                    &world_guard,
+                                    term_pos,
+                                );
+                                let items = blockgame_core::storage::list_network_items(
+                                    &world_guard,
+                                    &info.chests,
+                                    &state.storage_search_text,
+                                    state.storage_sort_mode,
+                                    &state.item_registry,
+                                );
+                                (info, items)
                             };
-                            UiBuilder::build_chest_screen(
+                            let total_pages = ((items.len() + 26) / 27).max(1);
+                            if state.storage_page >= total_pages {
+                                state.storage_page = total_pages - 1;
+                            }
+                            UiBuilder::build_storage_terminal_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
+                                &info,
+                                &items,
+                                &state.storage_search_text,
+                                state.storage_search_focused,
+                                state.storage_sort_mode,
+                                state.storage_page,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                ui_cursor,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if state.backpack_open {
+                            UiBuilder::build_backpack_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &state.backpack,
+                                state.backpack_page,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                ui_cursor,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if let Some(chest_pos) = state.active_chest_pos {
+                            let (chest_title, chest_slots) = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                let blk = world_guard.get_block(chest_pos);
+                                let title = match blk {
+                                    BlockId::IRON_CHEST => "Iron Chest (45 Slots)",
+                                    BlockId::GOLD_CHEST => "Gold Chest (63 Slots)",
+                                    BlockId::DIAMOND_CHEST => "Diamond Chest (81 Slots)",
+                                    _ => "Wooden Chest",
+                                };
+                                let slots = world_guard
+                                    .get_chest(chest_pos)
+                                    .cloned()
+                                    .unwrap_or_else(|| vec![ItemSlot::EMPTY; blk.chest_slot_count().max(27)]);
+                                (title, slots)
+                            };
+                            let total_pages = ((chest_slots.len() + 26) / 27).max(1);
+                            if state.chest_page >= total_pages {
+                                state.chest_page = total_pages - 1;
+                            }
+                            UiBuilder::build_chest_screen_paged(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                chest_title,
                                 &chest_slots,
+                                state.chest_page,
                                 &state.inventory,
                                 state.active_hotbar_slot,
                                 &state.cursor_held,
@@ -6963,12 +7256,38 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
     let slot_gap = UiBuilder::SLOT_GAP;
     let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
     let start_x = (screen_w - inv_w) * 0.5;
-
-    // 1. Chest Container Slots (3 rows x 9 columns = 27 slots)
     let chest_y = screen_h * 0.5 - 220.0;
+
+    // 0. Pagination buttons (< / >) for Iron/Gold/Diamond Chests
+    let total_slots = {
+        let mut world_guard = state.world_manager.world().lock().unwrap();
+        world_guard.get_or_create_chest(chest_pos).len()
+    };
+    let total_pages = ((total_slots + 26) / 27).max(1);
+    if total_pages > 1 {
+        let btn_y = chest_y - 24.0;
+        let next_x = start_x + inv_w - 26.0;
+        let prev_x = next_x - 86.0;
+        if cx >= prev_x && cx < prev_x + 24.0 && cy >= btn_y && cy < btn_y + 20.0 {
+            if state.chest_page > 0 {
+                state.chest_page -= 1;
+            }
+            return;
+        }
+        if cx >= next_x && cx < next_x + 24.0 && cy >= btn_y && cy < btn_y + 20.0 {
+            if state.chest_page + 1 < total_pages {
+                state.chest_page += 1;
+            }
+            return;
+        }
+    }
+    let page = state.chest_page.min(total_pages - 1);
+    let base_idx = page * 27;
+
+    // 1. Chest Container Slots (3 rows x 9 columns per page)
     for row in 0..3 {
         for col in 0..9 {
-            let slot_idx = row * 9 + col;
+            let slot_idx = base_idx + row * 9 + col;
             let sx = start_x + (col as f32) * (slot_size + slot_gap);
             let sy = chest_y + (row as f32) * (slot_size + slot_gap);
 
@@ -7000,7 +7319,7 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
         }
     }
 
-    // 2. Backpack Storage Grid (3 rows x 9 columns)
+    // 2. Player Inventory Grid (3 rows x 9 columns)
     let inv_y = chest_y + 3.0 * (slot_size + slot_gap) + 26.0;
     for row in 0..3 {
         for col in 0..9 {
@@ -7043,6 +7362,349 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
                     let mut world_guard = state.world_manager.world().lock().unwrap();
                     let chest_slots = world_guard.get_or_create_chest(chest_pos);
                     let rem = add_to_chest_slots(chest_slots, slot_val, &state.item_registry);
+                    state.inventory.slots[i] = rem.unwrap_or(ItemSlot::EMPTY);
+                }
+            } else {
+                state.inventory.click_slot(
+                    i,
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
+            }
+            return;
+        }
+    }
+}
+
+fn handle_storage_terminal_click(state: &mut AppState, is_right_click: bool) {
+    let Some(term_pos) = state.active_storage_terminal_pos else {
+        return;
+    };
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
+
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+    let grid_y = screen_h * 0.5 - 205.0;
+    let ctrl_y = grid_y - 24.0;
+
+    // 0a. Search box focus
+    let search_w = 210.0;
+    if cx >= start_x && cx < start_x + search_w && cy >= ctrl_y && cy < ctrl_y + 20.0 {
+        state.storage_search_focused = true;
+        state.jei_search_focused = false;
+        if is_right_click {
+            state.storage_search_text.clear();
+            state.storage_page = 0;
+        }
+        return;
+    } else {
+        state.storage_search_focused = false;
+    }
+
+    // 0b. Sort mode button
+    let sort_x = start_x + search_w + 8.0;
+    let sort_w = 104.0;
+    if cx >= sort_x && cx < sort_x + sort_w && cy >= ctrl_y && cy < ctrl_y + 20.0 {
+        state.storage_sort_mode = state.storage_sort_mode.next();
+        state.storage_page = 0;
+        return;
+    }
+
+    let (info, items) = {
+        let world_guard = state.world_manager.world().lock().unwrap();
+        let info = blockgame_core::storage::collect_storage_network(&world_guard, term_pos);
+        let items = blockgame_core::storage::list_network_items(
+            &world_guard,
+            &info.chests,
+            &state.storage_search_text,
+            state.storage_sort_mode,
+            &state.item_registry,
+        );
+        (info, items)
+    };
+
+    // 0c. Pagination buttons
+    let total_pages = ((items.len() + 26) / 27).max(1);
+    let next_x = start_x + inv_w - 24.0;
+    let prev_x = next_x - 82.0;
+    if cx >= prev_x && cx < prev_x + 24.0 && cy >= ctrl_y && cy < ctrl_y + 20.0 {
+        if state.storage_page > 0 {
+            state.storage_page -= 1;
+        }
+        return;
+    }
+    if cx >= next_x && cx < next_x + 24.0 && cy >= ctrl_y && cy < ctrl_y + 20.0 {
+        if state.storage_page + 1 < total_pages {
+            state.storage_page += 1;
+        }
+        return;
+    }
+
+    // 1. Unified 3x9 Storage Grid (requires power)
+    let page = state.storage_page.min(total_pages - 1);
+    let base_idx = page * 27;
+    for row in 0..3 {
+        for col in 0..9 {
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = grid_y + (row as f32) * (slot_size + slot_gap);
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                if !info.is_powered {
+                    return;
+                }
+                if !state.cursor_held.is_empty() {
+                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                    if is_right_click {
+                        let single = ItemSlot {
+                            item_id: state.cursor_held.item_id,
+                            count: 1,
+                            durability: state.cursor_held.durability,
+                        };
+                        if blockgame_core::storage::deposit_into_network(
+                            &mut world_guard,
+                            &info.chests,
+                            single,
+                            &state.item_registry,
+                        )
+                        .is_none()
+                        {
+                            state.cursor_held.count -= 1;
+                            if state.cursor_held.count == 0 {
+                                state.cursor_held = ItemSlot::EMPTY;
+                            }
+                        }
+                    } else {
+                        let held = std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
+                        let rem = blockgame_core::storage::deposit_into_network(
+                            &mut world_guard,
+                            &info.chests,
+                            held,
+                            &state.item_registry,
+                        );
+                        state.cursor_held = rem.unwrap_or(ItemSlot::EMPTY);
+                    }
+                } else {
+                    let idx = base_idx + row * 9 + col;
+                    if let Some(entry) = items.get(idx) {
+                        let max_stack = state
+                            .item_registry
+                            .get(entry.item_id)
+                            .map(|d| d.max_stack)
+                            .unwrap_or(64);
+                        let want = if is_right_click {
+                            ((entry.total_count.min(max_stack as u32) + 1) / 2).max(1) as u16
+                        } else {
+                            max_stack
+                        };
+                        let mut world_guard = state.world_manager.world().lock().unwrap();
+                        let pulled = blockgame_core::storage::withdraw_from_network(
+                            &mut world_guard,
+                            &info.chests,
+                            entry.item_id,
+                            want,
+                        );
+                        if !pulled.is_empty() {
+                            if state.shift_down {
+                                if let Some(rem) =
+                                    state.inventory.add_item(pulled, &state.item_registry)
+                                {
+                                    let _ = blockgame_core::storage::deposit_into_network(
+                                        &mut world_guard,
+                                        &info.chests,
+                                        rem,
+                                        &state.item_registry,
+                                    );
+                                }
+                            } else {
+                                state.cursor_held = pulled;
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    // 2. Player Inventory Grid (3 rows x 9 columns)
+    let inv_y = screen_h * 0.5 - 220.0 + 3.0 * (slot_size + slot_gap) + 26.0;
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = 9 + row * 9 + col;
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                if state.shift_down && info.is_powered {
+                    let slot_val = state.inventory.slots[slot_idx];
+                    if !slot_val.is_empty() {
+                        let mut world_guard = state.world_manager.world().lock().unwrap();
+                        let rem = blockgame_core::storage::deposit_into_network(
+                            &mut world_guard,
+                            &info.chests,
+                            slot_val,
+                            &state.item_registry,
+                        );
+                        state.inventory.slots[slot_idx] = rem.unwrap_or(ItemSlot::EMPTY);
+                    }
+                } else {
+                    state.inventory.click_slot(
+                        slot_idx,
+                        &mut state.cursor_held,
+                        is_right_click,
+                        &state.item_registry,
+                    );
+                }
+                return;
+            }
+        }
+    }
+
+    // 3. Hotbar Slots
+    let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+    for i in 0..9 {
+        let sx = start_x + (i as f32) * (slot_size + slot_gap);
+        let sy = hotbar_y;
+
+        if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+            if state.shift_down && info.is_powered {
+                let slot_val = state.inventory.slots[i];
+                if !slot_val.is_empty() {
+                    let mut world_guard = state.world_manager.world().lock().unwrap();
+                    let rem = blockgame_core::storage::deposit_into_network(
+                        &mut world_guard,
+                        &info.chests,
+                        slot_val,
+                        &state.item_registry,
+                    );
+                    state.inventory.slots[i] = rem.unwrap_or(ItemSlot::EMPTY);
+                }
+            } else {
+                state.inventory.click_slot(
+                    i,
+                    &mut state.cursor_held,
+                    is_right_click,
+                    &state.item_registry,
+                );
+            }
+            return;
+        }
+    }
+}
+
+fn handle_backpack_click(state: &mut AppState, is_right_click: bool) {
+    if !state.backpack_open || state.backpack.slots.is_empty() {
+        return;
+    }
+    let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
+
+    let slot_size = UiBuilder::SLOT_SIZE;
+    let slot_gap = UiBuilder::SLOT_GAP;
+    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+    let start_x = (screen_w - inv_w) * 0.5;
+    let chest_y = screen_h * 0.5 - 220.0;
+
+    let total_pages = ((state.backpack.slots.len() + 26) / 27).max(1);
+    if total_pages > 1 {
+        let btn_y = chest_y - 24.0;
+        let next_x = start_x + inv_w - 26.0;
+        let prev_x = next_x - 86.0;
+        if cx >= prev_x && cx < prev_x + 24.0 && cy >= btn_y && cy < btn_y + 20.0 {
+            if state.backpack_page > 0 {
+                state.backpack_page -= 1;
+            }
+            return;
+        }
+        if cx >= next_x && cx < next_x + 24.0 && cy >= btn_y && cy < btn_y + 20.0 {
+            if state.backpack_page + 1 < total_pages {
+                state.backpack_page += 1;
+            }
+            return;
+        }
+    }
+
+    let page = state.backpack_page.min(total_pages - 1);
+    let base_idx = page * 27;
+
+    // 1. Backpack Container Slots
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = base_idx + row * 9 + col;
+            if slot_idx >= state.backpack.slots.len() {
+                continue;
+            }
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = chest_y + (row as f32) * (slot_size + slot_gap);
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                if state.shift_down {
+                    let item = state.backpack.slots[slot_idx];
+                    if !item.is_empty() {
+                        if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                            state.backpack.slots[slot_idx] = rem;
+                        } else {
+                            state.backpack.slots[slot_idx] = ItemSlot::EMPTY;
+                        }
+                    }
+                } else {
+                    click_slot_raw(
+                        &mut state.backpack.slots[slot_idx],
+                        &mut state.cursor_held,
+                        is_right_click,
+                        &state.item_registry,
+                    );
+                }
+                return;
+            }
+        }
+    }
+
+    // 2. Player Inventory Grid
+    let inv_y = chest_y + 3.0 * (slot_size + slot_gap) + 26.0;
+    for row in 0..3 {
+        for col in 0..9 {
+            let slot_idx = 9 + row * 9 + col;
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+            if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+                if state.shift_down {
+                    let slot_val = state.inventory.slots[slot_idx];
+                    if !slot_val.is_empty() {
+                        let rem = add_to_chest_slots(
+                            &mut state.backpack.slots,
+                            slot_val,
+                            &state.item_registry,
+                        );
+                        state.inventory.slots[slot_idx] = rem.unwrap_or(ItemSlot::EMPTY);
+                    }
+                } else {
+                    state.inventory.click_slot(
+                        slot_idx,
+                        &mut state.cursor_held,
+                        is_right_click,
+                        &state.item_registry,
+                    );
+                }
+                return;
+            }
+        }
+    }
+
+    // 3. Hotbar Slots
+    let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+    for i in 0..9 {
+        let sx = start_x + (i as f32) * (slot_size + slot_gap);
+        let sy = hotbar_y;
+        if cx >= sx && cx < sx + slot_size && cy >= sy && cy < sy + slot_size {
+            if state.shift_down {
+                let slot_val = state.inventory.slots[i];
+                if !slot_val.is_empty() {
+                    let rem = add_to_chest_slots(
+                        &mut state.backpack.slots,
+                        slot_val,
+                        &state.item_registry,
+                    );
                     state.inventory.slots[i] = rem.unwrap_or(ItemSlot::EMPTY);
                 }
             } else {
@@ -7865,12 +8527,58 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
                 }
             }
         }
+    } else if let Some(term_pos) = state.active_storage_terminal_pos {
+        let grid_y = screen_h * 0.5 - 205.0;
+        let (info, items) = {
+            let world_guard = state.world_manager.world().lock().unwrap();
+            let info = blockgame_core::storage::collect_storage_network(&world_guard, term_pos);
+            let items = blockgame_core::storage::list_network_items(
+                &world_guard,
+                &info.chests,
+                &state.storage_search_text,
+                state.storage_sort_mode,
+                &state.item_registry,
+            );
+            (info, items)
+        };
+        if info.is_powered {
+            let base_idx = state.storage_page * 27;
+            for row in 0..3 {
+                for col in 0..9 {
+                    let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                    let sy = grid_y + (row as f32) * (slot_size + slot_gap);
+                    if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                        if let Some(entry) = items.get(base_idx + row * 9 + col) {
+                            return Some(entry.item_id);
+                        }
+                    }
+                }
+            }
+        }
+    } else if state.backpack_open {
+        let chest_y = screen_h * 0.5 - 220.0;
+        let base_idx = state.backpack_page * 27;
+        for row in 0..3 {
+            for col in 0..9 {
+                let slot_idx = base_idx + row * 9 + col;
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = chest_y + (row as f32) * (slot_size + slot_gap);
+                if cx >= sx && cx <= sx + slot_size && cy >= sy && cy <= sy + slot_size {
+                    if let Some(slot) = state.backpack.slots.get(slot_idx) {
+                        if !slot.is_empty() {
+                            return Some(slot.item_id);
+                        }
+                    }
+                }
+            }
+        }
     } else if let Some(chest_pos) = state.active_chest_pos {
         let chest_y = screen_h * 0.5 - 220.0;
+        let base_idx = state.chest_page * 27;
 
         for row in 0..3 {
             for col in 0..9 {
-                let slot_idx = row * 9 + col;
+                let slot_idx = base_idx + row * 9 + col;
                 let sx = start_x + (col as f32) * (slot_size + slot_gap);
                 let sy = chest_y + (row as f32) * (slot_size + slot_gap);
 
@@ -7932,7 +8640,10 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
         let flame_y = input_y + slot_size + 8.0;
         let fuel_y = flame_y + flame_size + 8.0;
         fuel_y + slot_size + 24.0
-    } else if state.active_chest_pos.is_some() {
+    } else if state.active_chest_pos.is_some()
+        || state.active_storage_terminal_pos.is_some()
+        || state.backpack_open
+    {
         screen_h * 0.5 - 220.0 + 3.0 * (slot_size + slot_gap) + 26.0
     } else {
         let grid_h = state.crafting_grid.height;
