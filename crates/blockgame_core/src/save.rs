@@ -92,6 +92,7 @@ pub struct WorldSaveData {
     pub metadata: WorldMetadata,
     pub player: SavedPlayerState,
     pub modified_chunks: HashMap<ChunkPos, Vec<(u16, BlockId)>>,
+    pub modified_chunk_facings: HashMap<ChunkPos, Vec<(u16, u8)>>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
     pub coal_generators: HashMap<IVec3, crate::power::CoalGeneratorState>,
@@ -114,6 +115,7 @@ impl WorldSaveData {
             metadata,
             player,
             modified_chunks: HashMap::new(),
+            modified_chunk_facings: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
             coal_generators: HashMap::new(),
@@ -131,12 +133,18 @@ impl WorldSaveData {
         }
     }
 
-    /// Captures all dirty chunks, chests, furnaces, and power machines from `World` into this `WorldSaveData`.
+    /// Captures all dirty chunks, block facings, chests, furnaces, and power machines from `World` into this `WorldSaveData`.
     pub fn capture_from_world(&mut self, world: &World) {
         for &cpos in &world.dirty_chunks {
             if let Some(chunk) = world.get_chunk(cpos) {
                 let rle = encode_chunk_rle(chunk);
                 self.modified_chunks.insert(cpos, rle);
+                let facings = encode_chunk_facings(chunk);
+                if facings.is_empty() {
+                    self.modified_chunk_facings.remove(&cpos);
+                } else {
+                    self.modified_chunk_facings.insert(cpos, facings);
+                }
             }
         }
         self.chest_containers = world.chest_containers.clone();
@@ -146,10 +154,13 @@ impl WorldSaveData {
         self.electric_furnaces = world.electric_furnaces.clone();
     }
 
-    /// Applies saved modified chunks, chests, furnaces, and power machines into `World`.
+    /// Applies saved modified chunks, block facings, chests, furnaces, and power machines into `World`.
     pub fn apply_to_world(&self, world: &mut World) {
         for (&cpos, rle) in &self.modified_chunks {
-            let chunk = decode_chunk_rle(cpos, rle);
+            let mut chunk = decode_chunk_rle(cpos, rle);
+            if let Some(facings) = self.modified_chunk_facings.get(&cpos) {
+                apply_chunk_facings(&mut chunk, facings);
+            }
             world.insert_dirty_chunk(chunk);
         }
         world.chest_containers = self.chest_containers.clone();
@@ -252,6 +263,29 @@ pub fn decode_chunk_rle(pos: ChunkPos, runs: &[(u16, BlockId)]) -> Chunk {
         }
     }
     chunk
+}
+
+/// Encodes all non-zero block facings in a `Chunk` as sparse `(voxel_index, facing)` pairs.
+pub fn encode_chunk_facings(chunk: &Chunk) -> Vec<(u16, u8)> {
+    let raw = chunk.raw_facings();
+    let mut facings = Vec::new();
+    for (idx, &f) in raw.iter().enumerate() {
+        let masked = f & 0x03;
+        if masked != 0 {
+            facings.push((idx as u16, masked));
+        }
+    }
+    facings
+}
+
+/// Applies sparse `(voxel_index, facing)` pairs onto a decoded `Chunk`.
+pub fn apply_chunk_facings(chunk: &mut Chunk, facings: &[(u16, u8)]) {
+    let raw = chunk.raw_facings_mut();
+    for &(idx, f) in facings {
+        if (idx as usize) < CHUNK_VOLUME {
+            raw[idx as usize] = f & 0x03;
+        }
+    }
 }
 
 /// Lists all saved worlds inside `saves_root`, sorted by `last_played` descending (newest first).
@@ -543,11 +577,12 @@ pub fn list_saved_players(world_dir: &Path) -> io::Result<Vec<String>> {
     Ok(list)
 }
 
-/// Saves a single modified chunk to `<chunk_dir>/<x>_<y>_<z>.bin`.
-pub fn save_chunk_file(
+/// Saves a single modified chunk (blocks + sparse facings) to `<chunk_dir>/<x>_<y>_<z>.bin`.
+pub fn save_chunk_file_with_facings(
     chunk_dir: &Path,
     cpos: ChunkPos,
     runs: &[(u16, BlockId)],
+    facings: &[(u16, u8)],
 ) -> io::Result<PathBuf> {
     let filename = format!("{}_{}_{}.bin", cpos.0.x, cpos.0.y, cpos.0.z);
     let path = chunk_dir.join(filename);
@@ -555,19 +590,36 @@ pub fn save_chunk_file(
     let mut w = BufWriter::new(file);
 
     w.write_all(CHUNK_MAGIC)?;
-    write_u32(&mut w, 1)?; // version 1
+    write_u32(&mut w, 2)?; // version 2: includes sparse block facings
     write_ivec3(&mut w, cpos.0)?;
     write_u32(&mut w, runs.len() as u32)?;
     for &(count, block_id) in runs {
         write_u16(&mut w, count)?;
         write_u8(&mut w, block_id.0)?;
     }
+    write_u32(&mut w, facings.len() as u32)?;
+    for &(idx, facing) in facings {
+        write_u16(&mut w, idx)?;
+        write_u8(&mut w, facing & 0x03)?;
+    }
     w.flush()?;
     Ok(path)
 }
 
-/// Loads a single modified chunk from `<x>_<y>_<z>.bin`.
-pub fn load_chunk_file(path: &Path) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>)> {
+/// Saves a single modified chunk to `<chunk_dir>/<x>_<y>_<z>.bin`.
+pub fn save_chunk_file(
+    chunk_dir: &Path,
+    cpos: ChunkPos,
+    runs: &[(u16, BlockId)],
+) -> io::Result<PathBuf> {
+    save_chunk_file_with_facings(chunk_dir, cpos, runs, &[])
+}
+
+/// Loads a single modified chunk (blocks + sparse facings) from `<x>_<y>_<z>.bin`.
+/// Backward-compatible with version 1 chunk files (which default all facings to 0).
+pub fn load_chunk_file_with_facings(
+    path: &Path,
+) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>, Vec<(u16, u8)>)> {
     let file = File::open(path)?;
     let mut r = BufReader::new(file);
 
@@ -580,7 +632,7 @@ pub fn load_chunk_file(path: &Path) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>
         ));
     }
     let version = read_u32(&mut r)?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported chunk version: {}", version),
@@ -594,6 +646,22 @@ pub fn load_chunk_file(path: &Path) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>
         let block_id = BlockId(read_u8(&mut r)?);
         runs.push((count, block_id));
     }
+    let mut facings = Vec::new();
+    if version >= 2 {
+        let facing_count = read_u32(&mut r)? as usize;
+        facings.reserve(facing_count);
+        for _ in 0..facing_count {
+            let idx = read_u16(&mut r)?;
+            let facing = read_u8(&mut r)? & 0x03;
+            facings.push((idx, facing));
+        }
+    }
+    Ok((cpos, runs, facings))
+}
+
+/// Loads a single modified chunk from `<x>_<y>_<z>.bin`.
+pub fn load_chunk_file(path: &Path) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>)> {
+    let (cpos, runs, _facings) = load_chunk_file_with_facings(path)?;
     Ok((cpos, runs))
 }
 
@@ -1063,7 +1131,12 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
     let chunk_dir = world_dir.join("chunks");
     fs::create_dir_all(&chunk_dir)?;
     for (&cpos, runs) in &data.modified_chunks {
-        save_chunk_file(&chunk_dir, cpos, runs)?;
+        let facings = data
+            .modified_chunk_facings
+            .get(&cpos)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        save_chunk_file_with_facings(&chunk_dir, cpos, runs, facings)?;
     }
 
     // 4. Write containers.bin (chests & furnaces)
@@ -1219,9 +1292,12 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("bin") {
-                    match load_chunk_file(&path) {
-                        Ok((cpos, runs)) => {
+                    match load_chunk_file_with_facings(&path) {
+                        Ok((cpos, runs, facings)) => {
                             data.modified_chunks.insert(cpos, runs);
+                            if !facings.is_empty() {
+                                data.modified_chunk_facings.insert(cpos, facings);
+                            }
                             loaded_modular_chunks = true;
                         }
                         Err(e) => {
@@ -2008,6 +2084,7 @@ mod tests {
                 skills: crate::skills::PlayerSkills::new(),
             },
             modified_chunks: HashMap::new(),
+            modified_chunk_facings: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
             coal_generators: HashMap::new(),

@@ -6486,7 +6486,7 @@ impl ApplicationHandler for BlockGameApp {
                 }
 
                 // Upload animated spinning 3D Wind Turbine rotors
-                let turbines: Vec<(IVec3, f32)> = {
+                let turbines: Vec<(IVec3, f32, u8)> = {
                     let world_guard = state.world_manager.world().lock().unwrap();
                     world_guard
                         .power_nodes
@@ -6497,7 +6497,8 @@ impl ApplicationHandler for BlockGameApp {
                                     &world_guard,
                                     pos,
                                 );
-                                Some((pos, out))
+                                let facing = world_guard.get_block_facing(pos);
+                                Some((pos, out, facing))
                             } else {
                                 None
                             }

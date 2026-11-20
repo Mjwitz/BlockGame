@@ -218,7 +218,7 @@ impl<'a> ChunkMesher<'a> {
                     }
 
                     if block_id == BlockId::WIND_TURBINE {
-                        self.build_wind_turbine(&mut mesh, chunk.pos, ix, iy, iz, &light_map);
+                        self.build_wind_turbine(&mut mesh, chunk.pos, ix, iy, iz, facing, &light_map);
                         continue;
                     }
 
@@ -1240,6 +1240,7 @@ impl<'a> ChunkMesher<'a> {
         x: i32,
         y: i32,
         z: i32,
+        facing: u8,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
         let origin = chunk_pos.to_world_origin();
@@ -1297,16 +1298,22 @@ impl<'a> ChunkMesher<'a> {
             [416, 416, 416, 416, 416, 425],
             light,
         );
-        // 3. Top aerodynamic nacelle housing (415 copper stator hub on South +Z front)
+        // 3. Top aerodynamic nacelle housing oriented to match block facing (0=+Z, 1=-Z, 2=+X, 3=-X)
+        let (nx0, nz0, nx1, nz1, nac_tiles) = match facing & 0x03 {
+            1 => (0.28, 0.16, 0.72, 0.86, [416, 415, 416, 416, 416, 425]), // North (-Z)
+            2 => (0.14, 0.28, 0.84, 0.72, [416, 416, 415, 416, 416, 425]), // East (+X)
+            3 => (0.16, 0.28, 0.86, 0.72, [416, 416, 416, 415, 416, 425]), // West (-X)
+            _ => (0.28, 0.14, 0.72, 0.84, [415, 416, 416, 416, 416, 425]), // South (+Z)
+        };
         self.add_box(
             mesh,
-            fx + 0.28,
+            fx + nx0,
             fy + 3.46,
-            fz + 0.14,
-            fx + 0.72,
+            fz + nz0,
+            fx + nx1,
             fy + 3.98,
-            fz + 0.84,
-            [415, 416, 416, 416, 416, 425],
+            fz + nz1,
+            nac_tiles,
             light,
         );
     }
@@ -3711,9 +3718,9 @@ pub fn build_celestial_mesh(camera_pos: glam::Vec3, sun_dir: glam::Vec3) -> Chun
 }
 
 /// Builds a dynamic 3D mesh for all animated spinning 3-blade Wind Turbine rotors.
-/// Each entry is `(base_block_pos, live_output_eu_s)`.
+/// Each entry is `(base_block_pos, live_output_eu_s, facing)`.
 pub fn build_wind_turbine_rotors_mesh(
-    turbines: &[(glam::IVec3, f32)],
+    turbines: &[(glam::IVec3, f32, u8)],
     total_time: f32,
 ) -> ChunkMesh {
     let mut mesh = ChunkMesh::new();
@@ -3728,6 +3735,7 @@ pub fn build_wind_turbine_rotors_mesh(
                        cx: f32,
                        cy: f32,
                        cz: f32,
+                       facing: u8,
                        angle: f32,
                        lx0: f32,
                        ly0: f32,
@@ -3738,15 +3746,24 @@ pub fn build_wind_turbine_rotors_mesh(
                        uv_bounds: [f32; 4]| {
         let cos_a = angle.cos();
         let sin_a = angle.sin();
+        let orient = |rx: f32, ry: f32, rz: f32| -> [f32; 3] {
+            match facing & 0x03 {
+                1 => [-rx, ry, -rz], // North (-Z)
+                2 => [rz, ry, -rx],  // East (+X)
+                3 => [-rz, ry, rx],  // West (-X)
+                _ => [rx, ry, rz],   // South (+Z)
+            }
+        };
         let xform = |lx: f32, ly: f32, lz: f32| -> [f32; 3] {
-            [
-                cx + lx * cos_a - ly * sin_a,
-                cy + lx * sin_a + ly * cos_a,
-                cz + lz,
-            ]
+            let rx = lx * cos_a - ly * sin_a;
+            let ry = lx * sin_a + ly * cos_a;
+            let [ox, oy, oz] = orient(rx, ry, lz);
+            [cx + ox, cy + oy, cz + oz]
         };
         let xform_n = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
-            [nx * cos_a - ny * sin_a, nx * sin_a + ny * cos_a, nz]
+            let rx = nx * cos_a - ny * sin_a;
+            let ry = nx * sin_a + ny * cos_a;
+            orient(rx, ry, nz)
         };
 
         let [u_min, v_min, u_max, v_max] = uv_bounds;
@@ -3841,10 +3858,16 @@ pub fn build_wind_turbine_rotors_mesh(
         }
     };
 
-    for &(pos, output_eu_s) in turbines {
-        let cx = pos.x as f32 + 0.5;
+    for &(pos, output_eu_s, facing) in turbines {
+        let (hx, hz) = match facing & 0x03 {
+            1 => (0.5, 0.10), // North (-Z)
+            2 => (0.90, 0.5), // East (+X)
+            3 => (0.10, 0.5), // West (-X)
+            _ => (0.5, 0.90), // South (+Z)
+        };
+        let cx = pos.x as f32 + hx;
         let cy = pos.y as f32 + 3.72;
-        let cz = pos.z as f32 + 0.90;
+        let cz = pos.z as f32 + hz;
         let phase = ((pos.x.wrapping_mul(31) ^ pos.z.wrapping_mul(17)) as f32) * 0.7;
         let spin_speed = if output_eu_s > 0.0 {
             1.6 + output_eu_s * 0.075
@@ -3859,6 +3882,7 @@ pub fn build_wind_turbine_rotors_mesh(
             cx,
             cy,
             cz,
+            facing,
             base_angle,
             -0.14,
             -0.14,
@@ -3878,6 +3902,7 @@ pub fn build_wind_turbine_rotors_mesh(
                 cx,
                 cy,
                 cz,
+                facing,
                 angle,
                 -0.10,
                 0.12,
@@ -3893,6 +3918,7 @@ pub fn build_wind_turbine_rotors_mesh(
                 cx,
                 cy,
                 cz,
+                facing,
                 angle,
                 -0.07,
                 1.05,
