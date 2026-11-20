@@ -880,38 +880,86 @@ pub fn load_power_file(
     Ok(Some((coal_generators, batteries, electric_furnaces)))
 }
 
-/// Saves the player's wearable portable backpack to `<world_dir>/backpack.bin`.
+const BACKPACK_MAGIC: &[u8; 4] = b"BKPK";
+
+/// Saves all unique portable backpacks (`BackpackRegistry`) to `<world_dir>/backpack.bin`.
 pub fn save_backpack_file(
     world_dir: &Path,
-    backpack: &crate::storage::BackpackState,
+    registry: &crate::storage::BackpackRegistry,
 ) -> io::Result<()> {
     let path = world_dir.join("backpack.bin");
     let mut w = BufWriter::new(File::create(&path)?);
-    write_u8(&mut w, backpack.tier)?;
-    write_u32(&mut w, backpack.slots.len() as u32)?;
-    for &slot in &backpack.slots {
-        write_item_slot(&mut w, slot)?;
+    w.write_all(BACKPACK_MAGIC)?;
+    write_u32(&mut w, 2)?; // version 2: per-instance BackpackRegistry
+    write_u16(&mut w, registry.next_id)?;
+    write_u32(&mut w, registry.bags.len() as u32)?;
+    let mut entries: Vec<_> = registry.bags.iter().collect();
+    entries.sort_by_key(|(&id, _)| id);
+    for (&id, bag) in entries {
+        write_u16(&mut w, id)?;
+        write_u8(&mut w, bag.tier)?;
+        write_u32(&mut w, bag.slots.len() as u32)?;
+        for &slot in &bag.slots {
+            write_item_slot(&mut w, slot)?;
+        }
     }
     w.flush()?;
     Ok(())
 }
 
-/// Loads the player's wearable portable backpack from `<world_dir>/backpack.bin`.
-pub fn load_backpack_file(world_dir: &Path) -> io::Result<Option<crate::storage::BackpackState>> {
+/// Loads all unique portable backpacks (`BackpackRegistry`) from `<world_dir>/backpack.bin`.
+/// Transparently migrates legacy v1 single-backpack files to bag ID 1.
+pub fn load_backpack_file(
+    world_dir: &Path,
+) -> io::Result<Option<crate::storage::BackpackRegistry>> {
     let path = world_dir.join("backpack.bin");
     if !path.exists() {
         return Ok(None);
     }
-    let mut r = BufReader::new(File::open(&path)?);
-    let tier = read_u8(&mut r)?;
-    let count = read_u32(&mut r)? as usize;
-    let mut slots = Vec::with_capacity(count);
-    for _ in 0..count {
-        slots.push(read_item_slot(&mut r, 2)?);
+    let bytes = std::fs::read(&path)?;
+    if bytes.len() >= 4 && &bytes[0..4] == BACKPACK_MAGIC {
+        let mut r = io::Cursor::new(&bytes[4..]);
+        let _version = read_u32(&mut r)?;
+        let next_id = read_u16(&mut r)?.max(1);
+        let bag_count = read_u32(&mut r)? as usize;
+        let mut reg = crate::storage::BackpackRegistry {
+            next_id,
+            bags: HashMap::with_capacity(bag_count),
+        };
+        for _ in 0..bag_count {
+            let id = read_u16(&mut r)?;
+            let tier = read_u8(&mut r)?;
+            let slot_count = read_u32(&mut r)? as usize;
+            let mut slots = Vec::with_capacity(slot_count);
+            for _ in 0..slot_count {
+                slots.push(read_item_slot(&mut r, 2)?);
+            }
+            let mut bp = crate::storage::BackpackState { tier, slots };
+            bp.ensure_tier(tier);
+            if id >= reg.next_id {
+                reg.next_id = id.saturating_add(1).max(1);
+            }
+            reg.bags.insert(id, bp);
+        }
+        Ok(Some(reg))
+    } else {
+        // Legacy v1 format: [tier: u8][count: u32][slots...]
+        let mut r = io::Cursor::new(&bytes[..]);
+        let tier = read_u8(&mut r)?;
+        let count = read_u32(&mut r)? as usize;
+        let mut slots = Vec::with_capacity(count);
+        for _ in 0..count {
+            slots.push(read_item_slot(&mut r, 2)?);
+        }
+        let mut reg = crate::storage::BackpackRegistry::default();
+        if tier > 0 {
+            let mut bp = crate::storage::BackpackState { tier, slots };
+            bp.ensure_tier(tier);
+            reg.bags.insert(1, bp);
+            reg.next_id = 2;
+        }
+        Ok(Some(reg))
     }
-    let mut bp = crate::storage::BackpackState { tier, slots };
-    bp.ensure_tier(tier);
-    Ok(Some(bp))
 }
 
 /// Saves entities to `<world_dir>/entities.bin`.

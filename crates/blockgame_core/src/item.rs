@@ -2496,7 +2496,11 @@ impl Inventory {
                 }
             } else if slot.can_stack_with(held_cursor) {
                 let max_stack = registry.max_stack_size(slot.item_id);
-                if slot.count < max_stack {
+                if max_stack <= 1 {
+                    if !split_half {
+                        std::mem::swap(slot, held_cursor);
+                    }
+                } else if slot.count < max_stack {
                     if split_half {
                         // Place 1 item into stack
                         slot.count += 1;

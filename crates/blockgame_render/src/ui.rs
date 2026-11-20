@@ -4856,7 +4856,15 @@ impl UiBuilder {
                             let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
                             let pad = 6.0;
                             mesh.add_quad(sx + pad, sy + pad, slot_size - pad * 2.0, slot_size - pad * 2.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
-                            Self::draw_stack_number(mesh, sx, sy, slot_size, entry.total_count.min(9999) as u16);
+                            if entry.unique_source.is_some()
+                                && entry.durability > 0
+                                && blockgame_core::storage::BackpackState::is_backpack_item(entry.item_id)
+                            {
+                                let tag = format!("#{}", entry.durability);
+                                Self::draw_string(mesh, sx + 3.0, sy + 3.0, &tag, 5.5, 7.0, 1.0, [0.98, 0.92, 0.45, 1.0]);
+                            } else {
+                                Self::draw_stack_number(mesh, sx, sy, slot_size, entry.total_count.min(9999) as u16);
+                            }
                             if cursor_pos[0] >= sx && cursor_pos[0] <= sx + slot_size && cursor_pos[1] >= sy && cursor_pos[1] <= sy + slot_size {
                                 hovered_item_name = Some(def.display_name);
                             }
@@ -4879,6 +4887,7 @@ impl UiBuilder {
         mesh: &mut UiMesh,
         screen_w: f32,
         screen_h: f32,
+        backpack_id: u16,
         backpack: &blockgame_core::storage::BackpackState,
         page: usize,
         inventory: &Inventory,
@@ -4889,11 +4898,12 @@ impl UiBuilder {
         jei_params: Option<&JeiParams>,
         recipe_modal: Option<&RecipeModalParams>,
     ) {
+        let title = backpack.title_with_id(backpack_id);
         Self::build_chest_screen_paged(
             mesh,
             screen_w,
             screen_h,
-            backpack.title(),
+            &title,
             &backpack.slots,
             page,
             inventory,

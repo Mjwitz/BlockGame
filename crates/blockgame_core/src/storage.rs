@@ -63,6 +63,11 @@ pub struct StorageNetworkInfo {
 pub struct AggregatedStorageItem {
     pub item_id: ItemId,
     pub total_count: u32,
+    /// When `Some((chest_pos, slot_idx))`, represents a single unique / non-stackable item
+    /// (such as a Backpack or tool) that is displayed individually and never stacked.
+    pub unique_source: Option<(IVec3, usize)>,
+    /// Item durability or unique backpack ID (`0` for standard stacked items).
+    pub durability: u16,
 }
 
 /// Discovers the connected Storage Network (Terminals + Storage Cables + all adjacent Chests)
@@ -137,7 +142,8 @@ pub fn terminal_power_draw_eu_s(world: &World, terminal_pos: IVec3) -> f32 {
     }
 }
 
-/// Aggregates, filters by `search`, and sorts all items stored across `chests`.
+/// Aggregates stackable items while keeping non-stackable / unique items (like Backpacks and tools)
+/// as separate individual entries, then filters by `search` and sorts by `sort_mode`.
 pub fn list_network_items(
     world: &World,
     chests: &[IVec3],
@@ -146,10 +152,29 @@ pub fn list_network_items(
     registry: &ItemRegistry,
 ) -> Vec<AggregatedStorageItem> {
     let mut totals: HashMap<ItemId, u32> = HashMap::new();
+    let mut unique_items: Vec<AggregatedStorageItem> = Vec::new();
+
     for &cpos in chests {
         if let Some(slots) = world.get_chest(cpos) {
-            for slot in slots {
-                if !slot.is_empty() {
+            for (slot_idx, slot) in slots.iter().enumerate() {
+                if slot.is_empty() {
+                    continue;
+                }
+                let max_stack = registry
+                    .get(slot.item_id)
+                    .map(|d| d.max_stack)
+                    .unwrap_or(64);
+                let is_unique = max_stack <= 1
+                    || slot.durability > 0
+                    || BackpackState::tier_for_item(slot.item_id) > 0;
+                if is_unique {
+                    unique_items.push(AggregatedStorageItem {
+                        item_id: slot.item_id,
+                        total_count: slot.count as u32,
+                        unique_source: Some((cpos, slot_idx)),
+                        durability: slot.durability,
+                    });
+                } else {
                     *totals.entry(slot.item_id).or_insert(0) += slot.count as u32;
                 }
             }
@@ -157,22 +182,37 @@ pub fn list_network_items(
     }
 
     let q = search.trim().to_lowercase();
+    let matches_search = |id: ItemId| -> bool {
+        if q.is_empty() {
+            return true;
+        }
+        registry
+            .get(id)
+            .map(|d| d.display_name.to_lowercase().contains(&q))
+            .unwrap_or(false)
+    };
+
     let mut items: Vec<AggregatedStorageItem> = totals
         .into_iter()
-        .filter(|(id, _)| {
-            if q.is_empty() {
-                return true;
-            }
-            registry
-                .get(*id)
-                .map(|d| d.display_name.to_lowercase().contains(&q))
-                .unwrap_or(false)
-        })
+        .filter(|(id, _)| matches_search(*id))
         .map(|(item_id, total_count)| AggregatedStorageItem {
             item_id,
             total_count,
+            unique_source: None,
+            durability: 0,
         })
         .collect();
+
+    items.extend(
+        unique_items
+            .into_iter()
+            .filter(|entry| matches_search(entry.item_id)),
+    );
+
+    let source_key = |src: Option<(IVec3, usize)>| {
+        src.map(|(p, i)| (1u8, p.y, p.x, p.z, i))
+            .unwrap_or((0, 0, 0, 0, 0))
+    };
 
     match sort_mode {
         StorageSortMode::CountDesc => {
@@ -180,17 +220,28 @@ pub fn list_network_items(
                 b.total_count
                     .cmp(&a.total_count)
                     .then_with(|| a.item_id.0.cmp(&b.item_id.0))
+                    .then_with(|| a.durability.cmp(&b.durability))
+                    .then_with(|| source_key(a.unique_source).cmp(&source_key(b.unique_source)))
             });
         }
         StorageSortMode::NameAsc => {
             items.sort_by(|a, b| {
                 let na = registry.get(a.item_id).map(|d| d.display_name).unwrap_or("");
                 let nb = registry.get(b.item_id).map(|d| d.display_name).unwrap_or("");
-                na.cmp(nb).then_with(|| a.item_id.0.cmp(&b.item_id.0))
+                na.cmp(nb)
+                    .then_with(|| a.item_id.0.cmp(&b.item_id.0))
+                    .then_with(|| a.durability.cmp(&b.durability))
+                    .then_with(|| source_key(a.unique_source).cmp(&source_key(b.unique_source)))
             });
         }
         StorageSortMode::ItemIdAsc => {
-            items.sort_by_key(|a| a.item_id.0);
+            items.sort_by(|a, b| {
+                a.item_id
+                    .0
+                    .cmp(&b.item_id.0)
+                    .then_with(|| a.durability.cmp(&b.durability))
+                    .then_with(|| source_key(a.unique_source).cmp(&source_key(b.unique_source)))
+            });
         }
     }
 
@@ -212,13 +263,20 @@ pub fn deposit_into_network(
         .get(slot.item_id)
         .map(|d| d.max_stack)
         .unwrap_or(64);
+    let is_unique = max_stack <= 1
+        || slot.durability > 0
+        || BackpackState::tier_for_item(slot.item_id) > 0;
 
-    // Pass 1: merge into existing partial stacks of the same item (if stackable & no durability)
-    if max_stack > 1 && slot.durability == 0 {
+    // Pass 1: merge into existing partial stacks of the same item (only for stackable non-unique items)
+    if !is_unique {
         for &cpos in chests {
             let chest = world.get_or_create_chest(cpos);
             for s in chest.iter_mut() {
-                if !s.is_empty() && s.item_id == slot.item_id && s.count < max_stack {
+                if !s.is_empty()
+                    && s.item_id == slot.item_id
+                    && s.durability == 0
+                    && s.count < max_stack
+                {
                     let add = (max_stack - s.count).min(slot.count);
                     s.count += add;
                     slot.count -= add;
@@ -252,7 +310,23 @@ pub fn deposit_into_network(
     Some(slot)
 }
 
-/// Withdraws up to `max_count` of `item_id` from `chests`.
+/// Withdraws a specific unique / non-stackable item from its exact chest slot so its unique ID
+/// and contents are preserved without duplication.
+pub fn withdraw_unique_from_network(
+    world: &mut World,
+    chest_pos: IVec3,
+    slot_idx: usize,
+) -> ItemSlot {
+    let Some(chest) = world.get_chest_mut(chest_pos) else {
+        return ItemSlot::EMPTY;
+    };
+    if slot_idx >= chest.len() || chest[slot_idx].is_empty() {
+        return ItemSlot::EMPTY;
+    }
+    std::mem::replace(&mut chest[slot_idx], ItemSlot::EMPTY)
+}
+
+/// Withdraws up to `max_count` of stackable `item_id` from `chests`.
 pub fn withdraw_from_network(
     world: &mut World,
     chests: &[IVec3],
@@ -303,10 +377,10 @@ pub fn withdraw_from_network(
     }
 }
 
-/// Player's wearable portable Backpack state (Tier 1: 18 slots, Tier 2: 27 slots, Tier 3: 36 slots).
+/// Single Backpack container instance (Tier 1: 18 slots, Tier 2: 27 slots, Tier 3: 36 slots).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BackpackState {
-    /// 0 = none equipped, 1 = Leather (18), 2 = Iron (27), 3 = Diamond (36).
+    /// 0 = uninitialized, 1 = Leather (18), 2 = Iron (27), 3 = Diamond (36).
     pub tier: u8,
     pub slots: Vec<ItemSlot>,
 }
@@ -319,6 +393,10 @@ impl BackpackState {
             ItemId::DIAMOND_BACKPACK => 3,
             _ => 0,
         }
+    }
+
+    pub fn is_backpack_item(item_id: ItemId) -> bool {
+        Self::tier_for_item(item_id) > 0
     }
 
     pub fn slot_count_for_tier(tier: u8) -> usize {
@@ -339,7 +417,16 @@ impl BackpackState {
         }
     }
 
-    /// Equips or upgrades the backpack tier while preserving all stored items.
+    pub fn title_with_id(&self, id: u16) -> String {
+        match self.tier {
+            1 => format!("Leather Backpack #{} (18 Slots)", id),
+            2 => format!("Iron Backpack #{} (27 Slots)", id),
+            3 => format!("Diamond Backpack #{} (36 Slots)", id),
+            _ => format!("Backpack #{}", id),
+        }
+    }
+
+    /// Ensures the backpack has at least `tier` capacity while preserving all stored items.
     pub fn ensure_tier(&mut self, tier: u8) {
         if tier > self.tier {
             self.tier = tier;
@@ -348,5 +435,71 @@ impl BackpackState {
         if self.slots.len() < target_len {
             self.slots.resize(target_len, ItemSlot::EMPTY);
         }
+    }
+}
+
+/// Stores all unique Backpack inventories in the world keyed by their unique `backpack_id: u16`
+/// (which is carried on each backpack `ItemSlot::durability`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackpackRegistry {
+    pub next_id: u16,
+    pub bags: HashMap<u16, BackpackState>,
+}
+
+impl Default for BackpackRegistry {
+    fn default() -> Self {
+        Self {
+            next_id: 1,
+            bags: HashMap::new(),
+        }
+    }
+}
+
+impl BackpackRegistry {
+    /// Allocates a fresh unique backpack ID (>= 1) and creates an empty bag for `tier`.
+    pub fn allocate_id(&mut self, tier: u8) -> u16 {
+        let mut id = self.next_id.max(1);
+        while self.bags.contains_key(&id) {
+            id = id.wrapping_add(1).max(1);
+        }
+        self.next_id = id.wrapping_add(1).max(1);
+        let mut bag = BackpackState::default();
+        bag.ensure_tier(tier.max(1));
+        self.bags.insert(id, bag);
+        id
+    }
+
+    /// Ensures a backpack with `id` exists and has at least `tier` capacity.
+    pub fn ensure_bag(&mut self, id: u16, tier: u8) -> &mut BackpackState {
+        let bag = self.bags.entry(id).or_default();
+        bag.ensure_tier(tier.max(1));
+        if id >= self.next_id {
+            self.next_id = id.saturating_add(1).max(1);
+        }
+        bag
+    }
+
+    /// Assigns a unique ID to a backpack `ItemSlot` if it does not have one yet (`durability == 0`),
+    /// and ensures its backing storage exists. Returns the backpack's unique ID (or `None` if not a backpack).
+    pub fn ensure_slot_id(&mut self, slot: &mut ItemSlot) -> Option<u16> {
+        let tier = BackpackState::tier_for_item(slot.item_id);
+        if tier == 0 {
+            return None;
+        }
+        slot.count = 1;
+        if slot.durability == 0 {
+            slot.durability = self.allocate_id(tier);
+        } else {
+            self.ensure_bag(slot.durability, tier);
+        }
+        Some(slot.durability)
+    }
+
+    pub fn get(&self, id: u16) -> Option<&BackpackState> {
+        self.bags.get(&id)
+    }
+
+    pub fn get_mut(&mut self, id: u16) -> Option<&mut BackpackState> {
+        self.bags.get_mut(&id)
     }
 }
