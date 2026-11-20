@@ -1206,10 +1206,31 @@ impl<'a> ChunkMesher<'a> {
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
+        // add_box face order: [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
         // Support pedestal base
-        self.add_box(mesh, fx + 0.30, fy, fz + 0.30, fx + 0.70, fy + 0.22, fz + 0.70, [425, 425, 414, 414, 414, 414], light);
-        // Slim photovoltaic panel slab on top
-        self.add_box(mesh, fx + 0.03, fy + 0.22, fz + 0.03, fx + 0.97, fy + 0.38, fz + 0.97, [413, 425, 414, 414, 414, 414], light);
+        self.add_box(
+            mesh,
+            fx + 0.30,
+            fy,
+            fz + 0.30,
+            fx + 0.70,
+            fy + 0.22,
+            fz + 0.70,
+            [414, 414, 414, 414, 425, 425],
+            light,
+        );
+        // Slim photovoltaic panel slab on top (413 blue solar cell grid on Top +Y!)
+        self.add_box(
+            mesh,
+            fx + 0.03,
+            fy + 0.22,
+            fz + 0.03,
+            fx + 0.97,
+            fy + 0.38,
+            fz + 0.97,
+            [414, 414, 414, 414, 413, 425],
+            light,
+        );
     }
 
     fn build_wind_turbine(
@@ -1228,13 +1249,66 @@ impl<'a> ChunkMesher<'a> {
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
-        // Vertical steel tower mast
-        self.add_box(mesh, fx + 0.38, fy, fz + 0.38, fx + 0.62, fy + 0.45, fz + 0.62, [416, 425, 416, 416, 416, 416], light);
-        // Aerodynamic nacelle housing
-        self.add_box(mesh, fx + 0.26, fy + 0.42, fz + 0.22, fx + 0.74, fy + 0.84, fz + 0.80, [416, 425, 415, 416, 416, 416], light);
-        // Rotor hub + vertical & horizontal blades on the front (+Z)
-        self.add_box(mesh, fx + 0.42, fy + 0.06, fz + 0.80, fx + 0.58, fy + 0.98, fz + 0.90, [416; 6], light);
-        self.add_box(mesh, fx + 0.04, fy + 0.55, fz + 0.80, fx + 0.96, fy + 0.71, fz + 0.90, [416; 6], light);
+        // add_box face order: [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
+        // 1. Bottom power port base plinth (copper power terminal on Bottom -Y and side ports)
+        self.add_box(
+            mesh,
+            fx + 0.16,
+            fy,
+            fz + 0.16,
+            fx + 0.84,
+            fy + 0.34,
+            fz + 0.84,
+            [414, 414, 414, 414, 425, 410],
+            light,
+        );
+        // Copper power output collar right at the bottom center
+        self.add_box(
+            mesh,
+            fx + 0.34,
+            fy,
+            fz + 0.34,
+            fx + 0.66,
+            fy + 0.48,
+            fz + 0.66,
+            [410, 410, 410, 410, 425, 410],
+            light,
+        );
+        // 2. Tall tapered 4-block steel mast (lower shaft + upper shaft)
+        self.add_box(
+            mesh,
+            fx + 0.36,
+            fy + 0.48,
+            fz + 0.36,
+            fx + 0.64,
+            fy + 2.05,
+            fz + 0.64,
+            [416, 416, 416, 416, 416, 425],
+            light,
+        );
+        self.add_box(
+            mesh,
+            fx + 0.40,
+            fy + 2.05,
+            fz + 0.40,
+            fx + 0.60,
+            fy + 3.52,
+            fz + 0.60,
+            [416, 416, 416, 416, 416, 425],
+            light,
+        );
+        // 3. Top aerodynamic nacelle housing (415 copper stator hub on South +Z front)
+        self.add_box(
+            mesh,
+            fx + 0.28,
+            fy + 3.46,
+            fz + 0.14,
+            fx + 0.72,
+            fy + 3.98,
+            fz + 0.84,
+            [415, 416, 416, 416, 416, 425],
+            light,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3631,6 +3705,204 @@ pub fn build_celestial_mesh(camera_pos: glam::Vec3, sun_dir: glam::Vec3) -> Chun
             base_idx + 2,
             base_idx + 3,
         ]);
+    }
+
+    mesh
+}
+
+/// Builds a dynamic 3D mesh for all animated spinning 3-blade Wind Turbine rotors.
+/// Each entry is `(base_block_pos, live_output_eu_s)`.
+pub fn build_wind_turbine_rotors_mesh(
+    turbines: &[(glam::IVec3, f32)],
+    total_time: f32,
+) -> ChunkMesh {
+    let mut mesh = ChunkMesh::new();
+    if turbines.is_empty() {
+        return mesh;
+    }
+
+    let blade_uv = TextureAtlas::get_uv_bounds(416);
+    let hub_uv = TextureAtlas::get_uv_bounds(415);
+
+    let add_rot_box = |mesh: &mut ChunkMesh,
+                       cx: f32,
+                       cy: f32,
+                       cz: f32,
+                       angle: f32,
+                       lx0: f32,
+                       ly0: f32,
+                       lz0: f32,
+                       lx1: f32,
+                       ly1: f32,
+                       lz1: f32,
+                       uv_bounds: [f32; 4]| {
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let xform = |lx: f32, ly: f32, lz: f32| -> [f32; 3] {
+            [
+                cx + lx * cos_a - ly * sin_a,
+                cy + lx * sin_a + ly * cos_a,
+                cz + lz,
+            ]
+        };
+        let xform_n = |nx: f32, ny: f32, nz: f32| -> [f32; 3] {
+            [nx * cos_a - ny * sin_a, nx * sin_a + ny * cos_a, nz]
+        };
+
+        let [u_min, v_min, u_max, v_max] = uv_bounds;
+        let uvs = [
+            [u_min, v_max],
+            [u_max, v_max],
+            [u_max, v_min],
+            [u_min, v_min],
+        ];
+        let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
+            // Front (+Z)
+            (
+                xform_n(0.0, 0.0, 1.0),
+                [
+                    xform(lx0, ly0, lz1),
+                    xform(lx1, ly0, lz1),
+                    xform(lx1, ly1, lz1),
+                    xform(lx0, ly1, lz1),
+                ],
+            ),
+            // Back (-Z)
+            (
+                xform_n(0.0, 0.0, -1.0),
+                [
+                    xform(lx1, ly0, lz0),
+                    xform(lx0, ly0, lz0),
+                    xform(lx0, ly1, lz0),
+                    xform(lx1, ly1, lz0),
+                ],
+            ),
+            // Right (+X)
+            (
+                xform_n(1.0, 0.0, 0.0),
+                [
+                    xform(lx1, ly0, lz1),
+                    xform(lx1, ly0, lz0),
+                    xform(lx1, ly1, lz0),
+                    xform(lx1, ly1, lz1),
+                ],
+            ),
+            // Left (-X)
+            (
+                xform_n(-1.0, 0.0, 0.0),
+                [
+                    xform(lx0, ly0, lz0),
+                    xform(lx0, ly0, lz1),
+                    xform(lx0, ly1, lz1),
+                    xform(lx0, ly1, lz0),
+                ],
+            ),
+            // Top (+Y)
+            (
+                xform_n(0.0, 1.0, 0.0),
+                [
+                    xform(lx0, ly1, lz1),
+                    xform(lx1, ly1, lz1),
+                    xform(lx1, ly1, lz0),
+                    xform(lx0, ly1, lz0),
+                ],
+            ),
+            // Bottom (-Y)
+            (
+                xform_n(0.0, -1.0, 0.0),
+                [
+                    xform(lx0, ly0, lz0),
+                    xform(lx1, ly0, lz0),
+                    xform(lx1, ly0, lz1),
+                    xform(lx0, ly0, lz1),
+                ],
+            ),
+        ];
+
+        for (normal, verts) in faces {
+            let base = mesh.vertices.len() as u32;
+            for i in 0..4 {
+                mesh.vertices.push(VoxelVertex {
+                    position: verts[i],
+                    uv: uvs[i],
+                    normal,
+                    ao: 1.0,
+                    light: [1.0, 0.0],
+                });
+            }
+            mesh.indices.extend_from_slice(&[
+                base,
+                base + 1,
+                base + 2,
+                base + 2,
+                base + 3,
+                base,
+            ]);
+        }
+    };
+
+    for &(pos, output_eu_s) in turbines {
+        let cx = pos.x as f32 + 0.5;
+        let cy = pos.y as f32 + 3.72;
+        let cz = pos.z as f32 + 0.90;
+        let phase = ((pos.x.wrapping_mul(31) ^ pos.z.wrapping_mul(17)) as f32) * 0.7;
+        let spin_speed = if output_eu_s > 0.0 {
+            1.6 + output_eu_s * 0.075
+        } else {
+            0.0
+        };
+        let base_angle = total_time * spin_speed + phase;
+
+        // Rotating central nose spinner hub
+        add_rot_box(
+            &mut mesh,
+            cx,
+            cy,
+            cz,
+            base_angle,
+            -0.14,
+            -0.14,
+            -0.06,
+            0.14,
+            0.14,
+            0.12,
+            hub_uv,
+        );
+
+        // 3 long aerodynamic blades spaced 120 degrees apart
+        for b in 0..3 {
+            let angle = base_angle + (b as f32) * (std::f32::consts::TAU / 3.0);
+            // Inner root section
+            add_rot_box(
+                &mut mesh,
+                cx,
+                cy,
+                cz,
+                angle,
+                -0.10,
+                0.12,
+                -0.04,
+                0.10,
+                1.05,
+                0.04,
+                blade_uv,
+            );
+            // Tapered outer tip section
+            add_rot_box(
+                &mut mesh,
+                cx,
+                cy,
+                cz,
+                angle,
+                -0.07,
+                1.05,
+                -0.03,
+                0.07,
+                1.85,
+                0.03,
+                blade_uv,
+            );
+        }
     }
 
     mesh

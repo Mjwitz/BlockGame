@@ -167,6 +167,7 @@ pub struct AppState {
     pub arrow_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub celestial_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub wind_turbine_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub player_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     // Multiplayer & 3D Player Model State
     pub mp_client: Option<blockgame_core::net::MultiplayerClient>,
@@ -1290,6 +1291,9 @@ impl ApplicationHandler for BlockGameApp {
             ),
             falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
                 "Dynamic Falling Block Mesh",
+            ),
+            wind_turbine_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Wind Turbine Rotor Mesh",
             ),
             player_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
                 "Dynamic Player Model Mesh",
@@ -6481,6 +6485,40 @@ impl ApplicationHandler for BlockGameApp {
                     state.falling_block_dynamic_mesh.clear();
                 }
 
+                // Upload animated spinning 3D Wind Turbine rotors
+                let turbines: Vec<(IVec3, f32)> = {
+                    let world_guard = state.world_manager.world().lock().unwrap();
+                    world_guard
+                        .power_nodes
+                        .iter()
+                        .filter_map(|&pos| {
+                            if world_guard.get_block(pos) == BlockId::WIND_TURBINE {
+                                let out = blockgame_core::power::wind_turbine_output_eu_s(
+                                    &world_guard,
+                                    pos,
+                                );
+                                Some((pos, out))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                };
+                if !turbines.is_empty() {
+                    let rotor_mesh = blockgame_render::build_wind_turbine_rotors_mesh(
+                        &turbines,
+                        state.total_time,
+                    );
+                    state.wind_turbine_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &rotor_mesh.vertices,
+                        &rotor_mesh.indices,
+                    );
+                } else {
+                    state.wind_turbine_dynamic_mesh.clear();
+                }
+
                 // Upload dynamic 3D Articulated Players mesh (remote multiplayer players + local player in 3rd-person or menu)
                 let mut players_to_render = Vec::new();
                 if let Some(client) = &state.mp_client {
@@ -6625,6 +6663,9 @@ impl ApplicationHandler for BlockGameApp {
 
                     // Render falling gravity blocks (Sand, Gravel, Red Sand)
                     state.falling_block_dynamic_mesh.draw(&mut render_pass);
+
+                    // Render animated spinning 3D Wind Turbine rotor blades
+                    state.wind_turbine_dynamic_mesh.draw(&mut render_pass);
 
                     // Render 3D articulated player models (remote players & 3rd-person local player)
                     state.player_dynamic_mesh.draw(&mut render_pass);

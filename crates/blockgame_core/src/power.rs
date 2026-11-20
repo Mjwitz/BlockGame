@@ -188,16 +188,24 @@ pub fn solar_panel_output_eu_s(world: &World, pos: IVec3, is_daytime: bool) -> f
     SOLAR_PANEL_OUTPUT_EU_S
 }
 
-/// Computes live output (EU/s) of a Wind Turbine at `pos`.
+/// Computes live output (EU/s) of a Wind Turbine at `pos` (base power port).
+/// The rotor spins 3 blocks above the base, so airflow and elevation are measured at `pos.y + 3`.
 pub fn wind_turbine_output_eu_s(world: &World, pos: IVec3) -> f32 {
-    // Needs clear horizontal airflow around the rotor
-    for offset in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
-        let b = world.get_block(pos + offset);
-        if !b.is_air() && !b.is_cable() {
+    let rotor_pos = pos + IVec3::new(0, 3, 0);
+    // Needs clear space for the 4-block tower and open airflow around the rotor
+    for dy in 1..=3 {
+        let b = world.get_block(pos + IVec3::new(0, dy, 0));
+        if !b.is_air() {
             return 0.0;
         }
     }
-    let elevation_bonus = ((pos.y - 60).clamp(0, 90) as f32) * 0.5;
+    for offset in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+        let b = world.get_block(rotor_pos + offset);
+        if !b.is_air() {
+            return 0.0;
+        }
+    }
+    let elevation_bonus = ((rotor_pos.y - 60).clamp(0, 90) as f32) * 0.5;
     WIND_TURBINE_BASE_EU_S + elevation_bonus
 }
 
