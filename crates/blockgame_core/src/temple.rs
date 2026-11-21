@@ -262,6 +262,7 @@ pub struct BossHudState {
     pub max_health: f32,
     pub phase: u8,
     pub distance: f32,
+    pub invulnerable: bool,
 }
 
 /// Manages all discovered/active boss temples, instanced arenas, and block protection.
@@ -634,6 +635,7 @@ pub fn compute_boss_hud(monsters: &[MonsterEntity], player_pos: Vec3) -> Option<
                 max_health: m.max_health.max(1.0),
                 phase: m.phase.clamp(1, 3),
                 distance: dist,
+                invulnerable: m.invuln_timer > 0.0,
             });
         }
     }
@@ -699,8 +701,13 @@ mod tests {
 
     #[test]
     fn test_boss_phases_and_unique_loot() {
-        let world = World::new();
+        let mut world = World::new();
         let reg = crate::block::BlockRegistry::new();
+        for x in -8..=8 {
+            for z in -8..=8 {
+                set_arena_block(&mut world, IVec3::new(x, 32, z), BlockId::TEMPLE_STONE);
+            }
+        }
 
         for (kind, expected_weapon, expected_armor, expected_core) in [
             (MonsterKind::SunPharaoh, ItemId::SUNBLADE, ItemId::PHARAOH_CROWN, ItemId::SUN_CORE),
@@ -711,17 +718,39 @@ mod tests {
             let mut boss = MonsterEntity::new_temple_mob(10, kind, Vec3::new(0.0, 33.0, 0.0), 99);
             assert_eq!(boss.phase, 1);
 
-            // Drop HP below 66% -> Phase 2
+            // Drop HP below 66% -> Phase 2 + invulnerable barrier
             boss.take_damage(boss.max_health * 0.4, Vec3::Z);
+            let hp_at_p2 = boss.health;
             let out2 = boss.update(0.05, Vec3::new(0.0, 33.0, 6.0), 0.0, &world, &reg);
             assert_eq!(boss.phase, 2);
             assert_eq!(out2.phase_changed, Some(2));
+            assert!(boss.invuln_timer > 0.0);
+
+            // Attacks while invulnerable must deal 0 damage
+            boss.take_damage(50.0, Vec3::Z);
+            assert_eq!(boss.health, hp_at_p2);
+
+            // Advance through the 4.5s intermission and verify dodgeable barrage projectiles + barrier shatter
+            let mut barrage_arrows = 0usize;
+            let mut shattered = false;
+            for _ in 0..100 {
+                let o = boss.update(0.05, Vec3::new(0.0, 33.0, 6.0), 0.0, &world, &reg);
+                barrage_arrows += o.extra_arrows.len();
+                if o.barrier_broken {
+                    shattered = true;
+                    break;
+                }
+            }
+            assert!(barrage_arrows > 0, "Expected dodgeable barrage projectiles during intermission");
+            assert!(shattered, "Expected invulnerability barrier to shatter after 4.5s");
+            assert_eq!(boss.invuln_timer, 0.0);
 
             // Drop HP below 33% -> Phase 3
             boss.take_damage(boss.max_health * 0.35, Vec3::Z);
             let out3 = boss.update(0.05, Vec3::new(0.0, 33.0, 6.0), 0.0, &world, &reg);
             assert_eq!(boss.phase, 3);
             assert_eq!(out3.phase_changed, Some(3));
+            assert!(boss.invuln_timer > 0.0);
 
             let drops = boss.generate_drops();
             assert!(drops.iter().any(|s| s.item_id == expected_weapon));

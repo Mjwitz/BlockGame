@@ -2000,9 +2000,15 @@ impl WorldManager {
                 }
                 if let Some(new_phase) = outcome.phase_changed {
                     self.pending_temple_messages.push(format!(
-                        "&c{} enters Phase {}!",
+                        "&e{} raises an invulnerable barrier for Phase {}! Dodge the incoming barrage!",
                         monster.kind.name(),
                         new_phase
+                    ));
+                }
+                if outcome.barrier_broken {
+                    self.pending_temple_messages.push(format!(
+                        "&a{}'s barrier shatters — strike now!",
+                        monster.kind.name()
                     ));
                 }
                 for (mkind, spos) in outcome.summon_minions {
@@ -2329,6 +2335,7 @@ impl WorldManager {
                 m.walk_anim_timer = s.walk_anim_timer;
                 m.phase = s.phase;
                 m.in_combat = s.in_combat;
+                m.invuln_timer = if s.invulnerable { 1.0 } else { 0.0 };
                 m
             })
             .collect();

@@ -274,6 +274,8 @@ pub struct MonsterTickOutcome {
     pub summon_minions: Vec<(MonsterKind, Vec3)>,
     /// Set to `Some(new_phase)` on the tick a boss transitions to Phase 2 or 3.
     pub phase_changed: Option<u8>,
+    /// Set to `true` on the tick a boss's phase-transition invulnerability barrier ends.
+    pub barrier_broken: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +302,8 @@ pub struct MonsterEntity {
     pub phase: u8,
     pub special_cooldown: f32,
     pub summon_cooldown: f32,
+    pub invuln_timer: f32,
+    pub barrage_timer: f32,
     pub temple_id: Option<u64>,
 }
 
@@ -334,6 +338,8 @@ impl MonsterEntity {
             phase: 1,
             special_cooldown: 4.0,
             summon_cooldown: 8.0,
+            invuln_timer: 0.0,
+            barrage_timer: 0.0,
             temple_id: None,
         }
     }
@@ -362,7 +368,7 @@ impl MonsterEntity {
     }
 
     pub fn take_damage(&mut self, amount: f32, knockback_dir: Vec3) {
-        if self.dead {
+        if self.dead || self.invuln_timer > 0.0 {
             return;
         }
         self.health = (self.health - amount).max(0.0);
@@ -497,9 +503,93 @@ impl MonsterEntity {
             if new_phase > self.phase {
                 self.phase = new_phase;
                 outcome.phase_changed = Some(new_phase);
-                // Reset special cooldown slightly so phase transitions feel dramatic
-                self.special_cooldown = self.special_cooldown.min(1.5);
+                // Enter a 4.5-second invulnerable intermission with a dodgeable special barrage
+                self.invuln_timer = 4.5;
+                self.barrage_timer = 0.45;
+                self.special_cooldown = 2.0;
             }
+        }
+
+        // Phase-transition invulnerability intermission: boss channels dodgeable rhythmic
+        // special attacks that force the player to move / weave / take cover behind pillars.
+        if self.kind.is_boss() && self.invuln_timer > 0.0 {
+            self.invuln_timer = (self.invuln_timer - dt).max(0.0);
+            if self.invuln_timer <= 0.0 {
+                outcome.barrier_broken = true;
+            }
+            self.in_combat = true;
+            let to_player = player_pos - self.position;
+            let horiz_to_player = Vec3::new(to_player.x, 0.0, to_player.z);
+            let dir = horiz_to_player.normalize_or_zero();
+            if dir.length_squared() > 0.001 {
+                self.yaw = dir.x.atan2(dir.z);
+            }
+
+            self.barrage_timer -= dt;
+            if self.barrage_timer <= 0.0 {
+                self.barrage_timer = 0.72;
+                let spin_offset = (4.5 - self.invuln_timer) * 0.55;
+                let origin = self.position + Vec3::new(0.0, 2.2, 0.0);
+                let base_angle = self.yaw;
+
+                match self.kind {
+                    MonsterKind::SunPharaoh => {
+                        // Rotating 8-bolt Solar Flare ring with dodgeable gaps
+                        for i in 0..8 {
+                            let ang = spin_offset + (i as f32) * (std::f32::consts::TAU / 8.0);
+                            let vdir = Vec3::new(ang.sin(), 0.04, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 0.9, vdir * 19.0, 6.5));
+                        }
+                    }
+                    MonsterKind::FrostTitan => {
+                        // Sweeping 5-lance Glacial Shatter fan + close-range frost shockwave
+                        for step in -2..=2 {
+                            let ang = base_angle + (step as f32) * 0.24 + (spin_offset.sin() * 0.14);
+                            let vdir = Vec3::new(ang.sin(), 0.06, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 1.0, vdir * 21.0, 7.0));
+                        }
+                        outcome.aoe_blast = Some((self.position, 6.5, 8.0));
+                    }
+                    MonsterKind::OvergrownGolem => {
+                        // 6-thorn Bramble Volley arc + tremor ring pushing melee spammers back
+                        for step in -2..=3 {
+                            let ang = base_angle + (step as f32 - 0.5) * 0.25;
+                            let vdir = Vec3::new(ang.sin(), 0.10, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 1.0, vdir * 18.0, 6.5));
+                        }
+                        outcome.aoe_blast = Some((self.position, 7.0, 8.0));
+                    }
+                    MonsterKind::ShadowLich => {
+                        // 8-bolt rotating Cursed Spiral + lateral shadow-step hop
+                        for i in 0..8 {
+                            let ang = -spin_offset * 1.3 + (i as f32) * (std::f32::consts::TAU / 8.0);
+                            let vdir = Vec3::new(ang.sin(), 0.03, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 0.8, vdir * 20.0, 6.5));
+                        }
+                        let side = Vec3::new(-dir.z, 0.0, dir.x);
+                        let sign = if ((self.invuln_timer * 2.0) as i32) % 2 == 0 { 1.0 } else { -1.0 };
+                        self.velocity = side * (sign * 8.0) + Vec3::new(0.0, 3.0, 0.0);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Apply gravity & collision while channeling barrier
+            let (half_width, height) = self.kind.dimensions();
+            self.velocity.y = (self.velocity.y - 26.0 * dt).max(-45.0);
+            self.velocity.x *= (1.0 - 4.0 * dt).max(0.0);
+            self.velocity.z *= (1.0 - 4.0 * dt).max(0.0);
+            resolve_entity_movement(
+                &mut self.position,
+                &mut self.velocity,
+                &mut self.on_ground,
+                half_width,
+                height,
+                dt,
+                world,
+                registry,
+            );
+            return outcome;
         }
 
         // Sunlight burning for Zombies & Skeletons

@@ -3397,6 +3397,30 @@ pub fn build_monsters_mesh_animated(
                     cos_y,
                     sin_y,
                 );
+
+                // Rotating 3D invulnerability barrier ring during phase-transition intermission
+                if m.invuln_timer > 0.0 {
+                    let shield_uv = get_animal_uvs(453);
+                    let spin = time * 3.2;
+                    let shield_ao = 1.65 + (time * 10.0).sin() * 0.2;
+                    for i in 0..4 {
+                        let ang = spin + (i as f32) * std::f32::consts::FRAC_PI_2;
+                        let sc = ang.cos();
+                        let ss = ang.sin();
+                        add_animal_box(
+                            &mut mesh,
+                            [-0.14, 0.35, 0.85 * scale],
+                            [0.14, 1.85 * scale, 1.02 * scale],
+                            &shield_uv,
+                            None,
+                            shield_ao,
+                            [1.0, 1.0],
+                            bpos,
+                            sc,
+                            ss,
+                        );
+                    }
+                }
             }
         }
 

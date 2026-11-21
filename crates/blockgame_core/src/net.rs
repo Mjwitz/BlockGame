@@ -182,6 +182,7 @@ pub struct SyncedMonsterState {
     pub walk_anim_timer: f32,
     pub phase: u8,
     pub in_combat: bool,
+    pub invulnerable: bool,
 }
 
 /// Maximum distance (in blocks) at which proximity voice chat is relayed and audible.
@@ -836,6 +837,7 @@ impl ServerPacket {
                     write_f32(&mut payload, m.walk_anim_timer)?;
                     write_u8(&mut payload, m.phase)?;
                     write_bool(&mut payload, m.in_combat)?;
+                    write_bool(&mut payload, m.invulnerable)?;
                 }
             }
             Self::BossHudUpdate { hud } => {
@@ -848,6 +850,7 @@ impl ServerPacket {
                     write_f32(&mut payload, h.max_health)?;
                     write_u8(&mut payload, h.phase)?;
                     write_f32(&mut payload, h.distance)?;
+                    write_bool(&mut payload, h.invulnerable)?;
                 }
             }
             Self::TempleProtectionSync { zones } => {
@@ -1114,6 +1117,7 @@ impl ServerPacket {
                     let walk_anim_timer = read_f32(&mut r)?;
                     let phase = read_u8(&mut r)?;
                     let in_combat = read_bool(&mut r)?;
+                    let invulnerable = read_bool(&mut r)?;
                     if let Some(kind) = crate::monster::MonsterKind::from_u8(kind_u8) {
                         monsters.push(SyncedMonsterState {
                             id,
@@ -1126,6 +1130,7 @@ impl ServerPacket {
                             walk_anim_timer,
                             phase,
                             in_combat,
+                            invulnerable,
                         });
                     }
                 }
@@ -1140,6 +1145,7 @@ impl ServerPacket {
                     let max_health = read_f32(&mut r)?;
                     let phase = read_u8(&mut r)?;
                     let distance = read_f32(&mut r)?;
+                    let invulnerable = read_bool(&mut r)?;
                     crate::monster::MonsterKind::from_u8(kind_u8).map(|kind| {
                         crate::temple::BossHudState {
                             name,
@@ -1148,6 +1154,7 @@ impl ServerPacket {
                             max_health,
                             phase,
                             distance,
+                            invulnerable,
                         }
                     })
                 } else {
@@ -3115,9 +3122,15 @@ fn run_server_loop(
                     }
                     if let Some(new_phase) = outcome.phase_changed {
                         tick_announcements.push(format!(
-                            "&c{} enters Phase {}!",
+                            "&e{} raises an invulnerable barrier for Phase {}! Dodge the incoming barrage!",
                             m.kind.name(),
                             new_phase
+                        ));
+                    }
+                    if outcome.barrier_broken {
+                        tick_announcements.push(format!(
+                            "&a{}'s barrier shatters — strike now!",
+                            m.kind.name()
                         ));
                     }
                     for (mkind, spos) in outcome.summon_minions {
@@ -3213,6 +3226,7 @@ fn run_server_loop(
                         walk_anim_timer: m.walk_anim_timer,
                         phase: m.phase,
                         in_combat: m.in_combat,
+                        invulnerable: m.invuln_timer > 0.0,
                     })
                     .collect();
                 if let Ok(mbytes) = (ServerPacket::TempleMonstersSync { monsters: synced }).encode() {
@@ -4446,6 +4460,7 @@ mod tests {
                 walk_anim_timer: 3.4,
                 phase: 2,
                 in_combat: true,
+                invulnerable: true,
             }],
         };
         let bytes = s1.encode().unwrap();
@@ -4459,6 +4474,7 @@ mod tests {
                 max_health: 320.0,
                 phase: 2,
                 distance: 18.5,
+                invulnerable: true,
             }),
         };
         let bytes = s2.encode().unwrap();

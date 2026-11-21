@@ -9630,18 +9630,34 @@ impl UiBuilder {
         boss: &blockgame_core::temple::BossHudState,
     ) {
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
-        let accent = boss.kind.boss_theme_color();
+        let accent = if boss.invulnerable {
+            [0.82, 0.94, 1.0, 1.0]
+        } else {
+            boss.kind.boss_theme_color()
+        };
         let phase_roman = match boss.phase {
             3 => "PHASE III",
             2 => "PHASE II",
             _ => "PHASE I",
         };
-        let header = format!("{}  [{}]", boss.name.to_uppercase(), phase_roman);
-        let hp_text = format!(
-            "{} / {} HP",
-            boss.health.ceil() as i32,
-            boss.max_health.ceil() as i32
-        );
+        let header = if boss.invulnerable {
+            format!("{}  [{} - SHIELDED! DODGE!]", boss.name.to_uppercase(), phase_roman)
+        } else {
+            format!("{}  [{}]", boss.name.to_uppercase(), phase_roman)
+        };
+        let hp_text = if boss.invulnerable {
+            format!(
+                "INVULNERABLE  ({} / {} HP)",
+                boss.health.ceil() as i32,
+                boss.max_health.ceil() as i32
+            )
+        } else {
+            format!(
+                "{} / {} HP",
+                boss.health.ceil() as i32,
+                boss.max_health.ceil() as i32
+            )
+        };
 
         let bar_w = (screen_w * 0.42).clamp(320.0, 540.0);
         let box_w = bar_w + 24.0;
