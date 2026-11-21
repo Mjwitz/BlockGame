@@ -122,15 +122,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = format!("{}:{}", config.bind_host, config.port);
     let saves_root = PathBuf::from("saves");
     let folder_name = sanitize_folder_name(&config.world_name);
+    let effective_seed = blockgame_core::save::load_world_metadata(&saves_root.join(&folder_name))
+        .map(|m| m.seed)
+        .unwrap_or(config.seed);
 
-    let generator = Arc::new(TerrainGenerator::new(config.seed));
+    let generator = Arc::new(TerrainGenerator::new(effective_seed));
     let gen_clone = generator.clone();
 
     log::info!(
         "Starting BlockGame Dedicated Multiplayer Server on {} (World: '{}', Seed: {})...",
         bind_addr,
         config.world_name,
-        config.seed
+        effective_seed
     );
 
     let mut server = MultiplayerServer::start(
@@ -138,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         saves_root,
         folder_name,
         config.world_name.clone(),
-        config.seed,
+        effective_seed,
         None,
         move |cpos| {
             let mut chunk = gen_clone.generate_chunk(cpos);

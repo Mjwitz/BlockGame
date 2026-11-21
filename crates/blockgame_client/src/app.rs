@@ -745,7 +745,10 @@ impl AppState {
         };
 
         let saves_root = self.saves_root.clone();
-        let seed = self.world_manager.generator.seed;
+        let hosted_dir = saves_root.join("Hosted_Multiplayer");
+        let seed = blockgame_core::save::load_world_metadata(&hosted_dir)
+            .map(|m| m.seed)
+            .unwrap_or(self.world_manager.generator.seed);
         let generator = Arc::new(blockgame_gen::TerrainGenerator::new(seed));
 
         let mut server = blockgame_core::net::MultiplayerServer::start(

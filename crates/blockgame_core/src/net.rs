@@ -2321,7 +2321,11 @@ fn run_server_loop(
                         }
                         let block = world.get_block(pos);
                         let username = clients[idx].username.clone();
-                        if block == BlockId::TEMPLE_PORTAL {
+                        let is_portal_interact = block == BlockId::TEMPLE_PORTAL
+                            || (temple_id != 0
+                                && !crate::temple::is_in_arena_band(pos.as_vec3())
+                                && (pos - portal_pos).abs().max_element() <= 3);
+                        if is_portal_interact {
                             if let Some(tkind) = crate::temple::TempleKind::from_u8(kind) {
                                 let return_pos = clients[idx].model.position;
                                 save_data
