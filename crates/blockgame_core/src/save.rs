@@ -107,6 +107,7 @@ pub struct WorldSaveData {
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
+    pub temples: crate::temple::TempleManager,
 }
 
 impl WorldSaveData {
@@ -130,6 +131,7 @@ impl WorldSaveData {
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
             animal_spawned_columns: HashSet::new(),
+            temples: crate::temple::TempleManager::new(),
         }
     }
 
@@ -1251,7 +1253,88 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
         &data.decaying_leaves,
     )?;
 
+    // 7. Write temples.bin (boss temple progression & return positions)
+    save_temples_file(&world_dir, &data.temples)?;
+
     Ok(world_dir)
+}
+
+const TEMPLES_MAGIC: &[u8; 4] = b"BGTP";
+const TEMPLES_VERSION: u32 = 1;
+
+fn save_temples_file(world_dir: &Path, temples: &crate::temple::TempleManager) -> io::Result<()> {
+    let path = world_dir.join("temples.bin");
+    let mut w = BufWriter::new(File::create(path)?);
+    w.write_all(TEMPLES_MAGIC)?;
+    write_u32(&mut w, TEMPLES_VERSION)?;
+
+    write_u32(&mut w, temples.temples.len() as u32)?;
+    for t in temples.temples.values() {
+        write_u64(&mut w, t.temple_id)?;
+        write_u8(&mut w, t.kind.to_u8())?;
+        write_ivec3(&mut w, t.overworld_origin)?;
+        write_ivec3(&mut w, t.overworld_portal_pos)?;
+        write_bool(&mut w, t.arena_built)?;
+        write_bool(&mut w, t.boss_defeated)?;
+        write_f32(&mut w, t.rechallenge_cooldown)?;
+    }
+
+    write_u32(&mut w, temples.player_return_positions.len() as u32)?;
+    for (name, pos) in &temples.player_return_positions {
+        write_string(&mut w, name)?;
+        write_vec3(&mut w, *pos)?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
+fn load_temples_file(world_dir: &Path) -> io::Result<Option<crate::temple::TempleManager>> {
+    let path = world_dir.join("temples.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut r = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != TEMPLES_MAGIC {
+        return Ok(None);
+    }
+    let version = read_u32(&mut r)?;
+    if version != TEMPLES_VERSION {
+        return Ok(None);
+    }
+
+    let mut mgr = crate::temple::TempleManager::new();
+    let count = read_u32(&mut r)? as usize;
+    for _ in 0..count {
+        let temple_id = read_u64(&mut r)?;
+        let kind_u8 = read_u8(&mut r)?;
+        let overworld_origin = read_ivec3(&mut r)?;
+        let overworld_portal_pos = read_ivec3(&mut r)?;
+        let arena_built = read_bool(&mut r)?;
+        let boss_defeated = read_bool(&mut r)?;
+        let rechallenge_cooldown = read_f32(&mut r)?;
+        if let Some(kind) = crate::temple::TempleKind::from_u8(kind_u8) {
+            let mut state = crate::temple::TempleInstanceState::new(
+                temple_id,
+                kind,
+                overworld_origin,
+                overworld_portal_pos,
+            );
+            state.arena_built = arena_built;
+            state.boss_defeated = boss_defeated;
+            state.rechallenge_cooldown = rechallenge_cooldown;
+            mgr.temples.insert(temple_id, state);
+        }
+    }
+
+    let ret_count = read_u32(&mut r)? as usize;
+    for _ in 0..ret_count {
+        let name = read_string(&mut r)?;
+        let pos = read_vec3(&mut r)?;
+        mgr.player_return_positions.insert(name, pos);
+    }
+    Ok(Some(mgr))
 }
 
 /// Loads the complete `WorldSaveData` from `saves_root/<folder_name>/`.
@@ -1425,6 +1508,11 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
         data.growing_cacti = cacti;
         data.decaying_leaves = leaves;
         loaded_env = true;
+    }
+
+    // 6b. Load temple progression (optional for backward compatibility)
+    if let Ok(Some(temples)) = load_temples_file(&world_dir) {
+        data.temples = temples;
     }
 
     // 7. Fallback to legacy world.bin if any modular files were missing
@@ -2181,6 +2269,7 @@ mod tests {
             active_farmland: Vec::new(),
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
+            temples: crate::temple::TempleManager::new(),
         };
 
         save_world_to_dir(&temp_root, &mut save).expect("save_world_to_dir should succeed");

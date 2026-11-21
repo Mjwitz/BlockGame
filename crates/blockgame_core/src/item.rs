@@ -236,9 +236,54 @@ impl ItemId {
     pub const IRON_BACKPACK: Self = Self(221);
     pub const DIAMOND_BACKPACK: Self = Self(222);
 
+    // Biome Boss Temple blocks, weapons, armor, and trophy cores (Issue #9)
+    pub const TEMPLE_STONE: Self = Self(223);
+    pub const TEMPLE_SANDSTONE: Self = Self(224);
+    pub const TEMPLE_ICE_BRICK: Self = Self(225);
+    pub const TEMPLE_MOSS_BRICK: Self = Self(226);
+    pub const TEMPLE_OBSIDIAN: Self = Self(227);
+    pub const TEMPLE_BRAZIER: Self = Self(228);
+
+    pub const SUNBLADE: Self = Self(229);
+    pub const FROSTBLADE: Self = Self(230);
+    pub const VERDANT_GREATBLADE: Self = Self(231);
+    pub const SHADOWFANG_BLADE: Self = Self(232);
+
+    pub const PHARAOH_CROWN: Self = Self(233);
+    pub const GLACIAL_CHESTPLATE: Self = Self(234);
+    pub const GOLEM_GREAVES: Self = Self(235);
+    pub const LICH_BOOTS: Self = Self(236);
+
+    pub const SUN_CORE: Self = Self(237);
+    pub const FROST_HEART: Self = Self(238);
+    pub const ANCIENT_VINE_CORE: Self = Self(239);
+    pub const SOUL_PHYLACTERY: Self = Self(240);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
+    }
+
+    /// Extra base melee damage for unique boss weapons.
+    #[inline]
+    pub const fn boss_weapon_damage(&self) -> Option<f32> {
+        match *self {
+            Self::SUNBLADE => Some(11.0),
+            Self::FROSTBLADE => Some(11.5),
+            Self::VERDANT_GREATBLADE => Some(10.5),
+            Self::SHADOWFANG_BLADE => Some(12.5),
+            _ => None,
+        }
+    }
+
+    /// Bonus lifesteal fraction granted by unique boss weapons.
+    #[inline]
+    pub const fn boss_weapon_lifesteal(&self) -> f32 {
+        match *self {
+            Self::VERDANT_GREATBLADE => 0.15,
+            Self::SHADOWFANG_BLADE => 0.08,
+            _ => 0.0,
+        }
     }
 }
 
@@ -2336,6 +2381,93 @@ impl ItemRegistry {
                 name,
                 display_name,
                 max_stack: 1,
+                placeable_block: None,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Biome Boss Temple placeable blocks (Issue #9)
+        let temple_block_items = [
+            (ItemId::TEMPLE_STONE, Some(BlockId::TEMPLE_STONE), "blockgame:temple_stone", "Temple Stone", 448),
+            (ItemId::TEMPLE_SANDSTONE, Some(BlockId::TEMPLE_SANDSTONE), "blockgame:temple_sandstone", "Temple Sandstone", 449),
+            (ItemId::TEMPLE_ICE_BRICK, Some(BlockId::TEMPLE_ICE_BRICK), "blockgame:temple_ice_brick", "Temple Ice Brick", 450),
+            (ItemId::TEMPLE_MOSS_BRICK, Some(BlockId::TEMPLE_MOSS_BRICK), "blockgame:temple_moss_brick", "Temple Moss Brick", 451),
+            (ItemId::TEMPLE_OBSIDIAN, Some(BlockId::TEMPLE_OBSIDIAN), "blockgame:temple_obsidian", "Temple Obsidian", 452),
+            (ItemId::TEMPLE_BRAZIER, Some(BlockId::TEMPLE_BRAZIER), "blockgame:temple_brazier", "Temple Brazier", 456),
+        ];
+        for (id, placeable_block, name, display_name, icon_tile) in temple_block_items {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 64,
+                placeable_block,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // Unique Boss Weapons (Issue #9)
+        let boss_weapons = [
+            (ItemId::SUNBLADE, "blockgame:sunblade", "Sunblade (11 DMG)", 2048, 457),
+            (ItemId::FROSTBLADE, "blockgame:frostblade", "Frostblade (11.5 DMG)", 2048, 458),
+            (ItemId::VERDANT_GREATBLADE, "blockgame:verdant_greatblade", "Verdant Greatblade (10.5 DMG, +15% Lifesteal)", 2048, 459),
+            (ItemId::SHADOWFANG_BLADE, "blockgame:shadowfang_blade", "Shadowfang Blade (12.5 DMG, +8% Lifesteal)", 2048, 460),
+        ];
+        for (id, name, display_name, dur, icon_tile) in boss_weapons {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
+                durability: Some(dur),
+                tool_type: Some(ToolType::Sword),
+                tool_tier: Some(ToolTier::Diamond),
+                icon_tile,
+            });
+        }
+
+        // Unique Boss Armor Set (Issue #9: 4+9+7+4 = 24 raw, capped at 20 = 80% max DR)
+        let boss_armor = [
+            (ItemId::PHARAOH_CROWN, "blockgame:pharaoh_crown", "Pharaoh's Crown", 600, ArmorSlot::Helmet, 4, 461),
+            (ItemId::GLACIAL_CHESTPLATE, "blockgame:glacial_chestplate", "Glacial Chestplate", 850, ArmorSlot::Chestplate, 9, 462),
+            (ItemId::GOLEM_GREAVES, "blockgame:golem_greaves", "Golem Greaves", 780, ArmorSlot::Leggings, 7, 463),
+            (ItemId::LICH_BOOTS, "blockgame:lich_boots", "Lich's Boots", 680, ArmorSlot::Boots, 4, 464),
+        ];
+        for (id, name, display_name, dur, slot, defense, icon_tile) in boss_armor {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 1,
+                placeable_block: None,
+                durability: Some(dur),
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+            self.register_armor(id, slot, defense);
+        }
+
+        // Boss Trophy Cores (Issue #9)
+        let boss_cores = [
+            (ItemId::SUN_CORE, "blockgame:sun_core", "Sun Core", 465),
+            (ItemId::FROST_HEART, "blockgame:frost_heart", "Frost Heart", 466),
+            (ItemId::ANCIENT_VINE_CORE, "blockgame:ancient_vine_core", "Ancient Vine Core", 467),
+            (ItemId::SOUL_PHYLACTERY, "blockgame:soul_phylactery", "Soul Phylactery", 468),
+        ];
+        for (id, name, display_name, icon_tile) in boss_cores {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack: 16,
                 placeable_block: None,
                 durability: None,
                 tool_type: None,

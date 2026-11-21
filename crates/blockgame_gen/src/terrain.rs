@@ -730,6 +730,11 @@ impl TerrainGenerator {
         let mut chunk = Chunk::new(pos);
         let origin = pos.to_world_origin();
 
+        // Coordinates >= ARENA_BAND_START_X are reserved for instanced boss arenas (pure void).
+        if origin.x >= blockgame_core::temple::ARENA_BAND_START_X {
+            return chunk;
+        }
+
         // Precompute surface heights across the chunk plus a 1-block border for steepness/cliff painting
         let mut heights = [[0i32; 18]; 18];
         for dz in 0..18usize {
@@ -1027,6 +1032,10 @@ impl TerrainGenerator {
             }
         }
 
+        for temple in self.find_temples_for_chunk(pos) {
+            crate::temple_gen::stamp_temple_exterior(&mut chunk, &temple);
+        }
+
         chunk
     }
 
@@ -1123,6 +1132,9 @@ impl TerrainGenerator {
     /// Populates foliage, trees, boulders, coral reefs, flowers, and cacti on chunks.
     pub fn populate_chunk_features(&self, chunk: &mut Chunk) {
         let origin = chunk.pos.to_world_origin();
+        if origin.x >= blockgame_core::temple::ARENA_BAND_START_X {
+            return;
+        }
 
         for lz in 0..CHUNK_SIZE_Z {
             let wz = origin.z + lz as i32;
@@ -2036,6 +2048,12 @@ impl TerrainGenerator {
                     _ => {}
                 }
             }
+        }
+
+        // Re-stamp intersecting boss temples so foliage/trees never clip into temple interiors
+        let cpos = chunk.pos;
+        for temple in self.find_temples_for_chunk(cpos) {
+            crate::temple_gen::stamp_temple_exterior(chunk, &temple);
         }
     }
 }

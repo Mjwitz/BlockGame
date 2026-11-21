@@ -155,6 +155,33 @@ pub enum ClientPacket {
     SkillsSync {
         skills: PlayerSkills,
     },
+    TempleInteract {
+        pos: IVec3,
+        temple_id: u64,
+        kind: u8,
+        overworld_origin: IVec3,
+        portal_pos: IVec3,
+    },
+    AttackTempleMonster {
+        monster_id: u32,
+        damage: f32,
+        knockback: Vec3,
+    },
+}
+
+/// Compact network representation of a server-authoritative boss or temple guardian.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncedMonsterState {
+    pub id: u32,
+    pub kind: crate::monster::MonsterKind,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub health: f32,
+    pub max_health: f32,
+    pub hurt_timer: f32,
+    pub walk_anim_timer: f32,
+    pub phase: u8,
+    pub in_combat: bool,
 }
 
 /// Maximum distance (in blocks) at which proximity voice chat is relayed and audible.
@@ -256,6 +283,15 @@ pub enum ServerPacket {
     },
     SkillsUpdate {
         skills: PlayerSkills,
+    },
+    TempleMonstersSync {
+        monsters: Vec<SyncedMonsterState>,
+    },
+    BossHudUpdate {
+        hud: Option<crate::temple::BossHudState>,
+    },
+    TempleProtectionSync {
+        zones: Vec<crate::temple::TempleBounds>,
     },
 }
 
@@ -385,6 +421,30 @@ impl ClientPacket {
             Self::SkillsSync { skills } => {
                 write_u8(&mut payload, 14)?;
                 write_player_skills(&mut payload, skills)?;
+            }
+            Self::TempleInteract {
+                pos,
+                temple_id,
+                kind,
+                overworld_origin,
+                portal_pos,
+            } => {
+                write_u8(&mut payload, 15)?;
+                write_ivec3(&mut payload, *pos)?;
+                write_u64(&mut payload, *temple_id)?;
+                write_u8(&mut payload, *kind)?;
+                write_ivec3(&mut payload, *overworld_origin)?;
+                write_ivec3(&mut payload, *portal_pos)?;
+            }
+            Self::AttackTempleMonster {
+                monster_id,
+                damage,
+                knockback,
+            } => {
+                write_u8(&mut payload, 16)?;
+                write_u32(&mut payload, *monster_id)?;
+                write_f32(&mut payload, *damage)?;
+                write_vec3(&mut payload, *knockback)?;
             }
         }
         wrap_frame(&payload)
@@ -527,6 +587,30 @@ impl ClientPacket {
             14 => {
                 let skills = read_player_skills(&mut r)?;
                 Ok(Self::SkillsSync { skills })
+            }
+            15 => {
+                let pos = read_ivec3(&mut r)?;
+                let temple_id = read_u64(&mut r)?;
+                let kind = read_u8(&mut r)?;
+                let overworld_origin = read_ivec3(&mut r)?;
+                let portal_pos = read_ivec3(&mut r)?;
+                Ok(Self::TempleInteract {
+                    pos,
+                    temple_id,
+                    kind,
+                    overworld_origin,
+                    portal_pos,
+                })
+            }
+            16 => {
+                let monster_id = read_u32(&mut r)?;
+                let damage = read_f32(&mut r)?;
+                let knockback = read_vec3(&mut r)?;
+                Ok(Self::AttackTempleMonster {
+                    monster_id,
+                    damage,
+                    knockback,
+                })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -737,6 +821,42 @@ impl ServerPacket {
             Self::SkillsUpdate { skills } => {
                 write_u8(&mut payload, 18)?;
                 write_player_skills(&mut payload, skills)?;
+            }
+            Self::TempleMonstersSync { monsters } => {
+                write_u8(&mut payload, 19)?;
+                write_u32(&mut payload, monsters.len() as u32)?;
+                for m in monsters {
+                    write_u32(&mut payload, m.id)?;
+                    write_u8(&mut payload, m.kind.to_u8())?;
+                    write_vec3(&mut payload, m.position)?;
+                    write_f32(&mut payload, m.yaw)?;
+                    write_f32(&mut payload, m.health)?;
+                    write_f32(&mut payload, m.max_health)?;
+                    write_f32(&mut payload, m.hurt_timer)?;
+                    write_f32(&mut payload, m.walk_anim_timer)?;
+                    write_u8(&mut payload, m.phase)?;
+                    write_bool(&mut payload, m.in_combat)?;
+                }
+            }
+            Self::BossHudUpdate { hud } => {
+                write_u8(&mut payload, 20)?;
+                write_bool(&mut payload, hud.is_some())?;
+                if let Some(h) = hud {
+                    write_string(&mut payload, &h.name)?;
+                    write_u8(&mut payload, h.kind.to_u8())?;
+                    write_f32(&mut payload, h.health)?;
+                    write_f32(&mut payload, h.max_health)?;
+                    write_u8(&mut payload, h.phase)?;
+                    write_f32(&mut payload, h.distance)?;
+                }
+            }
+            Self::TempleProtectionSync { zones } => {
+                write_u8(&mut payload, 21)?;
+                write_u32(&mut payload, zones.len() as u32)?;
+                for z in zones {
+                    write_ivec3(&mut payload, z.min)?;
+                    write_ivec3(&mut payload, z.max)?;
+                }
             }
         }
 
@@ -979,6 +1099,71 @@ impl ServerPacket {
             18 => {
                 let skills = read_player_skills(&mut r)?;
                 Ok(Self::SkillsUpdate { skills })
+            }
+            19 => {
+                let count = read_u32(&mut r)? as usize;
+                let mut monsters = Vec::with_capacity(count.min(256));
+                for _ in 0..count {
+                    let id = read_u32(&mut r)?;
+                    let kind_u8 = read_u8(&mut r)?;
+                    let position = read_vec3(&mut r)?;
+                    let yaw = read_f32(&mut r)?;
+                    let health = read_f32(&mut r)?;
+                    let max_health = read_f32(&mut r)?;
+                    let hurt_timer = read_f32(&mut r)?;
+                    let walk_anim_timer = read_f32(&mut r)?;
+                    let phase = read_u8(&mut r)?;
+                    let in_combat = read_bool(&mut r)?;
+                    if let Some(kind) = crate::monster::MonsterKind::from_u8(kind_u8) {
+                        monsters.push(SyncedMonsterState {
+                            id,
+                            kind,
+                            position,
+                            yaw,
+                            health,
+                            max_health,
+                            hurt_timer,
+                            walk_anim_timer,
+                            phase,
+                            in_combat,
+                        });
+                    }
+                }
+                Ok(Self::TempleMonstersSync { monsters })
+            }
+            20 => {
+                let has_hud = read_bool(&mut r)?;
+                let hud = if has_hud {
+                    let name = read_string(&mut r)?;
+                    let kind_u8 = read_u8(&mut r)?;
+                    let health = read_f32(&mut r)?;
+                    let max_health = read_f32(&mut r)?;
+                    let phase = read_u8(&mut r)?;
+                    let distance = read_f32(&mut r)?;
+                    crate::monster::MonsterKind::from_u8(kind_u8).map(|kind| {
+                        crate::temple::BossHudState {
+                            name,
+                            kind,
+                            health,
+                            max_health,
+                            phase,
+                            distance,
+                        }
+                    })
+                } else {
+                    None
+                };
+                Ok(Self::BossHudUpdate { hud })
+            }
+            21 => {
+                let count = read_u32(&mut r)? as usize;
+                let mut zones = Vec::with_capacity(count.min(512));
+                for _ in 0..count {
+                    let min = read_ivec3(&mut r)?;
+                    let max = read_ivec3(&mut r)?;
+                    zones.push(crate::temple::TempleBounds { min, max });
+                }
+                Ok(Self::TempleProtectionSync { zones })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1627,8 +1812,14 @@ fn run_server_loop(
     let mut ban_manager = BanManager::load_from_dir(&world_dir).unwrap_or_default();
 
     let item_registry = ItemRegistry::new();
+    let block_registry = crate::block::BlockRegistry::new();
     let mut world = World::new();
     save_data.apply_to_world(&mut world);
+    let mut temple_monsters: Vec<crate::monster::MonsterEntity> = Vec::new();
+    let mut temple_arrows: Vec<crate::monster::ArrowProjectile> = Vec::new();
+    let mut next_temple_monster_id: u32 = 100_000;
+    let mut next_temple_arrow_id: u32 = 100_000;
+    let mut next_temple_drop_id: u64 = 900_000;
 
     let spawn_file = world_dir.join("spawn.txt");
     let mut default_spawn = if let Ok(s) = fs::read_to_string(&spawn_file) {
@@ -2087,14 +2278,298 @@ fn run_server_loop(
                         if world.get_chunk(cpos).is_none() {
                             world.insert_chunk(chunk_generator(cpos));
                         }
-                        world.set_block(pos, block_id);
-                        if let Some(chunk) = world.get_chunk(cpos) {
-                            save_data
-                                .modified_chunks
-                                .insert(cpos, encode_chunk_rle(chunk));
+                        let existing_block = world.get_block(pos);
+                        if save_data.temples.is_block_protected(pos, existing_block) {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::BlockUpdate {
+                                    pos,
+                                    block_id: existing_block,
+                                },
+                            ));
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ChatBroadcast {
+                                    sender: String::new(),
+                                    prefix: String::new(),
+                                    message: "&cThis temple is protected until its boss is defeated!".to_string(),
+                                    is_system: true,
+                                },
+                            ));
+                        } else {
+                            world.set_block(pos, block_id);
+                            if let Some(chunk) = world.get_chunk(cpos) {
+                                save_data
+                                    .modified_chunks
+                                    .insert(cpos, encode_chunk_rle(chunk));
+                            }
+                            outgoing_broadcasts
+                                .push((Some(pid), ServerPacket::BlockUpdate { pos, block_id }));
                         }
-                        outgoing_broadcasts
-                            .push((Some(pid), ServerPacket::BlockUpdate { pos, block_id }));
+                    }
+                    ClientPacket::TempleInteract {
+                        pos,
+                        temple_id,
+                        kind,
+                        overworld_origin,
+                        portal_pos,
+                    } if clients[idx].authenticated => {
+                        let (cpos, _, _, _) = world_to_chunk_coords(pos);
+                        if world.get_chunk(cpos).is_none() {
+                            world.insert_chunk(chunk_generator(cpos));
+                        }
+                        let block = world.get_block(pos);
+                        let username = clients[idx].username.clone();
+                        if block == BlockId::TEMPLE_PORTAL {
+                            if let Some(tkind) = crate::temple::TempleKind::from_u8(kind) {
+                                let return_pos = clients[idx].model.position;
+                                save_data
+                                    .temples
+                                    .player_return_positions
+                                    .insert(username.clone(), return_pos);
+                                let state_snapshot = {
+                                    let entry = save_data.temples.register_temple(
+                                        temple_id,
+                                        tkind,
+                                        overworld_origin,
+                                        portal_pos,
+                                    );
+                                    entry.clone()
+                                };
+                                let needs_build = !state_snapshot.arena_built;
+                                if needs_build {
+                                    crate::temple::build_arena_into_world(&mut world, &state_snapshot);
+                                    let min_c = world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
+                                    let max_c = world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
+                                    let mut arena_chunks = Vec::new();
+                                    for cx in min_c.0.x..=max_c.0.x {
+                                        for cy in min_c.0.y..=max_c.0.y {
+                                            for cz in min_c.0.z..=max_c.0.z {
+                                                let acp = ChunkPos::new(cx, cy, cz);
+                                                if let Some(ch) = world.get_chunk(acp) {
+                                                    let rle = encode_chunk_rle(ch);
+                                                    save_data.modified_chunks.insert(acp, rle.clone());
+                                                    arena_chunks.push((acp, rle));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let chest_pos = state_snapshot.treasure_chest_pos();
+                                    let chests = world
+                                        .chest_containers
+                                        .get(&chest_pos)
+                                        .map(|s| vec![(chest_pos, s.clone())])
+                                        .unwrap_or_default();
+                                    outgoing_broadcasts.push((
+                                        None,
+                                        ServerPacket::WorldDeltaSync {
+                                            modified_chunks: arena_chunks,
+                                            chests,
+                                            furnaces: Vec::new(),
+                                            item_drops: Vec::new(),
+                                        },
+                                    ));
+                                    let spawned = crate::temple::spawn_arena_encounter(
+                                        &state_snapshot,
+                                        &mut next_temple_monster_id,
+                                    );
+                                    let boss_id = spawned.first().map(|m| m.id);
+                                    temple_monsters.extend(spawned);
+                                    if let Some(t) = save_data.temples.temples.get_mut(&temple_id) {
+                                        t.arena_built = true;
+                                        t.active_boss_id = boss_id;
+                                    }
+                                }
+                                let entry_pos = state_snapshot.arena_entry_spawn();
+                                clients[idx].model.position = entry_pos;
+                                clients[idx].saved_state.position = entry_pos;
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::TeleportPlayer {
+                                        position: entry_pos,
+                                        yaw: 0.0,
+                                        pitch: 0.0,
+                                    },
+                                ));
+                                outgoing_broadcasts.push((
+                                    None,
+                                    ServerPacket::TempleProtectionSync {
+                                        zones: save_data.temples.active_protected_zones(),
+                                    },
+                                ));
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::ChatBroadcast {
+                                        sender: String::new(),
+                                        prefix: String::new(),
+                                        message: format!(
+                                            "&6Entered {}! Defeat {} to unlock the temple!",
+                                            tkind.name(),
+                                            tkind.boss_kind().name()
+                                        ),
+                                        is_system: true,
+                                    },
+                                ));
+                            }
+                        } else if block == BlockId::ARENA_RETURN_PORTAL {
+                            let dest = save_data
+                                .temples
+                                .player_return_positions
+                                .get(&username)
+                                .copied()
+                                .or_else(|| {
+                                    save_data
+                                        .temples
+                                        .find_temple_by_arena_pos(pos)
+                                        .and_then(|tid| save_data.temples.temples.get(&tid))
+                                        .map(|t| t.overworld_return_spawn())
+                                })
+                                .unwrap_or(default_spawn);
+                            clients[idx].model.position = dest;
+                            clients[idx].saved_state.position = dest;
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::TeleportPlayer {
+                                    position: dest,
+                                    yaw: 0.0,
+                                    pitch: 0.0,
+                                },
+                            ));
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ChatBroadcast {
+                                    sender: String::new(),
+                                    prefix: String::new(),
+                                    message: "&aReturned to the overworld temple.".to_string(),
+                                    is_system: true,
+                                },
+                            ));
+                        } else if block == BlockId::BOSS_ALTAR {
+                            if let Some(tid) = save_data.temples.find_temple_by_arena_pos(pos) {
+                                let action = save_data.temples.temples.get(&tid).map(|t| {
+                                    (t.boss_defeated, t.rechallenge_cooldown, t.clone())
+                                });
+                                if let Some((defeated, cd, state_snapshot)) = action {
+                                    if !defeated {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: String::new(),
+                                                prefix: String::new(),
+                                                message: "&eThe boss is already awake in this arena!".to_string(),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    } else if cd > 0.0 {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: String::new(),
+                                                prefix: String::new(),
+                                                message: format!(
+                                                    "&eBoss Altar recharging... {:.0}s remaining.",
+                                                    cd.ceil()
+                                                ),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    } else {
+                                        // Reset arena & re-summon boss
+                                        temple_monsters.retain(|m| m.temple_id != Some(tid));
+                                        crate::temple::build_arena_into_world(&mut world, &state_snapshot);
+                                        let spawned = crate::temple::spawn_arena_encounter(
+                                            &state_snapshot,
+                                            &mut next_temple_monster_id,
+                                        );
+                                        let boss_id = spawned.first().map(|m| m.id);
+                                        temple_monsters.extend(spawned);
+                                        if let Some(t) = save_data.temples.temples.get_mut(&tid) {
+                                            t.boss_defeated = false;
+                                            t.active_boss_id = boss_id;
+                                        }
+                                        outgoing_broadcasts.push((
+                                            None,
+                                            ServerPacket::TempleProtectionSync {
+                                                zones: save_data.temples.active_protected_zones(),
+                                            },
+                                        ));
+                                        outgoing_broadcasts.push((
+                                            None,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: String::new(),
+                                                prefix: String::new(),
+                                                message: format!(
+                                                    "&c{} has been re-summoned at {}!",
+                                                    state_snapshot.kind.boss_kind().name(),
+                                                    state_snapshot.kind.name()
+                                                ),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ClientPacket::AttackTempleMonster {
+                        monster_id,
+                        damage,
+                        knockback,
+                    } if clients[idx].authenticated => {
+                        let dmg = damage.clamp(0.0, 50.0);
+                        if let Some(m) = temple_monsters
+                            .iter_mut()
+                            .find(|m| !m.dead && m.id == monster_id)
+                        {
+                            m.take_damage(dmg, knockback);
+                            if m.dead {
+                                let drop_pos = m.position + Vec3::new(0.0, 1.0, 0.0);
+                                for item in m.generate_drops() {
+                                    let drop_id = next_temple_drop_id;
+                                    next_temple_drop_id += 1;
+                                    let vel = Vec3::new(
+                                        ((drop_id % 7) as f32 - 3.0) * 0.7,
+                                        4.2,
+                                        (((drop_id / 7) % 7) as f32 - 3.0) * 0.7,
+                                    );
+                                    outgoing_broadcasts.push((
+                                        None,
+                                        ServerPacket::ItemDropSpawned {
+                                            drop_id,
+                                            position: drop_pos,
+                                            velocity: vel,
+                                            item,
+                                        },
+                                    ));
+                                }
+                                if m.kind.is_boss() {
+                                    if let Some(tid) = m.temple_id {
+                                        if let Some(tkind) = save_data.temples.mark_boss_defeated(tid) {
+                                            outgoing_broadcasts.push((
+                                                None,
+                                                ServerPacket::TempleProtectionSync {
+                                                    zones: save_data.temples.active_protected_zones(),
+                                                },
+                                            ));
+                                            outgoing_broadcasts.push((
+                                                None,
+                                                ServerPacket::ChatBroadcast {
+                                                    sender: String::new(),
+                                                    prefix: String::new(),
+                                                    message: format!(
+                                                        "&6Victory! {} has been defeated! {} is now unlocked!",
+                                                        m.kind.name(),
+                                                        tkind.name()
+                                                    ),
+                                                    is_system: true,
+                                                },
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        temple_monsters.retain(|m| !m.dead);
                     }
                     ClientPacket::ContainerUpdate {
                         pos,
@@ -2551,6 +3026,174 @@ fn run_server_loop(
                 .collect();
 
             *online_count.lock().unwrap() = all_players.len();
+
+            // Tick temple re-challenge cooldowns and active server-authoritative boss encounters
+            save_data.temples.tick_cooldowns(dt);
+            if !temple_monsters.is_empty() && !all_players.is_empty() {
+                let mut newly_summoned = Vec::new();
+                let mut tick_damage_events: Vec<(u32, f32)> = Vec::new();
+                let mut tick_announcements: Vec<String> = Vec::new();
+
+                for m in temple_monsters.iter_mut() {
+                    if m.dead {
+                        continue;
+                    }
+                    // Target the nearest alive authenticated player
+                    let nearest = all_players
+                        .iter()
+                        .min_by(|a, b| {
+                            let da = a.position.distance_squared(m.position);
+                            let db = b.position.distance_squared(m.position);
+                            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    let Some(target) = nearest else { continue; };
+                    let outcome = m.update(dt, target.position, 0.0, &world, &block_registry);
+
+                    if outcome.damage_to_player > 0.0 {
+                        tick_damage_events.push((target.player_id, outcome.damage_to_player));
+                    }
+                    if let Some((origin, vel)) = outcome.spawned_arrow {
+                        let aid = next_temple_arrow_id;
+                        next_temple_arrow_id = next_temple_arrow_id.wrapping_add(1);
+                        temple_arrows.push(crate::monster::ArrowProjectile::new(
+                            aid,
+                            origin,
+                            vel,
+                            false,
+                            m.kind.attack_damage(),
+                        ));
+                    }
+                    for (origin, vel, dmg) in outcome.extra_arrows {
+                        let aid = next_temple_arrow_id;
+                        next_temple_arrow_id = next_temple_arrow_id.wrapping_add(1);
+                        temple_arrows.push(crate::monster::ArrowProjectile::new(
+                            aid, origin, vel, false, dmg,
+                        ));
+                    }
+                    if let Some((center, radius, aoe_dmg)) = outcome.aoe_blast {
+                        for p in &all_players {
+                            if p.position.distance(center) <= radius {
+                                tick_damage_events.push((p.player_id, aoe_dmg));
+                            }
+                        }
+                    }
+                    if let Some(new_phase) = outcome.phase_changed {
+                        tick_announcements.push(format!(
+                            "&c{} enters Phase {}!",
+                            m.kind.name(),
+                            new_phase
+                        ));
+                    }
+                    for (mkind, spos) in outcome.summon_minions {
+                        if let Some(tid) = m.temple_id {
+                            newly_summoned.push((mkind, spos, tid));
+                        }
+                    }
+                }
+
+                // Cap active summoned minions per temple to avoid unbounded growth
+                for (mkind, spos, tid) in newly_summoned {
+                    let count_in_temple = temple_monsters
+                        .iter()
+                        .filter(|m| !m.dead && m.temple_id == Some(tid) && !m.kind.is_boss())
+                        .count();
+                    if count_in_temple < 6 {
+                        let mid = next_temple_monster_id;
+                        next_temple_monster_id = next_temple_monster_id.wrapping_add(1);
+                        temple_monsters.push(crate::monster::MonsterEntity::new_temple_mob(
+                            mid, mkind, spos, tid,
+                        ));
+                    }
+                }
+
+                // Update server-side boss projectiles
+                for arrow in temple_arrows.iter_mut() {
+                    arrow.update(dt, &world, &block_registry);
+                    if !arrow.dead && !arrow.stuck {
+                        for p in &all_players {
+                            let center = p.position + Vec3::new(0.0, 0.9, 0.0);
+                            if (arrow.position - center).length() < 0.9 {
+                                tick_damage_events.push((p.player_id, arrow.damage));
+                                arrow.dead = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                temple_arrows.retain(|a| !a.dead);
+                temple_monsters.retain(|m| !m.dead);
+
+                // Apply damage events to players
+                for (target_pid, dmg) in tick_damage_events {
+                    if let Some(c) = clients
+                        .iter_mut()
+                        .find(|c| c.authenticated && !c.is_dead && c.player_id == target_pid)
+                    {
+                        if c.model.hurt_timer <= 0.0 && c.model.health > 0.0 {
+                            c.model.health = (c.model.health - dmg).max(0.0);
+                            c.model.hurt_timer = 0.45;
+                            c.saved_state.stats.health = c.model.health;
+                            let pkt = ServerPacket::PlayerDamaged {
+                                target_player_id: target_pid,
+                                attacker_id: 0,
+                                damage: dmg,
+                                new_health: c.model.health,
+                            };
+                            if let Ok(bytes) = pkt.encode() {
+                                let _ = c.stream.write_all(&bytes);
+                            }
+                        }
+                    }
+                }
+
+                // Broadcast phase announcements
+                for msg in tick_announcements {
+                    let pkt = ServerPacket::ChatBroadcast {
+                        sender: String::new(),
+                        prefix: String::new(),
+                        message: msg,
+                        is_system: true,
+                    };
+                    if let Ok(bytes) = pkt.encode() {
+                        for c in clients.iter_mut() {
+                            if c.authenticated && !c.is_dead {
+                                let _ = c.stream.write_all(&bytes);
+                            }
+                        }
+                    }
+                }
+
+                // Broadcast synced temple monsters and per-player 500-block Boss HUD updates
+                let synced: Vec<SyncedMonsterState> = temple_monsters
+                    .iter()
+                    .map(|m| SyncedMonsterState {
+                        id: m.id,
+                        kind: m.kind,
+                        position: m.position,
+                        yaw: m.yaw,
+                        health: m.health,
+                        max_health: m.max_health,
+                        hurt_timer: m.hurt_timer,
+                        walk_anim_timer: m.walk_anim_timer,
+                        phase: m.phase,
+                        in_combat: m.in_combat,
+                    })
+                    .collect();
+                if let Ok(mbytes) = (ServerPacket::TempleMonstersSync { monsters: synced }).encode() {
+                    for c in clients.iter_mut() {
+                        if c.authenticated && !c.is_dead {
+                            let _ = c.stream.write_all(&mbytes);
+                            let hud = crate::temple::compute_boss_hud(
+                                &temple_monsters,
+                                c.model.position,
+                            );
+                            if let Ok(hbytes) = (ServerPacket::BossHudUpdate { hud }).encode() {
+                                let _ = c.stream.write_all(&hbytes);
+                            }
+                        }
+                    }
+                }
+            }
 
             if !all_players.is_empty() {
                 let snap = ServerPacket::WorldSnapshot {
@@ -3733,6 +4376,66 @@ mod tests {
         let spawn = find_dry_spawn_from_generator(&gen_closure);
         assert!(spawn.x >= 16.0 && spawn.x < 32.0, "Expected spawn on dry chunk (cx=1, cz=0), got {:?}", spawn);
         assert!(spawn.y >= 46.0, "Expected dry elevation >= 46, got {:?}", spawn);
+    }
+
+    #[test]
+    fn test_temple_packets_roundtrip() {
+        let c1 = ClientPacket::TempleInteract {
+            pos: IVec3::new(100, 64, -200),
+            temple_id: 4242,
+            kind: crate::temple::TempleKind::DarkForest.to_u8(),
+            overworld_origin: IVec3::new(100, 63, -203),
+            portal_pos: IVec3::new(100, 64, -200),
+        };
+        let bytes = c1.encode().unwrap();
+        assert_eq!(ClientPacket::decode(&bytes[8..]).unwrap(), c1);
+
+        let c2 = ClientPacket::AttackTempleMonster {
+            monster_id: 100_005,
+            damage: 14.5,
+            knockback: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let bytes = c2.encode().unwrap();
+        assert_eq!(ClientPacket::decode(&bytes[8..]).unwrap(), c2);
+
+        let s1 = ServerPacket::TempleMonstersSync {
+            monsters: vec![SyncedMonsterState {
+                id: 100_005,
+                kind: crate::monster::MonsterKind::ShadowLich,
+                position: Vec3::new(200_000.5, 33.0, 12.5),
+                yaw: 1.25,
+                health: 210.0,
+                max_health: 320.0,
+                hurt_timer: 0.2,
+                walk_anim_timer: 3.4,
+                phase: 2,
+                in_combat: true,
+            }],
+        };
+        let bytes = s1.encode().unwrap();
+        assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s1);
+
+        let s2 = ServerPacket::BossHudUpdate {
+            hud: Some(crate::temple::BossHudState {
+                name: "Shadow Lich".to_string(),
+                kind: crate::monster::MonsterKind::ShadowLich,
+                health: 210.0,
+                max_health: 320.0,
+                phase: 2,
+                distance: 18.5,
+            }),
+        };
+        let bytes = s2.encode().unwrap();
+        assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s2);
+
+        let s3 = ServerPacket::TempleProtectionSync {
+            zones: vec![crate::temple::TempleBounds {
+                min: IVec3::new(-12, 40, -12),
+                max: IVec3::new(12, 58, 12),
+            }],
+        };
+        let bytes = s3.encode().unwrap();
+        assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s3);
     }
 }
 

@@ -2402,6 +2402,13 @@ impl ApplicationHandler for BlockGameApp {
                                 } else {
                                     1.0
                                 };
+                            let held_slot_for_boss = state.inventory.get(state.active_hotbar_slot);
+                            let base_attack_damage = held_slot_for_boss
+                                .item_id
+                                .boss_weapon_damage()
+                                .unwrap_or(base_attack_damage);
+                            let weapon_lifesteal =
+                                held_slot_for_boss.item_id.boss_weapon_lifesteal();
                             let crit_roll =
                                 blockgame_core::fishing::next_f32(&mut state.fishing_rng)
                                     < state.player_skills.combat_crit_chance();
@@ -2470,13 +2477,27 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                 }
                             } else {
-                                let hit_monster = state.world_manager.attack_monster(
-                                    state.player.eye_position(),
-                                    state.camera.forward(),
-                                    3.5,
-                                    attack_damage,
-                                );
-                                let hit_animal = if hit_monster.is_none() {
+                                // In multiplayer, also check synced server-authoritative boss/temple monsters
+                                let hit_mp_boss = if state.mp_client.is_some() {
+                                    state.world_manager.hit_test_mp_temple_monster(
+                                        state.player.eye_position(),
+                                        state.camera.forward(),
+                                        4.2,
+                                    )
+                                } else {
+                                    None
+                                };
+                                let hit_monster = if hit_mp_boss.is_none() {
+                                    state.world_manager.attack_monster(
+                                        state.player.eye_position(),
+                                        state.camera.forward(),
+                                        4.0,
+                                        attack_damage,
+                                    )
+                                } else {
+                                    None
+                                };
+                                let hit_animal = if hit_mp_boss.is_none() && hit_monster.is_none() {
                                     state.world_manager.attack_animal(
                                         state.player.eye_position(),
                                         state.camera.forward(),
@@ -2486,15 +2507,46 @@ impl ApplicationHandler for BlockGameApp {
                                 } else {
                                     None
                                 };
-                                if let Some((mkind, mpos, killed)) = hit_monster {
+                                if let Some((mid, mkind, mpos)) = hit_mp_boss {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::AttackTempleMonster {
+                                                monster_id: mid,
+                                                damage: attack_damage,
+                                                knockback: state.camera.forward(),
+                                            },
+                                        );
+                                    }
                                     state.audio.play_monster_hurt(
                                         mkind,
                                         mpos,
                                         state.player.position,
                                         state.camera.yaw,
                                     );
-                                    let xp = if killed { 37 } else { 12 };
+                                    state.grant_skill_xp(SkillKind::Combat, 15);
+                                    if weapon_lifesteal > 0.0 && !state.player_stats.is_dead {
+                                        state.player_stats.health = (state.player_stats.health
+                                            + attack_damage * weapon_lifesteal)
+                                            .min(state.player_stats.max_health);
+                                    }
+                                } else if let Some((mkind, mpos, killed)) = hit_monster {
+                                    state.audio.play_monster_hurt(
+                                        mkind,
+                                        mpos,
+                                        state.player.position,
+                                        state.camera.yaw,
+                                    );
+                                    let xp = if killed {
+                                        if mkind.is_boss() { 250 } else { 37 }
+                                    } else {
+                                        12
+                                    };
                                     state.grant_skill_xp(SkillKind::Combat, xp);
+                                    if weapon_lifesteal > 0.0 && !state.player_stats.is_dead {
+                                        state.player_stats.health = (state.player_stats.health
+                                            + attack_damage * weapon_lifesteal)
+                                            .min(state.player_stats.max_health);
+                                    }
                                     if killed && !state.player_stats.is_dead {
                                         let ls = state.player_skills.combat_lifesteal_on_kill();
                                         if ls > 0.0 {
@@ -2510,7 +2562,9 @@ impl ApplicationHandler for BlockGameApp {
                                         state.camera.yaw,
                                     );
                                 }
-                                let hit_entity = hit_monster.is_some() || hit_animal.is_some();
+                                let hit_entity = hit_mp_boss.is_some()
+                                    || hit_monster.is_some()
+                                    || hit_animal.is_some();
                                 if hit_entity {
                                     state.mouse_left_down = false;
                                     state.breaking_voxel = None;
@@ -2547,12 +2601,40 @@ impl ApplicationHandler for BlockGameApp {
                             return;
                         }
                         state.hotbar_activity_timer = 4.0;
-                        // 1. Check if targeting an interactive block (e.g. Furnace, Chest, or Crafting Table)
+                        // 1. Check if targeting an interactive block (e.g. Temple Portal, Furnace, Chest, or Crafting Table)
                         if let Some(hit) = state.targeted_block {
                             let block_id = {
                                 let world_guard = state.world_manager.world().lock().unwrap();
                                 world_guard.get_block(hit.hit_voxel)
                             };
+                            if block_id.is_temple_interactive() {
+                                if state.mp_client.is_some() {
+                                    let placement = state
+                                        .world_manager
+                                        .find_temple_placement_at_portal(hit.hit_voxel);
+                                    let (tid, kind, ow_orig, p_pos) = placement
+                                        .map(|p| (p.temple_id, p.kind.to_u8(), p.origin, p.portal_pos))
+                                        .unwrap_or((0, 0, IVec3::ZERO, hit.hit_voxel));
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::TempleInteract {
+                                                pos: hit.hit_voxel,
+                                                temple_id: tid,
+                                                kind,
+                                                overworld_origin: ow_orig,
+                                                portal_pos: p_pos,
+                                            },
+                                        );
+                                    }
+                                } else if let Some(dest) = state
+                                    .world_manager
+                                    .interact_temple_block_sp(hit.hit_voxel, state.player.position)
+                                {
+                                    state.player.position = dest;
+                                    state.player.velocity = Vec3::ZERO;
+                                }
+                                return;
+                            }
                             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;
@@ -3322,6 +3404,18 @@ impl ApplicationHandler for BlockGameApp {
                                             } else {
                                                 hit.place_voxel
                                             };
+                                        if state.world_manager.is_block_protected(target_pos) {
+                                            state.local_chat_messages.push(
+                                                blockgame_core::net::ChatEntry {
+                                                    sender: String::new(),
+                                                    prefix: String::new(),
+                                                    message: "&cThis temple is protected until its boss is defeated!".to_string(),
+                                                    is_system: true,
+                                                    age: 0.0,
+                                                },
+                                            );
+                                            return;
+                                        }
                                         let dx = state.player.position.x - (target_pos.x as f32 + 0.5);
                                         let dz = state.player.position.z - (target_pos.z as f32 + 0.5);
                                         let facing = if dx.abs() > dz.abs() {
@@ -4501,6 +4595,15 @@ impl ApplicationHandler for BlockGameApp {
                                     state.player_skills = skills;
                                     state.skills_dirty = false;
                                 }
+                                blockgame_core::net::ServerPacket::TempleMonstersSync { monsters } => {
+                                    state.world_manager.apply_mp_temple_monsters(&monsters);
+                                }
+                                blockgame_core::net::ServerPacket::BossHudUpdate { hud } => {
+                                    state.world_manager.mp_boss_hud = hud;
+                                }
+                                blockgame_core::net::ServerPacket::TempleProtectionSync { zones } => {
+                                    state.world_manager.temples.synced_protected_zones = zones;
+                                }
                                 blockgame_core::net::ServerPacket::VoiceBroadcast {
                                     sender_id,
                                     seq,
@@ -4917,6 +5020,18 @@ impl ApplicationHandler for BlockGameApp {
                         state.player.position,
                         state.day_night.sun_intensity(),
                     );
+                    for msg in state.world_manager.pending_temple_messages.drain(..) {
+                        state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                            sender: String::new(),
+                            prefix: String::new(),
+                            message: msg,
+                            is_system: true,
+                            age: 0.0,
+                        });
+                        if state.local_chat_messages.len() > 100 {
+                            state.local_chat_messages.remove(0);
+                        }
+                    }
                     for (pos, drops) in monster_drops {
                         for drop_slot in drops {
                             state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
@@ -5442,7 +5557,9 @@ impl ApplicationHandler for BlockGameApp {
                                 } else {
                                     base_break_time
                                 };
-                                if break_time.is_infinite() && !is_creative {
+                                if state.world_manager.is_block_protected(target_voxel)
+                                    || (break_time.is_infinite() && !is_creative)
+                                {
                                     state.break_progress = 0.0;
                                     state.cracking_buffer = None;
                                     state.break_hit_timer = 0.0;
@@ -6214,6 +6331,13 @@ impl ApplicationHandler for BlockGameApp {
                             state.hotbar_tuck_progress,
                         );
 
+                        if let Some(boss_hud) = state
+                            .world_manager
+                            .active_boss_hud(state.player.position, state.mp_client.is_some())
+                        {
+                            UiBuilder::draw_boss_hud(&mut state.ui_mesh, screen_w, &boss_hud);
+                        }
+
                         match &state.fishing_state {
                             FishingSession::Idle => {}
                             FishingSession::Waiting { tackle, .. } => {
@@ -6682,12 +6806,24 @@ impl ApplicationHandler for BlockGameApp {
                     state.animal_dynamic_mesh.clear();
                 }
 
-                // Upload dynamic 3D Monsters mesh
-                if !state.world_manager.monsters.is_empty() {
-                    let monsters_mesh = blockgame_render::build_monsters_mesh_animated(
-                        &state.world_manager.monsters,
-                        state.total_time,
-                    );
+                // Upload dynamic 3D Monsters mesh (local + synced MP bosses/temple minions)
+                if !state.world_manager.monsters.is_empty()
+                    || !state.world_manager.mp_temple_monsters.is_empty()
+                {
+                    let monsters_mesh = if state.world_manager.mp_temple_monsters.is_empty() {
+                        blockgame_render::build_monsters_mesh_animated(
+                            &state.world_manager.monsters,
+                            state.total_time,
+                        )
+                    } else {
+                        let mut combined = Vec::with_capacity(
+                            state.world_manager.monsters.len()
+                                + state.world_manager.mp_temple_monsters.len(),
+                        );
+                        combined.extend_from_slice(&state.world_manager.monsters);
+                        combined.extend_from_slice(&state.world_manager.mp_temple_monsters);
+                        blockgame_render::build_monsters_mesh_animated(&combined, state.total_time)
+                    };
                     state.monster_dynamic_mesh.update(
                         &state.device,
                         &state.queue,

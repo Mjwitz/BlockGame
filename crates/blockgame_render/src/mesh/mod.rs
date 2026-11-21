@@ -3089,6 +3089,305 @@ pub fn build_monsters_mesh_animated(
                     );
                 }
             }
+            // Temple Guardian Minions (Issue #9)
+            MonsterKind::SandMummy
+            | MonsterKind::SunArcher
+            | MonsterKind::FrostWraith
+            | MonsterKind::ShadowKnight => {
+                let (head_tile, body_tile) = match m.kind {
+                    MonsterKind::SandMummy => (469, 470),
+                    MonsterKind::SunArcher => (471, 472),
+                    MonsterKind::FrostWraith => (473, 474),
+                    MonsterKind::ShadowKnight => (477, 478),
+                    _ => (469, 470),
+                };
+                let uvs_head = get_animal_uvs(head_tile);
+                let uvs_body = get_animal_uvs(body_tile);
+                let scale = if m.kind == MonsterKind::ShadowKnight { 1.08 } else { 1.0 };
+
+                // Head
+                add_animal_box(
+                    &mut mesh,
+                    [-0.25 * scale, 1.46 * scale, -0.25 * scale],
+                    [0.25 * scale, 1.96 * scale, 0.25 * scale],
+                    &uvs_body,
+                    Some(&uvs_head),
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Torso
+                add_animal_box(
+                    &mut mesh,
+                    [-0.26 * scale, 0.72 * scale, -0.15 * scale],
+                    [0.26 * scale, 1.46 * scale, 0.15 * scale],
+                    &uvs_body,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Arms
+                add_animal_box(
+                    &mut mesh,
+                    [-0.42 * scale, 0.85 * scale, -0.12 * scale],
+                    [-0.26 * scale, 1.42 * scale, 0.36 * scale],
+                    &uvs_body,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.26 * scale, 0.85 * scale, -0.12 * scale],
+                    [0.42 * scale, 1.42 * scale, 0.36 * scale],
+                    &uvs_body,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                // Legs
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.22 * scale, 0.0, -0.12 * scale],
+                    [-0.02 * scale, 0.72 * scale, 0.12 * scale],
+                    0.72 * scale,
+                    0.0,
+                    leg_swing,
+                    &uvs_body,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.02 * scale, 0.0, -0.12 * scale],
+                    [0.22 * scale, 0.72 * scale, 0.12 * scale],
+                    0.72 * scale,
+                    0.0,
+                    -leg_swing,
+                    &uvs_body,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+            }
+            MonsterKind::JungleStalker => {
+                let uvs_head = get_animal_uvs(475);
+                let uvs_body = get_animal_uvs(476);
+                // Low-slung mossy predator body
+                add_animal_box(
+                    &mut mesh,
+                    [-0.36, 0.32, -0.58],
+                    [0.36, 0.96, 0.42],
+                    &uvs_body,
+                    None,
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [-0.30, 0.36, 0.38],
+                    [0.30, 0.92, 0.84],
+                    &uvs_body,
+                    Some(&uvs_head),
+                    ao,
+                    light,
+                    pos,
+                    cos_y,
+                    sin_y,
+                );
+                for (idx, lz) in [-0.42f32, -0.12, 0.18].iter().enumerate() {
+                    let phase = if idx % 2 == 0 { leg_swing } else { -leg_swing };
+                    add_animal_leg_box(
+                        &mut mesh,
+                        [-0.76, 0.0, lz - 0.06],
+                        [-0.30, 0.44, lz + 0.06],
+                        0.44,
+                        *lz,
+                        phase,
+                        &uvs_body,
+                        ao,
+                        light,
+                        pos,
+                        cos_y,
+                        sin_y,
+                    );
+                    add_animal_leg_box(
+                        &mut mesh,
+                        [0.30, 0.0, lz - 0.06],
+                        [0.76, 0.44, lz + 0.06],
+                        0.44,
+                        *lz,
+                        -phase,
+                        &uvs_body,
+                        ao,
+                        light,
+                        pos,
+                        cos_y,
+                        sin_y,
+                    );
+                }
+            }
+            // Towering Biome Bosses (Issue #9)
+            MonsterKind::SunPharaoh
+            | MonsterKind::FrostTitan
+            | MonsterKind::OvergrownGolem
+            | MonsterKind::ShadowLich => {
+                let (head_tile, body_tile, accent_tile, scale, broad) = match m.kind {
+                    MonsterKind::SunPharaoh => (479, 480, 449, 1.48f32, 1.0f32),
+                    MonsterKind::FrostTitan => (481, 482, 450, 1.72f32, 1.25f32),
+                    MonsterKind::OvergrownGolem => (483, 484, 451, 1.64f32, 1.35f32),
+                    MonsterKind::ShadowLich => (485, 486, 452, 1.44f32, 0.95f32),
+                    _ => (479, 480, 449, 1.5, 1.0),
+                };
+                let uvs_head = get_animal_uvs(head_tile);
+                let uvs_body = get_animal_uvs(body_tile);
+                let uvs_accent = get_animal_uvs(accent_tile);
+                let boss_light = [1.0, 0.85];
+                let float_bob = if m.kind == MonsterKind::ShadowLich {
+                    (time * 3.0).sin() * 0.12
+                } else {
+                    0.0
+                };
+                let bpos = pos + glam::Vec3::new(0.0, float_bob, 0.0);
+
+                // Boss Head
+                add_animal_box(
+                    &mut mesh,
+                    [-0.26 * scale, 1.44 * scale, -0.26 * scale],
+                    [0.26 * scale, 1.94 * scale, 0.26 * scale],
+                    &uvs_body,
+                    Some(&uvs_head),
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                // Crown / Horns / Halo Crest
+                add_animal_box(
+                    &mut mesh,
+                    [-0.32 * scale, 1.92 * scale, -0.28 * scale],
+                    [0.32 * scale, 2.12 * scale, 0.28 * scale],
+                    &uvs_accent,
+                    None,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                // Broad Boss Torso
+                add_animal_box(
+                    &mut mesh,
+                    [-0.30 * scale * broad, 0.72 * scale, -0.18 * scale * broad],
+                    [0.30 * scale * broad, 1.46 * scale, 0.18 * scale * broad],
+                    &uvs_body,
+                    None,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                // Pauldrons / Shoulder Armor
+                add_animal_box(
+                    &mut mesh,
+                    [-0.50 * scale * broad, 1.24 * scale, -0.22 * scale],
+                    [-0.28 * scale * broad, 1.52 * scale, 0.22 * scale],
+                    &uvs_accent,
+                    None,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.28 * scale * broad, 1.24 * scale, -0.22 * scale],
+                    [0.50 * scale * broad, 1.52 * scale, 0.22 * scale],
+                    &uvs_accent,
+                    None,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                // Heavy Boss Arms
+                add_animal_box(
+                    &mut mesh,
+                    [-0.48 * scale * broad, 0.70 * scale, -0.14 * scale],
+                    [-0.30 * scale * broad, 1.28 * scale, 0.34 * scale],
+                    &uvs_body,
+                    None,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_box(
+                    &mut mesh,
+                    [0.30 * scale * broad, 0.70 * scale, -0.14 * scale],
+                    [0.48 * scale * broad, 1.28 * scale, 0.34 * scale],
+                    &uvs_body,
+                    None,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                // Legs
+                add_animal_leg_box(
+                    &mut mesh,
+                    [-0.26 * scale, 0.0, -0.15 * scale],
+                    [-0.04 * scale, 0.74 * scale, 0.15 * scale],
+                    0.74 * scale,
+                    0.0,
+                    leg_swing * 0.75,
+                    &uvs_body,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+                add_animal_leg_box(
+                    &mut mesh,
+                    [0.04 * scale, 0.0, -0.15 * scale],
+                    [0.26 * scale, 0.74 * scale, 0.15 * scale],
+                    0.74 * scale,
+                    0.0,
+                    -leg_swing * 0.75,
+                    &uvs_body,
+                    ao,
+                    boss_light,
+                    bpos,
+                    cos_y,
+                    sin_y,
+                );
+            }
         }
 
         // Animated burning flames wrapping around the mob when on fire

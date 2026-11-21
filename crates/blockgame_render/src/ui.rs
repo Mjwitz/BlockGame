@@ -9622,6 +9622,96 @@ impl UiBuilder {
             );
         }
     }
+
+    /// Draws the top-of-screen Boss Health Bar when a boss is in combat and within 500 blocks (Issue #9).
+    pub fn draw_boss_hud(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        boss: &blockgame_core::temple::BossHudState,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let accent = boss.kind.boss_theme_color();
+        let phase_roman = match boss.phase {
+            3 => "PHASE III",
+            2 => "PHASE II",
+            _ => "PHASE I",
+        };
+        let header = format!("{}  [{}]", boss.name.to_uppercase(), phase_roman);
+        let hp_text = format!(
+            "{} / {} HP",
+            boss.health.ceil() as i32,
+            boss.max_health.ceil() as i32
+        );
+
+        let bar_w = (screen_w * 0.42).clamp(320.0, 540.0);
+        let box_w = bar_w + 24.0;
+        let box_h = 46.0;
+        let bx = (screen_w - box_w) * 0.5;
+        let by = 12.0;
+
+        // Outer themed border + dark slate panel
+        mesh.add_quad(bx, by, box_w, box_h, white_uv, [accent[0], accent[1], accent[2], 0.92]);
+        mesh.add_quad(
+            bx + 2.0,
+            by + 2.0,
+            box_w - 4.0,
+            box_h - 4.0,
+            white_uv,
+            [0.06, 0.07, 0.10, 0.92],
+        );
+
+        // Centered Boss Name + Phase header
+        let hw = Self::string_width(&header, 8.8, 0.95);
+        Self::draw_string(
+            mesh,
+            bx + (box_w - hw) * 0.5,
+            by + 6.0,
+            &header,
+            8.8,
+            12.0,
+            0.95,
+            [1.0, 0.96, 0.86, 1.0],
+        );
+
+        // Health bar track + smooth fill + top gloss
+        let bar_x = bx + 12.0;
+        let bar_y = by + 23.0;
+        let bar_h = 15.0;
+        mesh.add_quad(bar_x, bar_y, bar_w, bar_h, white_uv, [0.14, 0.14, 0.18, 0.95]);
+        let frac = (boss.health / boss.max_health.max(1.0)).clamp(0.0, 1.0);
+        let fill_w = (bar_w - 2.0) * frac;
+        if fill_w > 0.5 {
+            mesh.add_quad(
+                bar_x + 1.0,
+                bar_y + 1.0,
+                fill_w,
+                bar_h - 2.0,
+                white_uv,
+                accent,
+            );
+            mesh.add_quad(
+                bar_x + 1.0,
+                bar_y + 1.0,
+                fill_w,
+                4.0,
+                white_uv,
+                [1.0, 1.0, 1.0, 0.25],
+            );
+        }
+
+        // Centered HP numeric readout on the bar
+        let hpw = Self::string_width(&hp_text, 7.0, 0.8);
+        Self::draw_string(
+            mesh,
+            bar_x + (bar_w - hpw) * 0.5,
+            bar_y + 3.0,
+            &hp_text,
+            7.0,
+            10.0,
+            0.8,
+            [1.0, 1.0, 1.0, 0.96],
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
