@@ -2608,6 +2608,18 @@ impl ApplicationHandler for BlockGameApp {
                                 world_guard.get_block(hit.hit_voxel)
                             };
                             if block_id.is_temple_interactive() {
+                                if block_id == BlockId::TEMPLE_PORTAL {
+                                    if let Some(placement) = state
+                                        .world_manager
+                                        .find_temple_placement_at_portal(hit.hit_voxel)
+                                    {
+                                        state.world_manager.ensure_arena_built_local(
+                                            placement,
+                                            &state.device,
+                                            &state.pipeline,
+                                        );
+                                    }
+                                }
                                 if state.mp_client.is_some() {
                                     let placement = state
                                         .world_manager

@@ -2350,34 +2350,18 @@ fn run_server_loop(
                                     }
                                     let min_c = world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
                                     let max_c = world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
-                                    let mut arena_chunks = Vec::new();
                                     for cx in min_c.0.x..=max_c.0.x {
                                         for cy in min_c.0.y..=max_c.0.y {
                                             for cz in min_c.0.z..=max_c.0.z {
                                                 let acp = ChunkPos::new(cx, cy, cz);
                                                 if let Some(ch) = world.get_chunk(acp) {
-                                                    let rle = encode_chunk_rle(ch);
-                                                    save_data.modified_chunks.insert(acp, rle.clone());
-                                                    arena_chunks.push((acp, rle));
+                                                    save_data
+                                                        .modified_chunks
+                                                        .insert(acp, encode_chunk_rle(ch));
                                                 }
                                             }
                                         }
                                     }
-                                    let chest_pos = state_snapshot.treasure_chest_pos();
-                                    let chests = world
-                                        .chest_containers
-                                        .get(&chest_pos)
-                                        .map(|s| vec![(chest_pos, s.clone())])
-                                        .unwrap_or_default();
-                                    outgoing_broadcasts.push((
-                                        None,
-                                        ServerPacket::WorldDeltaSync {
-                                            modified_chunks: arena_chunks,
-                                            chests,
-                                            furnaces: Vec::new(),
-                                            item_drops: Vec::new(),
-                                        },
-                                    ));
                                     if let Some(t) = save_data.temples.temples.get_mut(&temple_id) {
                                         t.arena_built = true;
                                     }
