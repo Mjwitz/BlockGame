@@ -2632,6 +2632,10 @@ impl ApplicationHandler for BlockGameApp {
                                 {
                                     state.player.position = dest;
                                     state.player.velocity = Vec3::ZERO;
+                                    if block_id == BlockId::TEMPLE_PORTAL {
+                                        state.camera.yaw = std::f32::consts::FRAC_PI_2;
+                                        state.camera.pitch = 0.0;
+                                    }
                                 }
                                 return;
                             }
@@ -2658,6 +2662,18 @@ impl ApplicationHandler for BlockGameApp {
                                 return;
                             }
                             if block_id.is_chest() {
+                                if state.world_manager.is_chest_locked(hit.hit_voxel) {
+                                    state.local_chat_messages.push(
+                                        blockgame_core::net::ChatEntry {
+                                            sender: String::new(),
+                                            prefix: String::new(),
+                                            message: "&cThis treasure chest is sealed until the temple boss is defeated!".to_string(),
+                                            is_system: true,
+                                            age: 0.0,
+                                        },
+                                    );
+                                    return;
+                                }
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;
                                 state.breaking_voxel = None;

@@ -84,9 +84,10 @@ pub use skills::{
 };
 pub use temple::{
     arena_origin_for_temple, build_arena_into_world, compute_boss_hud, is_in_arena_band,
-    spawn_arena_encounter, temple_id_from_grid, BossHudState, TempleBounds, TempleInstanceState,
-    TempleKind, TempleManager, ARENA_BAND_START_X, ARENA_FLOOR_Y, ARENA_HALF_SIZE, ARENA_HEIGHT,
-    ARENA_ORIGIN_BASE_X, BOSS_HUD_MAX_DISTANCE, BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE,
+    populate_arena_treasure_chest, spawn_arena_encounter, temple_id_from_grid, BossHudState,
+    TempleBounds, TempleInstanceState, TempleKind, TempleManager, ARENA_BAND_START_X,
+    ARENA_FLOOR_Y, ARENA_HALF_SIZE, ARENA_HEIGHT, ARENA_ORIGIN_BASE_X, BOSS_HUD_MAX_DISTANCE,
+    BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE,
 };
 pub use tool::{ToolTier, ToolType};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};
