@@ -4633,6 +4633,10 @@ impl ApplicationHandler for BlockGameApp {
                                     state.world_manager.mp_boss_hud = hud;
                                 }
                                 blockgame_core::net::ServerPacket::TempleProtectionSync { zones } => {
+                                    for t in state.world_manager.temples.temples.values_mut() {
+                                        t.boss_defeated =
+                                            !zones.iter().any(|z| z.contains(t.arena_origin));
+                                    }
                                     state.world_manager.temples.synced_protected_zones = zones;
                                 }
                                 blockgame_core::net::ServerPacket::VoiceBroadcast {
