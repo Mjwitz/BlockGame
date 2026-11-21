@@ -32,6 +32,9 @@ fn mesh_chunk_from_world(
     registry: &BlockRegistry,
     chunk: &Chunk,
 ) -> ChunkMesh {
+    if chunk.is_all_air() {
+        return ChunkMesh::new();
+    }
     let mesher = ChunkMesher::new(registry);
     let origin = chunk.pos.to_world_origin();
     let sources = world.get_light_sources_near(origin, 15);
@@ -46,6 +49,70 @@ fn mesh_chunk_from_world(
                 .map(|c| c.get_unchecked(nlx, nly, nlz))
         }
     })
+}
+
+/// Meshes a batch of chunks in parallel across all Rayon worker threads without holding
+/// the `World` mutex during lighting or mesh construction.
+fn mesh_batch_parallel(
+    world_arc: &Arc<Mutex<World>>,
+    registry: &Arc<BlockRegistry>,
+    batch: &[(ChunkPos, u64)],
+    tx: &Sender<(ChunkPos, u64, ChunkMesh)>,
+) {
+    let mut jobs: Vec<(ChunkPos, u64, Vec<(IVec3, u8)>)> = Vec::with_capacity(batch.len());
+    let mut snapshot: HashMap<ChunkPos, Chunk> = HashMap::new();
+
+    {
+        let world = world_arc.lock().unwrap();
+        for &(pos, epoch) in batch {
+            let Some(center) = world.get_chunk(pos) else {
+                continue;
+            };
+            if center.is_all_air() {
+                let _ = tx.send((pos, epoch, ChunkMesh::new()));
+                continue;
+            }
+            let origin = pos.to_world_origin();
+            let sources = world.get_light_sources_near(origin, 15);
+            jobs.push((pos, epoch, sources));
+
+            // Snapshot deduplicated 3x3 neighbor columns (including sky-light columns above)
+            let min_y = (pos.0.y - 1).max(0);
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    for cy in min_y..VERTICAL_CHUNKS {
+                        let npos = ChunkPos::new(pos.0.x + dx, cy, pos.0.z + dz);
+                        if !snapshot.contains_key(&npos) {
+                            if let Some(c) = world.get_chunk(npos) {
+                                snapshot.insert(npos, c.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // World mutex is now dropped: mesh all non-empty chunks concurrently across all CPU cores!
+    jobs.into_par_iter().for_each(|(pos, epoch, sources)| {
+        let Some(chunk) = snapshot.get(&pos) else {
+            return;
+        };
+        let mesher = ChunkMesher::new(registry);
+        let origin = pos.to_world_origin();
+        let mesh = mesher.mesh_chunk_with_lighting_opt(chunk, &sources, |lx, ly, lz| {
+            let wp = origin + IVec3::new(lx, ly, lz);
+            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                Some(BlockId::AIR)
+            } else {
+                snapshot
+                    .get(&ncpos)
+                    .map(|c| c.get_unchecked(nlx, nly, nlz))
+            }
+        });
+        let _ = tx.send((pos, epoch, mesh));
+    });
 }
 
 /// Checks whether inserting `new_chunk` adjacent to `neighbor_chunk` (at `new_chunk.pos + dir`)
@@ -740,7 +807,7 @@ impl WorldManager {
         }
 
         // Upload closest non-empty meshes first within a per-frame GPU buffer budget
-        const MAX_GPU_UPLOADS_PER_FRAME: usize = 6;
+        const MAX_GPU_UPLOADS_PER_FRAME: usize = 16;
         if !self.pending_gpu_uploads.is_empty() {
             let mut ready_positions: Vec<ChunkPos> =
                 self.pending_gpu_uploads.keys().copied().collect();
@@ -761,15 +828,15 @@ impl WorldManager {
         }
 
         // 4. Scan render distance when player crosses a chunk boundary or there are pending/dirty chunks.
-        // Keep in-flight generation + meshing bounded so CPU thread pool is never overwhelmed.
-        const MAX_IN_FLIGHT: usize = 24;
+        // Scale in-flight generation + meshing with available CPU cores for snappy multithreaded streaming.
+        let max_in_flight = (rayon::current_num_threads() * 8).clamp(48, 128);
         let in_flight = self.queued_generation.len() + self.queued_meshing.len();
 
-        if (self.has_pending_chunks || !self.dirty_remesh.is_empty()) && in_flight < MAX_IN_FLIGHT {
+        if (self.has_pending_chunks || !self.dirty_remesh.is_empty()) && in_flight < max_in_flight {
             let (batch_gen, batch_mesh) =
-                self.collect_streaming_batch(current_chunk, MAX_IN_FLIGHT);
+                self.collect_streaming_batch(current_chunk, max_in_flight);
 
-            // 5. Dispatch terrain generation + meshing asynchronously
+            // 5. Dispatch terrain generation + parallel lock-free meshing asynchronously
             if !batch_gen.is_empty() {
                 let generator = self.generator.clone();
                 let world_arc = self.world.clone();
@@ -803,40 +870,18 @@ impl WorldManager {
                         let _ = gen_tx.send(affected_neighbors);
                     }
 
-                    // Mesh each chunk individually, releasing the world lock between chunks
-                    // so the main thread (physics, raycasting, input) is never blocked!
-                    for &(pos, epoch) in &batch_gen {
-                        let mesh_opt = {
-                            let world = world_arc.lock().unwrap();
-                            world
-                                .get_chunk(pos)
-                                .map(|chunk| mesh_chunk_from_world(&world, &registry, chunk))
-                        };
-                        if let Some(mesh) = mesh_opt {
-                            let _ = tx.send((pos, epoch, mesh));
-                        }
-                    }
+                    mesh_batch_parallel(&world_arc, &registry, &batch_gen, &tx);
                 });
             }
 
-            // 6. Dispatch meshing for already-generated chunks needing GPU buffers or neighbor remeshes
+            // 6. Dispatch parallel lock-free meshing for already-generated chunks needing GPU buffers or remeshes
             if !batch_mesh.is_empty() {
                 let world_arc = self.world.clone();
                 let registry = self.registry.clone();
                 let tx = self.mesh_tx.clone();
 
                 rayon::spawn(move || {
-                    for (pos, epoch) in batch_mesh {
-                        let mesh_opt = {
-                            let world = world_arc.lock().unwrap();
-                            world
-                                .get_chunk(pos)
-                                .map(|chunk| mesh_chunk_from_world(&world, &registry, chunk))
-                        };
-                        if let Some(mesh) = mesh_opt {
-                            let _ = tx.send((pos, epoch, mesh));
-                        }
-                    }
+                    mesh_batch_parallel(&world_arc, &registry, &batch_mesh, &tx);
                 });
             }
         }

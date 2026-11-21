@@ -42,6 +42,11 @@ impl Chunk {
         }
     }
 
+    #[inline]
+    pub fn is_all_air(&self) -> bool {
+        self.blocks.iter().all(|b| b.is_air())
+    }
+
     #[inline(always)]
     pub const fn index(x: usize, y: usize, z: usize) -> usize {
         x | (z << 4) | (y << 8)
