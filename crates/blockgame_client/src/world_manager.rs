@@ -1868,37 +1868,8 @@ impl WorldManager {
 
         self.temples.tick_cooldowns(dt);
 
-        // Suppress normal night-monster spawning inside instanced boss arenas,
-        // and guarantee that an undefeated arena always has its boss spawned (e.g. after save reload).
+        // Suppress normal night-monster spawning inside instanced boss arenas
         let in_arena_band = blockgame_core::temple::is_in_arena_band(player_pos);
-        if in_arena_band {
-            let p_voxel = IVec3::new(
-                player_pos.x.floor() as i32,
-                player_pos.y.floor() as i32,
-                player_pos.z.floor() as i32,
-            );
-            if let Some(tid) = self.temples.find_temple_by_arena_pos(p_voxel) {
-                let needs_boss = self.temples.temples.get(&tid).map_or(false, |t| !t.boss_defeated)
-                    && !self
-                        .monsters
-                        .iter()
-                        .any(|m| !m.dead && m.kind.is_boss() && m.temple_id == Some(tid));
-                if needs_boss {
-                    if let Some(state_snapshot) = self.temples.temples.get(&tid).cloned() {
-                        self.monsters.retain(|m| m.temple_id != Some(tid));
-                        let spawned = blockgame_core::temple::spawn_arena_encounter(
-                            &state_snapshot,
-                            &mut self.next_monster_id,
-                        );
-                        let boss_id = spawned.first().map(|m| m.id);
-                        self.monsters.extend(spawned);
-                        if let Some(t) = self.temples.temples.get_mut(&tid) {
-                            t.active_boss_id = boss_id;
-                        }
-                    }
-                }
-            }
-        }
         self.monster_spawn_timer -= dt;
         if !in_arena_band && self.monster_spawn_timer <= 0.0 {
             self.monster_spawn_timer = 2.5;
@@ -2028,6 +1999,37 @@ impl WorldManager {
                     boss_name,
                     tkind.name()
                 ));
+            }
+        }
+
+        // Only after processing boss deaths & marking defeated temples, ensure that
+        // an undefeated arena (e.g., loaded from disk) has its boss spawned.
+        if in_arena_band {
+            let p_voxel = IVec3::new(
+                player_pos.x.floor() as i32,
+                player_pos.y.floor() as i32,
+                player_pos.z.floor() as i32,
+            );
+            if let Some(tid) = self.temples.find_temple_by_arena_pos(p_voxel) {
+                let needs_boss = self.temples.temples.get(&tid).map_or(false, |t| !t.boss_defeated)
+                    && !self
+                        .monsters
+                        .iter()
+                        .any(|m| !m.dead && m.kind.is_boss() && m.temple_id == Some(tid));
+                if needs_boss {
+                    if let Some(state_snapshot) = self.temples.temples.get(&tid).cloned() {
+                        self.monsters.retain(|m| m.temple_id != Some(tid));
+                        let spawned = blockgame_core::temple::spawn_arena_encounter(
+                            &state_snapshot,
+                            &mut self.next_monster_id,
+                        );
+                        let boss_id = spawned.first().map(|m| m.id);
+                        self.monsters.extend(spawned);
+                        if let Some(t) = self.temples.temples.get_mut(&tid) {
+                            t.active_boss_id = boss_id;
+                        }
+                    }
+                }
             }
         }
 

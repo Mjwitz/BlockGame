@@ -12,8 +12,9 @@ use crate::{
 
 /// Coordinates with `x >= ARENA_BAND_START_X` are reserved for instanced boss arenas.
 /// Overworld terrain generation and normal night-monster spawning are suppressed here.
-pub const ARENA_BAND_START_X: i32 = 150_000;
-pub const ARENA_ORIGIN_BASE_X: i32 = 200_000;
+/// Kept within ~24k..27k so 32-bit float view-projection math stays jitter-free.
+pub const ARENA_BAND_START_X: i32 = 20_000;
+pub const ARENA_ORIGIN_BASE_X: i32 = 24_000;
 pub const ARENA_FLOOR_Y: i32 = 32;
 pub const ARENA_HALF_SIZE: i32 = 18;
 pub const ARENA_HEIGHT: i32 = 18;
@@ -390,10 +391,11 @@ pub fn temple_id_from_grid(seed: u32, gx: i32, gz: i32) -> u64 {
     if h == 0 { 1 } else { h }
 }
 
-/// Deterministic arena origin inside the reserved `X >= 200_000` coordinate band.
+/// Deterministic arena origin inside the reserved `X >= 24_000` coordinate band.
+/// Uses 32x32 slots spaced 96 blocks apart (each arena is 37x37) to stay well within crisp f32 precision.
 pub fn arena_origin_for_temple(temple_id: u64, kind: TempleKind) -> IVec3 {
-    let slot_x = ((temple_id & 0x3FF) as i32) * 256;
-    let slot_z = ((((temple_id >> 10) & 0x3FF) as i32) - 512) * 256 + (kind.to_u8() as i32) * 64;
+    let slot_x = ((temple_id & 0x1F) as i32) * 96;
+    let slot_z = ((((temple_id >> 5) & 0x1F) as i32) - 16) * 96 + (kind.to_u8() as i32) * 16;
     IVec3::new(ARENA_ORIGIN_BASE_X + slot_x, ARENA_FLOOR_Y, slot_z)
 }
 
