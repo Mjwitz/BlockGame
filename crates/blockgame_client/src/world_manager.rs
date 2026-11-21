@@ -1866,8 +1866,37 @@ impl WorldManager {
 
         self.temples.tick_cooldowns(dt);
 
-        // Suppress normal night-monster spawning inside instanced boss arenas
+        // Suppress normal night-monster spawning inside instanced boss arenas,
+        // and guarantee that an undefeated arena always has its boss spawned (e.g. after save reload).
         let in_arena_band = blockgame_core::temple::is_in_arena_band(player_pos);
+        if in_arena_band {
+            let p_voxel = IVec3::new(
+                player_pos.x.floor() as i32,
+                player_pos.y.floor() as i32,
+                player_pos.z.floor() as i32,
+            );
+            if let Some(tid) = self.temples.find_temple_by_arena_pos(p_voxel) {
+                let needs_boss = self.temples.temples.get(&tid).map_or(false, |t| !t.boss_defeated)
+                    && !self
+                        .monsters
+                        .iter()
+                        .any(|m| !m.dead && m.kind.is_boss() && m.temple_id == Some(tid));
+                if needs_boss {
+                    if let Some(state_snapshot) = self.temples.temples.get(&tid).cloned() {
+                        self.monsters.retain(|m| m.temple_id != Some(tid));
+                        let spawned = blockgame_core::temple::spawn_arena_encounter(
+                            &state_snapshot,
+                            &mut self.next_monster_id,
+                        );
+                        let boss_id = spawned.first().map(|m| m.id);
+                        self.monsters.extend(spawned);
+                        if let Some(t) = self.temples.temples.get_mut(&tid) {
+                            t.active_boss_id = boss_id;
+                        }
+                    }
+                }
+            }
+        }
         self.monster_spawn_timer -= dt;
         if !in_arena_band && self.monster_spawn_timer <= 0.0 {
             self.monster_spawn_timer = 2.5;
@@ -1988,8 +2017,12 @@ impl WorldManager {
 
         for (tid, boss_name) in defeated_temples {
             if let Some(tkind) = self.temples.mark_boss_defeated(tid) {
+                if let Some(state_snapshot) = self.temples.temples.get(&tid).cloned() {
+                    let mut w = self.world.lock().unwrap();
+                    blockgame_core::temple::populate_arena_treasure_chest(&mut w, &state_snapshot);
+                }
                 self.pending_temple_messages.push(format!(
-                    "&6Victory! {} has been defeated! {} is now unlocked!",
+                    "&6Victory! {} has been defeated! {} and its treasure chest are now unlocked!",
                     boss_name,
                     tkind.name()
                 ));
@@ -1997,6 +2030,31 @@ impl WorldManager {
         }
 
         (total_damage, drops)
+    }
+
+    /// Returns `true` if opening a chest at `pos` is forbidden because the temple's boss is still alive.
+    pub fn is_chest_locked(&self, pos: IVec3) -> bool {
+        if self.temples.is_chest_locked(pos) {
+            return true;
+        }
+        let (cpos, _, _, _) = blockgame_core::world_to_chunk_coords(pos);
+        for placement in self.generator.find_temples_for_chunk(cpos) {
+            let defeated = self
+                .temples
+                .temples
+                .get(&placement.temple_id)
+                .map_or(false, |t| t.boss_defeated);
+            if !defeated {
+                let bounds = blockgame_core::temple::TempleBounds {
+                    min: placement.origin + IVec3::new(-12, -2, -12),
+                    max: placement.origin + IVec3::new(12, 16, 12),
+                };
+                if bounds.contains(pos) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Returns `true` if breaking or placing at `pos` is forbidden due to boss temple/arena protection.
@@ -2065,10 +2123,17 @@ impl WorldManager {
                 entry.clone()
             };
 
-            if !state_snapshot.arena_built {
+            let floor_missing = {
+                let w = self.world.lock().unwrap();
+                w.get_block(state_snapshot.arena_origin) == BlockId::AIR
+            };
+            if !state_snapshot.arena_built || floor_missing {
                 {
                     let mut w = self.world.lock().unwrap();
                     blockgame_core::temple::build_arena_into_world(&mut w, &state_snapshot);
+                    if state_snapshot.boss_defeated {
+                        blockgame_core::temple::populate_arena_treasure_chest(&mut w, &state_snapshot);
+                    }
                 }
                 let min_c = blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
                 let max_c = blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
@@ -2081,6 +2146,19 @@ impl WorldManager {
                         }
                     }
                 }
+                self.has_pending_chunks = true;
+                if let Some(t) = self.temples.temples.get_mut(&placement.temple_id) {
+                    t.arena_built = true;
+                }
+            }
+
+            // Always ensure the boss & guardians are present if this temple is not yet defeated
+            let has_live_boss = self.monsters.iter().any(|m| {
+                !m.dead && m.kind.is_boss() && m.temple_id == Some(placement.temple_id)
+            });
+            if !state_snapshot.boss_defeated && !has_live_boss {
+                self.monsters
+                    .retain(|m| m.temple_id != Some(placement.temple_id));
                 let spawned = blockgame_core::temple::spawn_arena_encounter(
                     &state_snapshot,
                     &mut self.next_monster_id,
@@ -2088,7 +2166,6 @@ impl WorldManager {
                 let boss_id = spawned.first().map(|m| m.id);
                 self.monsters.extend(spawned);
                 if let Some(t) = self.temples.temples.get_mut(&placement.temple_id) {
-                    t.arena_built = true;
                     t.active_boss_id = boss_id;
                 }
             }

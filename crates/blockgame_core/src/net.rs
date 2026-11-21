@@ -1817,6 +1817,7 @@ fn run_server_loop(
     save_data.apply_to_world(&mut world);
     let mut temple_monsters: Vec<crate::monster::MonsterEntity> = Vec::new();
     let mut temple_arrows: Vec<crate::monster::ArrowProjectile> = Vec::new();
+    let mut had_temple_monsters = false;
     let mut next_temple_monster_id: u32 = 100_000;
     let mut next_temple_arrow_id: u32 = 100_000;
     let mut next_temple_drop_id: u64 = 900_000;
@@ -2336,9 +2337,17 @@ fn run_server_loop(
                                     );
                                     entry.clone()
                                 };
-                                let needs_build = !state_snapshot.arena_built;
+                                let floor_missing =
+                                    world.get_block(state_snapshot.arena_origin) == BlockId::AIR;
+                                let needs_build = !state_snapshot.arena_built || floor_missing;
                                 if needs_build {
                                     crate::temple::build_arena_into_world(&mut world, &state_snapshot);
+                                    if state_snapshot.boss_defeated {
+                                        crate::temple::populate_arena_treasure_chest(
+                                            &mut world,
+                                            &state_snapshot,
+                                        );
+                                    }
                                     let min_c = world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
                                     let max_c = world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
                                     let mut arena_chunks = Vec::new();
@@ -2369,6 +2378,15 @@ fn run_server_loop(
                                             item_drops: Vec::new(),
                                         },
                                     ));
+                                    if let Some(t) = save_data.temples.temples.get_mut(&temple_id) {
+                                        t.arena_built = true;
+                                    }
+                                }
+                                let has_live_boss = temple_monsters.iter().any(|m| {
+                                    !m.dead && m.kind.is_boss() && m.temple_id == Some(temple_id)
+                                });
+                                if !state_snapshot.boss_defeated && !has_live_boss {
+                                    temple_monsters.retain(|m| m.temple_id != Some(temple_id));
                                     let spawned = crate::temple::spawn_arena_encounter(
                                         &state_snapshot,
                                         &mut next_temple_monster_id,
@@ -2376,7 +2394,6 @@ fn run_server_loop(
                                     let boss_id = spawned.first().map(|m| m.id);
                                     temple_monsters.extend(spawned);
                                     if let Some(t) = save_data.temples.temples.get_mut(&temple_id) {
-                                        t.arena_built = true;
                                         t.active_boss_id = boss_id;
                                     }
                                 }
@@ -2387,7 +2404,7 @@ fn run_server_loop(
                                     pid,
                                     ServerPacket::TeleportPlayer {
                                         position: entry_pos,
-                                        yaw: 0.0,
+                                        yaw: std::f32::consts::FRAC_PI_2,
                                         pitch: 0.0,
                                     },
                                 ));
@@ -2545,6 +2562,33 @@ fn run_server_loop(
                                 if m.kind.is_boss() {
                                     if let Some(tid) = m.temple_id {
                                         if let Some(tkind) = save_data.temples.mark_boss_defeated(tid) {
+                                            if let Some(state_snapshot) =
+                                                save_data.temples.temples.get(&tid).cloned()
+                                            {
+                                                crate::temple::populate_arena_treasure_chest(
+                                                    &mut world,
+                                                    &state_snapshot,
+                                                );
+                                                let chest_pos = state_snapshot.treasure_chest_pos();
+                                                if let Some(slots) =
+                                                    world.chest_containers.get(&chest_pos).cloned()
+                                                {
+                                                    save_data
+                                                        .chest_containers
+                                                        .insert(chest_pos, slots.clone());
+                                                    outgoing_broadcasts.push((
+                                                        None,
+                                                        ServerPacket::ContainerSync {
+                                                            pos: chest_pos,
+                                                            is_furnace: false,
+                                                            slots,
+                                                            burn_time: 0.0,
+                                                            max_burn_time: 0.0,
+                                                            cook_progress: 0.0,
+                                                        },
+                                                    ));
+                                                }
+                                            }
                                             outgoing_broadcasts.push((
                                                 None,
                                                 ServerPacket::TempleProtectionSync {
@@ -2557,7 +2601,7 @@ fn run_server_loop(
                                                     sender: String::new(),
                                                     prefix: String::new(),
                                                     message: format!(
-                                                        "&6Victory! {} has been defeated! {} is now unlocked!",
+                                                        "&6Victory! {} has been defeated! {} and its treasure chest are now unlocked!",
                                                         m.kind.name(),
                                                         tkind.name()
                                                     ),
@@ -2579,6 +2623,9 @@ fn run_server_loop(
                         max_burn_time,
                         cook_progress,
                     } if clients[idx].authenticated => {
+                        if !is_furnace && save_data.temples.is_chest_locked(pos) {
+                            continue;
+                        }
                         if is_furnace {
                             let f = world.get_or_create_furnace(pos);
                             if slots.len() >= 3 {
@@ -3029,7 +3076,8 @@ fn run_server_loop(
 
             // Tick temple re-challenge cooldowns and active server-authoritative boss encounters
             save_data.temples.tick_cooldowns(dt);
-            if !temple_monsters.is_empty() && !all_players.is_empty() {
+            if (!temple_monsters.is_empty() || had_temple_monsters) && !all_players.is_empty() {
+                had_temple_monsters = !temple_monsters.is_empty();
                 let mut newly_summoned = Vec::new();
                 let mut tick_damage_events: Vec<(u32, f32)> = Vec::new();
                 let mut tick_announcements: Vec<String> = Vec::new();

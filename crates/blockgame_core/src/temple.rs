@@ -330,6 +330,23 @@ impl TempleManager {
         false
     }
 
+    /// Returns `true` if opening or looting a chest at `pos` is forbidden because the temple's boss is still alive.
+    pub fn is_chest_locked(&self, pos: IVec3) -> bool {
+        for zone in &self.synced_protected_zones {
+            if zone.contains(pos) {
+                return true;
+            }
+        }
+        for temple in self.temples.values() {
+            if !temple.boss_defeated
+                && (temple.arena_bounds.contains(pos) || temple.overworld_bounds.contains(pos))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Returns all currently active protected bounding zones (for syncing to MP clients).
     pub fn active_protected_zones(&self) -> Vec<TempleBounds> {
         let mut zones = Vec::new();
@@ -515,15 +532,13 @@ pub fn build_arena_into_world(world: &mut World, state: &TempleInstanceState) {
     set_arena_block(world, rp, BlockId::ARENA_RETURN_PORTAL);
     set_arena_block(world, rp + IVec3::new(0, 1, 0), BlockId::ARENA_RETURN_PORTAL);
 
-    // Boss Treasure Chest on a pedestal at the far end of the arena
+    // Boss Treasure Chest on a pedestal at the far end of the arena (stays empty & sealed until boss is defeated)
     let chest_pos = state.treasure_chest_pos();
     set_arena_block(world, chest_pos + IVec3::new(0, -1, 0), accent);
     set_arena_block(world, chest_pos, BlockId::DIAMOND_CHEST);
     let slots = world.get_or_create_chest(chest_pos);
-    for (idx, item) in state.kind.treasure_loot().into_iter().enumerate() {
-        if idx < slots.len() {
-            slots[idx] = item;
-        }
+    for slot in slots.iter_mut() {
+        *slot = ItemSlot::EMPTY;
     }
 
     // Mark all arena chunks dirty so meshes rebuild immediately
@@ -532,6 +547,23 @@ pub fn build_arena_into_world(world: &mut World, state: &TempleInstanceState) {
             for cz in min_c.0.z..=max_c.0.z {
                 world.dirty_chunks.insert(ChunkPos::new(cx, cy, cz));
             }
+        }
+    }
+}
+
+/// Populates the arena's Boss Treasure Chest with biome-themed loot once the boss is defeated.
+pub fn populate_arena_treasure_chest(world: &mut World, state: &TempleInstanceState) {
+    let chest_pos = state.treasure_chest_pos();
+    if world.get_block(chest_pos) != BlockId::DIAMOND_CHEST {
+        set_arena_block(world, chest_pos, BlockId::DIAMOND_CHEST);
+    }
+    let slots = world.get_or_create_chest(chest_pos);
+    for slot in slots.iter_mut() {
+        *slot = ItemSlot::EMPTY;
+    }
+    for (idx, item) in state.kind.treasure_loot().into_iter().enumerate() {
+        if idx < slots.len() {
+            slots[idx] = item;
         }
     }
 }
@@ -694,5 +726,49 @@ mod tests {
             assert!(drops.iter().any(|s| s.item_id == expected_armor));
             assert!(drops.iter().any(|s| s.item_id == expected_core));
         }
+    }
+
+    #[test]
+    fn test_glacier_frost_titan_spawn_and_chest_lock() {
+        let mut world = World::new();
+        let reg = crate::block::BlockRegistry::new();
+        let mut mgr = TempleManager::new();
+        let tid = temple_id_from_grid(99, 1, 1);
+        let state = mgr
+            .register_temple(tid, TempleKind::Glacier, IVec3::new(320, 50, 320), IVec3::new(320, 51, 323))
+            .clone();
+
+        build_arena_into_world(&mut world, &state);
+        let chest_pos = state.treasure_chest_pos();
+
+        // Before boss defeat: chest is locked and empty
+        assert!(mgr.is_chest_locked(chest_pos));
+        let slots = world.chest_containers.get(&chest_pos).unwrap();
+        assert!(slots.iter().all(|s| s.is_empty()));
+
+        // Spawn Frost Titan + 2 Frost Wraiths and simulate 120 ticks
+        let mut next_id = 1;
+        let mut mobs = spawn_arena_encounter(&state, &mut next_id);
+        assert_eq!(mobs.len(), 3);
+        assert_eq!(mobs[0].kind, MonsterKind::FrostTitan);
+        let player_pos = state.arena_entry_spawn();
+
+        for _ in 0..120 {
+            for m in mobs.iter_mut() {
+                m.update(0.05, player_pos, 0.0, &world, &reg);
+            }
+        }
+        assert!(!mobs[0].dead, "Frost Titan should remain alive in Glacier arena");
+        assert!(mobs[0].position.y >= 32.5 && mobs[0].position.y <= 50.0);
+        let hud = compute_boss_hud(&mobs, player_pos);
+        assert!(hud.is_some());
+        assert_eq!(hud.unwrap().name, "Frost Titan");
+
+        // After boss defeat: chest unlocks and receives biome treasure loot
+        mgr.mark_boss_defeated(tid);
+        populate_arena_treasure_chest(&mut world, &state);
+        assert!(!mgr.is_chest_locked(chest_pos));
+        let unlocked_slots = world.chest_containers.get(&chest_pos).unwrap();
+        assert!(unlocked_slots.iter().any(|s| !s.is_empty()));
     }
 }
