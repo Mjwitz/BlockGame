@@ -1862,6 +1862,7 @@ impl WorldManager {
         dt: f32,
         player_pos: Vec3,
         sun_intensity: f32,
+        is_multiplayer: bool,
     ) -> (f32, Vec<(Vec3, Vec<ItemSlot>)>) {
         let mut total_damage = 0.0;
         let mut drops = Vec::new();
@@ -2003,8 +2004,9 @@ impl WorldManager {
         }
 
         // Only after processing boss deaths & marking defeated temples, ensure that
-        // an undefeated arena (e.g., loaded from disk) has its boss spawned.
-        if in_arena_band {
+        // an undefeated arena (e.g., loaded from disk) has its boss spawned in singleplayer.
+        // In multiplayer, arena bosses are server-authoritative via `mp_temple_monsters`.
+        if !is_multiplayer && in_arena_band {
             let p_voxel = IVec3::new(
                 player_pos.x.floor() as i32,
                 player_pos.y.floor() as i32,
@@ -2252,6 +2254,7 @@ impl WorldManager {
 
     /// Updates the synced multiplayer temple monster list from `ServerPacket::TempleMonstersSync`.
     pub fn apply_mp_temple_monsters(&mut self, synced: &[blockgame_core::SyncedMonsterState]) {
+        self.monsters.retain(|m| !m.kind.is_temple_mob());
         self.mp_temple_monsters = synced
             .iter()
             .map(|s| {

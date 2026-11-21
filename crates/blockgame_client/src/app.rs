@@ -5047,6 +5047,7 @@ impl ApplicationHandler for BlockGameApp {
                         dt,
                         state.player.position,
                         state.day_night.sun_intensity(),
+                        state.mp_client.is_some(),
                     );
                     for msg in state.world_manager.pending_temple_messages.drain(..) {
                         state.local_chat_messages.push(blockgame_core::net::ChatEntry {
