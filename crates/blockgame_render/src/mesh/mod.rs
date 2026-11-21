@@ -111,6 +111,7 @@ impl<'a> ChunkMesher<'a> {
         F: Fn(i32, i32, i32) -> Option<BlockId>,
     {
         let mut mesh = ChunkMesh::new();
+        let mut ice_mesh = ChunkMesh::new();
 
         let query_block_opt = |x: i32, y: i32, z: i32| -> Option<BlockId> {
             if x >= 0
@@ -410,7 +411,7 @@ impl<'a> ChunkMesher<'a> {
                                 };
 
                                 self.build_water_face(
-                                    &mut mesh,
+                                    &mut ice_mesh,
                                     chunk.pos,
                                     ix,
                                     iy,
@@ -473,6 +474,15 @@ impl<'a> ChunkMesher<'a> {
                     }
                 }
             }
+        }
+
+        // Append Ice translucent faces strictly after all Water faces so Ice always blends
+        // on top of Water within the same chunk instead of Water washing out Ice.
+        if !ice_mesh.water_vertices.is_empty() {
+            let base = mesh.water_vertices.len() as u32;
+            mesh.water_vertices.extend_from_slice(&ice_mesh.water_vertices);
+            mesh.water_indices
+                .extend(ice_mesh.water_indices.iter().map(|&idx| idx + base));
         }
 
         mesh

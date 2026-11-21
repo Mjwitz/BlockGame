@@ -922,29 +922,47 @@ impl WorldManager {
         self.render_with_frustum(render_pass, None);
     }
 
-    /// Renders loaded GPU water chunk meshes with optional camera view frustum culling.
+    /// Renders loaded GPU water/ice translucent chunk meshes with optional camera frustum culling
+    /// and back-to-front sorting so closer ice always blends cleanly over farther water.
     pub fn render_water_with_frustum<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
         frustum: Option<&blockgame_render::Frustum>,
+        camera_pos: Option<Vec3>,
     ) {
+        let mut visible: Vec<(f32, &'a GpuMeshBuffers)> = Vec::new();
         for (&pos, gpu_mesh) in &self.gpu_water_chunks {
             if gpu_mesh.index_count == 0 {
                 continue;
             }
 
+            let min = Vec3::new(
+                pos.0.x as f32 * 16.0,
+                pos.0.y as f32 * 16.0,
+                pos.0.z as f32 * 16.0,
+            );
+            let max = min + Vec3::splat(16.0);
             if let Some(f) = frustum {
-                let min = Vec3::new(
-                    pos.0.x as f32 * 16.0,
-                    pos.0.y as f32 * 16.0,
-                    pos.0.z as f32 * 16.0,
-                );
-                let max = min + Vec3::splat(16.0);
                 if !f.is_box_visible(min, max) {
                     continue;
                 }
             }
 
+            let dist_sq = if let Some(cam) = camera_pos {
+                let center = min + Vec3::splat(8.0);
+                center.distance_squared(cam)
+            } else {
+                0.0
+            };
+            visible.push((dist_sq, gpu_mesh));
+        }
+
+        if camera_pos.is_some() {
+            // Back-to-front (farthest chunk first) for correct translucent alpha blending
+            visible.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        for (_, gpu_mesh) in visible {
             render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
             render_pass
                 .set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -954,7 +972,7 @@ impl WorldManager {
 
     /// Renders all currently loaded GPU water chunk meshes without frustum culling.
     pub fn render_water<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
-        self.render_water_with_frustum(render_pass, None);
+        self.render_water_with_frustum(render_pass, None, None);
     }
 
     pub fn world(&self) -> &Arc<Mutex<World>> {

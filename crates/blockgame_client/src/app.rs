@@ -7148,7 +7148,11 @@ impl ApplicationHandler for BlockGameApp {
                     render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
                     state
                         .world_manager
-                        .render_water_with_frustum(&mut render_pass, Some(&frustum));
+                        .render_water_with_frustum(
+                            &mut render_pass,
+                            Some(&frustum),
+                            Some(state.camera.position),
+                        );
                 }
 
                 // 2D UI Overlay Pass (Draws HUD or Inventory over 3D world)
