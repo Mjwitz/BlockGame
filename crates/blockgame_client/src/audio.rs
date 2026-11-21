@@ -1607,15 +1607,15 @@ impl AudioManager {
                 let amb_path = assets_dir.join(&amb_name);
                 let amb_buffer = if has_assets && amb_path.exists() {
                     Self::load_audio_file(&amb_path).unwrap_or_else(|| match kind {
-                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_ambient(variant),
                         blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_ambient(variant),
                         blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_ambient(variant),
+                        _ => sound_generator::generate_zombie_ambient(variant),
                     })
                 } else {
                     match kind {
-                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_ambient(variant),
                         blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_ambient(variant),
                         blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_ambient(variant),
+                        _ => sound_generator::generate_zombie_ambient(variant),
                     }
                 };
                 self.monster_ambient.insert((kind, variant), Arc::new(amb_buffer));
@@ -1624,15 +1624,15 @@ impl AudioManager {
                 let hurt_path = assets_dir.join(&hurt_name);
                 let hurt_buffer = if has_assets && hurt_path.exists() {
                     Self::load_audio_file(&hurt_path).unwrap_or_else(|| match kind {
-                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_hurt(variant),
                         blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_hurt(variant),
                         blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_hurt(variant),
+                        _ => sound_generator::generate_zombie_hurt(variant),
                     })
                 } else {
                     match kind {
-                        blockgame_core::monster::MonsterKind::Zombie => sound_generator::generate_zombie_hurt(variant),
                         blockgame_core::monster::MonsterKind::Skeleton => sound_generator::generate_skeleton_hurt(variant),
                         blockgame_core::monster::MonsterKind::Spider => sound_generator::generate_spider_hurt(variant),
+                        _ => sound_generator::generate_zombie_hurt(variant),
                     }
                 };
                 self.monster_hurt.insert((kind, variant), Arc::new(hurt_buffer));
@@ -2031,12 +2031,30 @@ impl AudioManager {
         listener_pos: Vec3,
         listener_yaw: f32,
     ) {
+        use blockgame_core::monster::MonsterKind;
         let variant = (self.random_f32() * 2.0).floor() as usize % 2;
-        if let Some(samples) = self.monster_hurt.get(&(kind, variant)).cloned() {
-            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 28.0);
+        let sound_kind = match kind {
+            MonsterKind::Zombie
+            | MonsterKind::SandMummy
+            | MonsterKind::OvergrownGolem
+            | MonsterKind::FrostTitan => MonsterKind::Zombie,
+            MonsterKind::Skeleton
+            | MonsterKind::SunArcher
+            | MonsterKind::FrostWraith
+            | MonsterKind::ShadowKnight
+            | MonsterKind::SunPharaoh
+            | MonsterKind::ShadowLich => MonsterKind::Skeleton,
+            MonsterKind::Spider | MonsterKind::JungleStalker => MonsterKind::Spider,
+        };
+        if let Some(samples) = self.monster_hurt.get(&(sound_kind, variant)).cloned() {
+            let (atten, pan) = calculate_spatial_audio(pos, listener_pos, listener_yaw, 36.0);
             if atten > 0.001 {
-                let pitch = 0.95 + 0.15 * self.random_f32();
-                let base_vol = atten * 1.0;
+                let pitch = if kind.is_boss() {
+                    0.62 + 0.10 * self.random_f32()
+                } else {
+                    0.95 + 0.15 * self.random_f32()
+                };
+                let base_vol = atten * if kind.is_boss() { 1.2 } else { 1.0 };
                 let vol_l = ((1.0 - pan) * 0.5) * base_vol;
                 let vol_r = ((1.0 + pan) * 0.5) * base_vol;
 

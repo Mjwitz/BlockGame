@@ -13,22 +13,121 @@ pub enum MonsterKind {
     Zombie,
     Skeleton,
     Spider,
+    // Temple guardian minions (Issue #9)
+    SandMummy,
+    SunArcher,
+    FrostWraith,
+    JungleStalker,
+    ShadowKnight,
+    // Biome Bosses (Issue #9)
+    SunPharaoh,
+    FrostTitan,
+    OvergrownGolem,
+    ShadowLich,
 }
 
 impl MonsterKind {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Zombie => 0,
+            Self::Skeleton => 1,
+            Self::Spider => 2,
+            Self::SandMummy => 3,
+            Self::SunArcher => 4,
+            Self::FrostWraith => 5,
+            Self::JungleStalker => 6,
+            Self::ShadowKnight => 7,
+            Self::SunPharaoh => 8,
+            Self::FrostTitan => 9,
+            Self::OvergrownGolem => 10,
+            Self::ShadowLich => 11,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Zombie),
+            1 => Some(Self::Skeleton),
+            2 => Some(Self::Spider),
+            3 => Some(Self::SandMummy),
+            4 => Some(Self::SunArcher),
+            5 => Some(Self::FrostWraith),
+            6 => Some(Self::JungleStalker),
+            7 => Some(Self::ShadowKnight),
+            8 => Some(Self::SunPharaoh),
+            9 => Some(Self::FrostTitan),
+            10 => Some(Self::OvergrownGolem),
+            11 => Some(Self::ShadowLich),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn is_boss(self) -> bool {
+        matches!(
+            self,
+            Self::SunPharaoh | Self::FrostTitan | Self::OvergrownGolem | Self::ShadowLich
+        )
+    }
+
+    #[inline]
+    pub fn is_temple_minion(self) -> bool {
+        matches!(
+            self,
+            Self::SandMummy
+                | Self::SunArcher
+                | Self::FrostWraith
+                | Self::JungleStalker
+                | Self::ShadowKnight
+        )
+    }
+
+    #[inline]
+    pub fn is_temple_mob(self) -> bool {
+        self.is_boss() || self.is_temple_minion()
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::Zombie => "Zombie",
             Self::Skeleton => "Skeleton",
             Self::Spider => "Spider",
+            Self::SandMummy => "Sand Mummy",
+            Self::SunArcher => "Sun Archer",
+            Self::FrostWraith => "Frost Wraith",
+            Self::JungleStalker => "Jungle Stalker",
+            Self::ShadowKnight => "Shadow Knight",
+            Self::SunPharaoh => "Sun Pharaoh",
+            Self::FrostTitan => "Frost Titan",
+            Self::OvergrownGolem => "Overgrown Golem",
+            Self::ShadowLich => "Shadow Lich",
+        }
+    }
+
+    /// Accent RGBA color for the boss HUD health bar.
+    pub fn boss_theme_color(&self) -> [f32; 4] {
+        match self {
+            Self::SunPharaoh => [0.96, 0.72, 0.16, 1.0],     // Radiant solar gold
+            Self::FrostTitan => [0.24, 0.78, 0.98, 1.0],     // Glacial cyan
+            Self::OvergrownGolem => [0.26, 0.80, 0.36, 1.0], // Vibrant jungle emerald
+            Self::ShadowLich => [0.68, 0.28, 0.94, 1.0],     // Cursed shadow violet
+            _ => [0.85, 0.22, 0.22, 1.0],
         }
     }
 
     pub fn dimensions(&self) -> (f32, f32) {
         match self {
-            Self::Zombie => (0.35, 1.95),
-            Self::Skeleton => (0.35, 1.95),
+            Self::Zombie | Self::Skeleton => (0.35, 1.95),
             Self::Spider => (0.65, 0.90),
+            Self::SandMummy => (0.40, 2.05),
+            Self::SunArcher => (0.36, 1.95),
+            Self::FrostWraith => (0.38, 2.00),
+            Self::JungleStalker => (0.70, 1.05),
+            Self::ShadowKnight => (0.42, 2.10),
+            Self::SunPharaoh => (0.60, 2.90),
+            Self::FrostTitan => (0.80, 3.40),
+            Self::OvergrownGolem => (0.85, 3.20),
+            Self::ShadowLich => (0.55, 2.80),
         }
     }
 
@@ -37,6 +136,15 @@ impl MonsterKind {
             Self::Zombie => 20.0,
             Self::Skeleton => 20.0,
             Self::Spider => 16.0,
+            Self::SandMummy => 45.0,
+            Self::SunArcher => 38.0,
+            Self::FrostWraith => 42.0,
+            Self::JungleStalker => 40.0,
+            Self::ShadowKnight => 55.0,
+            Self::SunPharaoh => 300.0,
+            Self::FrostTitan => 380.0,
+            Self::OvergrownGolem => 350.0,
+            Self::ShadowLich => 320.0,
         }
     }
 
@@ -45,6 +153,15 @@ impl MonsterKind {
             Self::Zombie => 2.3,
             Self::Skeleton => 2.5,
             Self::Spider => 3.2,
+            Self::SandMummy => 2.6,
+            Self::SunArcher => 2.7,
+            Self::FrostWraith => 3.1,
+            Self::JungleStalker => 3.6,
+            Self::ShadowKnight => 2.8,
+            Self::SunPharaoh => 3.2,
+            Self::FrostTitan => 2.8,
+            Self::OvergrownGolem => 2.6,
+            Self::ShadowLich => 3.4,
         }
     }
 
@@ -53,6 +170,15 @@ impl MonsterKind {
             Self::Zombie => 3.0,
             Self::Skeleton => 3.0,
             Self::Spider => 2.0,
+            Self::SandMummy => 5.0,
+            Self::SunArcher => 4.5,
+            Self::FrostWraith => 5.0,
+            Self::JungleStalker => 4.5,
+            Self::ShadowKnight => 6.0,
+            Self::SunPharaoh => 8.0,
+            Self::FrostTitan => 10.0,
+            Self::OvergrownGolem => 9.5,
+            Self::ShadowLich => 8.5,
         }
     }
 
@@ -140,6 +266,14 @@ impl ArrowProjectile {
 pub struct MonsterTickOutcome {
     pub damage_to_player: f32,
     pub spawned_arrow: Option<(Vec3, Vec3)>,
+    /// Additional projectiles with explicit `(origin, velocity, damage)` (used by bosses/temple archers).
+    pub extra_arrows: Vec<(Vec3, Vec3, f32)>,
+    /// Radial AoE blast `(center, radius, damage)` triggered by boss special attacks.
+    pub aoe_blast: Option<(Vec3, f32, f32)>,
+    /// Minions summoned by a boss during Phase 2/3.
+    pub summon_minions: Vec<(MonsterKind, Vec3)>,
+    /// Set to `Some(new_phase)` on the tick a boss transitions to Phase 2 or 3.
+    pub phase_changed: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +295,12 @@ pub struct MonsterEntity {
     pub burning_timer: f32,
     pub aggro_in_day: bool,
     pub rng_state: u64,
+    // Boss & temple encounter state (Issue #9)
+    pub in_combat: bool,
+    pub phase: u8,
+    pub special_cooldown: f32,
+    pub summon_cooldown: f32,
+    pub temple_id: Option<u64>,
 }
 
 impl MonsterEntity {
@@ -188,9 +328,21 @@ impl MonsterEntity {
             on_ground: false,
             dead: false,
             burning_timer: 0.0,
-            aggro_in_day: false,
+            aggro_in_day: kind.is_temple_mob(),
             rng_state: seed,
+            in_combat: false,
+            phase: 1,
+            special_cooldown: 4.0,
+            summon_cooldown: 8.0,
+            temple_id: None,
         }
+    }
+
+    pub fn new_temple_mob(id: u32, kind: MonsterKind, position: Vec3, temple_id: u64) -> Self {
+        let mut m = Self::new(id, kind, position);
+        m.temple_id = Some(temple_id);
+        m.aggro_in_day = true;
+        m
     }
 
     #[inline]
@@ -216,16 +368,20 @@ impl MonsterEntity {
         self.health = (self.health - amount).max(0.0);
         self.hurt_timer = 0.35;
         self.aggro_in_day = true;
+        self.in_combat = true;
 
+        // Bosses have heavy knockback resistance so they cannot be trivially stunlocked.
+        let kb_scale = if self.kind.is_boss() { 0.35 } else { 1.0 };
         let horiz_dir = Vec3::new(knockback_dir.x, 0.0, knockback_dir.z).normalize_or_zero();
         if horiz_dir.length_squared() > 0.01 {
-            self.velocity = horiz_dir * 4.5 + Vec3::new(0.0, 3.2, 0.0);
+            self.velocity = horiz_dir * (4.5 * kb_scale) + Vec3::new(0.0, 3.2 * kb_scale, 0.0);
         } else {
-            self.velocity.y = self.velocity.y.max(3.0);
+            self.velocity.y = self.velocity.y.max(3.0 * kb_scale);
         }
 
         if self.health <= 0.0 {
             self.dead = true;
+            self.in_combat = false;
         }
     }
 
@@ -246,6 +402,52 @@ impl MonsterEntity {
             MonsterKind::Spider => {
                 drops.push(ItemSlot::new(ItemId::STRING, roll1));
             }
+            // Temple minions drop useful combat/crafting resources
+            MonsterKind::SandMummy => {
+                drops.push(ItemSlot::new(ItemId::GOLD_INGOT, 1 + roll2));
+                drops.push(ItemSlot::new(ItemId::BONE, roll1));
+            }
+            MonsterKind::SunArcher => {
+                drops.push(ItemSlot::new(ItemId::ARROW, 4 + roll1 * 2));
+                drops.push(ItemSlot::new(ItemId::GOLD_INGOT, 1));
+            }
+            MonsterKind::FrostWraith => {
+                drops.push(ItemSlot::new(ItemId::IRON_INGOT, 1 + roll2));
+                drops.push(ItemSlot::new(ItemId::DIAMOND, roll2.max(1)));
+            }
+            MonsterKind::JungleStalker => {
+                drops.push(ItemSlot::new(ItemId::STRING, 2 + roll1));
+                drops.push(ItemSlot::new(ItemId::IRON_INGOT, 1));
+            }
+            MonsterKind::ShadowKnight => {
+                drops.push(ItemSlot::new(ItemId::IRON_INGOT, 2));
+                drops.push(ItemSlot::new(ItemId::BONE, 2 + roll2));
+            }
+            // Unique Boss Drops: Signature Weapon + Boss Armor Piece + Trophy Core + Diamonds
+            MonsterKind::SunPharaoh => {
+                drops.push(ItemSlot::new(ItemId::SUNBLADE, 1));
+                drops.push(ItemSlot::new(ItemId::PHARAOH_CROWN, 1));
+                drops.push(ItemSlot::new(ItemId::SUN_CORE, 1));
+                drops.push(ItemSlot::new(ItemId::GOLD_INGOT, 8));
+            }
+            MonsterKind::FrostTitan => {
+                drops.push(ItemSlot::new(ItemId::FROSTBLADE, 1));
+                drops.push(ItemSlot::new(ItemId::GLACIAL_CHESTPLATE, 1));
+                drops.push(ItemSlot::new(ItemId::FROST_HEART, 1));
+                drops.push(ItemSlot::new(ItemId::DIAMOND, 4));
+            }
+            MonsterKind::OvergrownGolem => {
+                drops.push(ItemSlot::new(ItemId::VERDANT_GREATBLADE, 1));
+                drops.push(ItemSlot::new(ItemId::GOLEM_GREAVES, 1));
+                drops.push(ItemSlot::new(ItemId::ANCIENT_VINE_CORE, 1));
+                drops.push(ItemSlot::new(ItemId::DIAMOND, 4));
+            }
+            MonsterKind::ShadowLich => {
+                drops.push(ItemSlot::new(ItemId::SHADOWFANG_BLADE, 1));
+                drops.push(ItemSlot::new(ItemId::LICH_BOOTS, 1));
+                drops.push(ItemSlot::new(ItemId::SOUL_PHYLACTERY, 1));
+                drops.push(ItemSlot::new(ItemId::DIAMOND, 5));
+            }
         }
         drops
     }
@@ -265,6 +467,7 @@ impl MonsterEntity {
 
         if self.position.y < -40.0 {
             self.dead = true;
+            self.in_combat = false;
             return outcome;
         }
 
@@ -273,6 +476,30 @@ impl MonsterEntity {
         }
         if self.attack_cooldown > 0.0 {
             self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        }
+        if self.special_cooldown > 0.0 {
+            self.special_cooldown = (self.special_cooldown - dt).max(0.0);
+        }
+        if self.summon_cooldown > 0.0 {
+            self.summon_cooldown = (self.summon_cooldown - dt).max(0.0);
+        }
+
+        // Update boss phase based on remaining health
+        if self.kind.is_boss() && self.max_health > 0.0 {
+            let hp_ratio = self.health / self.max_health;
+            let new_phase = if hp_ratio <= 0.33 {
+                3
+            } else if hp_ratio <= 0.66 {
+                2
+            } else {
+                1
+            };
+            if new_phase > self.phase {
+                self.phase = new_phase;
+                outcome.phase_changed = Some(new_phase);
+                // Reset special cooldown slightly so phase transitions feel dramatic
+                self.special_cooldown = self.special_cooldown.min(1.5);
+            }
         }
 
         // Sunlight burning for Zombies & Skeletons
@@ -305,29 +532,77 @@ impl MonsterEntity {
             true
         };
 
-        let mut target_vel = Vec3::ZERO;
-        let speed = self.kind.move_speed();
+        let aggro_range = if self.kind.is_boss() {
+            36.0
+        } else if self.kind.is_temple_minion() {
+            24.0
+        } else {
+            18.0
+        };
+        let vertical_range = if self.kind.is_boss() { 18.0 } else { 10.0 };
 
-        if spider_hostile && dist < 18.0 && to_player.y.abs() < 10.0 {
+        let mut target_vel = Vec3::ZERO;
+        let base_speed = self.kind.move_speed();
+        let speed = if self.kind.is_boss() && self.phase == 3 {
+            base_speed * 1.25
+        } else if self.kind.is_boss() && self.phase == 2 {
+            base_speed * 1.10
+        } else {
+            base_speed
+        };
+
+        if spider_hostile && dist < aggro_range && to_player.y.abs() < vertical_range {
+            self.in_combat = true;
             let dir = horiz_to_player.normalize_or_zero();
             self.yaw = dir.x.atan2(dir.z);
 
             match self.kind {
-                MonsterKind::Zombie | MonsterKind::Spider => {
-                    let melee_range = if self.kind == MonsterKind::Spider { 1.8 } else { 1.6 };
+                MonsterKind::Zombie
+                | MonsterKind::Spider
+                | MonsterKind::SandMummy
+                | MonsterKind::JungleStalker
+                | MonsterKind::ShadowKnight => {
+                    let melee_range = match self.kind {
+                        MonsterKind::Spider | MonsterKind::JungleStalker => 1.9,
+                        MonsterKind::ShadowKnight => 2.0,
+                        _ => 1.65,
+                    };
                     if dist > melee_range * 0.75 {
                         target_vel = dir * speed;
                         self.is_moving = true;
                     } else {
                         self.is_moving = false;
                     }
-                    if dist <= melee_range && to_player.y.abs() <= 1.8 && self.attack_cooldown <= 0.0 {
+                    // Jungle Stalker leaps periodically toward the player
+                    if self.kind == MonsterKind::JungleStalker
+                        && self.on_ground
+                        && dist > 3.5
+                        && dist < 10.0
+                        && self.special_cooldown <= 0.0
+                    {
+                        self.velocity = dir * 9.5 + Vec3::new(0.0, 5.5, 0.0);
+                        self.on_ground = false;
+                        self.special_cooldown = 4.0;
+                    }
+                    if dist <= melee_range
+                        && to_player.y.abs() <= 2.0
+                        && self.attack_cooldown <= 0.0
+                    {
                         outcome.damage_to_player = self.kind.attack_damage();
-                        self.attack_cooldown = 1.0;
+                        self.attack_cooldown = if self.kind == MonsterKind::JungleStalker {
+                            0.85
+                        } else {
+                            1.0
+                        };
                     }
                 }
-                MonsterKind::Skeleton => {
-                    if dist > 11.0 {
+                MonsterKind::Skeleton | MonsterKind::SunArcher | MonsterKind::FrostWraith => {
+                    let keep_max = if self.kind == MonsterKind::FrostWraith {
+                        9.0
+                    } else {
+                        11.5
+                    };
+                    if dist > keep_max {
                         target_vel = dir * speed;
                         self.is_moving = true;
                     } else if dist < 4.5 {
@@ -337,19 +612,267 @@ impl MonsterEntity {
                         self.is_moving = false;
                     }
 
-                    if dist <= 15.0 && self.attack_cooldown <= 0.0 {
+                    if dist <= 18.0 && self.attack_cooldown <= 0.0 {
                         let shoot_origin = self.position + Vec3::new(0.0, 1.5, 0.0);
                         let target_aim = player_pos + Vec3::new(0.0, 1.1, 0.0);
                         let delta = target_aim - shoot_origin;
                         let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
-                        // Slight upward arc compensation for gravity
-                        let aim_dir = (delta + Vec3::new(0.0, horiz_d * 0.14, 0.0)).normalize_or_zero();
-                        outcome.spawned_arrow = Some((shoot_origin + aim_dir * 0.5, aim_dir * 20.0));
-                        self.attack_cooldown = 1.8;
+                        let aim_dir =
+                            (delta + Vec3::new(0.0, horiz_d * 0.14, 0.0)).normalize_or_zero();
+                        let proj_speed = if self.kind == MonsterKind::Skeleton {
+                            20.0
+                        } else {
+                            23.0
+                        };
+                        if self.kind == MonsterKind::Skeleton {
+                            outcome.spawned_arrow =
+                                Some((shoot_origin + aim_dir * 0.5, aim_dir * proj_speed));
+                        } else {
+                            outcome.extra_arrows.push((
+                                shoot_origin + aim_dir * 0.5,
+                                aim_dir * proj_speed,
+                                self.kind.attack_damage(),
+                            ));
+                        }
+                        self.attack_cooldown = if self.kind == MonsterKind::FrostWraith {
+                            1.4
+                        } else {
+                            1.7
+                        };
+                    }
+                }
+                // --- MULTI-PHASE BOSS AI ---
+                MonsterKind::SunPharaoh => {
+                    let melee_range = 2.6;
+                    if dist > 7.5 {
+                        target_vel = dir * speed;
+                        self.is_moving = true;
+                    } else if dist < 3.5 && self.phase < 3 {
+                        target_vel = -dir * (speed * 0.65);
+                        self.is_moving = true;
+                    } else if self.phase == 3 && dist > melee_range * 0.8 {
+                        target_vel = dir * speed;
+                        self.is_moving = true;
+                    } else {
+                        self.is_moving = false;
+                    }
+
+                    // Primary melee or solar bolt
+                    if dist <= melee_range && to_player.y.abs() <= 2.8 && self.attack_cooldown <= 0.0
+                    {
+                        outcome.damage_to_player = self.kind.attack_damage();
+                        self.attack_cooldown = 1.1;
+                    } else if dist <= 26.0 && self.attack_cooldown <= 0.0 {
+                        let origin = self.position + Vec3::new(0.0, 2.2, 0.0);
+                        let delta = (player_pos + Vec3::new(0.0, 1.0, 0.0)) - origin;
+                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
+                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.11, 0.0)).normalize_or_zero();
+                        outcome.extra_arrows.push((origin + aim * 0.7, aim * 25.0, 6.5));
+                        self.attack_cooldown = if self.phase == 3 { 1.15 } else { 1.65 };
+                    }
+
+                    // Phase 2+: Solar fan spread / Phase 3: Dash + Solar Slam AoE
+                    if self.phase >= 2 && self.special_cooldown <= 0.0 {
+                        if self.phase == 3 && dist < 12.0 {
+                            self.velocity = dir * 13.0 + Vec3::new(0.0, 4.5, 0.0);
+                            outcome.aoe_blast = Some((self.position, 5.5, 10.0));
+                            self.special_cooldown = 5.5;
+                        } else {
+                            let origin = self.position + Vec3::new(0.0, 2.1, 0.0);
+                            let base_angle = dir.x.atan2(dir.z);
+                            for step in -2..=2 {
+                                let ang = base_angle + (step as f32) * 0.22;
+                                let vdir = Vec3::new(ang.sin(), 0.08, ang.cos()).normalize();
+                                outcome.extra_arrows.push((origin + vdir * 0.8, vdir * 22.0, 6.0));
+                            }
+                            self.special_cooldown = if self.phase == 3 { 5.0 } else { 7.0 };
+                        }
+                    }
+
+                    // Phase 2+: Summon Sand Mummies
+                    if self.phase >= 2 && self.summon_cooldown <= 0.0 {
+                        let side = Vec3::new(-dir.z, 0.0, dir.x);
+                        outcome.summon_minions.push((
+                            MonsterKind::SandMummy,
+                            self.position + side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        outcome.summon_minions.push((
+                            MonsterKind::SunArcher,
+                            self.position - side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        self.summon_cooldown = 20.0;
+                    }
+                }
+                MonsterKind::FrostTitan => {
+                    let melee_range = 3.1;
+                    if dist > melee_range * 0.8 {
+                        target_vel = dir * speed;
+                        self.is_moving = true;
+                    } else {
+                        self.is_moving = false;
+                    }
+
+                    if dist <= melee_range && to_player.y.abs() <= 3.2 && self.attack_cooldown <= 0.0
+                    {
+                        outcome.damage_to_player = self.kind.attack_damage();
+                        self.attack_cooldown = if self.phase == 3 { 1.0 } else { 1.35 };
+                    } else if dist > 5.0 && dist <= 24.0 && self.attack_cooldown <= 0.0 {
+                        let origin = self.position + Vec3::new(0.0, 2.6, 0.0);
+                        let delta = (player_pos + Vec3::new(0.0, 1.0, 0.0)) - origin;
+                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
+                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.12, 0.0)).normalize_or_zero();
+                        let count = if self.phase == 3 { 3 } else { 1 };
+                        let base_angle = aim.x.atan2(aim.z);
+                        for i in 0..count {
+                            let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * 0.18;
+                            let ang = base_angle + offset;
+                            let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 0.9, vdir * 24.0, 7.0));
+                        }
+                        self.attack_cooldown = 2.0;
+                    }
+
+                    // Phase 2+: Frost Nova AoE / Phase 3: Leap Slam
+                    if self.phase >= 2 && self.special_cooldown <= 0.0 {
+                        if self.phase == 3 && dist > 4.0 && self.on_ground {
+                            self.velocity = dir * 12.0 + Vec3::new(0.0, 7.5, 0.0);
+                            self.on_ground = false;
+                        }
+                        outcome.aoe_blast = Some((self.position, 6.0, 11.0));
+                        self.special_cooldown = if self.phase == 3 { 5.5 } else { 7.5 };
+                    }
+
+                    if self.phase >= 2 && self.summon_cooldown <= 0.0 {
+                        let side = Vec3::new(-dir.z, 0.0, dir.x);
+                        outcome.summon_minions.push((
+                            MonsterKind::FrostWraith,
+                            self.position + side * 3.5 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        outcome.summon_minions.push((
+                            MonsterKind::FrostWraith,
+                            self.position - side * 3.5 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        self.summon_cooldown = 22.0;
+                    }
+                }
+                MonsterKind::OvergrownGolem => {
+                    let melee_range = 3.0;
+                    if dist > melee_range * 0.8 {
+                        target_vel = dir * speed;
+                        self.is_moving = true;
+                    } else {
+                        self.is_moving = false;
+                    }
+
+                    if dist <= melee_range && to_player.y.abs() <= 3.0 && self.attack_cooldown <= 0.0
+                    {
+                        outcome.damage_to_player = self.kind.attack_damage();
+                        self.attack_cooldown = 1.25;
+                    } else if dist > 5.0 && dist <= 24.0 && self.attack_cooldown <= 0.0 {
+                        let origin = self.position + Vec3::new(0.0, 2.4, 0.0);
+                        let delta = (player_pos + Vec3::new(0.0, 1.0, 0.0)) - origin;
+                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
+                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.14, 0.0)).normalize_or_zero();
+                        let count = if self.phase == 3 { 3 } else { 1 };
+                        let base_angle = aim.x.atan2(aim.z);
+                        for i in 0..count {
+                            let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * 0.2;
+                            let ang = base_angle + offset;
+                            let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 0.9, vdir * 21.0, 7.5));
+                        }
+                        self.attack_cooldown = 2.1;
+                    }
+
+                    // Phase 2+: Ground-pound AoE + minor nature regen; Phase 3: Charge dash
+                    if self.phase >= 2 && self.special_cooldown <= 0.0 {
+                        outcome.aoe_blast = Some((self.position, 6.5, 10.5));
+                        if self.phase == 2 {
+                            self.health = (self.health + 6.0).min(self.max_health);
+                        } else {
+                            self.velocity = dir * 13.5 + Vec3::new(0.0, 4.0, 0.0);
+                        }
+                        self.special_cooldown = if self.phase == 3 { 5.0 } else { 7.5 };
+                    }
+
+                    if self.phase >= 2 && self.summon_cooldown <= 0.0 {
+                        let side = Vec3::new(-dir.z, 0.0, dir.x);
+                        outcome.summon_minions.push((
+                            MonsterKind::JungleStalker,
+                            self.position + side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        outcome.summon_minions.push((
+                            MonsterKind::JungleStalker,
+                            self.position - side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        self.summon_cooldown = 20.0;
+                    }
+                }
+                MonsterKind::ShadowLich => {
+                    let melee_range = 2.4;
+                    if dist > 11.0 {
+                        target_vel = dir * speed;
+                        self.is_moving = true;
+                    } else if dist < 5.5 {
+                        target_vel = -dir * (speed * 0.9);
+                        self.is_moving = true;
+                    } else {
+                        // Strafe laterally
+                        let strafe = Vec3::new(-dir.z, 0.0, dir.x);
+                        target_vel = strafe * (speed * 0.65);
+                        self.is_moving = true;
+                    }
+
+                    if dist <= melee_range && to_player.y.abs() <= 2.6 && self.attack_cooldown <= 0.0
+                    {
+                        outcome.damage_to_player = self.kind.attack_damage();
+                        self.attack_cooldown = 1.0;
+                    } else if dist <= 28.0 && self.attack_cooldown <= 0.0 {
+                        let origin = self.position + Vec3::new(0.0, 2.2, 0.0);
+                        let delta = (player_pos + Vec3::new(0.0, 1.1, 0.0)) - origin;
+                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
+                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.10, 0.0)).normalize_or_zero();
+                        let count = if self.phase == 3 { 5 } else if self.phase == 2 { 3 } else { 1 };
+                        let base_angle = aim.x.atan2(aim.z);
+                        for i in 0..count {
+                            let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * 0.17;
+                            let ang = base_angle + offset;
+                            let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
+                            outcome.extra_arrows.push((origin + vdir * 0.7, vdir * 26.0, 6.5));
+                        }
+                        self.attack_cooldown = if self.phase == 3 { 1.35 } else { 1.75 };
+                    }
+
+                    // Shadow-step dash + Dark Nova AoE
+                    if self.special_cooldown <= 0.0 {
+                        let side = Vec3::new(-dir.z, 0.0, dir.x);
+                        let sign = if self.next_f32() < 0.5 { 1.0 } else { -1.0 };
+                        self.velocity = side * (sign * 12.0) + Vec3::new(0.0, 4.5, 0.0);
+                        if self.phase >= 2 {
+                            outcome.aoe_blast = Some((self.position, 5.5, 9.5));
+                        }
+                        self.special_cooldown = if self.phase == 3 { 4.2 } else { 6.5 };
+                    }
+
+                    if self.phase >= 2 && self.summon_cooldown <= 0.0 {
+                        let side = Vec3::new(-dir.z, 0.0, dir.x);
+                        outcome.summon_minions.push((
+                            MonsterKind::ShadowKnight,
+                            self.position + side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        outcome.summon_minions.push((
+                            MonsterKind::ShadowKnight,
+                            self.position - side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
+                        ));
+                        self.summon_cooldown = 21.0;
                     }
                 }
             }
         } else {
+            // Drop boss combat state only if player is far away (> 64 blocks)
+            if self.kind.is_boss() && dist > 64.0 {
+                self.in_combat = false;
+            }
             // Idle / Wander
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
@@ -373,10 +896,23 @@ impl MonsterEntity {
             let probe = self.position + dir * (half_width + 0.45);
             if aabb_intersects_solid(probe, half_width, height, 1e-4, world, registry) {
                 let step_probe = probe + Vec3::new(0.0, 1.05, 0.0);
-                let can_jump_over = self.kind == MonsterKind::Spider
-                    || !aabb_intersects_solid(step_probe, half_width, height, 1e-4, world, registry);
+                let can_jump_over =
+                    matches!(self.kind, MonsterKind::Spider | MonsterKind::JungleStalker)
+                        || !aabb_intersects_solid(
+                            step_probe,
+                            half_width,
+                            height,
+                            1e-4,
+                            world,
+                            registry,
+                        );
                 if can_jump_over {
-                    self.velocity.y = if self.kind == MonsterKind::Spider { 6.0 } else { 7.5 };
+                    self.velocity.y =
+                        if matches!(self.kind, MonsterKind::Spider | MonsterKind::JungleStalker) {
+                            6.5
+                        } else {
+                            7.5
+                        };
                     self.on_ground = false;
                 } else {
                     self.yaw += PI * 0.75;

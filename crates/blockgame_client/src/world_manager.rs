@@ -199,6 +199,11 @@ pub struct WorldManager {
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
+    // Biome Boss Temples & Instanced Arenas (Issue #9)
+    pub temples: blockgame_core::temple::TempleManager,
+    pub mp_temple_monsters: Vec<MonsterEntity>,
+    pub mp_boss_hud: Option<blockgame_core::temple::BossHudState>,
+    pub pending_temple_messages: Vec<String>,
 }
 
 impl WorldManager {
@@ -245,6 +250,10 @@ impl WorldManager {
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
             animal_spawned_columns: HashSet::new(),
+            temples: blockgame_core::temple::TempleManager::new(),
+            mp_temple_monsters: Vec::new(),
+            mp_boss_hud: None,
+            pending_temple_messages: Vec::new(),
         }
     }
 
@@ -396,6 +405,7 @@ impl WorldManager {
         self.growing_cacti = data.growing_cacti.clone();
         self.decaying_leaves = data.decaying_leaves.clone();
         self.animal_spawned_columns = data.animal_spawned_columns.clone();
+        self.temples = data.temples.clone();
     }
 
     /// Captures all modified chunks, containers, entities, and simulation timers from this `WorldManager`
@@ -420,6 +430,7 @@ impl WorldManager {
         data.growing_cacti = self.growing_cacti.clone();
         data.decaying_leaves = self.decaying_leaves.clone();
         data.animal_spawned_columns = self.animal_spawned_columns.clone();
+        data.temples = self.temples.clone();
         data
     }
 
@@ -1853,8 +1864,12 @@ impl WorldManager {
         let mut total_damage = 0.0;
         let mut drops = Vec::new();
 
+        self.temples.tick_cooldowns(dt);
+
+        // Suppress normal night-monster spawning inside instanced boss arenas
+        let in_arena_band = blockgame_core::temple::is_in_arena_band(player_pos);
         self.monster_spawn_timer -= dt;
-        if self.monster_spawn_timer <= 0.0 {
+        if !in_arena_band && self.monster_spawn_timer <= 0.0 {
             self.monster_spawn_timer = 2.5;
             if self.monsters.len() < 20 {
                 let mut candidates = Vec::new();
@@ -1898,7 +1913,8 @@ impl WorldManager {
             }
         }
 
-        let mut spawned_arrows = Vec::new();
+        let mut spawned_arrows: Vec<(Vec3, Vec3, f32)> = Vec::new();
+        let mut newly_summoned: Vec<(MonsterKind, Vec3, u64)> = Vec::new();
         {
             let world_guard = self.world.lock().unwrap();
             for monster in self.monsters.iter_mut() {
@@ -1906,33 +1922,305 @@ impl WorldManager {
                     monster.update(dt, player_pos, sun_intensity, &world_guard, &self.registry);
                 total_damage += outcome.damage_to_player;
                 if let Some((apos, avel)) = outcome.spawned_arrow {
-                    spawned_arrows.push((apos, avel));
+                    spawned_arrows.push((apos, avel, MonsterKind::Skeleton.attack_damage()));
+                }
+                for (apos, avel, dmg) in outcome.extra_arrows {
+                    spawned_arrows.push((apos, avel, dmg));
+                }
+                if let Some((center, radius, aoe_dmg)) = outcome.aoe_blast {
+                    if player_pos.distance(center) <= radius {
+                        total_damage += aoe_dmg;
+                    }
+                }
+                if let Some(new_phase) = outcome.phase_changed {
+                    self.pending_temple_messages.push(format!(
+                        "&c{} enters Phase {}!",
+                        monster.kind.name(),
+                        new_phase
+                    ));
+                }
+                for (mkind, spos) in outcome.summon_minions {
+                    if let Some(tid) = monster.temple_id {
+                        newly_summoned.push((mkind, spos, tid));
+                    }
                 }
             }
         }
 
-        for (apos, avel) in spawned_arrows {
+        for (apos, avel, dmg) in spawned_arrows {
             let id = self.next_arrow_id;
             self.next_arrow_id = self.next_arrow_id.wrapping_add(1).max(1);
-            self.arrows.push(ArrowProjectile::new(
-                id,
-                apos,
-                avel,
-                false,
-                MonsterKind::Skeleton.attack_damage(),
-            ));
+            self.arrows
+                .push(ArrowProjectile::new(id, apos, avel, false, dmg));
         }
 
+        for (mkind, spos, tid) in newly_summoned {
+            let count_in_temple = self
+                .monsters
+                .iter()
+                .filter(|m| !m.dead && m.temple_id == Some(tid) && !m.kind.is_boss())
+                .count();
+            if count_in_temple < 6 {
+                let id = self.next_monster_id;
+                self.next_monster_id = self.next_monster_id.wrapping_add(1).max(1);
+                self.monsters
+                    .push(MonsterEntity::new_temple_mob(id, mkind, spos, tid));
+            }
+        }
+
+        let mut defeated_temples: Vec<(u64, &'static str)> = Vec::new();
         self.monsters.retain(|monster| {
             if monster.dead {
                 drops.push((monster.position, monster.generate_drops()));
+                if monster.kind.is_boss() {
+                    if let Some(tid) = monster.temple_id {
+                        defeated_temples.push((tid, monster.kind.name()));
+                    }
+                }
                 false
+            } else if monster.kind.is_boss() {
+                // Keep bosses alive within 520 blocks (so the 500-block boss HUD stays consistent)
+                (monster.position - player_pos).length_squared() <= 520.0 * 520.0
             } else {
                 (monster.position - player_pos).length_squared() <= 72.0 * 72.0
             }
         });
 
+        for (tid, boss_name) in defeated_temples {
+            if let Some(tkind) = self.temples.mark_boss_defeated(tid) {
+                self.pending_temple_messages.push(format!(
+                    "&6Victory! {} has been defeated! {} is now unlocked!",
+                    boss_name,
+                    tkind.name()
+                ));
+            }
+        }
+
         (total_damage, drops)
+    }
+
+    /// Returns `true` if breaking or placing at `pos` is forbidden due to boss temple/arena protection.
+    pub fn is_block_protected(&self, pos: IVec3) -> bool {
+        let existing_block = {
+            let world_guard = self.world.lock().unwrap();
+            world_guard.get_block(pos)
+        };
+        if self.temples.is_block_protected(pos, existing_block) {
+            return true;
+        }
+        // Also enforce protection on undiscovered overworld temples before the player enters their portal
+        let (cpos, _, _, _) = blockgame_core::world_to_chunk_coords(pos);
+        for placement in self.generator.find_temples_for_chunk(cpos) {
+            let defeated = self
+                .temples
+                .temples
+                .get(&placement.temple_id)
+                .map_or(false, |t| t.boss_defeated);
+            if !defeated {
+                let bounds = blockgame_core::temple::TempleBounds {
+                    min: placement.origin + IVec3::new(-12, -2, -12),
+                    max: placement.origin + IVec3::new(12, 16, 12),
+                };
+                if bounds.contains(pos) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Looks up the deterministic overworld temple placement corresponding to a `TEMPLE_PORTAL` block.
+    pub fn find_temple_placement_at_portal(&self, pos: IVec3) -> Option<blockgame_gen::TemplePlacement> {
+        let (cpos, _, _, _) = blockgame_core::world_to_chunk_coords(pos);
+        self.generator
+            .find_temples_for_chunk(cpos)
+            .into_iter()
+            .find(|t| {
+                let d = (t.portal_pos - pos).abs();
+                d.x <= 2 && d.y <= 3 && d.z <= 2
+            })
+    }
+
+    /// Handles singleplayer right-click on `TEMPLE_PORTAL`, `ARENA_RETURN_PORTAL`, or `BOSS_ALTAR`.
+    /// Returns `Some(teleport_dest)` if the player should be teleported.
+    pub fn interact_temple_block_sp(&mut self, pos: IVec3, player_pos: Vec3) -> Option<Vec3> {
+        let block = {
+            let w = self.world.lock().unwrap();
+            w.get_block(pos)
+        };
+
+        if block == BlockId::TEMPLE_PORTAL {
+            let placement = self.find_temple_placement_at_portal(pos)?;
+            self.temples
+                .player_return_positions
+                .insert("local".to_string(), player_pos);
+
+            let state_snapshot = {
+                let entry = self.temples.register_temple(
+                    placement.temple_id,
+                    placement.kind,
+                    placement.origin,
+                    placement.portal_pos,
+                );
+                entry.clone()
+            };
+
+            if !state_snapshot.arena_built {
+                {
+                    let mut w = self.world.lock().unwrap();
+                    blockgame_core::temple::build_arena_into_world(&mut w, &state_snapshot);
+                }
+                let min_c = blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
+                let max_c = blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
+                for cx in min_c.0.x..=max_c.0.x {
+                    for cy in min_c.0.y..=max_c.0.y {
+                        for cz in min_c.0.z..=max_c.0.z {
+                            let acp = ChunkPos::new(cx, cy, cz);
+                            self.loaded_chunks_set.insert(acp);
+                            self.dirty_remesh.insert(acp);
+                        }
+                    }
+                }
+                let spawned = blockgame_core::temple::spawn_arena_encounter(
+                    &state_snapshot,
+                    &mut self.next_monster_id,
+                );
+                let boss_id = spawned.first().map(|m| m.id);
+                self.monsters.extend(spawned);
+                if let Some(t) = self.temples.temples.get_mut(&placement.temple_id) {
+                    t.arena_built = true;
+                    t.active_boss_id = boss_id;
+                }
+            }
+
+            self.pending_temple_messages.push(format!(
+                "&6Entered {}! Defeat {} to unlock the temple!",
+                placement.kind.name(),
+                placement.kind.boss_kind().name()
+            ));
+            return Some(state_snapshot.arena_entry_spawn());
+        } else if block == BlockId::ARENA_RETURN_PORTAL {
+            let dest = self
+                .temples
+                .player_return_positions
+                .get("local")
+                .copied()
+                .or_else(|| {
+                    self.temples
+                        .find_temple_by_arena_pos(pos)
+                        .and_then(|tid| self.temples.temples.get(&tid))
+                        .map(|t| t.overworld_return_spawn())
+                });
+            if dest.is_some() {
+                self.pending_temple_messages
+                    .push("&aReturned to the overworld temple.".to_string());
+            }
+            return dest;
+        } else if block == BlockId::BOSS_ALTAR {
+            if let Some(tid) = self.temples.find_temple_by_arena_pos(pos) {
+                let info = self.temples.temples.get(&tid).map(|t| {
+                    (t.boss_defeated, t.rechallenge_cooldown, t.clone())
+                });
+                if let Some((defeated, cd, state_snapshot)) = info {
+                    if !defeated {
+                        self.pending_temple_messages
+                            .push("&eThe boss is already awake in this arena!".to_string());
+                    } else if cd > 0.0 {
+                        self.pending_temple_messages.push(format!(
+                            "&eBoss Altar recharging... {:.0}s remaining.",
+                            cd.ceil()
+                        ));
+                    } else {
+                        self.monsters.retain(|m| m.temple_id != Some(tid));
+                        {
+                            let mut w = self.world.lock().unwrap();
+                            blockgame_core::temple::build_arena_into_world(&mut w, &state_snapshot);
+                        }
+                        let min_c =
+                            blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
+                        let max_c =
+                            blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
+                        for cx in min_c.0.x..=max_c.0.x {
+                            for cy in min_c.0.y..=max_c.0.y {
+                                for cz in min_c.0.z..=max_c.0.z {
+                                    self.dirty_remesh.insert(ChunkPos::new(cx, cy, cz));
+                                }
+                            }
+                        }
+                        let spawned = blockgame_core::temple::spawn_arena_encounter(
+                            &state_snapshot,
+                            &mut self.next_monster_id,
+                        );
+                        let boss_id = spawned.first().map(|m| m.id);
+                        self.monsters.extend(spawned);
+                        if let Some(t) = self.temples.temples.get_mut(&tid) {
+                            t.boss_defeated = false;
+                            t.active_boss_id = boss_id;
+                        }
+                        self.pending_temple_messages.push(format!(
+                            "&c{} has been re-summoned at {}!",
+                            state_snapshot.kind.boss_kind().name(),
+                            state_snapshot.kind.name()
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Updates the synced multiplayer temple monster list from `ServerPacket::TempleMonstersSync`.
+    pub fn apply_mp_temple_monsters(&mut self, synced: &[blockgame_core::SyncedMonsterState]) {
+        self.mp_temple_monsters = synced
+            .iter()
+            .map(|s| {
+                let mut m = MonsterEntity::new(s.id, s.kind, s.position);
+                m.yaw = s.yaw;
+                m.health = s.health;
+                m.max_health = s.max_health;
+                m.hurt_timer = s.hurt_timer;
+                m.walk_anim_timer = s.walk_anim_timer;
+                m.phase = s.phase;
+                m.in_combat = s.in_combat;
+                m
+            })
+            .collect();
+    }
+
+    /// Raycast hit test against synced multiplayer boss/temple monsters.
+    pub fn hit_test_mp_temple_monster(
+        &self,
+        ray_origin: Vec3,
+        ray_dir: Vec3,
+        reach: f32,
+    ) -> Option<(u32, MonsterKind, Vec3)> {
+        let mut closest_dist = reach;
+        let mut hit = None;
+        for m in &self.mp_temple_monsters {
+            if m.dead {
+                continue;
+            }
+            if let Some(dist) = m.aabb().intersect_ray(ray_origin, ray_dir, reach) {
+                if dist < closest_dist {
+                    closest_dist = dist;
+                    hit = Some((m.id, m.kind, m.position));
+                }
+            }
+        }
+        hit
+    }
+
+    /// Returns the active top-of-screen Boss HUD state (within 500 blocks and in combat).
+    pub fn active_boss_hud(
+        &self,
+        player_pos: Vec3,
+        is_multiplayer: bool,
+    ) -> Option<blockgame_core::temple::BossHudState> {
+        if is_multiplayer {
+            self.mp_boss_hud.clone()
+        } else {
+            blockgame_core::temple::compute_boss_hud(&self.monsters, player_pos)
+        }
     }
 
     /// Updates all active arrow projectiles and applies hits to monsters, animals, or the player.

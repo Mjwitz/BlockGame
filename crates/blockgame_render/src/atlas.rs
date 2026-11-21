@@ -94,6 +94,7 @@ impl TextureAtlas {
         // Paint fishing rods, lines, lures, bait, fish, and crafted dishes (384..=409)
         paint_fishing_tiles(&mut atlas);
         paint_power_tiles(&mut atlas);
+        paint_temple_and_boss_tiles(&mut atlas);
 
         atlas
     }
@@ -2522,6 +2523,243 @@ fn paint_power_tiles(atlas: &mut TextureAtlas) {
     paint_backpack(atlas, 445, [148, 92, 46], [176, 114, 60], [232, 194, 62]); // Leather Backpack
     paint_backpack(atlas, 446, [158, 166, 180], [194, 202, 214], [238, 204, 68]); // Iron Backpack
     paint_backpack(atlas, 447, [56, 192, 208], [88, 228, 240], [244, 208, 72]); // Diamond Backpack
+}
+
+/// Paints procedural 32x32 tiles for Biome Boss Temples, Portals, Boss Weapons/Armor/Cores,
+/// and Boss & Temple Minion entity skins (tiles 448..=486, Issue #9).
+fn paint_temple_and_boss_tiles(atlas: &mut TextureAtlas) {
+    // Helper for carved brick blocks
+    let paint_brick = |atlas: &mut TextureAtlas,
+                       tile: u16,
+                       base: [u8; 3],
+                       mortar: [u8; 3],
+                       accent: [u8; 3]| {
+        atlas.paint_tile(tile, |px, py| {
+            let border = px == 0 || py == 0 || px == 31 || py == 31;
+            let row = py / 8;
+            let offset = if row % 2 == 0 { 0 } else { 8 };
+            let seam = py % 8 == 0 || (px + offset) % 16 == 0;
+            let carve = px >= 10 && px <= 21 && py >= 10 && py <= 21
+                && (px == 10 || px == 21 || py == 10 || py == 21);
+            let n = (((px * 37 + py * 17) ^ (px * 13)) % 14) as i16 - 7;
+            let col = if border || seam {
+                mortar
+            } else if carve {
+                accent
+            } else {
+                [
+                    (base[0] as i16 + n).clamp(0, 255) as u8,
+                    (base[1] as i16 + n).clamp(0, 255) as u8,
+                    (base[2] as i16 + n).clamp(0, 255) as u8,
+                ]
+            };
+            Rgba([col[0], col[1], col[2], 255])
+        });
+    };
+
+    // 448..=452: Temple masonry blocks
+    paint_brick(atlas, 448, [118, 120, 126], [68, 70, 76], [160, 164, 172]); // TEMPLE_STONE
+    paint_brick(atlas, 449, [218, 186, 118], [156, 122, 64], [248, 210, 72]); // TEMPLE_SANDSTONE
+    paint_brick(atlas, 450, [132, 206, 238], [82, 148, 194], [214, 244, 255]); // TEMPLE_ICE_BRICK
+    paint_brick(atlas, 451, [104, 122, 92], [58, 74, 52], [62, 168, 82]); // TEMPLE_MOSS_BRICK
+    paint_brick(atlas, 452, [42, 32, 58], [22, 16, 34], [148, 72, 218]); // TEMPLE_OBSIDIAN
+
+    // 453: TEMPLE_PORTAL (swirling golden-violet arcane vortex)
+    atlas.paint_tile(453, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = py as f32 - 15.5;
+        let r = (dx * dx + dy * dy).sqrt();
+        let ang = dy.atan2(dx);
+        let swirl = ((r * 0.45 + ang * 3.0).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+        let core = (1.0 - (r / 18.0)).clamp(0.0, 1.0);
+        let cr = (95.0 + swirl * 115.0 + core * 45.0).min(255.0) as u8;
+        let cg = (40.0 + core * 165.0 + swirl * 35.0).min(255.0) as u8;
+        let cb = (175.0 + swirl * 75.0).min(255.0) as u8;
+        Rgba([cr, cg, cb, 255])
+    });
+
+    // 454: ARENA_RETURN_PORTAL (swirling emerald-cyan vortex)
+    atlas.paint_tile(454, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = py as f32 - 15.5;
+        let r = (dx * dx + dy * dy).sqrt();
+        let ang = dy.atan2(dx);
+        let swirl = ((r * 0.48 - ang * 3.0).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+        let core = (1.0 - (r / 18.0)).clamp(0.0, 1.0);
+        let cr = (30.0 + core * 140.0).min(255.0) as u8;
+        let cg = (155.0 + swirl * 85.0 + core * 15.0).min(255.0) as u8;
+        let cb = (140.0 + swirl * 100.0).min(255.0) as u8;
+        Rgba([cr, cg, cb, 255])
+    });
+
+    // 455: BOSS_ALTAR (dark runic pedestal with glowing central gem)
+    atlas.paint_tile(455, |px, py| {
+        let dx = (px as i32 - 16).abs();
+        let dy = (py as i32 - 16).abs();
+        let manhattan = dx + dy;
+        if manhattan <= 6 {
+            Rgba([255, 92, 64, 255])
+        } else if manhattan <= 9 || px == 2 || px == 29 || py == 2 || py == 29 {
+            Rgba([235, 192, 68, 255])
+        } else {
+            Rgba([46, 40, 56, 255])
+        }
+    });
+
+    // 456: TEMPLE_BRAZIER (dark iron frame + glowing embers)
+    atlas.paint_tile(456, |px, py| {
+        let frame = px < 4 || px > 27 || py < 4 || py > 27;
+        if frame {
+            Rgba([58, 54, 60, 255])
+        } else {
+            let wave = ((px * 19 + py * 29) % 40) as u8;
+            Rgba([250, 140u8.saturating_add(wave), 36, 255])
+        }
+    });
+
+    // Helper for diagonal boss sword icons (457..=460)
+    let paint_boss_sword = |atlas: &mut TextureAtlas,
+                            tile: u16,
+                            blade: [u8; 3],
+                            edge: [u8; 3],
+                            hilt: [u8; 3]| {
+        atlas.paint_tile(tile, |px, py| {
+            let x = px as i32;
+            let y = py as i32;
+            let diag = (x + y - 31).abs();
+            // Diagonal blade from top-right (27, 4) to lower-left (10, 21)
+            if x >= 10 && x <= 27 && y >= 4 && y <= 21 && diag <= 2 {
+                let c = if diag == 0 { edge } else { blade };
+                return Rgba([c[0], c[1], c[2], 255]);
+            }
+            // Crossguard
+            if (x - y).abs() <= 1 && x >= 7 && x <= 14 && y >= 17 && y <= 24 {
+                return Rgba([hilt[0], hilt[1], hilt[2], 255]);
+            }
+            // Handle
+            if x >= 4 && x <= 9 && y >= 22 && y <= 27 && diag <= 1 {
+                return Rgba([96, 64, 38, 255]);
+            }
+            Rgba([0, 0, 0, 0])
+        });
+    };
+
+    paint_boss_sword(atlas, 457, [252, 194, 42], [255, 245, 160], [220, 92, 24]); // SUNBLADE
+    paint_boss_sword(atlas, 458, [92, 204, 252], [224, 250, 255], [48, 96, 160]); // FROSTBLADE
+    paint_boss_sword(atlas, 459, [52, 198, 86], [176, 255, 168], [110, 78, 42]); // VERDANT_GREATBLADE
+    paint_boss_sword(atlas, 460, [146, 56, 232], [228, 174, 255], [46, 36, 62]); // SHADOWFANG_BLADE
+
+    // 461..=464: Boss Armor Icons
+    // 461: PHARAOH_CROWN
+    atlas.paint_tile(461, |px, py| {
+        let in_band = py >= 16 && py <= 24 && px >= 5 && px <= 26;
+        let spikes = py >= 8 && py < 16 && (px >= 5 && px <= 9 || px >= 13 && px <= 18 || px >= 22 && px <= 26);
+        let gem = py >= 18 && py <= 22 && px >= 14 && px <= 17;
+        if gem {
+            Rgba([46, 212, 242, 255])
+        } else if in_band || spikes {
+            Rgba([248, 204, 52, 255])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+    // 462: GLACIAL_CHESTPLATE
+    atlas.paint_tile(462, |px, py| {
+        let torso = px >= 8 && px <= 23 && py >= 6 && py <= 26;
+        let sleeves = py >= 6 && py <= 15 && (px >= 3 && px <= 8 || px >= 23 && px <= 28);
+        let neck = px >= 12 && px <= 19 && py >= 6 && py <= 9;
+        if (torso || sleeves) && !neck {
+            let trim = px == 8 || px == 23 || py == 26 || (px >= 14 && px <= 17 && py >= 12 && py <= 18);
+            if trim { Rgba([220, 248, 255, 255]) } else { Rgba([72, 176, 236, 255]) }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+    // 463: GOLEM_GREAVES
+    atlas.paint_tile(463, |px, py| {
+        let waist = px >= 7 && px <= 24 && py >= 6 && py <= 12;
+        let left_leg = px >= 7 && px <= 14 && py >= 12 && py <= 27;
+        let right_leg = px >= 17 && px <= 24 && py >= 12 && py <= 27;
+        if waist || left_leg || right_leg {
+            let moss = (px + py) % 5 == 0;
+            if moss { Rgba([58, 188, 86, 255]) } else { Rgba([106, 118, 102, 255]) }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+    // 464: LICH_BOOTS
+    atlas.paint_tile(464, |px, py| {
+        let left = px >= 4 && px <= 13 && py >= 14 && py <= 27;
+        let right = px >= 18 && px <= 27 && py >= 14 && py <= 27;
+        if left || right {
+            if py <= 17 { Rgba([172, 72, 248, 255]) } else { Rgba([46, 36, 64, 255]) }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 465..=468: Glowing Boss Trophy Cores
+    let paint_core = |atlas: &mut TextureAtlas, tile: u16, inner: [u8; 3], outer: [u8; 3]| {
+        atlas.paint_tile(tile, |px, py| {
+            let dx = px as f32 - 15.5;
+            let dy = py as f32 - 15.5;
+            let r = (dx * dx + dy * dy).sqrt();
+            if r <= 6.5 {
+                Rgba([inner[0], inner[1], inner[2], 255])
+            } else if r <= 11.5 {
+                Rgba([outer[0], outer[1], outer[2], 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        });
+    };
+    paint_core(atlas, 465, [255, 248, 168], [248, 168, 32]); // SUN_CORE
+    paint_core(atlas, 466, [224, 252, 255], [56, 178, 246]); // FROST_HEART
+    paint_core(atlas, 467, [188, 255, 168], [42, 172, 76]); // ANCIENT_VINE_CORE
+    paint_core(atlas, 468, [232, 178, 255], [136, 44, 224]); // SOUL_PHYLACTERY
+
+    // 469..=486: Temple Minion & Boss Entity Skins (face + body pairs)
+    let paint_mob_pair = |atlas: &mut TextureAtlas,
+                          head_tile: u16,
+                          body_tile: u16,
+                          skin: [u8; 3],
+                          eye: [u8; 3],
+                          armor: [u8; 3],
+                          trim: [u8; 3]| {
+        atlas.paint_tile(head_tile, |px, py| {
+            let left_eye = px >= 7 && px <= 12 && py >= 11 && py <= 15;
+            let right_eye = px >= 19 && px <= 24 && py >= 11 && py <= 15;
+            let brow = py >= 7 && py <= 9 && px >= 5 && px <= 26;
+            let mouth = px >= 10 && px <= 21 && py >= 21 && py <= 24;
+            if left_eye || right_eye {
+                Rgba([eye[0], eye[1], eye[2], 255])
+            } else if brow {
+                Rgba([trim[0], trim[1], trim[2], 255])
+            } else if mouth {
+                Rgba([30, 24, 28, 255])
+            } else {
+                Rgba([skin[0], skin[1], skin[2], 255])
+            }
+        });
+        atlas.paint_tile(body_tile, |px, py| {
+            let band = py % 8 == 0 || px == 15 || px == 16;
+            let c = if band { trim } else { armor };
+            Rgba([c[0], c[1], c[2], 255])
+        });
+    };
+
+    // Minions
+    paint_mob_pair(atlas, 469, 470, [212, 194, 148], [255, 190, 40], [192, 174, 130], [138, 118, 82]); // SandMummy
+    paint_mob_pair(atlas, 471, 472, [224, 212, 176], [255, 140, 20], [186, 146, 52], [242, 204, 72]); // SunArcher
+    paint_mob_pair(atlas, 473, 474, [156, 224, 250], [240, 255, 255], [76, 148, 202], [190, 238, 255]); // FrostWraith
+    paint_mob_pair(atlas, 475, 476, [52, 92, 48], [86, 255, 96], [46, 78, 42], [92, 148, 68]); // JungleStalker
+    paint_mob_pair(atlas, 477, 478, [44, 38, 56], [196, 86, 255], [38, 32, 50], [122, 52, 196]); // ShadowKnight
+
+    // Bosses
+    paint_mob_pair(atlas, 479, 480, [242, 198, 58], [255, 255, 180], [218, 162, 34], [52, 168, 214]); // SunPharaoh
+    paint_mob_pair(atlas, 481, 482, [142, 222, 255], [255, 255, 255], [64, 142, 208], [212, 246, 255]); // FrostTitan
+    paint_mob_pair(atlas, 483, 484, [96, 112, 92], [82, 255, 112], [82, 102, 76], [46, 182, 78]); // OvergrownGolem
+    paint_mob_pair(atlas, 485, 486, [224, 218, 232], [204, 72, 255], [46, 28, 68], [164, 62, 238]); // ShadowLich
 }
 
 #[cfg(test)]

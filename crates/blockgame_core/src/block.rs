@@ -133,6 +133,25 @@ impl BlockId {
     pub const STORAGE_TERMINAL: Self = Self(116);
     pub const STORAGE_CABLE: Self = Self(117);
 
+    // Biome Boss Temple & Instanced Arena blocks (Issue #9)
+    pub const TEMPLE_STONE: Self = Self(118);
+    pub const TEMPLE_SANDSTONE: Self = Self(119);
+    pub const TEMPLE_ICE_BRICK: Self = Self(120);
+    pub const TEMPLE_MOSS_BRICK: Self = Self(121);
+    pub const TEMPLE_OBSIDIAN: Self = Self(122);
+    pub const TEMPLE_PORTAL: Self = Self(123);
+    pub const ARENA_RETURN_PORTAL: Self = Self(124);
+    pub const BOSS_ALTAR: Self = Self(125);
+    pub const TEMPLE_BRAZIER: Self = Self(126);
+
+    #[inline]
+    pub const fn is_temple_interactive(&self) -> bool {
+        matches!(
+            *self,
+            Self::TEMPLE_PORTAL | Self::ARENA_RETURN_PORTAL | Self::BOSS_ALTAR
+        )
+    }
+
     #[inline]
     pub const fn is_air(&self) -> bool {
         self.0 == 0
@@ -312,6 +331,10 @@ impl BlockId {
             62 => 15,  // SEA_LANTERN
             94 => 15,  // JACK_O_LANTERN
             107 => 15, // ELECTRIC_LAMP_LIT
+            123 => 14, // TEMPLE_PORTAL
+            124 => 14, // ARENA_RETURN_PORTAL
+            125 => 12, // BOSS_ALTAR
+            126 => 15, // TEMPLE_BRAZIER
             _ => 0,
         }
     }
@@ -1903,6 +1926,133 @@ impl BlockRegistry {
             required_tool: None,
             min_tier: ToolTier::None,
             drop_item: Some(ItemId::STORAGE_CABLE),
+            drop_count: (1, 1),
+        });
+
+        // Biome Boss Temple & Instanced Arena blocks (Issue #9)
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_STONE,
+            name: "Temple Stone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [448; 6],
+            hardness: 5.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::TEMPLE_STONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_SANDSTONE,
+            name: "Temple Sandstone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [449; 6],
+            hardness: 4.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::TEMPLE_SANDSTONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_ICE_BRICK,
+            name: "Temple Ice Brick",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [450; 6],
+            hardness: 4.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::TEMPLE_ICE_BRICK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_MOSS_BRICK,
+            name: "Temple Moss Brick",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [451; 6],
+            hardness: 4.5,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::TEMPLE_MOSS_BRICK),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_OBSIDIAN,
+            name: "Temple Obsidian",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [452; 6],
+            hardness: 8.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Diamond,
+            drop_item: Some(ItemId::TEMPLE_OBSIDIAN),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_PORTAL,
+            name: "Temple Portal",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 14,
+            textures: [453; 6],
+            hardness: -1.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::ARENA_RETURN_PORTAL,
+            name: "Arena Return Portal",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 14,
+            textures: [454; 6],
+            hardness: -1.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::BOSS_ALTAR,
+            name: "Boss Summoning Altar",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 12,
+            textures: [455; 6],
+            hardness: -1.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::TEMPLE_BRAZIER,
+            name: "Temple Brazier",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 15,
+            textures: [456; 6],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::TEMPLE_BRAZIER),
             drop_count: (1, 1),
         });
 

@@ -21,6 +21,7 @@ pub mod raycast;
 pub mod save;
 pub mod skills;
 pub mod storage;
+pub mod temple;
 pub mod tool;
 pub mod voice;
 pub mod world;
@@ -58,7 +59,7 @@ pub use monster::{
 };
 pub use net::{
     player_skin_name, ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer,
-    PlayerModelState, ServerPacket, DEFAULT_SERVER_PORT,
+    PlayerModelState, ServerPacket, SyncedMonsterState, DEFAULT_SERVER_PORT,
 };
 pub use permissions::{
     permission_matches, BanEntry, BanManager, IpBanEntry, PermissionGroup, PermissionsManager,
@@ -80,6 +81,12 @@ pub use save::{
 pub use skills::{
     break_speed_skill_for_block, skill_xp_for_broken_block, PlayerSkills, SkillKind,
     SkillLevelUp, SkillMilestone, SkillProgress, MAX_SKILL_LEVEL,
+};
+pub use temple::{
+    arena_origin_for_temple, build_arena_into_world, compute_boss_hud, is_in_arena_band,
+    spawn_arena_encounter, temple_id_from_grid, BossHudState, TempleBounds, TempleInstanceState,
+    TempleKind, TempleManager, ARENA_BAND_START_X, ARENA_FLOOR_Y, ARENA_HALF_SIZE, ARENA_HEIGHT,
+    ARENA_ORIGIN_BASE_X, BOSS_HUD_MAX_DISTANCE, BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE,
 };
 pub use tool::{ToolTier, ToolType};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};
