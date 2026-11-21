@@ -59,7 +59,7 @@ pub use monster::{
 };
 pub use net::{
     player_skin_name, ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer,
-    PlayerModelState, ServerPacket, SyncedMonsterState, DEFAULT_SERVER_PORT,
+    PlayerModelState, ServerPacket, SyncedArrowState, SyncedMonsterState, DEFAULT_SERVER_PORT,
 };
 pub use permissions::{
     permission_matches, BanEntry, BanManager, IpBanEntry, PermissionGroup, PermissionsManager,

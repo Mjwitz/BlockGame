@@ -2510,27 +2510,29 @@ impl ApplicationHandler for BlockGameApp {
                                 } else {
                                     None
                                 };
-                                if let Some((mid, mkind, mpos)) = hit_mp_boss {
-                                    if let Some(client) = &mut state.mp_client {
-                                        client.send(
-                                            &blockgame_core::net::ClientPacket::AttackTempleMonster {
-                                                monster_id: mid,
-                                                damage: attack_damage,
-                                                knockback: state.camera.forward(),
-                                            },
+                                if let Some((mid, mkind, mpos, invulnerable)) = hit_mp_boss {
+                                    if !invulnerable {
+                                        if let Some(client) = &mut state.mp_client {
+                                            client.send(
+                                                &blockgame_core::net::ClientPacket::AttackTempleMonster {
+                                                    monster_id: mid,
+                                                    damage: attack_damage,
+                                                    knockback: state.camera.forward(),
+                                                },
+                                            );
+                                        }
+                                        state.audio.play_monster_hurt(
+                                            mkind,
+                                            mpos,
+                                            state.player.position,
+                                            state.camera.yaw,
                                         );
-                                    }
-                                    state.audio.play_monster_hurt(
-                                        mkind,
-                                        mpos,
-                                        state.player.position,
-                                        state.camera.yaw,
-                                    );
-                                    state.grant_skill_xp(SkillKind::Combat, 15);
-                                    if weapon_lifesteal > 0.0 && !state.player_stats.is_dead {
-                                        state.player_stats.health = (state.player_stats.health
-                                            + attack_damage * weapon_lifesteal)
-                                            .min(state.player_stats.max_health);
+                                        state.grant_skill_xp(SkillKind::Combat, 15);
+                                        if weapon_lifesteal > 0.0 && !state.player_stats.is_dead {
+                                            state.player_stats.health = (state.player_stats.health
+                                                + attack_damage * weapon_lifesteal)
+                                                .min(state.player_stats.max_health);
+                                        }
                                     }
                                 } else if let Some((mkind, mpos, killed)) = hit_monster {
                                     state.audio.play_monster_hurt(
@@ -4629,6 +4631,9 @@ impl ApplicationHandler for BlockGameApp {
                                 blockgame_core::net::ServerPacket::TempleMonstersSync { monsters } => {
                                     state.world_manager.apply_mp_temple_monsters(&monsters);
                                 }
+                                blockgame_core::net::ServerPacket::TempleArrowsSync { arrows } => {
+                                    state.world_manager.apply_mp_temple_arrows(&arrows);
+                                }
                                 blockgame_core::net::ServerPacket::BossHudUpdate { hud } => {
                                     state.world_manager.mp_boss_hud = hud;
                                 }
@@ -5073,12 +5078,26 @@ impl ApplicationHandler for BlockGameApp {
                             state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
                         }
                     }
-                    let (arrow_dmg, arrow_hits, arrow_kills) = state.world_manager.update_arrows(
-                        dt,
-                        state.player.position,
-                        state.player.half_width,
-                        state.player.height,
-                    );
+                    let (arrow_dmg, arrow_hits, arrow_kills, mp_arrow_hits) =
+                        state.world_manager.update_arrows(
+                            dt,
+                            state.player.position,
+                            state.player.half_width,
+                            state.player.height,
+                        );
+                    if !mp_arrow_hits.is_empty() {
+                        if let Some(client) = &mut state.mp_client {
+                            for (monster_id, damage, knockback) in mp_arrow_hits {
+                                client.send(
+                                    &blockgame_core::net::ClientPacket::AttackTempleMonster {
+                                        monster_id,
+                                        damage,
+                                        knockback,
+                                    },
+                                );
+                            }
+                        }
+                    }
                     if arrow_hits > 0 {
                         state.grant_skill_xp(
                             SkillKind::Combat,
@@ -6886,9 +6905,22 @@ impl ApplicationHandler for BlockGameApp {
                     }
                     FishingSession::Idle => None,
                 };
-                if !state.world_manager.arrows.is_empty() || bobber_info.is_some() {
+                if !state.world_manager.arrows.is_empty()
+                    || !state.world_manager.mp_temple_arrows.is_empty()
+                    || bobber_info.is_some()
+                {
                     let mut combined =
                         blockgame_render::build_arrows_mesh(&state.world_manager.arrows);
+                    if !state.world_manager.mp_temple_arrows.is_empty() {
+                        let mp_mesh = blockgame_render::build_arrows_mesh(
+                            &state.world_manager.mp_temple_arrows,
+                        );
+                        let base = combined.vertices.len() as u32;
+                        combined.vertices.extend(mp_mesh.vertices);
+                        combined
+                            .indices
+                            .extend(mp_mesh.indices.into_iter().map(|i| i + base));
+                    }
                     if let Some((bpos, is_biting)) = bobber_info {
                         let right = state.camera.forward().cross(Vec3::Y).normalize_or_zero();
                         let rod_tip = state.camera.position

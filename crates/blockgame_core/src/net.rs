@@ -185,6 +185,15 @@ pub struct SyncedMonsterState {
     pub invulnerable: bool,
 }
 
+/// Compact network representation of a server-authoritative boss/temple projectile.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncedArrowState {
+    pub id: u32,
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub stuck: bool,
+}
+
 /// Maximum distance (in blocks) at which proximity voice chat is relayed and audible.
 pub const MAX_VOICE_RANGE: f32 = 48.0;
 
@@ -293,6 +302,9 @@ pub enum ServerPacket {
     },
     TempleProtectionSync {
         zones: Vec<crate::temple::TempleBounds>,
+    },
+    TempleArrowsSync {
+        arrows: Vec<SyncedArrowState>,
     },
 }
 
@@ -861,6 +873,16 @@ impl ServerPacket {
                     write_ivec3(&mut payload, z.max)?;
                 }
             }
+            Self::TempleArrowsSync { arrows } => {
+                write_u8(&mut payload, 22)?;
+                write_u32(&mut payload, arrows.len() as u32)?;
+                for a in arrows {
+                    write_u32(&mut payload, a.id)?;
+                    write_vec3(&mut payload, a.position)?;
+                    write_vec3(&mut payload, a.velocity)?;
+                    write_bool(&mut payload, a.stuck)?;
+                }
+            }
         }
 
         wrap_frame(&payload)
@@ -1171,6 +1193,23 @@ impl ServerPacket {
                     zones.push(crate::temple::TempleBounds { min, max });
                 }
                 Ok(Self::TempleProtectionSync { zones })
+            }
+            22 => {
+                let count = read_u32(&mut r)? as usize;
+                let mut arrows = Vec::with_capacity(count.min(512));
+                for _ in 0..count {
+                    let id = read_u32(&mut r)?;
+                    let position = read_vec3(&mut r)?;
+                    let velocity = read_vec3(&mut r)?;
+                    let stuck = read_bool(&mut r)?;
+                    arrows.push(SyncedArrowState {
+                        id,
+                        position,
+                        velocity,
+                        stuck,
+                    });
+                }
+                Ok(Self::TempleArrowsSync { arrows })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -2595,10 +2634,9 @@ fn run_server_loop(
                                                 ServerPacket::ChatBroadcast {
                                                     sender: String::new(),
                                                     prefix: String::new(),
-                                                    message: format!(
-                                                        "&6Victory! {} has been defeated! {} and its treasure chest are now unlocked!",
+                                                    message: crate::temple::boss_victory_message(
                                                         m.kind.name(),
-                                                        tkind.name()
+                                                        tkind.name(),
                                                     ),
                                                     is_system: true,
                                                 },
@@ -3121,16 +3159,14 @@ fn run_server_loop(
                         }
                     }
                     if let Some(new_phase) = outcome.phase_changed {
-                        tick_announcements.push(format!(
-                            "&e{} raises an invulnerable barrier for Phase {}! Dodge the incoming barrage!",
+                        tick_announcements.push(crate::temple::phase_barrier_message(
                             m.kind.name(),
-                            new_phase
+                            new_phase,
                         ));
                     }
                     if outcome.barrier_broken {
-                        tick_announcements.push(format!(
-                            "&a{}'s barrier shatters — strike now!",
-                            m.kind.name()
+                        tick_announcements.push(crate::temple::barrier_shatter_message(
+                            m.kind.name(),
                         ));
                     }
                     for (mkind, spos) in outcome.summon_minions {
@@ -3146,7 +3182,7 @@ fn run_server_loop(
                         .iter()
                         .filter(|m| !m.dead && m.temple_id == Some(tid) && !m.kind.is_boss())
                         .count();
-                    if count_in_temple < 6 {
+                    if count_in_temple < crate::temple::MAX_MINIONS_PER_TEMPLE {
                         let mid = next_temple_monster_id;
                         next_temple_monster_id = next_temple_monster_id.wrapping_add(1);
                         temple_monsters.push(crate::monster::MonsterEntity::new_temple_mob(
@@ -3212,7 +3248,7 @@ fn run_server_loop(
                     }
                 }
 
-                // Broadcast synced temple monsters and per-player 500-block Boss HUD updates
+                // Broadcast synced temple monsters, boss projectiles, and per-player 500-block Boss HUD updates
                 let synced: Vec<SyncedMonsterState> = temple_monsters
                     .iter()
                     .map(|m| SyncedMonsterState {
@@ -3229,10 +3265,27 @@ fn run_server_loop(
                         invulnerable: m.invuln_timer > 0.0,
                     })
                     .collect();
+                let synced_arrows: Vec<SyncedArrowState> = temple_arrows
+                    .iter()
+                    .map(|a| SyncedArrowState {
+                        id: a.id,
+                        position: a.position,
+                        velocity: a.velocity,
+                        stuck: a.stuck,
+                    })
+                    .collect();
+                let arrow_bytes = (ServerPacket::TempleArrowsSync {
+                    arrows: synced_arrows,
+                })
+                .encode()
+                .ok();
                 if let Ok(mbytes) = (ServerPacket::TempleMonstersSync { monsters: synced }).encode() {
                     for c in clients.iter_mut() {
                         if c.authenticated && !c.is_dead {
                             let _ = c.stream.write_all(&mbytes);
+                            if let Some(ref abytes) = arrow_bytes {
+                                let _ = c.stream.write_all(abytes);
+                            }
                             let hud = crate::temple::compute_boss_hud(
                                 &temple_monsters,
                                 c.model.position,
@@ -4488,6 +4541,17 @@ mod tests {
         };
         let bytes = s3.encode().unwrap();
         assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s3);
+
+        let s4 = ServerPacket::TempleArrowsSync {
+            arrows: vec![SyncedArrowState {
+                id: 77,
+                position: Vec3::new(24_001.5, 34.0, -4.25),
+                velocity: Vec3::new(14.0, 2.5, -6.0),
+                stuck: false,
+            }],
+        };
+        let bytes = s4.encode().unwrap();
+        assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s4);
     }
 }
 

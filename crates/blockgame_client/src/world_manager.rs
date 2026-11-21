@@ -269,8 +269,10 @@ pub struct WorldManager {
     // Biome Boss Temples & Instanced Arenas (Issue #9)
     pub temples: blockgame_core::temple::TempleManager,
     pub mp_temple_monsters: Vec<MonsterEntity>,
+    pub mp_temple_arrows: Vec<ArrowProjectile>,
     pub mp_boss_hud: Option<blockgame_core::temple::BossHudState>,
     pub pending_temple_messages: Vec<String>,
+    spawned_overworld_temples: HashSet<u64>,
 }
 
 impl WorldManager {
@@ -319,8 +321,10 @@ impl WorldManager {
             animal_spawned_columns: HashSet::new(),
             temples: blockgame_core::temple::TempleManager::new(),
             mp_temple_monsters: Vec::new(),
+            mp_temple_arrows: Vec::new(),
             mp_boss_hud: None,
             pending_temple_messages: Vec::new(),
+            spawned_overworld_temples: HashSet::new(),
         }
     }
 
@@ -1899,6 +1903,9 @@ impl WorldManager {
         }
 
         if let Some(idx) = hit_idx {
+            if self.monsters[idx].invuln_timer > 0.0 {
+                return None;
+            }
             let knockback = ray_dir.normalize_or_zero();
             self.monsters[idx].take_damage(damage, knockback);
             Some((
@@ -1999,17 +2006,17 @@ impl WorldManager {
                     }
                 }
                 if let Some(new_phase) = outcome.phase_changed {
-                    self.pending_temple_messages.push(format!(
-                        "&e{} raises an invulnerable barrier for Phase {}! Dodge the incoming barrage!",
-                        monster.kind.name(),
-                        new_phase
-                    ));
+                    self.pending_temple_messages.push(
+                        blockgame_core::temple::phase_barrier_message(
+                            monster.kind.name(),
+                            new_phase,
+                        ),
+                    );
                 }
                 if outcome.barrier_broken {
-                    self.pending_temple_messages.push(format!(
-                        "&a{}'s barrier shatters — strike now!",
-                        monster.kind.name()
-                    ));
+                    self.pending_temple_messages.push(
+                        blockgame_core::temple::barrier_shatter_message(monster.kind.name()),
+                    );
                 }
                 for (mkind, spos) in outcome.summon_minions {
                     if let Some(tid) = monster.temple_id {
@@ -2032,7 +2039,7 @@ impl WorldManager {
                 .iter()
                 .filter(|m| !m.dead && m.temple_id == Some(tid) && !m.kind.is_boss())
                 .count();
-            if count_in_temple < 6 {
+            if count_in_temple < blockgame_core::temple::MAX_MINIONS_PER_TEMPLE {
                 let id = self.next_monster_id;
                 self.next_monster_id = self.next_monster_id.wrapping_add(1).max(1);
                 self.monsters
@@ -2064,11 +2071,9 @@ impl WorldManager {
                     let mut w = self.world.lock().unwrap();
                     blockgame_core::temple::populate_arena_treasure_chest(&mut w, &state_snapshot);
                 }
-                self.pending_temple_messages.push(format!(
-                    "&6Victory! {} has been defeated! {} and its treasure chest are now unlocked!",
-                    boss_name,
-                    tkind.name()
-                ));
+                self.pending_temple_messages.push(
+                    blockgame_core::temple::boss_victory_message(boss_name, tkind.name()),
+                );
             }
         }
 
@@ -2102,6 +2107,38 @@ impl WorldManager {
                     }
                 }
             }
+        } else if !is_multiplayer && !in_arena_band {
+            // Spawn 2 biome-themed overworld guardians outside undefeated temples on approach
+            let (player_cpos, _, _, _) = blockgame_core::world_to_chunk_coords(IVec3::new(
+                player_pos.x.floor() as i32,
+                player_pos.y.floor() as i32,
+                player_pos.z.floor() as i32,
+            ));
+            for placement in self.generator.find_temples_for_chunk(player_cpos) {
+                if self.spawned_overworld_temples.contains(&placement.temple_id) {
+                    continue;
+                }
+                let defeated = self
+                    .temples
+                    .temples
+                    .get(&placement.temple_id)
+                    .map_or(false, |t| t.boss_defeated);
+                if defeated {
+                    self.spawned_overworld_temples.insert(placement.temple_id);
+                    continue;
+                }
+                let dist_sq = (placement.origin.as_vec3() - player_pos).length_squared();
+                if dist_sq <= 40.0 * 40.0 {
+                    self.spawned_overworld_temples.insert(placement.temple_id);
+                    let guardians = blockgame_core::temple::spawn_overworld_temple_guardians(
+                        placement.temple_id,
+                        placement.kind,
+                        placement.origin,
+                        &mut self.next_monster_id,
+                    );
+                    self.monsters.extend(guardians);
+                }
+            }
         }
 
         (total_damage, drops)
@@ -2121,7 +2158,7 @@ impl WorldManager {
                 .map_or(false, |t| t.boss_defeated);
             if !defeated {
                 let bounds = blockgame_core::temple::TempleBounds {
-                    min: placement.origin + IVec3::new(-12, -2, -12),
+                    min: placement.origin + IVec3::new(-12, -4, -12),
                     max: placement.origin + IVec3::new(12, 16, 12),
                 };
                 if bounds.contains(pos) {
@@ -2151,7 +2188,7 @@ impl WorldManager {
                 .map_or(false, |t| t.boss_defeated);
             if !defeated {
                 let bounds = blockgame_core::temple::TempleBounds {
-                    min: placement.origin + IVec3::new(-12, -2, -12),
+                    min: placement.origin + IVec3::new(-12, -4, -12),
                     max: placement.origin + IVec3::new(12, 16, 12),
                 };
                 if bounds.contains(pos) {
@@ -2341,13 +2378,26 @@ impl WorldManager {
             .collect();
     }
 
+    /// Updates the synced multiplayer temple arrow list from `ServerPacket::TempleArrowsSync`.
+    pub fn apply_mp_temple_arrows(&mut self, synced: &[blockgame_core::SyncedArrowState]) {
+        self.mp_temple_arrows = synced
+            .iter()
+            .map(|s| {
+                let mut a = ArrowProjectile::new(s.id, s.position, s.velocity, false, 0.0);
+                a.stuck = s.stuck;
+                a
+            })
+            .collect();
+    }
+
     /// Raycast hit test against synced multiplayer boss/temple monsters.
+    /// Returns `(id, kind, position, invulnerable)`.
     pub fn hit_test_mp_temple_monster(
         &self,
         ray_origin: Vec3,
         ray_dir: Vec3,
         reach: f32,
-    ) -> Option<(u32, MonsterKind, Vec3)> {
+    ) -> Option<(u32, MonsterKind, Vec3, bool)> {
         let mut closest_dist = reach;
         let mut hit = None;
         for m in &self.mp_temple_monsters {
@@ -2357,7 +2407,7 @@ impl WorldManager {
             if let Some(dist) = m.aabb().intersect_ray(ray_origin, ray_dir, reach) {
                 if dist < closest_dist {
                     closest_dist = dist;
-                    hit = Some((m.id, m.kind, m.position));
+                    hit = Some((m.id, m.kind, m.position, m.invuln_timer > 0.0));
                 }
             }
         }
@@ -2377,18 +2427,21 @@ impl WorldManager {
         }
     }
 
-    /// Updates all active arrow projectiles and applies hits to monsters, animals, or the player.
-    /// Returns `(player_damage_taken, monster_hits, monster_kills)`.
+    /// Updates all active arrow projectiles and applies hits to monsters, MP temple monsters,
+    /// animals, or the player.
+    /// Returns `(player_damage_taken, monster_hits, monster_kills, mp_temple_hits)` where each
+    /// MP temple hit is `(monster_id, damage, knockback)`.
     pub fn update_arrows(
         &mut self,
         dt: f32,
         player_pos: Vec3,
         player_half_width: f32,
         player_height: f32,
-    ) -> (f32, usize, usize) {
+    ) -> (f32, usize, usize, Vec<(u32, f32, Vec3)>) {
         let mut total_player_damage = 0.0;
         let mut monster_hits = 0;
         let mut monster_kills = 0;
+        let mut mp_temple_hits: Vec<(u32, f32, Vec3)> = Vec::new();
         let player_box = AABB::from_player(player_pos, player_half_width, player_height);
         let world_guard = self.world.lock().unwrap();
 
@@ -2413,14 +2466,43 @@ impl WorldManager {
                         && p.z >= b.min.z - 0.15
                         && p.z <= b.max.z + 0.15
                     {
-                        monster.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
-                        monster_hits += 1;
-                        if monster.dead {
-                            monster_kills += 1;
+                        if monster.invuln_timer <= 0.0 {
+                            monster.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
+                            monster_hits += 1;
+                            if monster.dead {
+                                monster_kills += 1;
+                            }
                         }
                         arrow.dead = true;
                         hit = true;
                         break;
+                    }
+                }
+                if !hit {
+                    for monster in &self.mp_temple_monsters {
+                        if monster.dead {
+                            continue;
+                        }
+                        let b = monster.aabb();
+                        if p.x >= b.min.x - 0.15
+                            && p.x <= b.max.x + 0.15
+                            && p.y >= b.min.y - 0.15
+                            && p.y <= b.max.y + 0.15
+                            && p.z >= b.min.z - 0.15
+                            && p.z <= b.max.z + 0.15
+                        {
+                            if monster.invuln_timer <= 0.0 {
+                                mp_temple_hits.push((
+                                    monster.id,
+                                    arrow.damage,
+                                    arrow.velocity.normalize_or_zero(),
+                                ));
+                                monster_hits += 1;
+                            }
+                            arrow.dead = true;
+                            hit = true;
+                            break;
+                        }
                     }
                 }
                 if !hit {
@@ -2458,7 +2540,7 @@ impl WorldManager {
         }
 
         self.arrows.retain(|a| !a.dead);
-        (total_player_damage, monster_hits, monster_kills)
+        (total_player_damage, monster_hits, monster_kills, mp_temple_hits)
     }
 
     /// Tills Grass or Dirt into Farmland using a Hoe.

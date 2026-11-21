@@ -371,7 +371,22 @@ impl MonsterEntity {
         if self.dead || self.invuln_timer > 0.0 {
             return;
         }
-        self.health = (self.health - amount).max(0.0);
+        let mut next_hp = (self.health - amount).max(0.0);
+        // Clamp boss HP at the next phase threshold so burst damage cannot skip a phase barrier
+        if self.kind.is_boss() && self.max_health > 0.0 {
+            if self.phase == 1 {
+                let p2_threshold = self.max_health * 0.66;
+                if next_hp < p2_threshold {
+                    next_hp = p2_threshold;
+                }
+            } else if self.phase == 2 {
+                let p3_threshold = self.max_health * 0.33;
+                if next_hp < p3_threshold {
+                    next_hp = p3_threshold;
+                }
+            }
+        }
+        self.health = next_hp;
         self.hurt_timer = 0.35;
         self.aggro_in_day = true;
         self.in_combat = true;
@@ -781,15 +796,14 @@ impl MonsterEntity {
 
                     // Phase 2+: Summon Sand Mummies
                     if self.phase >= 2 && self.summon_cooldown <= 0.0 {
-                        let side = Vec3::new(-dir.z, 0.0, dir.x);
-                        outcome.summon_minions.push((
+                        push_flank_minions(
+                            &mut outcome.summon_minions,
+                            self.position,
+                            dir,
+                            3.0,
                             MonsterKind::SandMummy,
-                            self.position + side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
-                        outcome.summon_minions.push((
                             MonsterKind::SunArcher,
-                            self.position - side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
+                        );
                         self.summon_cooldown = 20.0;
                     }
                 }
@@ -807,18 +821,18 @@ impl MonsterEntity {
                         outcome.damage_to_player = self.kind.attack_damage();
                         self.attack_cooldown = if self.phase == 3 { 1.0 } else { 1.35 };
                     } else if dist > 5.0 && dist <= 24.0 && self.attack_cooldown <= 0.0 {
-                        let origin = self.position + Vec3::new(0.0, 2.6, 0.0);
-                        let delta = (player_pos + Vec3::new(0.0, 1.0, 0.0)) - origin;
-                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
-                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.12, 0.0)).normalize_or_zero();
                         let count = if self.phase == 3 { 3 } else { 1 };
-                        let base_angle = aim.x.atan2(aim.z);
-                        for i in 0..count {
-                            let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * 0.18;
-                            let ang = base_angle + offset;
-                            let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
-                            outcome.extra_arrows.push((origin + vdir * 0.9, vdir * 24.0, 7.0));
-                        }
+                        push_aimed_fan(
+                            &mut outcome.extra_arrows,
+                            self.position + Vec3::new(0.0, 2.6, 0.0),
+                            player_pos + Vec3::new(0.0, 1.0, 0.0),
+                            0.12,
+                            count,
+                            0.18,
+                            0.9,
+                            24.0,
+                            7.0,
+                        );
                         self.attack_cooldown = 2.0;
                     }
 
@@ -833,15 +847,14 @@ impl MonsterEntity {
                     }
 
                     if self.phase >= 2 && self.summon_cooldown <= 0.0 {
-                        let side = Vec3::new(-dir.z, 0.0, dir.x);
-                        outcome.summon_minions.push((
+                        push_flank_minions(
+                            &mut outcome.summon_minions,
+                            self.position,
+                            dir,
+                            3.5,
                             MonsterKind::FrostWraith,
-                            self.position + side * 3.5 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
-                        outcome.summon_minions.push((
                             MonsterKind::FrostWraith,
-                            self.position - side * 3.5 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
+                        );
                         self.summon_cooldown = 22.0;
                     }
                 }
@@ -859,18 +872,18 @@ impl MonsterEntity {
                         outcome.damage_to_player = self.kind.attack_damage();
                         self.attack_cooldown = 1.25;
                     } else if dist > 5.0 && dist <= 24.0 && self.attack_cooldown <= 0.0 {
-                        let origin = self.position + Vec3::new(0.0, 2.4, 0.0);
-                        let delta = (player_pos + Vec3::new(0.0, 1.0, 0.0)) - origin;
-                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
-                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.14, 0.0)).normalize_or_zero();
                         let count = if self.phase == 3 { 3 } else { 1 };
-                        let base_angle = aim.x.atan2(aim.z);
-                        for i in 0..count {
-                            let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * 0.2;
-                            let ang = base_angle + offset;
-                            let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
-                            outcome.extra_arrows.push((origin + vdir * 0.9, vdir * 21.0, 7.5));
-                        }
+                        push_aimed_fan(
+                            &mut outcome.extra_arrows,
+                            self.position + Vec3::new(0.0, 2.4, 0.0),
+                            player_pos + Vec3::new(0.0, 1.0, 0.0),
+                            0.14,
+                            count,
+                            0.20,
+                            0.9,
+                            21.0,
+                            7.5,
+                        );
                         self.attack_cooldown = 2.1;
                     }
 
@@ -886,15 +899,14 @@ impl MonsterEntity {
                     }
 
                     if self.phase >= 2 && self.summon_cooldown <= 0.0 {
-                        let side = Vec3::new(-dir.z, 0.0, dir.x);
-                        outcome.summon_minions.push((
+                        push_flank_minions(
+                            &mut outcome.summon_minions,
+                            self.position,
+                            dir,
+                            3.0,
                             MonsterKind::JungleStalker,
-                            self.position + side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
-                        outcome.summon_minions.push((
                             MonsterKind::JungleStalker,
-                            self.position - side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
+                        );
                         self.summon_cooldown = 20.0;
                     }
                 }
@@ -907,7 +919,6 @@ impl MonsterEntity {
                         target_vel = -dir * (speed * 0.9);
                         self.is_moving = true;
                     } else {
-                        // Strafe laterally
                         let strafe = Vec3::new(-dir.z, 0.0, dir.x);
                         target_vel = strafe * (speed * 0.65);
                         self.is_moving = true;
@@ -918,18 +929,18 @@ impl MonsterEntity {
                         outcome.damage_to_player = self.kind.attack_damage();
                         self.attack_cooldown = 1.0;
                     } else if dist <= 28.0 && self.attack_cooldown <= 0.0 {
-                        let origin = self.position + Vec3::new(0.0, 2.2, 0.0);
-                        let delta = (player_pos + Vec3::new(0.0, 1.1, 0.0)) - origin;
-                        let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
-                        let aim = (delta + Vec3::new(0.0, horiz_d * 0.10, 0.0)).normalize_or_zero();
                         let count = if self.phase == 3 { 5 } else if self.phase == 2 { 3 } else { 1 };
-                        let base_angle = aim.x.atan2(aim.z);
-                        for i in 0..count {
-                            let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * 0.17;
-                            let ang = base_angle + offset;
-                            let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
-                            outcome.extra_arrows.push((origin + vdir * 0.7, vdir * 26.0, 6.5));
-                        }
+                        push_aimed_fan(
+                            &mut outcome.extra_arrows,
+                            self.position + Vec3::new(0.0, 2.2, 0.0),
+                            player_pos + Vec3::new(0.0, 1.1, 0.0),
+                            0.10,
+                            count,
+                            0.17,
+                            0.7,
+                            26.0,
+                            6.5,
+                        );
                         self.attack_cooldown = if self.phase == 3 { 1.35 } else { 1.75 };
                     }
 
@@ -945,15 +956,14 @@ impl MonsterEntity {
                     }
 
                     if self.phase >= 2 && self.summon_cooldown <= 0.0 {
-                        let side = Vec3::new(-dir.z, 0.0, dir.x);
-                        outcome.summon_minions.push((
+                        push_flank_minions(
+                            &mut outcome.summon_minions,
+                            self.position,
+                            dir,
+                            3.0,
                             MonsterKind::ShadowKnight,
-                            self.position + side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
-                        outcome.summon_minions.push((
                             MonsterKind::ShadowKnight,
-                            self.position - side * 3.0 + Vec3::new(0.0, 0.5, 0.0),
-                        ));
+                        );
                         self.summon_cooldown = 21.0;
                     }
                 }
@@ -1034,6 +1044,45 @@ impl MonsterEntity {
 
         outcome
     }
+}
+
+/// Emits a symmetric horizontal fan of gravity-compensated projectiles toward `target`.
+#[allow(clippy::too_many_arguments)]
+fn push_aimed_fan(
+    out: &mut Vec<(Vec3, Vec3, f32)>,
+    origin: Vec3,
+    target: Vec3,
+    arc_factor: f32,
+    count: usize,
+    spread_rad: f32,
+    muzzle_offset: f32,
+    speed: f32,
+    damage: f32,
+) {
+    let delta = target - origin;
+    let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
+    let aim = (delta + Vec3::new(0.0, horiz_d * arc_factor, 0.0)).normalize_or_zero();
+    let base_angle = aim.x.atan2(aim.z);
+    for i in 0..count {
+        let offset = (i as f32 - (count as f32 - 1.0) * 0.5) * spread_rad;
+        let ang = base_angle + offset;
+        let vdir = Vec3::new(ang.sin(), aim.y, ang.cos()).normalize();
+        out.push((origin + vdir * muzzle_offset, vdir * speed, damage));
+    }
+}
+
+/// Spawns two flanking temple minions to the left and right of `center` relative to `forward`.
+fn push_flank_minions(
+    out: &mut Vec<(MonsterKind, Vec3)>,
+    center: Vec3,
+    forward: Vec3,
+    spacing: f32,
+    left_kind: MonsterKind,
+    right_kind: MonsterKind,
+) {
+    let side = Vec3::new(-forward.z, 0.0, forward.x);
+    out.push((left_kind, center + side * spacing + Vec3::new(0.0, 0.5, 0.0)));
+    out.push((right_kind, center - side * spacing + Vec3::new(0.0, 0.5, 0.0)));
 }
 
 /// Returns `true` if there are no solid blocks directly above `pos`.

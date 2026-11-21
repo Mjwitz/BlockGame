@@ -4,7 +4,7 @@ use glam::{IVec3, Vec3};
 
 use crate::{
     block::BlockId,
-    chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z},
+    chunk::{Chunk, ChunkPos},
     item::{ItemId, ItemSlot},
     monster::{MonsterEntity, MonsterKind},
     world::{world_to_chunk_coords, World},
@@ -27,6 +27,9 @@ pub const BOSS_HUD_MAX_DISTANCE: f32 = 500.0;
 
 /// Cooldown (seconds) before a defeated boss can be re-summoned via the Boss Altar.
 pub const BOSS_RECHALLENGE_COOLDOWN_SECS: f32 = 30.0;
+
+/// Maximum active non-boss minions per temple encounter (shared by SP and MP).
+pub const MAX_MINIONS_PER_TEMPLE: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TempleKind {
@@ -186,7 +189,7 @@ impl TempleInstanceState {
     ) -> Self {
         let arena_origin = arena_origin_for_temple(temple_id, kind);
         let overworld_bounds = TempleBounds {
-            min: overworld_origin + IVec3::new(-12, -2, -12),
+            min: overworld_origin + IVec3::new(-12, -4, -12),
             max: overworld_origin + IVec3::new(12, 16, 12),
         };
         let arena_bounds = TempleBounds {
@@ -642,9 +645,58 @@ pub fn compute_boss_hud(monsters: &[MonsterEntity], player_pos: Vec3) -> Option<
     best
 }
 
-/// Helper to make sure we don't accidentally drop unused imports for chunk constants.
-pub fn arena_chunk_span() -> (i32, i32, i32) {
-    (CHUNK_SIZE_X as i32, CHUNK_SIZE_Y as i32, CHUNK_SIZE_Z as i32)
+/// Spawns 2 biome-themed temple guardians outside an overworld temple entrance.
+pub fn spawn_overworld_temple_guardians(
+    temple_id: u64,
+    kind: TempleKind,
+    overworld_origin: IVec3,
+    next_monster_id: &mut u32,
+) -> Vec<MonsterEntity> {
+    let (m1_kind, m2_kind) = kind.minion_kinds();
+    let id1 = *next_monster_id;
+    *next_monster_id = next_monster_id.wrapping_add(1).max(1);
+    let id2 = *next_monster_id;
+    *next_monster_id = next_monster_id.wrapping_add(1).max(1);
+    vec![
+        MonsterEntity::new_temple_mob(
+            id1,
+            m1_kind,
+            Vec3::new(
+                (overworld_origin.x - 3) as f32 + 0.5,
+                (overworld_origin.y + 1) as f32,
+                (overworld_origin.z - 6) as f32 + 0.5,
+            ),
+            temple_id,
+        ),
+        MonsterEntity::new_temple_mob(
+            id2,
+            m2_kind,
+            Vec3::new(
+                (overworld_origin.x + 3) as f32 + 0.5,
+                (overworld_origin.y + 1) as f32,
+                (overworld_origin.z - 6) as f32 + 0.5,
+            ),
+            temple_id,
+        ),
+    ]
+}
+
+pub fn phase_barrier_message(boss_name: &str, new_phase: u8) -> String {
+    format!(
+        "&e{} raises an invulnerable barrier for Phase {}! Dodge the incoming barrage!",
+        boss_name, new_phase
+    )
+}
+
+pub fn barrier_shatter_message(boss_name: &str) -> String {
+    format!("&a{}'s barrier shatters — strike now!", boss_name)
+}
+
+pub fn boss_victory_message(boss_name: &str, temple_name: &str) -> String {
+    format!(
+        "&6Victory! {} has been defeated! {} and its treasure chest are now unlocked!",
+        boss_name, temple_name
+    )
 }
 
 #[cfg(test)]
@@ -718,9 +770,15 @@ mod tests {
             let mut boss = MonsterEntity::new_temple_mob(10, kind, Vec3::new(0.0, 33.0, 0.0), 99);
             assert_eq!(boss.phase, 1);
 
-            // Drop HP below 66% -> Phase 2 + invulnerable barrier
-            boss.take_damage(boss.max_health * 0.4, Vec3::Z);
+            // Burst damage in Phase 1 must clamp at the 66% threshold so Phase 2 barrier cannot be skipped
+            boss.take_damage(boss.max_health * 0.9, Vec3::Z);
             let hp_at_p2 = boss.health;
+            assert!(
+                hp_at_p2 >= boss.max_health * 0.65 && hp_at_p2 <= boss.max_health * 0.67,
+                "Expected burst damage to clamp at Phase 2 threshold (66%), got {}/{}",
+                hp_at_p2,
+                boss.max_health
+            );
             let out2 = boss.update(0.05, Vec3::new(0.0, 33.0, 6.0), 0.0, &world, &reg);
             assert_eq!(boss.phase, 2);
             assert_eq!(out2.phase_changed, Some(2));
