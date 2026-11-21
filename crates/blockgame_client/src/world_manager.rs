@@ -792,7 +792,9 @@ impl WorldManager {
                     let affected_neighbors = {
                         let mut world = world_arc.lock().unwrap();
                         for chunk in new_chunks {
-                            world.insert_chunk(chunk);
+                            if !world.has_chunk(chunk.pos) {
+                                world.insert_chunk(chunk);
+                            }
                         }
                         collect_affected_neighbors(&world, &positions)
                     };
@@ -3040,6 +3042,67 @@ impl WorldManager {
     }
 
     /// Applies an initial `WorldDeltaSync` packet from the multiplayer server and remeshes modified chunks.
+    /// Builds (if needed) and synchronously meshes/uploads a temple's instanced arena chunks so
+    /// the arena floor is 100% solid and rendered immediately upon teleporting in (SP & MP).
+    pub fn ensure_arena_built_local(
+        &mut self,
+        placement: blockgame_gen::TemplePlacement,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let state_snapshot = {
+            let entry = self.temples.register_temple(
+                placement.temple_id,
+                placement.kind,
+                placement.origin,
+                placement.portal_pos,
+            );
+            entry.clone()
+        };
+
+        let floor_missing = {
+            let w = self.world.lock().unwrap();
+            w.get_block(state_snapshot.arena_origin) == BlockId::AIR
+        };
+        if !state_snapshot.arena_built || floor_missing {
+            let mut w = self.world.lock().unwrap();
+            blockgame_core::temple::build_arena_into_world(&mut w, &state_snapshot);
+            if state_snapshot.boss_defeated {
+                blockgame_core::temple::populate_arena_treasure_chest(&mut w, &state_snapshot);
+            }
+        }
+
+        let min_c = blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.min).0;
+        let max_c = blockgame_core::world_to_chunk_coords(state_snapshot.arena_bounds.max).0;
+        let mut arena_cpos = Vec::new();
+        for cx in min_c.0.x..=max_c.0.x {
+            for cy in min_c.0.y..=max_c.0.y {
+                for cz in min_c.0.z..=max_c.0.z {
+                    let acp = ChunkPos::new(cx, cy, cz);
+                    self.loaded_chunks_set.insert(acp);
+                    self.dirty_remesh.remove(&acp);
+                    arena_cpos.push(acp);
+                }
+            }
+        }
+
+        let new_meshes = {
+            let world = self.world.lock().unwrap();
+            arena_cpos
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
     pub fn apply_world_delta_sync(
         &mut self,
         modified_chunks: &[(ChunkPos, Vec<(u16, BlockId)>)],
@@ -3053,17 +3116,23 @@ impl WorldManager {
         {
             let mut world = self.world.lock().unwrap();
             for (cpos, blocks) in modified_chunks {
-                if !world.has_chunk(*cpos) {
-                    let mut chunk = self.generator.generate_chunk(*cpos);
-                    self.generator.populate_chunk_features(&mut chunk);
+                let rle_sum: usize = blocks.iter().map(|&(count, _)| count as usize).sum();
+                if rle_sum == blockgame_core::CHUNK_VOLUME {
+                    let chunk = blockgame_core::save::decode_chunk_rle(*cpos, blocks);
                     world.insert_chunk(chunk);
-                }
-                let origin = cpos.to_world_origin();
-                for &(idx, block_id) in blocks {
-                    let lx = (idx as usize % 16) as i32;
-                    let lz = ((idx as usize / 16) % 16) as i32;
-                    let ly = (idx as usize / 256) as i32;
-                    world.set_block(origin + IVec3::new(lx, ly, lz), block_id);
+                } else {
+                    if !world.has_chunk(*cpos) {
+                        let mut chunk = self.generator.generate_chunk(*cpos);
+                        self.generator.populate_chunk_features(&mut chunk);
+                        world.insert_chunk(chunk);
+                    }
+                    let origin = cpos.to_world_origin();
+                    for &(idx, block_id) in blocks {
+                        let lx = (idx as usize % 16) as i32;
+                        let lz = ((idx as usize / 16) % 16) as i32;
+                        let ly = (idx as usize / 256) as i32;
+                        world.set_block(origin + IVec3::new(lx, ly, lz), block_id);
+                    }
                 }
                 chunks_to_rebuild.push(*cpos);
             }
@@ -3077,6 +3146,10 @@ impl WorldManager {
             for (pos, state) in furnaces {
                 world.furnaces.insert(*pos, state.clone());
             }
+        }
+
+        for &cpos in &chunks_to_rebuild {
+            self.loaded_chunks_set.insert(cpos);
         }
 
         self.item_drops.clear();
