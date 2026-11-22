@@ -116,6 +116,14 @@ pub enum FishingSession {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct EatingState {
+    pub slot: usize,
+    pub timer: f32,
+    pub duration: f32,
+    pub crunch_accum: f32,
+}
+
 pub struct AppState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -162,10 +170,7 @@ pub struct AppState {
     pub active_chest_pos: Option<IVec3>,
     pub active_furnace_pos: Option<IVec3>,
     pub active_cooking_pot_pos: Option<IVec3>,
-    pub eating_timer: f32,
-    pub eating_duration: f32,
-    pub eating_slot: Option<usize>,
-    pub eating_crunch_accum: f32,
+    pub eating: Option<EatingState>,
     pub active_coal_gen_pos: Option<IVec3>,
     pub active_battery_pos: Option<IVec3>,
     pub active_electric_furnace_pos: Option<IVec3>,
@@ -748,6 +753,7 @@ impl AppState {
         self.skills_open = false;
         self.skill_toast = None;
         self.skills_dirty = false;
+        self.world_manager.is_multiplayer = false;
     }
 
     pub fn join_multiplayer_server(
@@ -781,6 +787,7 @@ impl AppState {
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.is_multiplayer = true;
         world_manager.init_area_around(initial_state.position, &self.device, &self.pipeline);
 
         self.world_manager = world_manager;
@@ -1431,10 +1438,7 @@ impl ApplicationHandler for BlockGameApp {
             active_chest_pos: None,
             active_furnace_pos: None,
             active_cooking_pot_pos: None,
-            eating_timer: 0.0,
-            eating_duration: 0.0,
-            eating_slot: None,
-            eating_crunch_accum: 0.0,
+            eating: None,
             active_coal_gen_pos: None,
             active_battery_pos: None,
             active_electric_furnace_pos: None,
@@ -3003,7 +3007,16 @@ impl ApplicationHandler for BlockGameApp {
                                                 .min(state.player_stats.max_health);
                                         }
                                     }
-                                } else if let Some((akind, apos)) = hit_animal {
+                                } else if let Some((animal_id, akind, apos)) = hit_animal {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::AttackAnimal {
+                                                animal_id,
+                                                damage: base_attack_damage,
+                                                knockback: state.camera.forward().normalize_or_zero(),
+                                            },
+                                        );
+                                    }
                                     state.audio.play_animal_hurt(
                                         akind,
                                         apos,
@@ -3892,10 +3905,12 @@ impl ApplicationHandler for BlockGameApp {
                         if !held_slot.is_empty() {
                             if let Some(food) = state.item_registry.get_food(held_slot.item_id) {
                                 if state.player_stats.can_consume(&food) {
-                                    state.eating_slot = Some(state.active_hotbar_slot);
-                                    state.eating_timer = 0.0;
-                                    state.eating_duration = food.eat_duration.max(0.4);
-                                    state.eating_crunch_accum = 0.0;
+                                    state.eating = Some(EatingState {
+                                        slot: state.active_hotbar_slot,
+                                        timer: 0.0,
+                                        duration: food.eat_duration.max(0.4),
+                                        crunch_accum: 0.0,
+                                    });
                                     state.audio.play_eat_crunch();
                                     state.punch_timer = 0.16;
                                     return;
@@ -5709,7 +5724,7 @@ impl ApplicationHandler for BlockGameApp {
                     }
 
                     // 3a. Hold-Right-Click Eating / Drinking Tick (Issue #12)
-                    if let Some(eat_slot) = state.eating_slot {
+                    if let Some(eat_slot) = state.eating.as_ref().map(|e| e.slot) {
                         let slot_changed = eat_slot != state.active_hotbar_slot;
                         let held = state.inventory.get(state.active_hotbar_slot);
                         let food_opt = state.item_registry.get_food(held.item_id);
@@ -5724,23 +5739,27 @@ impl ApplicationHandler for BlockGameApp {
 
                         if !still_valid {
                             // Cancel eating without consuming item (release or hotbar slot switch)
-                            state.eating_slot = None;
-                            state.eating_timer = 0.0;
-                            state.eating_crunch_accum = 0.0;
+                            state.eating = None;
                         } else if let Some(food) = food_opt {
                             // Slow horizontal movement while eating
                             state.player.velocity.x *= (1.0 - 6.0 * dt).clamp(0.35, 1.0);
                             state.player.velocity.z *= (1.0 - 6.0 * dt).clamp(0.35, 1.0);
 
-                            state.eating_timer += dt;
-                            state.eating_crunch_accum += dt;
-                            if state.eating_crunch_accum >= 0.28 {
-                                state.eating_crunch_accum = 0.0;
-                                state.audio.play_eat_crunch();
-                                state.punch_timer = 0.16; // Chomp/bob animation pulse
+                            let mut finished = false;
+                            if let Some(eating) = &mut state.eating {
+                                eating.timer += dt;
+                                eating.crunch_accum += dt;
+                                if eating.crunch_accum >= 0.28 {
+                                    eating.crunch_accum = 0.0;
+                                    state.audio.play_eat_crunch();
+                                    state.punch_timer = 0.16; // Chomp/bob animation pulse
+                                }
+                                if eating.timer >= eating.duration {
+                                    finished = true;
+                                }
                             }
 
-                            if state.eating_timer >= state.eating_duration {
+                            if finished {
                                 let food_mult = state.player_skills.farming_food_multiplier();
                                 let rng_roll =
                                     blockgame_core::fishing::next_f32(&mut state.fishing_rng);
@@ -5749,9 +5768,7 @@ impl ApplicationHandler for BlockGameApp {
                                     state.audio.play_eat_crunch();
                                     state.punch_timer = 0.2;
                                 }
-                                state.eating_slot = None;
-                                state.eating_timer = 0.0;
-                                state.eating_crunch_accum = 0.0;
+                                state.eating = None;
                             }
                         }
                     }
@@ -7173,14 +7190,16 @@ impl ApplicationHandler for BlockGameApp {
                             &state.character_profile.active_appearance,
                         );
 
-                        if state.eating_slot.is_some() && state.eating_duration > 0.0 {
-                            let progress = (state.eating_timer / state.eating_duration).clamp(0.0, 1.0);
-                            UiBuilder::draw_eating_progress_bar(
-                                &mut state.ui_mesh,
-                                screen_w,
-                                screen_h,
-                                progress,
-                            );
+                        if let Some(eating) = &state.eating {
+                            if eating.duration > 0.0 {
+                                let progress = (eating.timer / eating.duration).clamp(0.0, 1.0);
+                                UiBuilder::draw_eating_progress_bar(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    progress,
+                                );
+                            }
                         }
 
                         if let Some(boss_hud) = state

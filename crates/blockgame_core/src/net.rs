@@ -2083,32 +2083,11 @@ fn run_server_loop(
     let block_registry = crate::block::BlockRegistry::new();
     let mut world = World::new();
     save_data.apply_to_world(&mut world);
-    let mut farming_sim = crate::farming::FarmingSimulation::new(save_data.metadata.seed as u64 ^ 0xFA4A_1234);
-    for &(pos, timer) in &save_data.planted_crops {
-        let target_secs = farming_sim.roll_stage_duration();
-        farming_sim.planted_crops.push(crate::farming::CropEntry {
-            pos,
-            timer,
-            target_secs,
-        });
-    }
-    for &(pos, dry_timer) in &save_data.active_farmland {
-        farming_sim
-            .active_farmland
-            .push(crate::farming::FarmlandEntry { pos, dry_timer });
-    }
-    for &(pos, timer) in &save_data.growing_sugar_cane {
-        let target_secs = farming_sim.roll_sugar_cane_duration();
-        farming_sim
-            .growing_sugar_cane
-            .push(crate::farming::SugarCaneEntry {
-                pos,
-                timer,
-                target_secs,
-            });
-    }
+    let mut farming_sim = crate::farming::FarmingSimulation::from_save_data(&save_data);
     let mut station_sync_accum: f32 = 0.0;
     let mut animal_sync_accum: f32 = 0.0;
+    let mut animal_spawn_accum: f32 = 0.0;
+    let mut had_animals = !save_data.animals.is_empty();
     let mut temple_monsters: Vec<crate::monster::MonsterEntity> = Vec::new();
     let mut temple_arrows: Vec<crate::monster::ArrowProjectile> = Vec::new();
     let mut had_temple_monsters = false;
@@ -2513,6 +2492,45 @@ fn run_server_loop(
                                         chests,
                                         furnaces,
                                         item_drops: drops,
+                                    },
+                                ));
+                                for (&pot_pos, pot) in &world.cooking_pots {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::CookingPotSync {
+                                            pos: pot_pos,
+                                            ingredients: pot.ingredients,
+                                            fuel: pot.fuel,
+                                            output: pot.output,
+                                            burn_time: pot.burn_time_remaining,
+                                            max_burn_time: pot.max_burn_time,
+                                            cook_progress: pot.cook_progress,
+                                        },
+                                    ));
+                                }
+                                let join_animals: Vec<SyncedAnimalState> = save_data
+                                    .animals
+                                    .iter()
+                                    .map(|a| SyncedAnimalState {
+                                        id: a.id,
+                                        kind: a.kind,
+                                        position: a.position,
+                                        velocity: a.velocity,
+                                        yaw: a.yaw,
+                                        health: a.health,
+                                        max_health: a.max_health,
+                                        hurt_timer: a.hurt_timer,
+                                        love_timer: a.love_timer,
+                                        breed_cooldown: a.breed_cooldown,
+                                        baby_timer: a.baby_timer,
+                                        is_moving: a.is_moving,
+                                        walk_anim_timer: a.walk_anim_timer,
+                                    })
+                                    .collect();
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::AnimalsSync {
+                                        animals: join_animals,
                                     },
                                 ));
 
@@ -3630,6 +3648,16 @@ fn run_server_loop(
                 .collect();
 
             if !active_player_positions.is_empty() {
+                let broadcast_pkt = |clients: &mut [ConnectedClient], pkt: &ServerPacket| {
+                    if let Ok(bytes) = pkt.encode() {
+                        for c in clients.iter_mut() {
+                            if c.authenticated && !c.is_dead {
+                                let _ = c.stream.write_all(&bytes);
+                            }
+                        }
+                    }
+                };
+
                 let day_frac = (save_data.metadata.day_night_time / 24000.0).rem_euclid(1.0);
                 let sun_angle = day_frac * std::f32::consts::TAU;
                 let sun_intensity = (sun_angle.sin() * 2.0 + 0.5).clamp(0.0, 1.0);
@@ -3651,18 +3679,13 @@ fn run_server_loop(
                                     .modified_chunks
                                     .insert(cpos, encode_chunk_rle(chunk));
                             }
-                            if let Ok(bbytes) = (ServerPacket::BlockUpdate {
-                                pos,
-                                block_id: block,
-                            })
-                            .encode()
-                            {
-                                for c in clients.iter_mut() {
-                                    if c.authenticated && !c.is_dead {
-                                        let _ = c.stream.write_all(&bbytes);
-                                    }
-                                }
-                            }
+                            broadcast_pkt(
+                                &mut clients,
+                                &ServerPacket::BlockUpdate {
+                                    pos,
+                                    block_id: block,
+                                },
+                            );
                         }
                         crate::farming::FarmingEvent::SpawnDrop { pos, item } => {
                             let drop_id = next_local_drop_id();
@@ -3670,17 +3693,86 @@ fn run_server_loop(
                             let mut drop = ItemDrop::new(drop_pos, item);
                             drop.drop_id = drop_id;
                             save_data.item_drops.push(drop);
-                            if let Ok(dbytes) = (ServerPacket::ItemDropSpawned {
-                                drop_id,
-                                position: drop_pos,
-                                velocity: Vec3::new(0.0, 2.0, 0.0),
-                                item,
-                            })
-                            .encode()
-                            {
-                                for c in clients.iter_mut() {
-                                    if c.authenticated && !c.is_dead {
-                                        let _ = c.stream.write_all(&dbytes);
+                            broadcast_pkt(
+                                &mut clients,
+                                &ServerPacket::ItemDropSpawned {
+                                    drop_id,
+                                    position: drop_pos,
+                                    velocity: Vec3::new(0.0, 2.0, 0.0),
+                                    item,
+                                },
+                            );
+                        }
+                    }
+                }
+
+                // B0. Server-authoritative passive animal spawning around connected players
+                animal_spawn_accum += dt;
+                if animal_spawn_accum >= 2.0 && save_data.animals.len() < 35 {
+                    animal_spawn_accum = 0.0;
+                    'spawn_outer: for &ppos in &active_player_positions {
+                        let pcx = (ppos.x.floor() as i32).div_euclid(16);
+                        let pcz = (ppos.z.floor() as i32).div_euclid(16);
+                        for dcz in -2..=2 {
+                            for dcx in -2..=2 {
+                                let col = glam::IVec2::new(pcx + dcx, pcz + dcz);
+                                if save_data.animal_spawned_columns.contains(&col) {
+                                    continue;
+                                }
+                                save_data.animal_spawned_columns.insert(col);
+                                // Ensure vertical surface chunks exist in server world
+                                for cy in 0..crate::chunk::VERTICAL_CHUNKS as i32 {
+                                    let cpos = ChunkPos::new(col.x, cy, col.y);
+                                    if world.get_chunk(cpos).is_none() {
+                                        world.insert_chunk(chunk_generator(cpos));
+                                    }
+                                }
+                                let col_hash = ((col.x as i64).wrapping_mul(73856093)
+                                    ^ (col.y as i64).wrapping_mul(19349663)
+                                    ^ (save_data.metadata.seed as i64))
+                                    as u64;
+                                if col_hash % 5 != 0 {
+                                    continue;
+                                }
+                                let kind = match (col_hash >> 4) % 4 {
+                                    0 => crate::animal::AnimalKind::Cow,
+                                    1 => crate::animal::AnimalKind::Pig,
+                                    2 => crate::animal::AnimalKind::Chicken,
+                                    _ => crate::animal::AnimalKind::Sheep,
+                                };
+                                let count = (1 + ((col_hash >> 8) % 3) as usize)
+                                    .min(35_usize.saturating_sub(save_data.animals.len()));
+                                for n in 0..count {
+                                    let lx = (((col_hash >> (12 + n * 4)) & 0xF) as i32).clamp(1, 14);
+                                    let lz = (((col_hash >> (16 + n * 4)) & 0xF) as i32).clamp(1, 14);
+                                    let wx = col.x * 16 + lx;
+                                    let wz = col.y * 16 + lz;
+                                    let max_y = (crate::chunk::VERTICAL_CHUNKS * 16 - 3) as i32;
+                                    for wy in (40..=max_y).rev() {
+                                        let ground = world.get_block(IVec3::new(wx, wy, wz));
+                                        if matches!(ground, BlockId::GRASS | BlockId::DIRT)
+                                            && world.get_block(IVec3::new(wx, wy + 1, wz)).is_air()
+                                            && world.get_block(IVec3::new(wx, wy + 2, wz)).is_air()
+                                        {
+                                            let aid = save_data.next_animal_id;
+                                            save_data.next_animal_id =
+                                                save_data.next_animal_id.wrapping_add(1);
+                                            save_data.animals.push(
+                                                crate::animal::AnimalEntity::new(
+                                                    aid,
+                                                    kind,
+                                                    Vec3::new(
+                                                        wx as f32 + 0.5,
+                                                        (wy + 1) as f32,
+                                                        wz as f32 + 0.5,
+                                                    ),
+                                                ),
+                                            );
+                                            break;
+                                        }
+                                    }
+                                    if save_data.animals.len() >= 35 {
+                                        break 'spawn_outer;
                                     }
                                 }
                             }
@@ -3702,25 +3794,21 @@ fn run_server_loop(
                     let mut drop = ItemDrop::new(drop_pos, item);
                     drop.drop_id = drop_id;
                     save_data.item_drops.push(drop);
-                    if let Ok(dbytes) = (ServerPacket::ItemDropSpawned {
-                        drop_id,
-                        position: drop_pos,
-                        velocity: Vec3::new(0.0, 2.5, 0.0),
-                        item,
-                    })
-                    .encode()
-                    {
-                        for c in clients.iter_mut() {
-                            if c.authenticated && !c.is_dead {
-                                let _ = c.stream.write_all(&dbytes);
-                            }
-                        }
-                    }
+                    broadcast_pkt(
+                        &mut clients,
+                        &ServerPacket::ItemDropSpawned {
+                            drop_id,
+                            position: drop_pos,
+                            velocity: Vec3::new(0.0, 2.5, 0.0),
+                            item,
+                        },
+                    );
                 }
 
                 animal_sync_accum += dt;
-                if animal_sync_accum >= 0.1 && !save_data.animals.is_empty() {
+                if animal_sync_accum >= 0.1 && (!save_data.animals.is_empty() || had_animals) {
                     animal_sync_accum = 0.0;
+                    had_animals = !save_data.animals.is_empty();
                     let synced_animals: Vec<SyncedAnimalState> = save_data
                         .animals
                         .iter()
@@ -3740,17 +3828,12 @@ fn run_server_loop(
                             walk_anim_timer: a.walk_anim_timer,
                         })
                         .collect();
-                    if let Ok(abytes) = (ServerPacket::AnimalsSync {
-                        animals: synced_animals,
-                    })
-                    .encode()
-                    {
-                        for c in clients.iter_mut() {
-                            if c.authenticated && !c.is_dead {
-                                let _ = c.stream.write_all(&abytes);
-                            }
-                        }
-                    }
+                    broadcast_pkt(
+                        &mut clients,
+                        &ServerPacket::AnimalsSync {
+                            animals: synced_animals,
+                        },
+                    );
                 }
 
                 // C. Authoritative Furnaces & Cooking Pots
@@ -3780,36 +3863,26 @@ fn run_server_loop(
                                 BlockId::FURNACE
                             };
                             world.set_block(fpos, new_blk);
-                            if let Ok(bbytes) = (ServerPacket::BlockUpdate {
-                                pos: fpos,
-                                block_id: new_blk,
-                            })
-                            .encode()
-                            {
-                                for c in clients.iter_mut() {
-                                    if c.authenticated && !c.is_dead {
-                                        let _ = c.stream.write_all(&bbytes);
-                                    }
-                                }
-                            }
+                            broadcast_pkt(
+                                &mut clients,
+                                &ServerPacket::BlockUpdate {
+                                    pos: fpos,
+                                    block_id: new_blk,
+                                },
+                            );
                         }
                         if (should_sync_stations && (was_active || is_active)) || lit_changed {
-                            if let Ok(cbytes) = (ServerPacket::ContainerSync {
-                                pos: fpos,
-                                is_furnace: true,
-                                slots: snapshot.0.to_vec(),
-                                burn_time: snapshot.1,
-                                max_burn_time: snapshot.2,
-                                cook_progress: snapshot.3,
-                            })
-                            .encode()
-                            {
-                                for c in clients.iter_mut() {
-                                    if c.authenticated && !c.is_dead {
-                                        let _ = c.stream.write_all(&cbytes);
-                                    }
-                                }
-                            }
+                            broadcast_pkt(
+                                &mut clients,
+                                &ServerPacket::ContainerSync {
+                                    pos: fpos,
+                                    is_furnace: true,
+                                    slots: snapshot.0.to_vec(),
+                                    burn_time: snapshot.1,
+                                    max_burn_time: snapshot.2,
+                                    cook_progress: snapshot.3,
+                                },
+                            );
                         }
                     }
                 }
@@ -3836,37 +3909,27 @@ fn run_server_loop(
                                 BlockId::COOKING_POT
                             };
                             world.set_block(ppos, new_blk);
-                            if let Ok(bbytes) = (ServerPacket::BlockUpdate {
-                                pos: ppos,
-                                block_id: new_blk,
-                            })
-                            .encode()
-                            {
-                                for c in clients.iter_mut() {
-                                    if c.authenticated && !c.is_dead {
-                                        let _ = c.stream.write_all(&bbytes);
-                                    }
-                                }
-                            }
+                            broadcast_pkt(
+                                &mut clients,
+                                &ServerPacket::BlockUpdate {
+                                    pos: ppos,
+                                    block_id: new_blk,
+                                },
+                            );
                         }
                         if (should_sync_stations && (was_active || is_active)) || lit_changed {
-                            if let Ok(pbytes) = (ServerPacket::CookingPotSync {
-                                pos: ppos,
-                                ingredients: snapshot.0,
-                                fuel: snapshot.1,
-                                output: snapshot.2,
-                                burn_time: snapshot.3,
-                                max_burn_time: snapshot.4,
-                                cook_progress: snapshot.5,
-                            })
-                            .encode()
-                            {
-                                for c in clients.iter_mut() {
-                                    if c.authenticated && !c.is_dead {
-                                        let _ = c.stream.write_all(&pbytes);
-                                    }
-                                }
-                            }
+                            broadcast_pkt(
+                                &mut clients,
+                                &ServerPacket::CookingPotSync {
+                                    pos: ppos,
+                                    ingredients: snapshot.0,
+                                    fuel: snapshot.1,
+                                    output: snapshot.2,
+                                    burn_time: snapshot.3,
+                                    max_burn_time: snapshot.4,
+                                    cook_progress: snapshot.5,
+                                },
+                            );
                         }
                     }
                 }
@@ -3905,21 +3968,7 @@ fn run_server_loop(
                 }
             }
             let _ = auth_db.save_to_dir(&world_dir);
-            save_data.planted_crops = farming_sim
-                .planted_crops
-                .iter()
-                .map(|c| (c.pos, c.timer))
-                .collect();
-            save_data.active_farmland = farming_sim
-                .active_farmland
-                .iter()
-                .map(|f| (f.pos, f.dry_timer))
-                .collect();
-            save_data.growing_sugar_cane = farming_sim
-                .growing_sugar_cane
-                .iter()
-                .map(|s| (s.pos, s.timer))
-                .collect();
+            farming_sim.export_to_save_data(&mut save_data);
             save_data.capture_from_world(&world);
             let _ = save_world_to_dir(&saves_root, &mut save_data);
         }
@@ -3936,21 +3985,7 @@ fn run_server_loop(
     let _ = auth_db.save_to_dir(&world_dir);
     let _ = perms_manager.save_to_dir(&world_dir);
     let _ = ban_manager.save_to_dir(&world_dir);
-    save_data.planted_crops = farming_sim
-        .planted_crops
-        .iter()
-        .map(|c| (c.pos, c.timer))
-        .collect();
-    save_data.active_farmland = farming_sim
-        .active_farmland
-        .iter()
-        .map(|f| (f.pos, f.dry_timer))
-        .collect();
-    save_data.growing_sugar_cane = farming_sim
-        .growing_sugar_cane
-        .iter()
-        .map(|s| (s.pos, s.timer))
-        .collect();
+    farming_sim.export_to_save_data(&mut save_data);
     save_data.capture_from_world(&world);
     let _ = save_world_to_dir(&saves_root, &mut save_data);
 

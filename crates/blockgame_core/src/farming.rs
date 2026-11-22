@@ -82,6 +82,50 @@ impl FarmingSimulation {
         }
     }
 
+    /// Reconstructs a `FarmingSimulation` from persisted `WorldSaveData` timers.
+    pub fn from_save_data(data: &crate::save::WorldSaveData) -> Self {
+        let mut sim = Self::new(data.metadata.seed as u64 ^ 0xFA4A_1234);
+        for &(pos, timer) in &data.planted_crops {
+            let target_secs = sim.roll_stage_duration();
+            sim.planted_crops.push(CropEntry {
+                pos,
+                timer,
+                target_secs,
+            });
+        }
+        for &(pos, dry_timer) in &data.active_farmland {
+            sim.active_farmland.push(FarmlandEntry { pos, dry_timer });
+        }
+        for &(pos, timer) in &data.growing_sugar_cane {
+            let target_secs = sim.roll_sugar_cane_duration();
+            sim.growing_sugar_cane.push(SugarCaneEntry {
+                pos,
+                timer,
+                target_secs,
+            });
+        }
+        sim
+    }
+
+    /// Exports current crop, farmland, and sugar cane timers into `WorldSaveData`.
+    pub fn export_to_save_data(&self, data: &mut crate::save::WorldSaveData) {
+        data.planted_crops = self
+            .planted_crops
+            .iter()
+            .map(|c| (c.pos, c.timer))
+            .collect();
+        data.active_farmland = self
+            .active_farmland
+            .iter()
+            .map(|f| (f.pos, f.dry_timer))
+            .collect();
+        data.growing_sugar_cane = self
+            .growing_sugar_cane
+            .iter()
+            .map(|s| (s.pos, s.timer))
+            .collect();
+    }
+
     fn next_u32(&mut self) -> u32 {
         // xorshift64*
         let mut x = self.rng_state;

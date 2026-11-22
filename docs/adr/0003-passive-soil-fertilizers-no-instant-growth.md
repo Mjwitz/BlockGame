@@ -10,4 +10,4 @@ Fertilizers (`Compost` and `Bone Fertilizer`) are applied to farmland tiles as p
 ## Consequences
 
 - `Bone` crafts into `Bone Fertilizer` (2.0× growth speed and +1 bonus harvest yield) rather than an instant-growth item.
-- Fertilizer state is tracked per farmland tile in world persistence (`environment.bin`) and clears on harvest, first Stem Crop fruit spawn, or soil reversion to Dirt.
+- Fertilizer tier is encoded directly in farmland `BlockId` variants (`FARMLAND_COMPOST*`, `FARMLAND_BONE*`) in chunk persistence, syncing automatically via `BlockUpdate` and clearing on harvest, first Stem Crop fruit spawn, or soil reversion to Dirt.

@@ -635,6 +635,16 @@ impl CraftingManager {
                 return Some((recipe, recipe.output()));
             }
         }
+        // Fallback: any 4 mixed compostable organic items craft into 2x Compost
+        if is_mixed_compost_grid(grid) {
+            if let Some(compost_recipe) = self
+                .recipes
+                .iter()
+                .find(|r| r.output().item_id == ItemId::COMPOST)
+            {
+                return Some((compost_recipe, ItemSlot::new(ItemId::COMPOST, 2)));
+            }
+        }
         None
     }
 
@@ -2506,6 +2516,39 @@ impl CraftingManager {
     }
 }
 
+/// Returns true if `item` is organic matter that can be combined (in any mix of 4) into Compost.
+pub const fn is_compostable_organic(item: ItemId) -> bool {
+    matches!(
+        item,
+        ItemId::WHEAT_SEEDS
+            | ItemId::TOMATO_SEEDS
+            | ItemId::MELON_SEEDS
+            | ItemId::PUMPKIN_SEEDS
+            | ItemId::WHEAT
+            | ItemId::CARROT
+            | ItemId::POTATO
+            | ItemId::TOMATO
+            | ItemId::MELON_SLICE
+            | ItemId::APPLE
+            | ItemId::ROTTEN_FLESH
+            | ItemId::SUGAR_CANE
+    )
+}
+
+fn is_mixed_compost_grid(grid: &CraftingGrid) -> bool {
+    let mut count = 0usize;
+    for slot in &grid.slots {
+        if slot.is_empty() {
+            continue;
+        }
+        if !is_compostable_organic(slot.item_id) {
+            return false;
+        }
+        count += 1;
+    }
+    count == 4
+}
+
 /// Static table of shapeless Cooking Pot recipes (up to 4 ingredients).
 /// Recipes consuming `MILK_BUCKET` or `WATER_BUCKET` return an empty `BUCKET` in that input slot.
 pub const COOKING_POT_RECIPES: &[(&'static str, &'static [ItemId], ItemId, u16)] = &[
@@ -3167,5 +3210,26 @@ mod tests {
             get_smelting_output(ItemId::CACTUS),
             Some(ItemId::GREEN_DYE)
         );
+    }
+
+    #[test]
+    fn test_mixed_organic_compost_crafting() {
+        let cm = CraftingManager::new();
+
+        // Any mix of 4 organic items crafts 2x Compost
+        let mut grid = CraftingGrid::new_2x2();
+        grid.set(0, 0, ItemSlot::new(ItemId::WHEAT_SEEDS, 1));
+        grid.set(1, 0, ItemSlot::new(ItemId::WHEAT_SEEDS, 1));
+        grid.set(0, 1, ItemSlot::new(ItemId::CARROT, 1));
+        grid.set(1, 1, ItemSlot::new(ItemId::ROTTEN_FLESH, 1));
+        assert_eq!(cm.craft(&mut grid), Some(ItemSlot::new(ItemId::COMPOST, 2)));
+
+        // Non-organic item breaks the match
+        let mut bad_grid = CraftingGrid::new_2x2();
+        bad_grid.set(0, 0, ItemSlot::new(ItemId::WHEAT_SEEDS, 1));
+        bad_grid.set(1, 0, ItemSlot::new(ItemId::CARROT, 1));
+        bad_grid.set(0, 1, ItemSlot::new(ItemId::ROTTEN_FLESH, 1));
+        bad_grid.set(1, 1, ItemSlot::new(ItemId::COBBLESTONE, 1));
+        assert!(cm.find_match(&bad_grid).is_none());
     }
 }
