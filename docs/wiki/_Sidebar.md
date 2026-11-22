@@ -2,6 +2,7 @@
 - [[Home]]
 - [[Getting Started|Getting-Started]]
 - [[Controls and UI|Controls-and-UI]]
+- [[Character Creator|Character-Creator]]
 - [[Gameplay and Survival|Gameplay-and-Survival]]
 - [[Farming and Cooking|Farming-and-Cooking]]
 - [[Power and Storage|Power-and-Storage]]
