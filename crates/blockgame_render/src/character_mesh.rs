@@ -200,10 +200,10 @@ impl CharacterMesh {
         for i in 0..8 {
             let (x_a, z_a) = ring[i];
             let (x_b, z_b) = ring[(i + 1) % 8];
-            let p0 = Vec3::new(x_b, y0, z_b);
-            let p1 = Vec3::new(x_a, y0, z_a);
-            let p2 = Vec3::new(x_a, y1, z_a);
-            let p3 = Vec3::new(x_b, y1, z_b);
+            let p0 = Vec3::new(x_a, y0, z_a);
+            let p1 = Vec3::new(x_b, y0, z_b);
+            let p2 = Vec3::new(x_b, y1, z_b);
+            let p3 = Vec3::new(x_a, y1, z_a);
             self.push_quad(xform, p0, p1, p2, p3, color, light);
         }
 
@@ -218,9 +218,9 @@ impl CharacterMesh {
             self.push_quad(
                 xform,
                 top_center,
-                Vec3::new(x2, y1, z2),
-                Vec3::new(x1, y1, z1),
                 Vec3::new(x0, y1, z0),
+                Vec3::new(x1, y1, z1),
+                Vec3::new(x2, y1, z2),
                 color,
                 light,
             );
@@ -228,9 +228,9 @@ impl CharacterMesh {
             self.push_quad(
                 xform,
                 bot_center,
-                Vec3::new(x0, y0, z0),
-                Vec3::new(x1, y0, z1),
                 Vec3::new(x2, y0, z2),
+                Vec3::new(x1, y0, z1),
+                Vec3::new(x0, y0, z0),
                 color,
                 light,
             );
@@ -1578,5 +1578,28 @@ mod tests {
         let mesh = build_player_held_items_mesh(&[p], &reg, 0.0);
         assert!(!mesh.vertices.is_empty());
         assert!(!mesh.indices.is_empty());
+    }
+
+    #[test]
+    fn test_chamfered_prism_outward_normals() {
+        let mut mesh = CharacterMesh::new();
+        mesh.add_chamfered_prism(Mat4::IDENTITY, 0.0, 0.36, 0.185, 0.185, 0.048, [1.0, 0.8, 0.6], [1.0, 0.0]);
+        let center = Vec3::new(0.0, 0.18, 0.0);
+        for tri in mesh.indices.chunks_exact(3) {
+            let v0 = mesh.vertices[tri[0] as usize];
+            let v1 = mesh.vertices[tri[1] as usize];
+            let v2 = mesh.vertices[tri[2] as usize];
+            let p0 = Vec3::from(v0.position);
+            let p1 = Vec3::from(v1.position);
+            let p2 = Vec3::from(v2.position);
+            let face_center = (p0 + p1 + p2) / 3.0;
+            let n = (p1 - p0).cross(p2 - p0);
+            assert!(
+                n.dot(face_center - center) > 0.0,
+                "Triangle has inward-facing winding: normal {:?}, offset {:?}",
+                n,
+                face_center - center
+            );
+        }
     }
 }
