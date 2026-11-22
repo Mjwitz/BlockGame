@@ -1179,10 +1179,8 @@ impl UiBuilder {
             } else if block_id.is_flower()
                 || block_id == blockgame_core::block::BlockId::TALL_GRASS
                 || block_id == blockgame_core::block::BlockId::SEAGRASS
-                || block_id == blockgame_core::block::BlockId::WHEAT_0
-                || block_id == blockgame_core::block::BlockId::WHEAT_1
-                || block_id == blockgame_core::block::BlockId::WHEAT_2
-                || block_id == blockgame_core::block::BlockId::WHEAT_3
+                || block_id == blockgame_core::block::BlockId::SUGAR_CANE
+                || block_id.is_farmland_crop()
             {
                 // -----------------------------------------------------------------
                 // 3D HELD PLANT / FLOWER: Crossed-quad in-world plant geometry with soil clod
@@ -3022,6 +3020,102 @@ impl UiBuilder {
         Self::draw_string(mesh, x + w - num_w - 4.0, y + (h - 9.0) * 0.5, &num_str, 7.0, 9.0, 0.5, [0.92, 0.94, 0.98, 0.95]);
     }
 
+    /// Draws a segmented gauge with a two-tone fill:
+    /// `primary_val` (`0..=secondary_val`, e.g. Saturation) renders in `primary_color`/`primary_highlight`,
+    /// and the remainder up to `secondary_val` (e.g. Hunger) renders in `secondary_color`/`secondary_highlight`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_two_tone_segmented_gauge(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        label_color: [f32; 4],
+        primary_val: f32,
+        secondary_val: f32,
+        max_val: f32,
+        primary_color: [f32; 4],
+        primary_highlight: [f32; 4],
+        secondary_color: [f32; 4],
+        secondary_highlight: [f32; 4],
+        empty_color: [f32; 4],
+        border_color: [f32; 4],
+        num_segments: usize,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        mesh.add_quad(x + 1.5, y + 1.5, w, h, white_uv, [0.02, 0.03, 0.05, 0.60]);
+        mesh.add_quad(x, y, w, h, white_uv, border_color);
+        mesh.add_quad(x + 1.0, y + 1.0, w - 2.0, h - 2.0, white_uv, [0.06, 0.08, 0.12, 0.88]);
+
+        let label_w = Self::string_width(label, 7.5, 0.5);
+        Self::draw_string(mesh, x + 5.0, y + (h - 9.0) * 0.5, label, 7.5, 9.0, 0.5, label_color);
+
+        let track_start_x = x + 8.0 + label_w;
+        let num_str = format!("{:.0}", secondary_val.max(0.0));
+        let num_w = Self::string_width(&num_str, 7.0, 0.5);
+        let track_end_x = x + w - num_w - 7.0;
+        let track_w = (track_end_x - track_start_x).max(10.0);
+
+        let seg_gap = 2.0;
+        let total_gaps = (num_segments.saturating_sub(1)) as f32 * seg_gap;
+        let seg_w = ((track_w - total_gaps) / num_segments as f32).max(2.0);
+        let seg_h = h - 4.0;
+        let seg_y = y + 2.0;
+        let val_per_seg = max_val / num_segments as f32;
+
+        let clamped_sec = secondary_val.clamp(0.0, max_val);
+        let clamped_pri = primary_val.clamp(0.0, clamped_sec);
+
+        for i in 0..num_segments {
+            let sx = track_start_x + (i as f32) * (seg_w + seg_gap);
+            let seg_min = (i as f32) * val_per_seg;
+
+            // Empty groove
+            mesh.add_quad(sx, seg_y, seg_w, seg_h, white_uv, empty_color);
+
+            // Secondary fill (Hunger)
+            let sec_frac = ((clamped_sec - seg_min) / val_per_seg).clamp(0.0, 1.0);
+            if sec_frac > 0.01 {
+                let sw = seg_w * sec_frac;
+                mesh.add_quad(sx, seg_y, sw, seg_h, white_uv, secondary_color);
+                mesh.add_quad(sx, seg_y, sw, (seg_h * 0.35).max(1.0), white_uv, secondary_highlight);
+            }
+
+            // Primary fill (Saturation in bright gold)
+            let pri_frac = ((clamped_pri - seg_min) / val_per_seg).clamp(0.0, 1.0);
+            if pri_frac > 0.01 {
+                let pw = seg_w * pri_frac;
+                mesh.add_quad(sx, seg_y, pw, seg_h, white_uv, primary_color);
+                mesh.add_quad(sx, seg_y, pw, (seg_h * 0.35).max(1.0), white_uv, primary_highlight);
+            }
+        }
+
+        Self::draw_string(mesh, x + w - num_w - 4.0, y + (h - 9.0) * 0.5, &num_str, 7.0, 9.0, 0.5, [0.92, 0.94, 0.98, 0.95]);
+    }
+
+    /// Draws a compact eating/drinking progress bar below the center crosshair.
+    pub fn draw_eating_progress_bar(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        progress: f32,
+    ) {
+        let p = progress.clamp(0.0, 1.0);
+        if p <= 0.001 {
+            return;
+        }
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let bar_w = 72.0;
+        let bar_h = 6.0;
+        let bx = (screen_w - bar_w) * 0.5;
+        let by = screen_h * 0.5 + 22.0;
+        mesh.add_quad(bx - 1.0, by - 1.0, bar_w + 2.0, bar_h + 2.0, white_uv, [0.05, 0.06, 0.08, 0.85]);
+        mesh.add_quad(bx, by, bar_w, bar_h, white_uv, [0.18, 0.16, 0.12, 0.80]);
+        mesh.add_quad(bx, by, bar_w * p, bar_h, white_uv, [1.0, 0.82, 0.25, 0.96]);
+    }
+
     /// Builds the standard Roots & Ridges gameplay HUD: center crosshair, held item,
     /// dynamic auto-tucking hotbar, segmented Vitality/Stamina gauges, damage flash, and death screen.
     pub fn build_hud_with_armor_and_tuck(
@@ -3213,7 +3307,23 @@ impl UiBuilder {
             let gauge_w = 188.0;
             let gauge_h = 13.0;
 
-            // 4a. Vitality Gauge (Health) on the left above hotbar
+            // 4a. Vitality Gauge (Health) on the left above hotbar (tinted green when Poisoned)
+            let is_poisoned = stats.has_status_effect(blockgame_core::item::FoodEffectKind::Poison);
+            let (hp_label_col, hp_fill, hp_hi, hp_border) = if is_poisoned {
+                (
+                    [0.45, 0.96, 0.42, 1.0],
+                    [0.24, 0.72, 0.24, 1.0],
+                    [0.52, 0.96, 0.48, 1.0],
+                    [0.22, 0.56, 0.22, 0.92],
+                )
+            } else {
+                (
+                    [1.0, 0.35, 0.40, 1.0],
+                    [0.90, 0.18, 0.22, 1.0],
+                    [1.0, 0.45, 0.48, 1.0],
+                    [0.48, 0.22, 0.26, 0.90],
+                )
+            };
             Self::draw_segmented_gauge(
                 mesh,
                 start_x,
@@ -3221,13 +3331,13 @@ impl UiBuilder {
                 gauge_w,
                 gauge_h,
                 "HP",
-                [1.0, 0.35, 0.40, 1.0],
+                hp_label_col,
                 stats.health,
                 stats.max_health,
-                [0.90, 0.18, 0.22, 1.0],
-                [1.0, 0.45, 0.48, 1.0],
+                hp_fill,
+                hp_hi,
                 [0.16, 0.18, 0.22, 0.65],
-                [0.48, 0.22, 0.26, 0.90],
+                hp_border,
                 10,
             );
 
@@ -3252,24 +3362,81 @@ impl UiBuilder {
                 );
             }
 
-            // 5. Stamina / Nourishment Gauge on the right above hotbar
+            // 5. Stamina / Hunger Gauge with Two-Tone Saturation Fill (Q23 Option C)
+            // Bright gold from 0..saturation, warm orange from saturation..hunger (sickly green on Food Poisoning)
             let stamina_x = start_x + total_w - gauge_w;
-            Self::draw_segmented_gauge(
+            let has_food_poisoning =
+                stats.has_status_effect(blockgame_core::item::FoodEffectKind::FoodPoisoning);
+            let (st_label_col, sat_fill, sat_hi, hun_fill, hun_hi, st_border) = if has_food_poisoning {
+                (
+                    [0.68, 0.95, 0.34, 1.0],
+                    [0.66, 0.88, 0.26, 1.0],
+                    [0.82, 0.98, 0.50, 1.0],
+                    [0.42, 0.64, 0.16, 1.0],
+                    [0.58, 0.80, 0.26, 1.0],
+                    [0.34, 0.52, 0.16, 0.92],
+                )
+            } else {
+                (
+                    [1.0, 0.84, 0.28, 1.0],
+                    [1.0, 0.85, 0.20, 1.0],
+                    [1.0, 0.96, 0.60, 1.0],
+                    [0.92, 0.50, 0.10, 1.0],
+                    [1.0, 0.70, 0.26, 1.0],
+                    [0.58, 0.44, 0.18, 0.92],
+                )
+            };
+            Self::draw_two_tone_segmented_gauge(
                 mesh,
                 stamina_x,
                 bars_y,
                 gauge_w,
                 gauge_h,
                 "ST",
-                [1.0, 0.78, 0.25, 1.0],
+                st_label_col,
+                stats.saturation,
                 stats.hunger,
                 stats.max_hunger,
-                [0.94, 0.60, 0.12, 1.0],
-                [1.0, 0.82, 0.35, 1.0],
+                sat_fill,
+                sat_hi,
+                hun_fill,
+                hun_hi,
                 [0.20, 0.18, 0.14, 0.65],
-                [0.55, 0.42, 0.20, 0.90],
+                st_border,
                 10,
             );
+
+            // 5b. Active Food Status Effect Badges (Food Poisoning / Poison)
+            if !stats.status_effects.is_empty() && !stats.is_dead {
+                let mut badge_y = bars_y - 32.0;
+                for eff in &stats.status_effects {
+                    if eff.remaining_secs <= 0.0 {
+                        continue;
+                    }
+                    let (text, col) = match eff.kind {
+                        blockgame_core::item::FoodEffectKind::FoodPoisoning => (
+                            format!("FOOD POISONING {:.0}s", eff.remaining_secs.ceil()),
+                            [0.72, 0.95, 0.36, 0.98],
+                        ),
+                        blockgame_core::item::FoodEffectKind::Poison => (
+                            format!("POISON {:.0}s", eff.remaining_secs.ceil()),
+                            [0.42, 0.96, 0.46, 0.98],
+                        ),
+                    };
+                    let tw = Self::string_width(&text, 7.5, 0.5);
+                    let bx = (screen_w - tw) * 0.5;
+                    mesh.add_quad(
+                        bx - 6.0,
+                        badge_y - 2.0,
+                        tw + 12.0,
+                        13.0,
+                        TextureAtlas::get_uv_bounds(Self::WHITE_TILE),
+                        [0.05, 0.10, 0.05, 0.78],
+                    );
+                    Self::draw_string(mesh, bx, badge_y, &text, 7.5, 9.0, 0.5, col);
+                    badge_y -= 16.0;
+                }
+            }
 
             // 6. Oxygen / Breath Depth Gauge (above Stamina gauge when submerged or recovering breath)
             if (stats.is_submerged || stats.breath < stats.max_breath) && !stats.is_dead {
@@ -4349,6 +4516,216 @@ impl UiBuilder {
         }
     }
 
+    /// Hit-test helper for the Cooking Pot screen.
+    /// Returns `(kind, index)` where:
+    /// - `0` = Ingredient slot (`0..4`)
+    /// - `1` = Fuel slot (`0`)
+    /// - `2` = Output slot (`0`)
+    /// - `3` = Player inventory / hotbar slot (`0..36`)
+    pub fn hit_test_cooking_pot_screen(
+        screen_w: f32,
+        screen_h: f32,
+        mx: f32,
+        my: f32,
+    ) -> Option<(u8, usize)> {
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let top_y = screen_h * 0.5 - 220.0;
+
+        let ing_x0 = start_x + 48.0;
+        let ing_y0 = top_y + 12.0;
+        for i in 0..4 {
+            let col = (i % 2) as f32;
+            let row = (i / 2) as f32;
+            let sx = ing_x0 + col * (slot_size + slot_gap);
+            let sy = ing_y0 + row * (slot_size + slot_gap);
+            if mx >= sx && mx <= sx + slot_size && my >= sy && my <= sy + slot_size {
+                return Some((0, i));
+            }
+        }
+
+        let fuel_x = ing_x0 + 2.0 * (slot_size + slot_gap) + 28.0;
+        let fuel_y = ing_y0 + (slot_size + slot_gap);
+        if mx >= fuel_x && mx <= fuel_x + slot_size && my >= fuel_y && my <= fuel_y + slot_size {
+            return Some((1, 0));
+        }
+
+        let out_x = fuel_x + slot_size + 52.0;
+        let out_y = ing_y0 + (slot_size + slot_gap) * 0.5;
+        if mx >= out_x && mx <= out_x + slot_size && my >= out_y && my <= out_y + slot_size {
+            return Some((2, 0));
+        }
+
+        let inv_y = ing_y0 + 2.0 * (slot_size + slot_gap) + 32.0;
+        for row in 0..3 {
+            for col in 0..9 {
+                let sx = start_x + (col as f32) * (slot_size + slot_gap);
+                let sy = inv_y + (row as f32) * (slot_size + slot_gap);
+                if mx >= sx && mx <= sx + slot_size && my >= sy && my <= sy + slot_size {
+                    return Some((3, 9 + row * 9 + col));
+                }
+            }
+        }
+        let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 14.0;
+        for col in 0..9 {
+            let sx = start_x + (col as f32) * (slot_size + slot_gap);
+            if mx >= sx && mx <= sx + slot_size && my >= hotbar_y && my <= hotbar_y + slot_size {
+                return Some((3, col));
+            }
+        }
+
+        None
+    }
+
+    /// Builds the Cooking Pot UI screen (4-slot shapeless ingredient tray, fuel slot, flame,
+    /// cook progress bar, output slot, plus player backpack, hotbar, JEI, and tooltips).
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_cooking_pot_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        pot: &blockgame_core::CookingPotState,
+        inventory: &Inventory,
+        active_hotbar_slot: usize,
+        cursor_held: &ItemSlot,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+        jei_params: Option<&JeiParams>,
+        recipe_modal: Option<&RecipeModalParams>,
+    ) {
+        mesh.clear();
+        let mut hovered_item_name: Option<&str> = None;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.65]);
+
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let slot_uv = TextureAtlas::get_uv_bounds(Self::SLOT_BG_TILE);
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let top_y = screen_h * 0.5 - 220.0;
+
+        Self::draw_string(
+            mesh,
+            start_x,
+            top_y - 20.0,
+            "Cooking Pot",
+            8.0,
+            10.0,
+            1.0,
+            [1.0, 0.88, 0.62, 1.0],
+        );
+
+        let draw_slot_item = |mesh: &mut UiMesh,
+                              sx: f32,
+                              sy: f32,
+                              item_slot: ItemSlot,
+                              hovered: &mut Option<&str>| {
+            mesh.add_quad(sx, sy, slot_size, slot_size, slot_uv, [1.0, 1.0, 1.0, 0.95]);
+            if !item_slot.is_empty() {
+                if let Some(def) = registry.get(item_slot.item_id) {
+                    let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                    let icon_pad = 6.0;
+                    mesh.add_quad(
+                        sx + icon_pad,
+                        sy + icon_pad,
+                        slot_size - icon_pad * 2.0,
+                        slot_size - icon_pad * 2.0,
+                        icon_uv,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                    Self::draw_stack_number(mesh, sx, sy, slot_size, item_slot.count);
+                    Self::draw_durability_bar(mesh, sx, sy, slot_size, item_slot, registry);
+                    if cursor_pos[0] >= sx
+                        && cursor_pos[0] <= sx + slot_size
+                        && cursor_pos[1] >= sy
+                        && cursor_pos[1] <= sy + slot_size
+                    {
+                        *hovered = Some(def.display_name);
+                    }
+                }
+            }
+        };
+
+        // 4-slot shapeless ingredient tray (2x2)
+        let ing_x0 = start_x + 48.0;
+        let ing_y0 = top_y + 12.0;
+        for i in 0..4 {
+            let col = (i % 2) as f32;
+            let row = (i / 2) as f32;
+            let sx = ing_x0 + col * (slot_size + slot_gap);
+            let sy = ing_y0 + row * (slot_size + slot_gap);
+            draw_slot_item(mesh, sx, sy, pot.ingredients[i], &mut hovered_item_name);
+        }
+
+        // Fuel slot & flame meter
+        let fuel_x = ing_x0 + 2.0 * (slot_size + slot_gap) + 28.0;
+        let fuel_y = ing_y0 + (slot_size + slot_gap);
+        draw_slot_item(mesh, fuel_x, fuel_y, pot.fuel, &mut hovered_item_name);
+
+        let flame_w = 24.0;
+        let flame_h = 24.0;
+        let flame_x = fuel_x + (slot_size - flame_w) * 0.5;
+        let flame_y = ing_y0 + 12.0;
+        mesh.add_quad(flame_x, flame_y, flame_w, flame_h, white_uv, [0.18, 0.14, 0.12, 0.85]);
+        if pot.is_burning() && pot.max_burn_time > 0.0 {
+            let frac = (pot.burn_time_remaining / pot.max_burn_time).clamp(0.0, 1.0);
+            let fh = flame_h * frac;
+            mesh.add_quad(
+                flame_x + 2.0,
+                flame_y + (flame_h - fh),
+                flame_w - 4.0,
+                fh,
+                white_uv,
+                [1.0, 0.55, 0.12, 0.95],
+            );
+        }
+
+        // Cook progress bar between fuel/flame and output
+        let prog_x = fuel_x + slot_size + 10.0;
+        let prog_y = ing_y0 + (slot_size + slot_gap) * 0.5 + 16.0;
+        let prog_w = 34.0;
+        let prog_h = 12.0;
+        mesh.add_quad(prog_x, prog_y, prog_w, prog_h, white_uv, [0.16, 0.16, 0.18, 0.85]);
+        let cook_frac = (pot.cook_progress / blockgame_core::world::COOKING_POT_COOK_TIME).clamp(0.0, 1.0);
+        if cook_frac > 0.001 {
+            mesh.add_quad(
+                prog_x + 1.0,
+                prog_y + 1.0,
+                (prog_w - 2.0) * cook_frac,
+                prog_h - 2.0,
+                white_uv,
+                [1.0, 0.82, 0.24, 0.95],
+            );
+        }
+
+        // Output slot
+        let out_x = fuel_x + slot_size + 52.0;
+        let out_y = ing_y0 + (slot_size + slot_gap) * 0.5;
+        draw_slot_item(mesh, out_x, out_y, pot.output, &mut hovered_item_name);
+
+        // Shared player inventory, hotbar, JEI, recipe modal, cursor, and tooltips
+        let inv_y = ing_y0 + 2.0 * (slot_size + slot_gap) + 32.0;
+        Self::draw_power_screen_inv_and_chrome(
+            mesh,
+            screen_w,
+            screen_h,
+            start_x,
+            inv_y,
+            inventory,
+            active_hotbar_slot,
+            cursor_held,
+            cursor_pos,
+            registry,
+            jei_params,
+            recipe_modal,
+            &mut hovered_item_name,
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_power_screen_inv_and_chrome<'a>(
         mesh: &mut UiMesh,
@@ -5385,6 +5762,7 @@ impl UiBuilder {
             blockgame_core::crafting::RecipeCategory::Crafting3x3 => "[ 3x3 Crafting Table ]",
             blockgame_core::crafting::RecipeCategory::Crafting2x2 => "[ 2x2 Crafting Grid ]",
             blockgame_core::crafting::RecipeCategory::Smelting => "[ Smelting / Cooking ]",
+            blockgame_core::crafting::RecipeCategory::CookingPot => "[ Cooking Pot ]",
             blockgame_core::crafting::RecipeCategory::WorldGen => "[ World Generation / Natural Source ]",
         };
         let cat_col = if params.recipe.category == blockgame_core::crafting::RecipeCategory::WorldGen {

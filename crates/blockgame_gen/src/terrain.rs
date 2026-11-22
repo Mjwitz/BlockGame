@@ -1301,6 +1301,67 @@ impl TerrainGenerator {
                                 && fh % 200 == 0
                             {
                                 chunk.set(lx, ly, lz, BlockId::MELON);
+                            } else if matches!(
+                                biome,
+                                Biome::Plains | Biome::FlowerMeadow | Biome::Savanna
+                            ) && fh % 210 == 17
+                            {
+                                chunk.set(lx, ly - 1, lz, BlockId::FARMLAND);
+                                chunk.set(lx, ly, lz, BlockId::CARROTS_3);
+                            } else if matches!(
+                                biome,
+                                Biome::Forest | Biome::BirchForest | Biome::Taiga | Biome::Plains
+                            ) && fh % 220 == 31
+                            {
+                                chunk.set(lx, ly - 1, lz, BlockId::FARMLAND);
+                                chunk.set(lx, ly, lz, BlockId::POTATOES_3);
+                            } else if matches!(
+                                biome,
+                                Biome::FlowerMeadow | Biome::Jungle | Biome::Plains
+                            ) && fh % 230 == 47
+                            {
+                                chunk.set(lx, ly - 1, lz, BlockId::FARMLAND);
+                                chunk.set(lx, ly, lz, BlockId::TOMATOES_3);
+                            }
+                        }
+                    }
+                }
+
+                // Water-adjacent wild Sugar Cane (1–3 blocks tall on sand/dirt/grass)
+                if local_surface_y >= 1
+                    && local_surface_y < (CHUNK_SIZE_Y as i32 - 4)
+                    && lx >= 1
+                    && lx < (CHUNK_SIZE_X - 1)
+                    && lz >= 1
+                    && lz < (CHUNK_SIZE_Z - 1)
+                {
+                    let ly = local_surface_y as usize;
+                    let under = chunk.get(lx, ly - 1, lz);
+                    if matches!(
+                        under,
+                        Some(BlockId::SAND)
+                            | Some(BlockId::RED_SAND)
+                            | Some(BlockId::DIRT)
+                            | Some(BlockId::GRASS)
+                    ) && chunk.get(lx, ly, lz) == Some(BlockId::AIR)
+                    {
+                        let near_water = [
+                            chunk.get(lx + 1, ly - 1, lz),
+                            chunk.get(lx - 1, ly - 1, lz),
+                            chunk.get(lx, ly - 1, lz + 1),
+                            chunk.get(lx, ly - 1, lz - 1),
+                        ]
+                        .iter()
+                        .any(|b| b.map(|id| id.is_water()).unwrap_or(false));
+                        if near_water {
+                            let sh = tree_hash(wx, wz, self.seed.wrapping_add(777));
+                            if sh % 14 == 0 {
+                                let cane_h = 1 + ((sh >> 4) % 3) as usize;
+                                for cy in ly..(ly + cane_h).min(CHUNK_SIZE_Y) {
+                                    if chunk.get(lx, cy, lz) == Some(BlockId::AIR) {
+                                        chunk.set(lx, cy, lz, BlockId::SUGAR_CANE);
+                                    }
+                                }
                             }
                         }
                     }

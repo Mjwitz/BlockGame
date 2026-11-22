@@ -88,6 +88,7 @@ pub enum RecipeCategory {
     Crafting3x3,
     Crafting2x2,
     Smelting,
+    CookingPot,
     WorldGen,
 }
 
@@ -401,6 +402,11 @@ pub enum Recipe {
         input: ItemId,
         output: ItemSlot,
     },
+    CookingPot {
+        name: &'static str,
+        inputs: Vec<ItemId>,
+        output: ItemSlot,
+    },
 }
 
 impl Recipe {
@@ -409,6 +415,7 @@ impl Recipe {
             Recipe::Shapeless { output, .. } => *output,
             Recipe::Shaped { output, .. } => *output,
             Recipe::Smelting { output, .. } => *output,
+            Recipe::CookingPot { output, .. } => *output,
         }
     }
 
@@ -417,6 +424,7 @@ impl Recipe {
             Recipe::Shapeless { name, .. } => name,
             Recipe::Shaped { name, .. } => name,
             Recipe::Smelting { name, .. } => name,
+            Recipe::CookingPot { name, .. } => name,
         }
     }
 
@@ -484,6 +492,22 @@ impl Recipe {
                     output: *output,
                 }
             }
+            Recipe::CookingPot {
+                name,
+                inputs,
+                output,
+            } => {
+                let mut grid = [None; 9];
+                for (i, &inp) in inputs.iter().take(4).enumerate() {
+                    grid[i] = Some(inp);
+                }
+                DisplayRecipe {
+                    name,
+                    category: RecipeCategory::CookingPot,
+                    inputs: grid,
+                    output: *output,
+                }
+            }
         }
     }
 
@@ -544,7 +568,7 @@ impl Recipe {
 
                 true
             }
-            Recipe::Smelting { .. } => false, // Smelting recipes only work in a furnace, never in crafting grids!
+            Recipe::Smelting { .. } | Recipe::CookingPot { .. } => false,
         }
     }
 }
@@ -593,6 +617,7 @@ impl CraftingManager {
                 Recipe::Shapeless { inputs, .. } => inputs.contains(&item_id),
                 Recipe::Shaped { pattern, .. } => pattern.contains(&Some(item_id)),
                 Recipe::Smelting { input, .. } => *input == item_id,
+                Recipe::CookingPot { inputs, .. } => inputs.contains(&item_id),
             })
             .map(|r| r.to_display_recipe())
             .collect()
@@ -641,8 +666,8 @@ impl CraftingManager {
                     }
                 }
             }
-            Recipe::Smelting { .. } => {
-                unreachable!("Smelting recipes cannot be crafted in a crafting grid")
+            Recipe::Smelting { .. } | Recipe::CookingPot { .. } => {
+                unreachable!("Station recipes cannot be crafted in a crafting grid")
             }
         }
 
@@ -2372,7 +2397,229 @@ impl CraftingManager {
             ],
             output: ItemSlot::new(ItemId::DIAMOND_BACKPACK, 1),
         });
+
+        // === Farming, Cooking, and Hunger Revamp Recipes (Issue #12) ===
+
+        // Cooking Pot (5 Iron Ingots in U-shape + 2 Planks as handles)
+        for plank in [
+            ItemId::PLANKS,
+            ItemId::BIRCH_PLANKS,
+            ItemId::SPRUCE_PLANKS,
+            ItemId::ACACIA_PLANKS,
+            ItemId::JUNGLE_PLANKS,
+            ItemId::DARK_OAK_PLANKS,
+        ] {
+            self.register(Recipe::Shaped {
+                name: "Cooking Pot",
+                width: 3,
+                height: 3,
+                pattern: vec![
+                    Some(plank),            None,                   Some(plank),
+                    Some(ItemId::IRON_INGOT), None,                 Some(ItemId::IRON_INGOT),
+                    Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT), Some(ItemId::IRON_INGOT),
+                ],
+                output: ItemSlot::new(ItemId::COOKING_POT, 1),
+            });
+        }
+
+        // Fertilizers (passive soil buffs, ADR-0003)
+        for organic in [
+            ItemId::WHEAT_SEEDS,
+            ItemId::TOMATO_SEEDS,
+            ItemId::MELON_SEEDS,
+            ItemId::PUMPKIN_SEEDS,
+            ItemId::WHEAT,
+            ItemId::CARROT,
+            ItemId::POTATO,
+            ItemId::TOMATO,
+            ItemId::ROTTEN_FLESH,
+        ] {
+            self.register(Recipe::Shapeless {
+                name: "Compost",
+                inputs: vec![organic, organic, organic, organic],
+                output: ItemSlot::new(ItemId::COMPOST, 2),
+            });
+        }
+
+        self.register(Recipe::Shapeless {
+            name: "Bone Fertilizer",
+            inputs: vec![ItemId::BONE, ItemId::COMPOST],
+            output: ItemSlot::new(ItemId::BONE_FERTILIZER, 2),
+        });
+
+        // Seeds & Sugar
+        self.register(Recipe::Shapeless {
+            name: "Sugar",
+            inputs: vec![ItemId::SUGAR_CANE],
+            output: ItemSlot::new(ItemId::SUGAR, 2),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Tomato Seeds",
+            inputs: vec![ItemId::TOMATO],
+            output: ItemSlot::new(ItemId::TOMATO_SEEDS, 2),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Melon Seeds",
+            inputs: vec![ItemId::MELON_SLICE],
+            output: ItemSlot::new(ItemId::MELON_SEEDS, 1),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Pumpkin Seeds",
+            inputs: vec![ItemId::PUMPKIN],
+            output: ItemSlot::new(ItemId::PUMPKIN_SEEDS, 4),
+        });
+
+        // Simple Crafted Foods
+        self.register(Recipe::Shaped {
+            name: "Cookie",
+            width: 3,
+            height: 1,
+            pattern: vec![Some(ItemId::WHEAT), Some(ItemId::SUGAR), Some(ItemId::WHEAT)],
+            output: ItemSlot::new(ItemId::COOKIE, 4),
+        });
+        self.register(Recipe::Shapeless {
+            name: "Pumpkin Pie",
+            inputs: vec![ItemId::PUMPKIN, ItemId::SUGAR, ItemId::EGG],
+            output: ItemSlot::new(ItemId::PUMPKIN_PIE, 1),
+        });
+
+        // Furnace Smelting Display Recipes for new foods
+        self.register(Recipe::Smelting {
+            name: "Baked Potato",
+            input: ItemId::POTATO,
+            output: ItemSlot::new(ItemId::BAKED_POTATO, 1),
+        });
+        self.register(Recipe::Smelting {
+            name: "Cooked Mutton",
+            input: ItemId::RAW_MUTTON,
+            output: ItemSlot::new(ItemId::COOKED_MUTTON, 1),
+        });
+
+        // Cooking Pot Multi-Ingredient Meals & Herbal Tea
+        for &(name, inputs, out_id, out_count) in COOKING_POT_RECIPES {
+            self.register(Recipe::CookingPot {
+                name,
+                inputs: inputs.to_vec(),
+                output: ItemSlot::new(out_id, out_count),
+            });
+        }
     }
+}
+
+/// Static table of shapeless Cooking Pot recipes (up to 4 ingredients).
+/// Recipes consuming `MILK_BUCKET` or `WATER_BUCKET` return an empty `BUCKET` in that input slot.
+pub const COOKING_POT_RECIPES: &[(&'static str, &'static [ItemId], ItemId, u16)] = &[
+    ("Tomato Soup", &[ItemId::TOMATO, ItemId::TOMATO], ItemId::TOMATO_SOUP, 1),
+    (
+        "Vegetable Stew",
+        &[ItemId::CARROT, ItemId::POTATO, ItemId::TOMATO],
+        ItemId::VEGETABLE_STEW,
+        1,
+    ),
+    (
+        "Hearty Beef Stew",
+        &[ItemId::RAW_BEEF, ItemId::CARROT, ItemId::POTATO],
+        ItemId::HEARTY_MEAT_STEW,
+        1,
+    ),
+    (
+        "Hearty Pork Stew",
+        &[ItemId::RAW_PORKCHOP, ItemId::CARROT, ItemId::POTATO],
+        ItemId::HEARTY_MEAT_STEW,
+        1,
+    ),
+    (
+        "Hearty Mutton Stew",
+        &[ItemId::RAW_MUTTON, ItemId::CARROT, ItemId::POTATO],
+        ItemId::HEARTY_MEAT_STEW,
+        1,
+    ),
+    (
+        "Tomato Omelette",
+        &[ItemId::EGG, ItemId::EGG, ItemId::TOMATO],
+        ItemId::OMELETTE,
+        1,
+    ),
+    (
+        "Garden Omelette",
+        &[ItemId::EGG, ItemId::EGG, ItemId::CARROT],
+        ItemId::OMELETTE,
+        1,
+    ),
+    (
+        "Fruit Salad",
+        &[ItemId::APPLE, ItemId::MELON_SLICE, ItemId::SUGAR],
+        ItemId::FRUIT_SALAD,
+        1,
+    ),
+    (
+        "Sweet Cake",
+        &[ItemId::MILK_BUCKET, ItemId::EGG, ItemId::SUGAR, ItemId::WHEAT],
+        ItemId::SWEET_CAKE,
+        1,
+    ),
+    (
+        "Herbal Tea (Leaves)",
+        &[ItemId::WATER_BUCKET, ItemId::SUGAR, ItemId::LEAVES],
+        ItemId::HERBAL_TEA,
+        2,
+    ),
+    (
+        "Herbal Tea (Poppy)",
+        &[ItemId::WATER_BUCKET, ItemId::SUGAR, ItemId::POPPY],
+        ItemId::HERBAL_TEA,
+        2,
+    ),
+    (
+        "Herbal Tea (Dandelion)",
+        &[ItemId::WATER_BUCKET, ItemId::SUGAR, ItemId::DANDELION],
+        ItemId::HERBAL_TEA,
+        2,
+    ),
+    (
+        "Fisherman's Stew",
+        &[ItemId::RAW_CARP, ItemId::CARROT, ItemId::POTATO],
+        ItemId::FISH_STEW,
+        1,
+    ),
+    (
+        "Trout Stew",
+        &[ItemId::RAW_TROUT, ItemId::CARROT, ItemId::POTATO],
+        ItemId::FISH_STEW,
+        1,
+    ),
+    (
+        "Salmon Stew",
+        &[ItemId::RAW_SALMON, ItemId::CARROT, ItemId::POTATO],
+        ItemId::FISH_STEW,
+        1,
+    ),
+];
+
+/// Matches the non-empty ingredients in a 4-slot Cooking Pot tray (shapelessly)
+/// and returns the resulting meal `ItemSlot`.
+pub fn get_cooking_pot_output(slots: &[ItemSlot; 4]) -> Option<ItemSlot> {
+    let mut present: Vec<ItemId> = slots
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.item_id)
+        .collect();
+    if present.is_empty() {
+        return None;
+    }
+    present.sort();
+
+    for &(_, recipe_inputs, out_id, out_count) in COOKING_POT_RECIPES {
+        if recipe_inputs.len() != present.len() {
+            continue;
+        }
+        let mut expected: Vec<ItemId> = recipe_inputs.to_vec();
+        expected.sort();
+        if present == expected {
+            return Some(ItemSlot::new(out_id, out_count));
+        }
+    }
+    None
 }
 
 /// Returns the smelted/cooked output ItemId for a given input item, if smeltable in a Furnace.
@@ -2388,6 +2635,8 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
         ItemId::RAW_BEEF => Some(ItemId::COOKED_STEAK),
         ItemId::RAW_PORKCHOP => Some(ItemId::COOKED_PORKCHOP),
         ItemId::RAW_CHICKEN => Some(ItemId::COOKED_CHICKEN),
+        ItemId::RAW_MUTTON => Some(ItemId::COOKED_MUTTON),
+        ItemId::POTATO => Some(ItemId::BAKED_POTATO),
         ItemId::RAW_CARP
         | ItemId::RAW_SARDINE
         | ItemId::RAW_PERCH
@@ -2667,9 +2916,9 @@ mod tests {
         assert_eq!(plank_recipes.len(), 1);
         assert_eq!(plank_recipes[0].output.count, 4);
 
-        // 4. Recipes using Wheat as ingredient (Bread + 3 Fisherman's Stew variants)
+        // 4. Recipes using Wheat as ingredient (Bread + 3 Fisherman's Stew + Compost + Cookie + Sweet Cake)
         let wheat_uses = cm.get_recipes_using_input(ItemId::WHEAT);
-        assert_eq!(wheat_uses.len(), 4);
+        assert_eq!(wheat_uses.len(), 7);
         assert!(wheat_uses.iter().any(|r| r.output.item_id == ItemId::BREAD));
 
         // 5. Smelting category recognition

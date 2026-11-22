@@ -9,6 +9,7 @@ pub mod crafting;
 pub mod direction;
 pub mod directory;
 pub mod entity;
+pub mod farming;
 pub mod fishing;
 pub mod item;
 pub mod lighting;
@@ -34,8 +35,11 @@ pub use auth::{
 };
 pub use block::{
     apply_water_fill, find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
-    is_leaf_supported, place_water_source, try_grow_cactus, BlockDefinition, BlockId,
-    BlockRegistry,
+    is_leaf_supported, place_water_source, try_grow_cactus, try_grow_sugar_cane, BlockDefinition,
+    BlockId, BlockRegistry, FertilizerTier,
+};
+pub use farming::{
+    CropEntry, FarmlandEntry, FarmingEvent, FarmingSimulation, SugarCaneEntry,
 };
 pub use character::{
     starter_presets, BodyFrame, CharacterAppearance, CharacterPreset, CharacterProfile, EyeStyle,
@@ -65,14 +69,14 @@ pub use monster::{
 };
 pub use net::{
     ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer, PlayerModelState, ServerPacket,
-    SyncedArrowState, SyncedMonsterState, DEFAULT_SERVER_PORT,
+    SyncedAnimalState, SyncedArrowState, SyncedMonsterState, DEFAULT_SERVER_PORT,
 };
 pub use permissions::{
     permission_matches, BanEntry, BanManager, IpBanEntry, PermissionGroup, PermissionsManager,
     PlayerPermissions,
 };
 pub use physics::{PlayerPhysics, AABB};
-pub use player::{GameMode, PlayerStats};
+pub use player::{ActiveStatusEffect, GameMode, PlayerStats};
 pub use power::{
     get_network_summary, solar_panel_output_eu_s, tick_power_networks, wind_turbine_output_eu_s,
     BatteryState, CoalGeneratorState, ElectricFurnaceState, PowerNetworkSummary,
@@ -96,5 +100,5 @@ pub use temple::{
     BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE,
 };
 pub use tool::{ToolTier, ToolType};
-pub use world::{chunk_to_world_coords, world_to_chunk_coords, World};
+pub use world::{chunk_to_world_coords, world_to_chunk_coords, CookingPotState, World};
 

@@ -163,6 +163,42 @@ pub enum ClientPacket {
         damage: f32,
         knockback: Vec3,
     },
+    InteractAnimal {
+        animal_id: u32,
+        held_item: ItemId,
+    },
+    AttackAnimal {
+        animal_id: u32,
+        damage: f32,
+        knockback: Vec3,
+    },
+    CookingPotUpdate {
+        pos: IVec3,
+        ingredients: [ItemSlot; 4],
+        fuel: ItemSlot,
+        output: ItemSlot,
+        burn_time: f32,
+        max_burn_time: f32,
+        cook_progress: f32,
+    },
+}
+
+/// Compact network representation of a server-authoritative passive animal (ADR-0004).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncedAnimalState {
+    pub id: u32,
+    pub kind: crate::animal::AnimalKind,
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub yaw: f32,
+    pub health: f32,
+    pub max_health: f32,
+    pub hurt_timer: f32,
+    pub love_timer: f32,
+    pub breed_cooldown: f32,
+    pub baby_timer: f32,
+    pub is_moving: bool,
+    pub walk_anim_timer: f32,
 }
 
 /// Compact network representation of a server-authoritative boss or temple guardian.
@@ -301,6 +337,18 @@ pub enum ServerPacket {
     },
     TempleArrowsSync {
         arrows: Vec<SyncedArrowState>,
+    },
+    AnimalsSync {
+        animals: Vec<SyncedAnimalState>,
+    },
+    CookingPotSync {
+        pos: IVec3,
+        ingredients: [ItemSlot; 4],
+        fuel: ItemSlot,
+        output: ItemSlot,
+        burn_time: f32,
+        max_burn_time: f32,
+        cook_progress: f32,
     },
 }
 
@@ -454,6 +502,44 @@ impl ClientPacket {
                 write_u32(&mut payload, *monster_id)?;
                 write_f32(&mut payload, *damage)?;
                 write_vec3(&mut payload, *knockback)?;
+            }
+            Self::InteractAnimal {
+                animal_id,
+                held_item,
+            } => {
+                write_u8(&mut payload, 17)?;
+                write_u32(&mut payload, *animal_id)?;
+                write_u16(&mut payload, held_item.0)?;
+            }
+            Self::AttackAnimal {
+                animal_id,
+                damage,
+                knockback,
+            } => {
+                write_u8(&mut payload, 18)?;
+                write_u32(&mut payload, *animal_id)?;
+                write_f32(&mut payload, *damage)?;
+                write_vec3(&mut payload, *knockback)?;
+            }
+            Self::CookingPotUpdate {
+                pos,
+                ingredients,
+                fuel,
+                output,
+                burn_time,
+                max_burn_time,
+                cook_progress,
+            } => {
+                write_u8(&mut payload, 19)?;
+                write_ivec3(&mut payload, *pos)?;
+                for slot in ingredients {
+                    write_slot(&mut payload, *slot)?;
+                }
+                write_slot(&mut payload, *fuel)?;
+                write_slot(&mut payload, *output)?;
+                write_f32(&mut payload, *burn_time)?;
+                write_f32(&mut payload, *max_burn_time)?;
+                write_f32(&mut payload, *cook_progress)?;
             }
         }
         wrap_frame(&payload)
@@ -619,6 +705,47 @@ impl ClientPacket {
                     monster_id,
                     damage,
                     knockback,
+                })
+            }
+            17 => {
+                let animal_id = read_u32(&mut r)?;
+                let held_item = ItemId(read_u16(&mut r)?);
+                Ok(Self::InteractAnimal {
+                    animal_id,
+                    held_item,
+                })
+            }
+            18 => {
+                let animal_id = read_u32(&mut r)?;
+                let damage = read_f32(&mut r)?;
+                let knockback = read_vec3(&mut r)?;
+                Ok(Self::AttackAnimal {
+                    animal_id,
+                    damage,
+                    knockback,
+                })
+            }
+            19 => {
+                let pos = read_ivec3(&mut r)?;
+                let ingredients = [
+                    read_slot(&mut r)?,
+                    read_slot(&mut r)?,
+                    read_slot(&mut r)?,
+                    read_slot(&mut r)?,
+                ];
+                let fuel = read_slot(&mut r)?;
+                let output = read_slot(&mut r)?;
+                let burn_time = read_f32(&mut r)?;
+                let max_burn_time = read_f32(&mut r)?;
+                let cook_progress = read_f32(&mut r)?;
+                Ok(Self::CookingPotUpdate {
+                    pos,
+                    ingredients,
+                    fuel,
+                    output,
+                    burn_time,
+                    max_burn_time,
+                    cook_progress,
                 })
             }
             other => Err(io::Error::new(
@@ -878,6 +1005,45 @@ impl ServerPacket {
                     write_vec3(&mut payload, a.velocity)?;
                     write_bool(&mut payload, a.stuck)?;
                 }
+            }
+            Self::AnimalsSync { animals } => {
+                write_u8(&mut payload, 23)?;
+                write_u32(&mut payload, animals.len() as u32)?;
+                for a in animals {
+                    write_u32(&mut payload, a.id)?;
+                    write_u8(&mut payload, a.kind.to_u8())?;
+                    write_vec3(&mut payload, a.position)?;
+                    write_vec3(&mut payload, a.velocity)?;
+                    write_f32(&mut payload, a.yaw)?;
+                    write_f32(&mut payload, a.health)?;
+                    write_f32(&mut payload, a.max_health)?;
+                    write_f32(&mut payload, a.hurt_timer)?;
+                    write_f32(&mut payload, a.love_timer)?;
+                    write_f32(&mut payload, a.breed_cooldown)?;
+                    write_f32(&mut payload, a.baby_timer)?;
+                    write_bool(&mut payload, a.is_moving)?;
+                    write_f32(&mut payload, a.walk_anim_timer)?;
+                }
+            }
+            Self::CookingPotSync {
+                pos,
+                ingredients,
+                fuel,
+                output,
+                burn_time,
+                max_burn_time,
+                cook_progress,
+            } => {
+                write_u8(&mut payload, 24)?;
+                write_ivec3(&mut payload, *pos)?;
+                for slot in ingredients {
+                    write_slot(&mut payload, *slot)?;
+                }
+                write_slot(&mut payload, *fuel)?;
+                write_slot(&mut payload, *output)?;
+                write_f32(&mut payload, *burn_time)?;
+                write_f32(&mut payload, *max_burn_time)?;
+                write_f32(&mut payload, *cook_progress)?;
             }
         }
 
@@ -1206,6 +1372,66 @@ impl ServerPacket {
                     });
                 }
                 Ok(Self::TempleArrowsSync { arrows })
+            }
+            23 => {
+                let count = read_u32(&mut r)? as usize;
+                let mut animals = Vec::with_capacity(count.min(512));
+                for _ in 0..count.min(512) {
+                    let id = read_u32(&mut r)?;
+                    let kind_u8 = read_u8(&mut r)?;
+                    let position = read_vec3(&mut r)?;
+                    let velocity = read_vec3(&mut r)?;
+                    let yaw = read_f32(&mut r)?;
+                    let health = read_f32(&mut r)?;
+                    let max_health = read_f32(&mut r)?;
+                    let hurt_timer = read_f32(&mut r)?;
+                    let love_timer = read_f32(&mut r)?;
+                    let breed_cooldown = read_f32(&mut r)?;
+                    let baby_timer = read_f32(&mut r)?;
+                    let is_moving = read_bool(&mut r)?;
+                    let walk_anim_timer = read_f32(&mut r)?;
+                    if let Some(kind) = crate::animal::AnimalKind::from_u8(kind_u8) {
+                        animals.push(SyncedAnimalState {
+                            id,
+                            kind,
+                            position,
+                            velocity,
+                            yaw,
+                            health,
+                            max_health,
+                            hurt_timer,
+                            love_timer,
+                            breed_cooldown,
+                            baby_timer,
+                            is_moving,
+                            walk_anim_timer,
+                        });
+                    }
+                }
+                Ok(Self::AnimalsSync { animals })
+            }
+            24 => {
+                let pos = read_ivec3(&mut r)?;
+                let ingredients = [
+                    read_slot(&mut r)?,
+                    read_slot(&mut r)?,
+                    read_slot(&mut r)?,
+                    read_slot(&mut r)?,
+                ];
+                let fuel = read_slot(&mut r)?;
+                let output = read_slot(&mut r)?;
+                let burn_time = read_f32(&mut r)?;
+                let max_burn_time = read_f32(&mut r)?;
+                let cook_progress = read_f32(&mut r)?;
+                Ok(Self::CookingPotSync {
+                    pos,
+                    ingredients,
+                    fuel,
+                    output,
+                    burn_time,
+                    max_burn_time,
+                    cook_progress,
+                })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1857,6 +2083,32 @@ fn run_server_loop(
     let block_registry = crate::block::BlockRegistry::new();
     let mut world = World::new();
     save_data.apply_to_world(&mut world);
+    let mut farming_sim = crate::farming::FarmingSimulation::new(save_data.metadata.seed as u64 ^ 0xFA4A_1234);
+    for &(pos, timer) in &save_data.planted_crops {
+        let target_secs = farming_sim.roll_stage_duration();
+        farming_sim.planted_crops.push(crate::farming::CropEntry {
+            pos,
+            timer,
+            target_secs,
+        });
+    }
+    for &(pos, dry_timer) in &save_data.active_farmland {
+        farming_sim
+            .active_farmland
+            .push(crate::farming::FarmlandEntry { pos, dry_timer });
+    }
+    for &(pos, timer) in &save_data.growing_sugar_cane {
+        let target_secs = farming_sim.roll_sugar_cane_duration();
+        farming_sim
+            .growing_sugar_cane
+            .push(crate::farming::SugarCaneEntry {
+                pos,
+                timer,
+                target_secs,
+            });
+    }
+    let mut station_sync_accum: f32 = 0.0;
+    let mut animal_sync_accum: f32 = 0.0;
     let mut temple_monsters: Vec<crate::monster::MonsterEntity> = Vec::new();
     let mut temple_arrows: Vec<crate::monster::ArrowProjectile> = Vec::new();
     let mut had_temple_monsters = false;
@@ -2341,6 +2593,18 @@ fn run_server_loop(
                             ));
                         } else {
                             world.set_block(pos, block_id);
+                            if block_id.is_farmland() {
+                                farming_sim.track_farmland(pos);
+                            } else if block_id.is_farmland_crop() {
+                                farming_sim.plant_crop(pos);
+                            } else if block_id == BlockId::SUGAR_CANE {
+                                farming_sim.track_sugar_cane(pos);
+                            } else if block_id.is_cooking_pot() {
+                                world.get_or_create_cooking_pot(pos);
+                            }
+                            if existing_block.is_cooking_pot() && !block_id.is_cooking_pot() {
+                                world.remove_cooking_pot(pos);
+                            }
                             if let Some(chunk) = world.get_chunk(cpos) {
                                 save_data
                                     .modified_chunks
@@ -2679,6 +2943,61 @@ fn run_server_loop(
                                 pos,
                                 is_furnace,
                                 slots,
+                                burn_time,
+                                max_burn_time,
+                                cook_progress,
+                            },
+                        ));
+                    }
+                    ClientPacket::InteractAnimal {
+                        animal_id,
+                        held_item,
+                    } if clients[idx].authenticated => {
+                        if let Some(animal) = save_data.animals.iter_mut().find(|a| a.id == animal_id) {
+                            if animal.can_milk(held_item) {
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::ReceiveItem {
+                                        item: ItemSlot::new(ItemId::MILK_BUCKET, 1),
+                                    },
+                                ));
+                            } else {
+                                let _ = animal.try_feed(held_item);
+                            }
+                        }
+                    }
+                    ClientPacket::AttackAnimal {
+                        animal_id,
+                        damage,
+                        knockback,
+                    } if clients[idx].authenticated => {
+                        if let Some(animal) = save_data.animals.iter_mut().find(|a| a.id == animal_id) {
+                            animal.take_damage(damage.clamp(0.0, 50.0), knockback);
+                        }
+                    }
+                    ClientPacket::CookingPotUpdate {
+                        pos,
+                        ingredients,
+                        fuel,
+                        output,
+                        burn_time,
+                        max_burn_time,
+                        cook_progress,
+                    } if clients[idx].authenticated => {
+                        let pot = world.get_or_create_cooking_pot(pos);
+                        pot.ingredients = ingredients;
+                        pot.fuel = fuel;
+                        pot.output = output;
+                        pot.burn_time_remaining = burn_time;
+                        pot.max_burn_time = max_burn_time;
+                        pot.cook_progress = cook_progress;
+                        outgoing_broadcasts.push((
+                            Some(pid),
+                            ServerPacket::CookingPotSync {
+                                pos,
+                                ingredients,
+                                fuel,
+                                output,
                                 burn_time,
                                 max_burn_time,
                                 cook_progress,
@@ -3294,6 +3613,265 @@ fn run_server_loop(
                 }
             }
 
+            // Server-authoritative Farming, Animals, Furnaces, and Cooking Pots (ADR-0004)
+            let active_player_positions: Vec<Vec3> = clients
+                .iter()
+                .filter(|c| c.authenticated && !c.is_dead)
+                .map(|c| c.model.position)
+                .collect();
+            let active_player_lures: Vec<(Vec3, ItemId)> = clients
+                .iter()
+                .filter(|c| c.authenticated && !c.is_dead)
+                .map(|c| {
+                    let slot_idx = c.saved_state.active_hotbar_slot.min(8);
+                    let held = c.saved_state.inventory.slots[slot_idx].item_id;
+                    (c.model.position, held)
+                })
+                .collect();
+
+            if !active_player_positions.is_empty() {
+                let day_frac = (save_data.metadata.day_night_time / 24000.0).rem_euclid(1.0);
+                let sun_angle = day_frac * std::f32::consts::TAU;
+                let sun_intensity = (sun_angle.sin() * 2.0 + 0.5).clamp(0.0, 1.0);
+
+                // A. Crops, Farmland, Fertilizers, Stem Crops, Sugar Cane
+                let farm_events = farming_sim.tick(
+                    dt,
+                    sun_intensity,
+                    &active_player_positions,
+                    &mut world,
+                    &block_registry,
+                );
+                for ev in farm_events {
+                    match ev {
+                        crate::farming::FarmingEvent::BlockChanged { pos, block } => {
+                            let (cpos, _, _, _) = world_to_chunk_coords(pos);
+                            if let Some(chunk) = world.get_chunk(cpos) {
+                                save_data
+                                    .modified_chunks
+                                    .insert(cpos, encode_chunk_rle(chunk));
+                            }
+                            if let Ok(bbytes) = (ServerPacket::BlockUpdate {
+                                pos,
+                                block_id: block,
+                            })
+                            .encode()
+                            {
+                                for c in clients.iter_mut() {
+                                    if c.authenticated && !c.is_dead {
+                                        let _ = c.stream.write_all(&bbytes);
+                                    }
+                                }
+                            }
+                        }
+                        crate::farming::FarmingEvent::SpawnDrop { pos, item } => {
+                            let drop_id = next_local_drop_id();
+                            let drop_pos = pos.as_vec3() + Vec3::new(0.5, 0.35, 0.5);
+                            let mut drop = ItemDrop::new(drop_pos, item);
+                            drop.drop_id = drop_id;
+                            save_data.item_drops.push(drop);
+                            if let Ok(dbytes) = (ServerPacket::ItemDropSpawned {
+                                drop_id,
+                                position: drop_pos,
+                                velocity: Vec3::new(0.0, 2.0, 0.0),
+                                item,
+                            })
+                            .encode()
+                            {
+                                for c in clients.iter_mut() {
+                                    if c.authenticated && !c.is_dead {
+                                        let _ = c.stream.write_all(&dbytes);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // B. Passive Animals (herding, breeding, egg laying, physics, death drops)
+                let animal_drops = crate::animal::tick_animals(
+                    &mut save_data.animals,
+                    &mut save_data.next_animal_id,
+                    dt,
+                    &active_player_lures,
+                    &world,
+                    &block_registry,
+                );
+                for (drop_pos, item) in animal_drops {
+                    let drop_id = next_local_drop_id();
+                    let mut drop = ItemDrop::new(drop_pos, item);
+                    drop.drop_id = drop_id;
+                    save_data.item_drops.push(drop);
+                    if let Ok(dbytes) = (ServerPacket::ItemDropSpawned {
+                        drop_id,
+                        position: drop_pos,
+                        velocity: Vec3::new(0.0, 2.5, 0.0),
+                        item,
+                    })
+                    .encode()
+                    {
+                        for c in clients.iter_mut() {
+                            if c.authenticated && !c.is_dead {
+                                let _ = c.stream.write_all(&dbytes);
+                            }
+                        }
+                    }
+                }
+
+                animal_sync_accum += dt;
+                if animal_sync_accum >= 0.1 && !save_data.animals.is_empty() {
+                    animal_sync_accum = 0.0;
+                    let synced_animals: Vec<SyncedAnimalState> = save_data
+                        .animals
+                        .iter()
+                        .map(|a| SyncedAnimalState {
+                            id: a.id,
+                            kind: a.kind,
+                            position: a.position,
+                            velocity: a.velocity,
+                            yaw: a.yaw,
+                            health: a.health,
+                            max_health: a.max_health,
+                            hurt_timer: a.hurt_timer,
+                            love_timer: a.love_timer,
+                            breed_cooldown: a.breed_cooldown,
+                            baby_timer: a.baby_timer,
+                            is_moving: a.is_moving,
+                            walk_anim_timer: a.walk_anim_timer,
+                        })
+                        .collect();
+                    if let Ok(abytes) = (ServerPacket::AnimalsSync {
+                        animals: synced_animals,
+                    })
+                    .encode()
+                    {
+                        for c in clients.iter_mut() {
+                            if c.authenticated && !c.is_dead {
+                                let _ = c.stream.write_all(&abytes);
+                            }
+                        }
+                    }
+                }
+
+                // C. Authoritative Furnaces & Cooking Pots
+                station_sync_accum += dt;
+                let should_sync_stations = station_sync_accum >= 0.25;
+                if should_sync_stations {
+                    station_sync_accum = 0.0;
+                }
+
+                let furnace_positions: Vec<IVec3> = world.furnaces.keys().copied().collect();
+                for fpos in furnace_positions {
+                    if let Some(f) = world.furnaces.get_mut(&fpos) {
+                        let was_active = f.is_burning() || f.cook_progress > 0.0;
+                        let lit_changed = f.update(dt);
+                        let is_active = f.is_burning() || f.cook_progress > 0.0;
+                        let snapshot = (
+                            [f.input, f.fuel, f.output],
+                            f.burn_time_remaining,
+                            f.max_burn_time,
+                            f.cook_progress,
+                            f.is_burning(),
+                        );
+                        if lit_changed {
+                            let new_blk = if snapshot.4 {
+                                BlockId::FURNACE_LIT
+                            } else {
+                                BlockId::FURNACE
+                            };
+                            world.set_block(fpos, new_blk);
+                            if let Ok(bbytes) = (ServerPacket::BlockUpdate {
+                                pos: fpos,
+                                block_id: new_blk,
+                            })
+                            .encode()
+                            {
+                                for c in clients.iter_mut() {
+                                    if c.authenticated && !c.is_dead {
+                                        let _ = c.stream.write_all(&bbytes);
+                                    }
+                                }
+                            }
+                        }
+                        if (should_sync_stations && (was_active || is_active)) || lit_changed {
+                            if let Ok(cbytes) = (ServerPacket::ContainerSync {
+                                pos: fpos,
+                                is_furnace: true,
+                                slots: snapshot.0.to_vec(),
+                                burn_time: snapshot.1,
+                                max_burn_time: snapshot.2,
+                                cook_progress: snapshot.3,
+                            })
+                            .encode()
+                            {
+                                for c in clients.iter_mut() {
+                                    if c.authenticated && !c.is_dead {
+                                        let _ = c.stream.write_all(&cbytes);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let pot_positions: Vec<IVec3> = world.cooking_pots.keys().copied().collect();
+                for ppos in pot_positions {
+                    if let Some(pot) = world.cooking_pots.get_mut(&ppos) {
+                        let was_active = pot.is_burning() || pot.cook_progress > 0.0;
+                        let lit_changed = pot.update(dt);
+                        let is_active = pot.is_burning() || pot.cook_progress > 0.0;
+                        let snapshot = (
+                            pot.ingredients,
+                            pot.fuel,
+                            pot.output,
+                            pot.burn_time_remaining,
+                            pot.max_burn_time,
+                            pot.cook_progress,
+                            pot.is_burning(),
+                        );
+                        if lit_changed {
+                            let new_blk = if snapshot.6 {
+                                BlockId::COOKING_POT_LIT
+                            } else {
+                                BlockId::COOKING_POT
+                            };
+                            world.set_block(ppos, new_blk);
+                            if let Ok(bbytes) = (ServerPacket::BlockUpdate {
+                                pos: ppos,
+                                block_id: new_blk,
+                            })
+                            .encode()
+                            {
+                                for c in clients.iter_mut() {
+                                    if c.authenticated && !c.is_dead {
+                                        let _ = c.stream.write_all(&bbytes);
+                                    }
+                                }
+                            }
+                        }
+                        if (should_sync_stations && (was_active || is_active)) || lit_changed {
+                            if let Ok(pbytes) = (ServerPacket::CookingPotSync {
+                                pos: ppos,
+                                ingredients: snapshot.0,
+                                fuel: snapshot.1,
+                                output: snapshot.2,
+                                burn_time: snapshot.3,
+                                max_burn_time: snapshot.4,
+                                cook_progress: snapshot.5,
+                            })
+                            .encode()
+                            {
+                                for c in clients.iter_mut() {
+                                    if c.authenticated && !c.is_dead {
+                                        let _ = c.stream.write_all(&pbytes);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if !all_players.is_empty() {
                 let snap = ServerPacket::WorldSnapshot {
                     day_night_time: save_data.metadata.day_night_time,
@@ -3327,6 +3905,21 @@ fn run_server_loop(
                 }
             }
             let _ = auth_db.save_to_dir(&world_dir);
+            save_data.planted_crops = farming_sim
+                .planted_crops
+                .iter()
+                .map(|c| (c.pos, c.timer))
+                .collect();
+            save_data.active_farmland = farming_sim
+                .active_farmland
+                .iter()
+                .map(|f| (f.pos, f.dry_timer))
+                .collect();
+            save_data.growing_sugar_cane = farming_sim
+                .growing_sugar_cane
+                .iter()
+                .map(|s| (s.pos, s.timer))
+                .collect();
             save_data.capture_from_world(&world);
             let _ = save_world_to_dir(&saves_root, &mut save_data);
         }
@@ -3343,6 +3936,21 @@ fn run_server_loop(
     let _ = auth_db.save_to_dir(&world_dir);
     let _ = perms_manager.save_to_dir(&world_dir);
     let _ = ban_manager.save_to_dir(&world_dir);
+    save_data.planted_crops = farming_sim
+        .planted_crops
+        .iter()
+        .map(|c| (c.pos, c.timer))
+        .collect();
+    save_data.active_farmland = farming_sim
+        .active_farmland
+        .iter()
+        .map(|f| (f.pos, f.dry_timer))
+        .collect();
+    save_data.growing_sugar_cane = farming_sim
+        .growing_sugar_cane
+        .iter()
+        .map(|s| (s.pos, s.timer))
+        .collect();
     save_data.capture_from_world(&world);
     let _ = save_world_to_dir(&saves_root, &mut save_data);
 

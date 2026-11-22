@@ -39,6 +39,15 @@ impl GameMode {
     }
 }
 
+use crate::item::{FoodDef, FoodEffectKind};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveStatusEffect {
+    pub kind: FoodEffectKind,
+    pub remaining_secs: f32,
+    pub tick_accum: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerStats {
     pub health: f32,
@@ -58,6 +67,7 @@ pub struct PlayerStats {
     pub drown_timer: f32,
     pub is_submerged: bool,
     pub game_mode: GameMode,
+    pub status_effects: Vec<ActiveStatusEffect>,
 }
 
 impl Default for PlayerStats {
@@ -90,6 +100,7 @@ impl PlayerStats {
             drown_timer: 0.0,
             is_submerged: false,
             game_mode: GameMode::Survival,
+            status_effects: Vec::new(),
         }
     }
 
@@ -141,6 +152,81 @@ impl PlayerStats {
         true
     }
 
+    /// Returns whether the player is allowed to start/finish consuming `food`.
+    pub fn can_consume(&self, food: &FoodDef) -> bool {
+        if self.is_dead {
+            return false;
+        }
+        food.always_edible || self.hunger < self.max_hunger
+    }
+
+    /// Consumes a food/drink item with full Issue #12 semantics:
+    /// scales hunger/saturation by `food_multiplier`, grants Farming Skill bonus heal,
+    /// clears negative effects for cures (Herbal Tea), and rolls unsafe-food effects using `rng_roll` in `0.0..1.0`.
+    pub fn consume_food(&mut self, food: &FoodDef, food_multiplier: f32, rng_roll: f32) -> bool {
+        if !self.can_consume(food) {
+            return false;
+        }
+        let mult = food_multiplier.max(1.0);
+        let scaled_fp = (food.food_points as f32 * mult).round() as u16;
+        let scaled_sat = food.saturation * mult;
+        self.hunger = (self.hunger + scaled_fp as f32).min(self.max_hunger);
+        self.saturation = (self.saturation + scaled_sat).min(self.hunger);
+
+        if mult > 1.0 && self.health < self.max_health {
+            let bonus_heal = (mult - 1.0) * 4.0;
+            self.health = (self.health + bonus_heal).min(self.max_health);
+        }
+
+        if food.cures_negative_effects {
+            self.clear_negative_effects();
+        }
+
+        if let Some(spec) = food.effect {
+            if rng_roll < spec.chance {
+                self.add_status_effect(spec.kind, spec.duration_secs);
+            }
+        }
+        true
+    }
+
+    /// Adds or refreshes a status effect duration.
+    pub fn add_status_effect(&mut self, kind: FoodEffectKind, duration_secs: f32) {
+        if duration_secs <= 0.0 || self.game_mode.is_creative() || self.is_dead {
+            return;
+        }
+        if let Some(existing) = self.status_effects.iter_mut().find(|e| e.kind == kind) {
+            existing.remaining_secs = existing.remaining_secs.max(duration_secs);
+        } else {
+            self.status_effects.push(ActiveStatusEffect {
+                kind,
+                remaining_secs: duration_secs,
+                tick_accum: 0.0,
+            });
+        }
+    }
+
+    /// Clears all negative food status effects (Food Poisoning & Poison).
+    pub fn clear_negative_effects(&mut self) {
+        self.status_effects.clear();
+    }
+
+    #[inline]
+    pub fn has_status_effect(&self, kind: FoodEffectKind) -> bool {
+        self.status_effects
+            .iter()
+            .any(|e| e.kind == kind && e.remaining_secs > 0.0)
+    }
+
+    #[inline]
+    pub fn status_effect_remaining(&self, kind: FoodEffectKind) -> f32 {
+        self.status_effects
+            .iter()
+            .find(|e| e.kind == kind)
+            .map(|e| e.remaining_secs.max(0.0))
+            .unwrap_or(0.0)
+    }
+
     /// Adds exhaustion from movement, jumping, mining, etc.
     pub fn add_exhaustion(&mut self, amount: f32) {
         if self.is_dead || amount <= 0.0 {
@@ -157,7 +243,7 @@ impl PlayerStats {
         }
     }
 
-    /// Ticks player regeneration, starvation, damage cooldowns, void damage, and breath/drowning.
+    /// Ticks player regeneration, starvation, damage cooldowns, void damage, status effects, and breath/drowning.
     pub fn update(&mut self, dt: f32, player_y: f32, is_submerged: bool) {
         if self.is_dead {
             return;
@@ -174,10 +260,46 @@ impl PlayerStats {
             self.is_submerged = is_submerged;
             self.health = self.max_health;
             self.hunger = self.max_hunger;
+            self.saturation = self.max_hunger;
             self.breath = self.max_breath;
             self.drown_timer = 0.0;
             self.void_timer = 0.0;
+            self.status_effects.clear();
             return;
+        }
+
+        // 0. Status Effects (Food Poisoning & Poison)
+        let mut extra_exhaustion = 0.0_f32;
+        let mut poison_ticks = 0_u32;
+        for effect in &mut self.status_effects {
+            effect.remaining_secs -= dt;
+            match effect.kind {
+                FoodEffectKind::FoodPoisoning => {
+                    extra_exhaustion += 0.6 * dt;
+                }
+                FoodEffectKind::Poison => {
+                    effect.tick_accum += dt;
+                    while effect.tick_accum >= 1.5 {
+                        effect.tick_accum -= 1.5;
+                        poison_ticks += 1;
+                    }
+                }
+            }
+        }
+        self.status_effects.retain(|e| e.remaining_secs > 0.0);
+
+        if extra_exhaustion > 0.0 {
+            self.add_exhaustion(extra_exhaustion);
+        }
+        for _ in 0..poison_ticks {
+            // Non-lethal poison damage down to 1.0 HP
+            if self.health > 1.0 {
+                let dmg = 1.0_f32.min(self.health - 1.0);
+                if dmg > 0.0 {
+                    self.health = (self.health - dmg).max(1.0);
+                    self.damage_flash = 0.3;
+                }
+            }
         }
 
         // 1. Void Damage: below y = -25.0

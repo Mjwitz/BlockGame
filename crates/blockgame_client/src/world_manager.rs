@@ -263,6 +263,7 @@ pub struct WorldManager {
     monster_rng_state: u64,
     pub planted_crops: Vec<(IVec3, f32)>,
     pub active_farmland: Vec<(IVec3, f32)>,
+    pub farming_sim: blockgame_core::FarmingSimulation,
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
@@ -316,6 +317,7 @@ impl WorldManager {
             monster_rng_state,
             planted_crops: Vec::new(),
             active_farmland: Vec::new(),
+            farming_sim: blockgame_core::FarmingSimulation::new(seed as u64 ^ 0xFA4A_1234),
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
             animal_spawned_columns: HashSet::new(),
@@ -473,6 +475,30 @@ impl WorldManager {
         self.next_animal_id = data.next_animal_id;
         self.planted_crops = data.planted_crops.clone();
         self.active_farmland = data.active_farmland.clone();
+        self.farming_sim = blockgame_core::FarmingSimulation::new(data.metadata.seed as u64 ^ 0xFA4A_1234);
+        for &(pos, timer) in &data.planted_crops {
+            let target_secs = self.farming_sim.roll_stage_duration();
+            self.farming_sim.planted_crops.push(blockgame_core::CropEntry {
+                pos,
+                timer,
+                target_secs,
+            });
+        }
+        for &(pos, dry_timer) in &data.active_farmland {
+            self.farming_sim
+                .active_farmland
+                .push(blockgame_core::FarmlandEntry { pos, dry_timer });
+        }
+        for &(pos, timer) in &data.growing_sugar_cane {
+            let target_secs = self.farming_sim.roll_sugar_cane_duration();
+            self.farming_sim
+                .growing_sugar_cane
+                .push(blockgame_core::SugarCaneEntry {
+                    pos,
+                    timer,
+                    target_secs,
+                });
+        }
         self.growing_cacti = data.growing_cacti.clone();
         self.decaying_leaves = data.decaying_leaves.clone();
         self.animal_spawned_columns = data.animal_spawned_columns.clone();
@@ -496,8 +522,30 @@ impl WorldManager {
         data.falling_blocks = self.falling_blocks.clone();
         data.animals = self.animals.clone();
         data.next_animal_id = self.next_animal_id;
-        data.planted_crops = self.planted_crops.clone();
-        data.active_farmland = self.active_farmland.clone();
+        data.planted_crops = if !self.farming_sim.planted_crops.is_empty() {
+            self.farming_sim
+                .planted_crops
+                .iter()
+                .map(|c| (c.pos, c.timer))
+                .collect()
+        } else {
+            self.planted_crops.clone()
+        };
+        data.active_farmland = if !self.farming_sim.active_farmland.is_empty() {
+            self.farming_sim
+                .active_farmland
+                .iter()
+                .map(|f| (f.pos, f.dry_timer))
+                .collect()
+        } else {
+            self.active_farmland.clone()
+        };
+        data.growing_sugar_cane = self
+            .farming_sim
+            .growing_sugar_cane
+            .iter()
+            .map(|s| (s.pos, s.timer))
+            .collect();
         data.growing_cacti = self.growing_cacti.clone();
         data.decaying_leaves = self.decaying_leaves.clone();
         data.animal_spawned_columns = self.animal_spawned_columns.clone();
@@ -1572,6 +1620,8 @@ impl WorldManager {
         }
         if block_id.is_farmland() {
             self.register_farmland(pos);
+        } else if block_id == BlockId::SUGAR_CANE {
+            self.farming_sim.track_sugar_cane(pos);
         }
 
         true
@@ -1582,6 +1632,7 @@ impl WorldManager {
         if !self.active_farmland.iter().any(|(p, _)| *p == pos) {
             self.active_farmland.push((pos, 0.0));
         }
+        self.farming_sim.track_farmland(pos);
     }
 
     /// Scoops a water block at `pos` with an empty bucket, replacing it with AIR and updating meshes.
@@ -2622,7 +2673,112 @@ impl WorldManager {
     /// Registers a planted crop for growth updates.
     pub fn plant_crop(&mut self, pos: IVec3) {
         self.planted_crops.push((pos, 0.0));
+        self.farming_sim.plant_crop(pos);
         self.register_farmland(pos - IVec3::Y);
+    }
+
+    /// Applies a passive fertilizer tier to farmland at `pos` and remeshes if upgraded.
+    pub fn apply_fertilizer(
+        &mut self,
+        pos: IVec3,
+        tier: blockgame_core::FertilizerTier,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> Option<BlockId> {
+        let updated = {
+            let mut world = self.world.lock().unwrap();
+            self.farming_sim.apply_fertilizer(pos, tier, &mut world)
+        };
+        if updated.is_some() {
+            let (cpos, _, _, _) = world_to_chunk_coords(pos);
+            let registry = Arc::clone(&self.registry);
+            let mesh = {
+                let world = self.world.lock().unwrap();
+                world
+                    .get_chunk(cpos)
+                    .map(|c| mesh_chunk_from_world(&world, &registry, c))
+            };
+            if let Some(m) = mesh {
+                self.store_mesh(cpos, &m, device, pipeline);
+            }
+        }
+        updated
+    }
+
+    /// Consumes passive fertilizer on the farmland under `crop_pos` when a mature crop is harvested.
+    pub fn consume_fertilizer_on_harvest(
+        &mut self,
+        crop_pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> (blockgame_core::FertilizerTier, Option<BlockId>) {
+        let (tier, reset_block) = {
+            let mut world = self.world.lock().unwrap();
+            self.farming_sim
+                .consume_fertilizer_on_harvest(crop_pos, &mut world)
+        };
+        if reset_block.is_some() {
+            let farm_pos = crop_pos - IVec3::Y;
+            let (cpos, _, _, _) = world_to_chunk_coords(farm_pos);
+            let registry = Arc::clone(&self.registry);
+            let mesh = {
+                let world = self.world.lock().unwrap();
+                world
+                    .get_chunk(cpos)
+                    .map(|c| mesh_chunk_from_world(&world, &registry, c))
+            };
+            if let Some(m) = mesh {
+                self.store_mesh(cpos, &m, device, pipeline);
+            }
+        }
+        (tier, reset_block)
+    }
+
+    /// Ticks shared `FarmingSimulation` (crops, stems, sugar cane, farmland hydration & reversion)
+    /// for singleplayer worlds, spawning popped drops and remeshing modified chunks.
+    pub fn update_farming(
+        &mut self,
+        dt: f32,
+        sun_intensity: f32,
+        player_pos: Vec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let events = {
+            let mut world = self.world.lock().unwrap();
+            self.farming_sim
+                .tick(dt, sun_intensity, &[player_pos], &mut world, &self.registry)
+        };
+        if events.is_empty() {
+            return;
+        }
+        let mut changed_chunks = HashSet::new();
+        for ev in events {
+            match ev {
+                blockgame_core::FarmingEvent::BlockChanged { pos, .. } => {
+                    let (cp, _, _, _) = world_to_chunk_coords(pos);
+                    changed_chunks.insert(cp);
+                }
+                blockgame_core::FarmingEvent::SpawnDrop { pos, item } => {
+                    self.spawn_item_drop(pos.as_vec3() + Vec3::new(0.5, 0.35, 0.5), item);
+                }
+            }
+        }
+        if !changed_chunks.is_empty() {
+            let registry = Arc::clone(&self.registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                    }
+                }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
     }
 
     /// Periodically grows planted crops to their next stage, requiring nearby water to stay hydrated.
@@ -2984,6 +3140,90 @@ impl WorldManager {
             for (cpos, mesh) in meshes {
                 self.store_mesh(cpos, &mesh, device, pipeline);
             }
+        }
+    }
+
+    /// Ticks all Cooking Pots in singleplayer and remeshes chunks when lit state changes.
+    pub fn update_cooking_pots(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut changed_chunks = HashSet::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            let mut lit_changes = Vec::new();
+            for (&pos, pot) in world.cooking_pots.iter_mut() {
+                if pot.update(dt) {
+                    lit_changes.push((pos, pot.is_burning()));
+                }
+            }
+            for (pos, is_burning) in lit_changes {
+                let cur = world.get_block(pos);
+                if is_burning && cur == BlockId::COOKING_POT {
+                    world.set_block(pos, BlockId::COOKING_POT_LIT);
+                    let (cp, _, _, _) = world_to_chunk_coords(pos);
+                    changed_chunks.insert(cp);
+                } else if !is_burning && cur == BlockId::COOKING_POT_LIT {
+                    world.set_block(pos, BlockId::COOKING_POT);
+                    let (cp, _, _, _) = world_to_chunk_coords(pos);
+                    changed_chunks.insert(cp);
+                }
+            }
+        }
+        if !changed_chunks.is_empty() {
+            let registry = Arc::clone(&self.registry);
+            let mut meshes = Vec::new();
+            {
+                let world = self.world.lock().unwrap();
+                for cpos in changed_chunks {
+                    if let Some(chunk) = world.get_chunk(cpos) {
+                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                    }
+                }
+            }
+            for (cpos, mesh) in meshes {
+                self.store_mesh(cpos, &mesh, device, pipeline);
+            }
+        }
+    }
+
+    /// Ticks passive animals in singleplayer using the shared `blockgame_core::animal::tick_animals`
+    /// simulation (herding toward Breeding Feed, breeding, passive Chicken eggs, death drops).
+    pub fn update_animals_with_lure(
+        &mut self,
+        dt: f32,
+        player_pos: Vec3,
+        held_item: ItemId,
+    ) -> Vec<(Vec3, ItemSlot)> {
+        let world = self.world.lock().unwrap();
+        blockgame_core::animal::tick_animals(
+            &mut self.animals,
+            &mut self.next_animal_id,
+            dt,
+            &[(player_pos, held_item)],
+            &world,
+            &self.registry,
+        )
+    }
+
+    /// Replaces/updates client-side animal entities from a server-authoritative `AnimalsSync` packet.
+    pub fn apply_synced_animals(&mut self, synced: &[blockgame_core::SyncedAnimalState]) {
+        self.animals.clear();
+        for s in synced {
+            let mut a = AnimalEntity::new(s.id, s.kind, s.position);
+            a.velocity = s.velocity;
+            a.yaw = s.yaw;
+            a.health = s.health;
+            a.max_health = s.max_health;
+            a.hurt_timer = s.hurt_timer;
+            a.love_timer = s.love_timer;
+            a.breed_cooldown = s.breed_cooldown;
+            a.baby_timer = s.baby_timer;
+            a.is_moving = s.is_moving;
+            a.walk_anim_timer = s.walk_anim_timer;
+            self.animals.push(a);
         }
     }
 

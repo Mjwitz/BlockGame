@@ -11,9 +11,9 @@ use crate::{
     block::BlockId,
     chunk::{Chunk, ChunkPos, CHUNK_VOLUME},
     entity::{FallingBlock, ItemDrop},
-    item::{Inventory, ItemId, ItemSlot},
-    player::PlayerStats,
-    world::{FurnaceState, World},
+    item::{FoodEffectKind, Inventory, ItemId, ItemSlot},
+    player::{ActiveStatusEffect, PlayerStats},
+    world::{CookingPotState, FurnaceState, World},
 };
 
 const SAVE_MAGIC: &[u8; 4] = b"BGSV";
@@ -95,6 +95,7 @@ pub struct WorldSaveData {
     pub modified_chunk_facings: HashMap<ChunkPos, Vec<(u16, u8)>>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
+    pub cooking_pots: HashMap<IVec3, CookingPotState>,
     pub coal_generators: HashMap<IVec3, crate::power::CoalGeneratorState>,
     pub batteries: HashMap<IVec3, crate::power::BatteryState>,
     pub electric_furnaces: HashMap<IVec3, crate::power::ElectricFurnaceState>,
@@ -106,6 +107,7 @@ pub struct WorldSaveData {
     pub active_farmland: Vec<(IVec3, f32)>,
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
+    pub growing_sugar_cane: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
     pub temples: crate::temple::TempleManager,
 }
@@ -119,6 +121,7 @@ impl WorldSaveData {
             modified_chunk_facings: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
+            cooking_pots: HashMap::new(),
             coal_generators: HashMap::new(),
             batteries: HashMap::new(),
             electric_furnaces: HashMap::new(),
@@ -130,12 +133,13 @@ impl WorldSaveData {
             active_farmland: Vec::new(),
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
+            growing_sugar_cane: Vec::new(),
             animal_spawned_columns: HashSet::new(),
             temples: crate::temple::TempleManager::new(),
         }
     }
 
-    /// Captures all dirty chunks, block facings, chests, furnaces, and power machines from `World` into this `WorldSaveData`.
+    /// Captures all dirty chunks, block facings, chests, furnaces, cooking pots, and power machines from `World` into this `WorldSaveData`.
     pub fn capture_from_world(&mut self, world: &World) {
         for &cpos in &world.dirty_chunks {
             if let Some(chunk) = world.get_chunk(cpos) {
@@ -151,12 +155,13 @@ impl WorldSaveData {
         }
         self.chest_containers = world.chest_containers.clone();
         self.furnaces = world.furnaces.clone();
+        self.cooking_pots = world.cooking_pots.clone();
         self.coal_generators = world.coal_generators.clone();
         self.batteries = world.batteries.clone();
         self.electric_furnaces = world.electric_furnaces.clone();
     }
 
-    /// Applies saved modified chunks, block facings, chests, furnaces, and power machines into `World`.
+    /// Applies saved modified chunks, block facings, chests, furnaces, cooking pots, and power machines into `World`.
     pub fn apply_to_world(&self, world: &mut World) {
         for (&cpos, rle) in &self.modified_chunks {
             let mut chunk = decode_chunk_rle(cpos, rle);
@@ -167,6 +172,7 @@ impl WorldSaveData {
         }
         world.chest_containers = self.chest_containers.clone();
         world.furnaces = self.furnaces.clone();
+        world.cooking_pots = self.cooking_pots.clone();
         world.coal_generators = self.coal_generators.clone();
         world.batteries = self.batteries.clone();
         world.electric_furnaces = self.electric_furnaces.clone();
@@ -436,6 +442,11 @@ pub fn save_player_data(
         write_u16(&mut w, entry.level)?;
         write_u64(&mut w, entry.xp)?;
     }
+    write_u32(&mut w, player.stats.status_effects.len() as u32)?;
+    for eff in &player.stats.status_effects {
+        write_u8(&mut w, eff.kind as u8)?;
+        write_f32(&mut w, eff.remaining_secs)?;
+    }
 
     w.flush()?;
     Ok(file_path)
@@ -528,6 +539,23 @@ pub fn load_player_data(
                 };
             } else {
                 break;
+            }
+        }
+        if let Ok(eff_count) = read_u32(&mut r) {
+            for _ in 0..eff_count.min(16) {
+                if let (Ok(kind_u8), Ok(rem)) = (read_u8(&mut r), read_f32(&mut r)) {
+                    if let Some(kind) = FoodEffectKind::from_u8(kind_u8) {
+                        if rem > 0.0 {
+                            stats.status_effects.push(ActiveStatusEffect {
+                                kind,
+                                remaining_secs: rem,
+                                tick_accum: 0.0,
+                            });
+                        }
+                    }
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -667,18 +695,19 @@ pub fn load_chunk_file(path: &Path) -> io::Result<(ChunkPos, Vec<(u16, BlockId)>
     Ok((cpos, runs))
 }
 
-/// Saves chest and furnace containers to `<world_dir>/containers.bin`.
+/// Saves chest, furnace, and cooking pot containers to `<world_dir>/containers.bin`.
 pub fn save_containers_file(
     world_dir: &Path,
     chests: &HashMap<IVec3, Vec<ItemSlot>>,
     furnaces: &HashMap<IVec3, FurnaceState>,
+    cooking_pots: &HashMap<IVec3, CookingPotState>,
 ) -> io::Result<PathBuf> {
     let path = world_dir.join("containers.bin");
     let file = File::create(&path)?;
     let mut w = BufWriter::new(file);
 
     w.write_all(CONTAINER_MAGIC)?;
-    write_u32(&mut w, 1)?; // version 1
+    write_u32(&mut w, 2)?; // version 2: includes cooking pots
 
     // Chests
     write_u32(&mut w, chests.len() as u32)?;
@@ -702,14 +731,34 @@ pub fn save_containers_file(
         write_f32(&mut w, furnace.cook_progress)?;
     }
 
+    // Cooking Pots (version 2+)
+    write_u32(&mut w, cooking_pots.len() as u32)?;
+    for (&pos, pot) in cooking_pots {
+        write_ivec3(&mut w, pos)?;
+        for slot in &pot.ingredients {
+            write_item_slot(&mut w, *slot)?;
+        }
+        write_item_slot(&mut w, pot.fuel)?;
+        write_item_slot(&mut w, pot.output)?;
+        write_f32(&mut w, pot.burn_time_remaining)?;
+        write_f32(&mut w, pot.max_burn_time)?;
+        write_f32(&mut w, pot.cook_progress)?;
+    }
+
     w.flush()?;
     Ok(path)
 }
 
-/// Loads containers from `<world_dir>/containers.bin`.
+/// Loads containers from `<world_dir>/containers.bin` (supports v1 and v2).
 pub fn load_containers_file(
     world_dir: &Path,
-) -> io::Result<Option<(HashMap<IVec3, Vec<ItemSlot>>, HashMap<IVec3, FurnaceState>)>> {
+) -> io::Result<
+    Option<(
+        HashMap<IVec3, Vec<ItemSlot>>,
+        HashMap<IVec3, FurnaceState>,
+        HashMap<IVec3, CookingPotState>,
+    )>,
+> {
     let path = world_dir.join("containers.bin");
     if !path.exists() {
         return Ok(None);
@@ -726,7 +775,7 @@ pub fn load_containers_file(
         ));
     }
     let version = read_u32(&mut r)?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported containers.bin version: {}", version),
@@ -768,7 +817,38 @@ pub fn load_containers_file(
         );
     }
 
-    Ok(Some((chests, furnaces)))
+    let mut cooking_pots = HashMap::new();
+    if version >= 2 {
+        let pot_count = read_u32(&mut r)? as usize;
+        cooking_pots.reserve(pot_count);
+        for _ in 0..pot_count {
+            let pos = read_ivec3(&mut r)?;
+            let ingredients = [
+                read_item_slot(&mut r, 2)?,
+                read_item_slot(&mut r, 2)?,
+                read_item_slot(&mut r, 2)?,
+                read_item_slot(&mut r, 2)?,
+            ];
+            let fuel = read_item_slot(&mut r, 2)?;
+            let output = read_item_slot(&mut r, 2)?;
+            let burn_time_remaining = read_f32(&mut r)?;
+            let max_burn_time = read_f32(&mut r)?;
+            let cook_progress = read_f32(&mut r)?;
+            cooking_pots.insert(
+                pos,
+                CookingPotState {
+                    ingredients,
+                    fuel,
+                    output,
+                    burn_time_remaining,
+                    max_burn_time,
+                    cook_progress,
+                },
+            );
+        }
+    }
+
+    Ok(Some((chests, furnaces, cooking_pots)))
 }
 
 /// Saves power machine states (coal generators, batteries, electric furnaces) to `<world_dir>/power.bin`.
@@ -978,7 +1058,7 @@ pub fn save_entities_file(
     let mut w = BufWriter::new(file);
 
     w.write_all(ENTITY_MAGIC)?;
-    write_u32(&mut w, 1)?; // version 1
+    write_u32(&mut w, 2)?; // version 2: includes animal breeding, baby, and egg timers
 
     // Drops
     write_u32(&mut w, drops.len() as u32)?;
@@ -1004,19 +1084,17 @@ pub fn save_entities_file(
     write_u32(&mut w, next_animal_id)?;
     write_u32(&mut w, animals.len() as u32)?;
     for animal in animals {
-        let kind_u8 = match animal.kind {
-            AnimalKind::Cow => 0,
-            AnimalKind::Pig => 1,
-            AnimalKind::Chicken => 2,
-            AnimalKind::Sheep => 3,
-        };
         write_u32(&mut w, animal.id)?;
-        write_u8(&mut w, kind_u8)?;
+        write_u8(&mut w, animal.kind.to_u8())?;
         write_vec3(&mut w, animal.position)?;
         write_vec3(&mut w, animal.velocity)?;
         write_f32(&mut w, animal.yaw)?;
         write_f32(&mut w, animal.health)?;
         write_f32(&mut w, animal.breath)?;
+        write_f32(&mut w, animal.love_timer)?;
+        write_f32(&mut w, animal.breed_cooldown)?;
+        write_f32(&mut w, animal.baby_timer)?;
+        write_f32(&mut w, animal.egg_timer)?;
     }
 
     // Animal spawned columns
@@ -1030,7 +1108,7 @@ pub fn save_entities_file(
     Ok(path)
 }
 
-/// Loads entities from `<world_dir>/entities.bin`.
+/// Loads entities from `<world_dir>/entities.bin` (supports v1 and v2).
 pub fn load_entities_file(
     world_dir: &Path,
 ) -> io::Result<Option<(Vec<ItemDrop>, Vec<FallingBlock>, u32, Vec<AnimalEntity>, HashSet<IVec2>)>> {
@@ -1050,7 +1128,7 @@ pub fn load_entities_file(
         ));
     }
     let version = read_u32(&mut r)?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported entities.bin version: {}", version),
@@ -1092,13 +1170,7 @@ pub fn load_entities_file(
     for _ in 0..animal_count {
         let id = read_u32(&mut r)?;
         let kind_u8 = read_u8(&mut r)?;
-        let kind = match kind_u8 {
-            0 => AnimalKind::Cow,
-            1 => AnimalKind::Pig,
-            2 => AnimalKind::Chicken,
-            3 => AnimalKind::Sheep,
-            _ => AnimalKind::Chicken,
-        };
+        let kind = AnimalKind::from_u8(kind_u8).unwrap_or(AnimalKind::Chicken);
         let position = read_vec3(&mut r)?;
         let velocity = read_vec3(&mut r)?;
         let yaw = read_f32(&mut r)?;
@@ -1109,6 +1181,12 @@ pub fn load_entities_file(
         animal.yaw = yaw;
         animal.health = health;
         animal.breath = breath;
+        if version >= 2 {
+            animal.love_timer = read_f32(&mut r)?;
+            animal.breed_cooldown = read_f32(&mut r)?;
+            animal.baby_timer = read_f32(&mut r)?;
+            animal.egg_timer = read_f32(&mut r)?;
+        }
         animals.push(animal);
     }
 
@@ -1130,27 +1208,37 @@ pub fn save_environment_file(
     active_farmland: &[(IVec3, f32)],
     growing_cacti: &[(IVec3, f32)],
     decaying_leaves: &[(IVec3, f32)],
+    growing_sugar_cane: &[(IVec3, f32)],
 ) -> io::Result<PathBuf> {
     let path = world_dir.join("environment.bin");
     let file = File::create(&path)?;
     let mut w = BufWriter::new(file);
 
     w.write_all(ENV_MAGIC)?;
-    write_u32(&mut w, 1)?; // version 1
+    write_u32(&mut w, 2)?; // version 2: includes growing sugar cane
 
     write_pos_timer_list(&mut w, planted_crops)?;
     write_pos_timer_list(&mut w, active_farmland)?;
     write_pos_timer_list(&mut w, growing_cacti)?;
     write_pos_timer_list(&mut w, decaying_leaves)?;
+    write_pos_timer_list(&mut w, growing_sugar_cane)?;
 
     w.flush()?;
     Ok(path)
 }
 
-/// Loads environmental simulation timers from `<world_dir>/environment.bin`.
+/// Loads environmental simulation timers from `<world_dir>/environment.bin` (supports v1 and v2).
 pub fn load_environment_file(
     world_dir: &Path,
-) -> io::Result<Option<(Vec<(IVec3, f32)>, Vec<(IVec3, f32)>, Vec<(IVec3, f32)>, Vec<(IVec3, f32)>)>> {
+) -> io::Result<
+    Option<(
+        Vec<(IVec3, f32)>,
+        Vec<(IVec3, f32)>,
+        Vec<(IVec3, f32)>,
+        Vec<(IVec3, f32)>,
+        Vec<(IVec3, f32)>,
+    )>,
+> {
     let path = world_dir.join("environment.bin");
     if !path.exists() {
         return Ok(None);
@@ -1167,7 +1255,7 @@ pub fn load_environment_file(
         ));
     }
     let version = read_u32(&mut r)?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported environment.bin version: {}", version),
@@ -1178,8 +1266,19 @@ pub fn load_environment_file(
     let active_farmland = read_pos_timer_list(&mut r)?;
     let growing_cacti = read_pos_timer_list(&mut r)?;
     let decaying_leaves = read_pos_timer_list(&mut r)?;
+    let growing_sugar_cane = if version >= 2 {
+        read_pos_timer_list(&mut r)?
+    } else {
+        Vec::new()
+    };
 
-    Ok(Some((planted_crops, active_farmland, growing_cacti, decaying_leaves)))
+    Ok(Some((
+        planted_crops,
+        active_farmland,
+        growing_cacti,
+        decaying_leaves,
+        growing_sugar_cane,
+    )))
 }
 
 /// Saves the complete `WorldSaveData` to `saves_root/<folder_name>/` using the multi-file architecture.
@@ -1223,8 +1322,13 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
         save_chunk_file_with_facings(&chunk_dir, cpos, runs, facings)?;
     }
 
-    // 4. Write containers.bin (chests & furnaces)
-    save_containers_file(&world_dir, &data.chest_containers, &data.furnaces)?;
+    // 4. Write containers.bin (chests, furnaces, cooking pots)
+    save_containers_file(
+        &world_dir,
+        &data.chest_containers,
+        &data.furnaces,
+        &data.cooking_pots,
+    )?;
 
     // 4b. Write power.bin (coal generators, batteries, electric furnaces)
     save_power_file(
@@ -1244,13 +1348,14 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
         &data.animal_spawned_columns,
     )?;
 
-    // 6. Write environment.bin (crops, farmland, cacti, leaf decay)
+    // 6. Write environment.bin (crops, farmland, cacti, leaf decay, sugar cane)
     save_environment_file(
         &world_dir,
         &data.planted_crops,
         &data.active_farmland,
         &data.growing_cacti,
         &data.decaying_leaves,
+        &data.growing_sugar_cane,
     )?;
 
     // 7. Write temples.bin (boss temple progression & return positions)
@@ -1476,9 +1581,10 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
 
     // 4. Load containers
     let mut loaded_containers = false;
-    if let Ok(Some((chests, furnaces))) = load_containers_file(&world_dir) {
+    if let Ok(Some((chests, furnaces, cooking_pots))) = load_containers_file(&world_dir) {
         data.chest_containers = chests;
         data.furnaces = furnaces;
+        data.cooking_pots = cooking_pots;
         loaded_containers = true;
     }
 
@@ -1502,11 +1608,12 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
 
     // 6. Load environment
     let mut loaded_env = false;
-    if let Ok(Some((crops, farmland, cacti, leaves))) = load_environment_file(&world_dir) {
+    if let Ok(Some((crops, farmland, cacti, leaves, sugar_cane))) = load_environment_file(&world_dir) {
         data.planted_crops = crops;
         data.active_farmland = farmland;
         data.growing_cacti = cacti;
         data.decaying_leaves = leaves;
+        data.growing_sugar_cane = sugar_cane;
         loaded_env = true;
     }
 
@@ -2257,6 +2364,7 @@ mod tests {
             modified_chunk_facings: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
+            cooking_pots: HashMap::new(),
             coal_generators: HashMap::new(),
             batteries: HashMap::new(),
             electric_furnaces: HashMap::new(),
@@ -2266,6 +2374,7 @@ mod tests {
             next_animal_id: 1,
             animal_spawned_columns: HashSet::new(),
             planted_crops: Vec::new(),
+            growing_sugar_cane: Vec::new(),
             active_farmland: Vec::new(),
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
