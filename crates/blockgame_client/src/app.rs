@@ -6837,7 +6837,7 @@ impl ApplicationHandler for BlockGameApp {
                         } else {
                             0.0
                         };
-                        UiBuilder::build_hud_with_armor_and_tuck(
+                        UiBuilder::build_hud_with_appearance(
                             &mut state.ui_mesh,
                             screen_w,
                             screen_h,
@@ -6849,6 +6849,7 @@ impl ApplicationHandler for BlockGameApp {
                             &state.player_stats,
                             state.armor.total_defense(&state.item_registry),
                             state.hotbar_tuck_progress,
+                            &state.character_profile.active_appearance,
                         );
 
                         if let Some(boss_hud) = state

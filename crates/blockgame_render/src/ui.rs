@@ -555,6 +555,76 @@ impl UiBuilder {
         walk_distance: f32,
         punch_time: f32,
     ) {
+        let default_app = blockgame_core::character::CharacterAppearance::default();
+        Self::draw_held_item_with_appearance(
+            mesh,
+            screen_w,
+            screen_h,
+            active_slot,
+            registry,
+            walk_distance,
+            punch_time,
+            &default_app,
+        );
+    }
+
+    /// Computes `(upper_top, upper_side, forearm_top, forearm_side, skin_light, optional_cuff_top, optional_cuff_side)`
+    /// for first-person arm rendering so empty hand and held-item arms match the player's Character Appearance.
+    fn first_person_arm_colors(
+        appearance: &blockgame_core::character::CharacterAppearance,
+    ) -> (
+        [f32; 4],
+        [f32; 4],
+        [f32; 4],
+        [f32; 4],
+        [f32; 4],
+        Option<([f32; 4], [f32; 4])>,
+    ) {
+        use blockgame_core::character::ShirtStyle;
+        let app = appearance.sanitized();
+
+        let skin_top = app.skin_tone.to_rgba_f32(1.0);
+        let skin_side = app.skin_tone.scale(0.82).to_rgba_f32(1.0);
+        let skin_light = app.skin_tone.scale(1.06).to_rgba_f32(1.0);
+
+        let shirt_top = app.shirt_primary.to_rgba_f32(1.0);
+        let shirt_side = app.shirt_primary.scale(0.78).to_rgba_f32(1.0);
+        let shirt_dark_top = app.shirt_primary.scale(0.86).to_rgba_f32(1.0);
+        let shirt_dark_side = app.shirt_primary.scale(0.68).to_rgba_f32(1.0);
+        let cuff = Some((
+            app.shirt_accent.to_rgba_f32(1.0),
+            app.shirt_accent.scale(0.80).to_rgba_f32(1.0),
+        ));
+
+        match app.shirt_style {
+            ShirtStyle::Vest => (skin_top, skin_side, skin_top, skin_side, skin_light, None),
+            ShirtStyle::TShirt => (shirt_top, shirt_side, skin_top, skin_side, skin_light, None),
+            ShirtStyle::LongSleeve | ShirtStyle::Hoodie | ShirtStyle::Jacket => {
+                (shirt_top, shirt_side, shirt_top, shirt_side, skin_light, cuff)
+            }
+            ShirtStyle::Tunic => (
+                shirt_top,
+                shirt_side,
+                shirt_dark_top,
+                shirt_dark_side,
+                skin_light,
+                cuff,
+            ),
+        }
+    }
+
+    /// Renders first-person view using the player's `CharacterAppearance` for arm skin tone, sleeves, and cuffs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_held_item_with_appearance(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        active_slot: ItemSlot,
+        registry: &ItemRegistry,
+        walk_distance: f32,
+        punch_time: f32,
+        appearance: &blockgame_core::character::CharacterAppearance,
+    ) {
         let white_uv_bounds = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
         let white_uv = [
             [white_uv_bounds[0], white_uv_bounds[1]],
@@ -570,6 +640,15 @@ impl UiBuilder {
 
         // Punch swing animation (0.0 -> 1.0 -> 0.0)
         let punch_swing = (punch_time * std::f32::consts::PI).sin();
+
+        let (
+            col_sleeve_top,
+            col_sleeve_side,
+            col_forearm_top,
+            col_forearm_side,
+            col_skin_light,
+            cuff_colors,
+        ) = Self::first_person_arm_colors(appearance);
 
         let def_opt = registry.get(active_slot.item_id);
 
@@ -624,12 +703,6 @@ impl UiBuilder {
                 screen_h - 200.0 * scale + bob_y + punch_y * 1.1,
             ];
 
-            let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
-            let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
-            let col_skin_top = [0.88, 0.64, 0.48, 1.0];
-            let col_skin_side = [0.72, 0.48, 0.35, 1.0];
-            let col_skin_light = [0.93, 0.69, 0.53, 1.0];
-
             // 1. Sleeve quads (side facet and top facet)
             mesh.add_quad_vertices(
                 [p_arm_bot_l, p_arm_bot_m, p_sleeve_m, p_sleeve_l],
@@ -646,13 +719,25 @@ impl UiBuilder {
             mesh.add_quad_vertices(
                 [p_sleeve_l, p_sleeve_m, p_wrist_m, p_wrist_l],
                 white_uv,
-                [col_skin_side; 4],
+                [col_forearm_side; 4],
             );
             mesh.add_quad_vertices(
                 [p_sleeve_m, p_sleeve_r, p_wrist_r, p_wrist_m],
                 white_uv,
-                [col_skin_top; 4],
+                [col_forearm_top; 4],
             );
+
+            // Optional sleeve cuff accent band near wrist for long-sleeved shirts
+            if let Some((cuff_top, cuff_side)) = cuff_colors {
+                let lerp2 = |a: [f32; 2], b: [f32; 2], t: f32| -> [f32; 2] {
+                    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+                };
+                let c_l = lerp2(p_sleeve_l, p_wrist_l, 0.78);
+                let c_m = lerp2(p_sleeve_m, p_wrist_m, 0.78);
+                let c_r = lerp2(p_sleeve_r, p_wrist_r, 0.78);
+                mesh.add_quad_vertices([c_l, c_m, p_wrist_m, p_wrist_l], white_uv, [cuff_side; 4]);
+                mesh.add_quad_vertices([c_m, c_r, p_wrist_r, p_wrist_m], white_uv, [cuff_top; 4]);
+            }
 
             // 3. Clenched fist punching forward
             let p_fist_tip_l = [
@@ -2730,11 +2815,6 @@ impl UiBuilder {
                     (p_wrist_l[1] + p_wrist_r[1]) * 0.5,
                 ];
 
-                let col_sleeve_top = [0.0, 0.68, 0.70, 1.0];
-                let col_sleeve_side = [0.0, 0.50, 0.52, 1.0];
-                let col_skin_top = [0.88, 0.64, 0.48, 1.0];
-                let col_skin_side = [0.72, 0.48, 0.35, 1.0];
-
                 // Sleeve quads
                 mesh.add_quad_vertices(
                     [p_arm_bot_l, p_arm_bot_m, p_sleeve_m, p_sleeve_l],
@@ -2751,13 +2831,25 @@ impl UiBuilder {
                 mesh.add_quad_vertices(
                     [p_sleeve_l, p_sleeve_m, p_wrist_m, p_wrist_l],
                     white_uv,
-                    [col_skin_side; 4],
+                    [col_forearm_side; 4],
                 );
                 mesh.add_quad_vertices(
                     [p_sleeve_m, p_sleeve_r, p_wrist_r, p_wrist_m],
                     white_uv,
-                    [col_skin_top; 4],
+                    [col_forearm_top; 4],
                 );
+
+                // Optional sleeve cuff accent band near wrist
+                if let Some((cuff_top, cuff_side)) = cuff_colors {
+                    let lerp2 = |a: [f32; 2], b: [f32; 2], t: f32| -> [f32; 2] {
+                        [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+                    };
+                    let c_l = lerp2(p_sleeve_l, p_wrist_l, 0.78);
+                    let c_m = lerp2(p_sleeve_m, p_wrist_m, 0.78);
+                    let c_r = lerp2(p_sleeve_r, p_wrist_r, 0.78);
+                    mesh.add_quad_vertices([c_l, c_m, p_wrist_m, p_wrist_l], white_uv, [cuff_side; 4]);
+                    mesh.add_quad_vertices([c_m, c_r, p_wrist_r, p_wrist_m], white_uv, [cuff_top; 4]);
+                }
 
                 // 2. The Clean Item Sprite (crisp upright 2D quad held by hand)
                 let item_size = 96.0 * scale;
@@ -2777,7 +2869,6 @@ impl UiBuilder {
                 );
 
                 // 3. Thumb / Knuckles gripping the item
-                let col_skin_light = [0.93, 0.69, 0.53, 1.0];
                 let p_thumb = [ix + item_size * 0.45, iy + item_size * 0.70];
                 let p_fist_w = 26.0 * scale;
                 let p_fist_h = 24.0 * scale;
@@ -2946,6 +3037,38 @@ impl UiBuilder {
         armor_points: u8,
         hotbar_tuck_progress: f32,
     ) {
+        let default_app = blockgame_core::character::CharacterAppearance::default();
+        Self::build_hud_with_appearance(
+            mesh,
+            screen_w,
+            screen_h,
+            inventory,
+            active_slot,
+            registry,
+            walk_distance,
+            punch_time,
+            stats,
+            armor_points,
+            hotbar_tuck_progress,
+            &default_app,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_hud_with_appearance(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        inventory: &Inventory,
+        active_slot: usize,
+        registry: &ItemRegistry,
+        walk_distance: f32,
+        punch_time: f32,
+        stats: &blockgame_core::player::PlayerStats,
+        armor_points: u8,
+        hotbar_tuck_progress: f32,
+        appearance: &blockgame_core::character::CharacterAppearance,
+    ) {
         mesh.clear();
         let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
 
@@ -2973,7 +3096,7 @@ impl UiBuilder {
         // 2. First-Person Hand or Held Item in lower-right corner - only when alive
         if !stats.is_dead {
             let held_slot = inventory.get(active_slot);
-            Self::draw_held_item(
+            Self::draw_held_item_with_appearance(
                 mesh,
                 screen_w,
                 screen_h,
@@ -2981,6 +3104,7 @@ impl UiBuilder {
                 registry,
                 walk_distance,
                 punch_time,
+                appearance,
             );
         }
 
