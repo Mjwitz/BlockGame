@@ -62,6 +62,35 @@ impl AnimalKind {
             Self::Sheep => 3.3,
         }
     }
+
+    pub const fn to_u8(self) -> u8 {
+        match self {
+            Self::Cow => 0,
+            Self::Pig => 1,
+            Self::Chicken => 2,
+            Self::Sheep => 3,
+        }
+    }
+
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Cow),
+            1 => Some(Self::Pig),
+            2 => Some(Self::Chicken),
+            3 => Some(Self::Sheep),
+            _ => None,
+        }
+    }
+
+    /// Returns whether `item` is this species' Breeding Feed (used for herding and breeding).
+    #[inline]
+    pub const fn is_breeding_feed(self, item: ItemId) -> bool {
+        match self {
+            Self::Cow | Self::Sheep => item.0 == ItemId::WHEAT.0,
+            Self::Pig => item.0 == ItemId::CARROT.0 || item.0 == ItemId::POTATO.0,
+            Self::Chicken => item.is_seed(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -89,11 +118,16 @@ pub struct AnimalEntity {
     pub love_timer: f32,
     pub breed_cooldown: f32,
     pub baby_timer: f32,
+    /// Countdown in seconds until an adult Chicken passively lays an Egg (300–600s).
+    pub egg_timer: f32,
 }
 
 impl AnimalEntity {
     pub const BREED_COOLDOWN_SECONDS: f32 = 300.0; // 5-minute breeding cooldown
     pub const LOVE_DURATION_SECONDS: f32 = 30.0;
+    pub const EGG_LAY_MIN_SECONDS: f32 = 300.0; // 5 minutes
+    pub const EGG_LAY_MAX_SECONDS: f32 = 600.0; // 10 minutes
+    pub const HERDING_FOLLOW_RADIUS: f32 = 10.0;
 
     pub fn new(id: u32, kind: AnimalKind, position: Vec3) -> Self {
         let max_hp = kind.max_health();
@@ -104,6 +138,13 @@ impl AnimalEntity {
             seed = 0x853c49e6748fea9b;
         }
         let wander_init = 1.0 + (id % 3) as f32 * 0.8;
+        let egg_frac = ((seed >> 24) as u32 as f32) / (u32::MAX as f32);
+        let egg_timer = if kind == AnimalKind::Chicken {
+            Self::EGG_LAY_MIN_SECONDS
+                + egg_frac * (Self::EGG_LAY_MAX_SECONDS - Self::EGG_LAY_MIN_SECONDS)
+        } else {
+            0.0
+        };
         Self {
             id,
             kind,
@@ -128,6 +169,7 @@ impl AnimalEntity {
             love_timer: 0.0,
             breed_cooldown: 0.0,
             baby_timer: 0.0,
+            egg_timer,
         }
     }
 
@@ -141,14 +183,25 @@ impl AnimalEntity {
         !self.dead && self.baby_timer <= 0.0 && self.breed_cooldown <= 0.0
     }
 
-    /// Feeds this animal Wheat to enter love mode for breeding.
-    /// Returns `false` if the animal is a baby, already in love mode, or on breeding cooldown.
-    pub fn try_feed_wheat(&mut self) -> bool {
-        if !self.can_breed() || self.love_timer > 0.0 {
+    /// Feeds this animal its species-specific Breeding Feed to enter love mode.
+    /// Returns `false` if the item is not this species' Breeding Feed or the animal cannot breed.
+    pub fn try_feed(&mut self, item: ItemId) -> bool {
+        if !self.kind.is_breeding_feed(item) || !self.can_breed() || self.love_timer > 0.0 {
             return false;
         }
         self.love_timer = Self::LOVE_DURATION_SECONDS;
         true
+    }
+
+    /// Feeds this animal Wheat (for Cow/Sheep) to enter love mode.
+    pub fn try_feed_wheat(&mut self) -> bool {
+        self.try_feed(ItemId::WHEAT)
+    }
+
+    /// Checks whether this animal can be milked with `item` (adult Cow + empty Bucket).
+    #[inline]
+    pub fn can_milk(&self, item: ItemId) -> bool {
+        !self.dead && self.kind == AnimalKind::Cow && !self.is_baby() && item == ItemId::BUCKET
     }
 
     /// Advances the animal's internal PRNG state and returns a uniform pseudo-random f32 in 0.0..1.0.
@@ -161,6 +214,11 @@ impl AnimalEntity {
             self.rng_state = 0x853c49e6748fea9b;
         }
         ((self.rng_state >> 32) as u32 as f32) / (u32::MAX as f32)
+    }
+
+    pub fn roll_next_egg_timer(&mut self) -> f32 {
+        Self::EGG_LAY_MIN_SECONDS
+            + self.next_f32() * (Self::EGG_LAY_MAX_SECONDS - Self::EGG_LAY_MIN_SECONDS)
     }
 
     pub fn aabb(&self) -> AABB {
@@ -217,6 +275,7 @@ impl AnimalEntity {
             }
             AnimalKind::Sheep => {
                 drops.push(ItemSlot::new(ItemId::WHITE_WOOL, 1 + roll2));
+                drops.push(ItemSlot::new(ItemId::RAW_MUTTON, 1 + roll2));
             }
         }
 
@@ -224,6 +283,16 @@ impl AnimalEntity {
     }
 
     pub fn update(&mut self, dt: f32, world: &World, registry: &BlockRegistry) {
+        self.update_with_lure(dt, world, registry, None);
+    }
+
+    pub fn update_with_lure(
+        &mut self,
+        dt: f32,
+        world: &World,
+        registry: &BlockRegistry,
+        lure_target: Option<Vec3>,
+    ) {
         if self.dead {
             return;
         }
@@ -310,6 +379,21 @@ impl AnimalEntity {
             self.flee_timer = (self.flee_timer - dt).max(0.0);
             wish_dir = self.flee_dir;
             self.is_moving = true;
+        } else if let Some(target) = lure_target {
+            let delta = Vec3::new(target.x - self.position.x, 0.0, target.z - self.position.z);
+            let dist_sq = delta.length_squared();
+            if dist_sq > 1.8 * 1.8 && dist_sq <= Self::HERDING_FOLLOW_RADIUS * Self::HERDING_FOLLOW_RADIUS {
+                let dir = delta.normalize_or_zero();
+                self.yaw = dir.x.atan2(dir.z);
+                self.is_moving = true;
+                wish_dir = dir;
+            } else {
+                // Close enough to the player holding Breeding Feed: look at player and pause
+                if dist_sq > 0.01 {
+                    self.yaw = delta.x.atan2(delta.z);
+                }
+                self.is_moving = false;
+            }
         } else {
             self.wander_timer -= dt;
             if self.wander_timer <= 0.0 {
@@ -439,6 +523,144 @@ impl AnimalEntity {
             registry,
         );
     }
+}
+
+/// Shared animal simulation tick (ADR-0004): runs herding toward players holding each species'
+/// Breeding Feed, love-mode mate seeking, breeding pair baby spawning, passive Chicken egg-laying,
+/// physics/AI updates, and dead animal drop collection.
+///
+/// `players` is a slice of `(player_feet_pos, active_held_item)`.
+/// Returns `(world_pos, ItemSlot)` drops to spawn (eggs + death drops).
+pub fn tick_animals(
+    animals: &mut Vec<AnimalEntity>,
+    next_animal_id: &mut u32,
+    dt: f32,
+    players: &[(Vec3, ItemId)],
+    world: &World,
+    registry: &BlockRegistry,
+) -> Vec<(Vec3, ItemSlot)> {
+    let mut drops = Vec::new();
+    if dt <= 0.0 {
+        return drops;
+    }
+
+    // 1. Pre-compute steering targets (love-mode mates take priority over herding)
+    let len = animals.len();
+    let mut lure_targets: Vec<Option<Vec3>> = vec![None; len];
+    let herd_r2 = AnimalEntity::HERDING_FOLLOW_RADIUS * AnimalEntity::HERDING_FOLLOW_RADIUS;
+
+    for i in 0..len {
+        let a = &animals[i];
+        if a.dead || a.flee_timer > 0.0 {
+            continue;
+        }
+        if a.love_timer > 0.0 {
+            let mut best_dist_sq = 12.0_f32 * 12.0_f32;
+            let mut mate_pos = None;
+            for j in 0..len {
+                if i == j {
+                    continue;
+                }
+                let b = &animals[j];
+                if !b.dead && b.kind == a.kind && b.love_timer > 0.0 {
+                    let d2 = a.position.distance_squared(b.position);
+                    if d2 < best_dist_sq {
+                        best_dist_sq = d2;
+                        mate_pos = Some(b.position);
+                    }
+                }
+            }
+            if mate_pos.is_some() {
+                lure_targets[i] = mate_pos;
+                continue;
+            }
+        }
+
+        // Otherwise check if any nearby player is holding this species' Breeding Feed
+        let mut best_player_d2 = herd_r2;
+        let mut best_player_pos = None;
+        for &(p_pos, held) in players {
+            if a.kind.is_breeding_feed(held) {
+                let d2 = a.position.distance_squared(p_pos);
+                if d2 <= best_player_d2 {
+                    best_player_d2 = d2;
+                    best_player_pos = Some(p_pos);
+                }
+            }
+        }
+        lure_targets[i] = best_player_pos;
+    }
+
+    // 2. Tick movement, physics, and passive Chicken egg-laying
+    for i in 0..len {
+        let animal = &mut animals[i];
+        animal.update_with_lure(dt, world, registry, lure_targets[i]);
+
+        if !animal.dead && animal.kind == AnimalKind::Chicken && !animal.is_baby() {
+            if animal.egg_timer <= 0.0 {
+                animal.egg_timer = animal.roll_next_egg_timer();
+            } else {
+                animal.egg_timer -= dt;
+                if animal.egg_timer <= 0.0 {
+                    drops.push((
+                        animal.position + Vec3::new(0.0, 0.35, 0.0),
+                        ItemSlot::new(ItemId::EGG, 1),
+                    ));
+                    animal.egg_timer = animal.roll_next_egg_timer();
+                }
+            }
+        }
+    }
+
+    // 3. Breeding pair detection & baby spawning
+    let mut babies_to_spawn: Vec<(AnimalKind, Vec3)> = Vec::new();
+    for i in 0..len {
+        if animals[i].dead || animals[i].love_timer <= 0.0 {
+            continue;
+        }
+        for j in (i + 1)..len {
+            if animals[j].dead
+                || animals[j].kind != animals[i].kind
+                || animals[j].love_timer <= 0.0
+            {
+                continue;
+            }
+            if animals[i].position.distance_squared(animals[j].position) <= 3.5 * 3.5 {
+                let kind = animals[i].kind;
+                let mid = (animals[i].position + animals[j].position) * 0.5;
+                animals[i].love_timer = 0.0;
+                animals[i].breed_cooldown = AnimalEntity::BREED_COOLDOWN_SECONDS;
+                animals[j].love_timer = 0.0;
+                animals[j].breed_cooldown = AnimalEntity::BREED_COOLDOWN_SECONDS;
+                babies_to_spawn.push((kind, mid));
+                break;
+            }
+        }
+    }
+
+    for (kind, pos) in babies_to_spawn {
+        let id = *next_animal_id;
+        *next_animal_id = next_animal_id.wrapping_add(1);
+        let mut baby = AnimalEntity::new(id, kind, pos);
+        baby.baby_timer = AnimalEntity::BREED_COOLDOWN_SECONDS;
+        animals.push(baby);
+    }
+
+    // 4. Collect drops from dead animals and remove them
+    let mut idx = 0;
+    while idx < animals.len() {
+        if animals[idx].dead {
+            let dead_animal = animals.swap_remove(idx);
+            let drop_pos = dead_animal.position + Vec3::new(0.0, 0.5, 0.0);
+            for item in dead_animal.generate_drops() {
+                drops.push((drop_pos, item));
+            }
+        } else {
+            idx += 1;
+        }
+    }
+
+    drops
 }
 
 #[cfg(test)]

@@ -259,9 +259,73 @@ impl ItemId {
     pub const ANCIENT_VINE_CORE: Self = Self(239);
     pub const SOUL_PHYLACTERY: Self = Self(240);
 
+    // Farming, Cooking, and Hunger Revamp (Issue #12)
+    pub const TOMATO_SEEDS: Self = Self(241);
+    pub const MELON_SEEDS: Self = Self(242);
+    pub const PUMPKIN_SEEDS: Self = Self(243);
+    pub const SUGAR_CANE: Self = Self(244);
+    pub const COMPOST: Self = Self(245);
+    pub const BONE_FERTILIZER: Self = Self(246);
+
+    pub const CARROT: Self = Self(247);
+    pub const POTATO: Self = Self(248);
+    pub const TOMATO: Self = Self(249);
+    pub const SUGAR: Self = Self(250);
+    pub const EGG: Self = Self(251);
+    pub const MILK_BUCKET: Self = Self(252);
+    pub const RAW_MUTTON: Self = Self(253);
+
+    pub const BAKED_POTATO: Self = Self(254);
+    pub const COOKED_MUTTON: Self = Self(255);
+    pub const COOKIE: Self = Self(256);
+    pub const PUMPKIN_PIE: Self = Self(257);
+
+    pub const TOMATO_SOUP: Self = Self(258);
+    pub const VEGETABLE_STEW: Self = Self(259);
+    pub const HEARTY_MEAT_STEW: Self = Self(260);
+    pub const OMELETTE: Self = Self(261);
+    pub const FRUIT_SALAD: Self = Self(262);
+    pub const SWEET_CAKE: Self = Self(263);
+    pub const HERBAL_TEA: Self = Self(264);
+
+    pub const COOKING_POT: Self = Self(265);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
+    }
+
+    /// Returns true if this item is any crop seed (used as Chicken Breeding Feed).
+    #[inline]
+    pub const fn is_seed(&self) -> bool {
+        matches!(
+            *self,
+            Self::WHEAT_SEEDS | Self::TOMATO_SEEDS | Self::MELON_SEEDS | Self::PUMPKIN_SEEDS
+        )
+    }
+
+    /// Returns the passive FertilizerTier for fertilizer items, if applicable.
+    #[inline]
+    pub const fn fertilizer_tier(&self) -> Option<crate::block::FertilizerTier> {
+        match *self {
+            Self::COMPOST => Some(crate::block::FertilizerTier::Compost),
+            Self::BONE_FERTILIZER => Some(crate::block::FertilizerTier::Bone),
+            _ => None,
+        }
+    }
+
+    /// Returns the stage-0 farmland crop block planted when right-clicking farmland with this item.
+    #[inline]
+    pub const fn plantable_farmland_crop(&self) -> Option<BlockId> {
+        match *self {
+            Self::WHEAT_SEEDS => Some(BlockId::WHEAT_0),
+            Self::CARROT => Some(BlockId::CARROTS_0),
+            Self::POTATO => Some(BlockId::POTATOES_0),
+            Self::TOMATO_SEEDS => Some(BlockId::TOMATOES_0),
+            Self::MELON_SEEDS => Some(BlockId::MELON_STEM_0),
+            Self::PUMPKIN_SEEDS => Some(BlockId::PUMPKIN_STEM_0),
+            _ => None,
+        }
     }
 
     /// Extra base melee damage for unique boss weapons.
@@ -421,18 +485,83 @@ impl ItemSlot {
     }
 }
 
+/// Negative status effects that can be inflicted by unsafe foods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum FoodEffectKind {
+    FoodPoisoning = 1,
+    Poison = 2,
+}
+
+impl FoodEffectKind {
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(Self::FoodPoisoning),
+            2 => Some(Self::Poison),
+            _ => None,
+        }
+    }
+}
+
+/// Probabilistic status effect applied when consuming an unsafe food item.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FoodEffectSpec {
+    pub kind: FoodEffectKind,
+    /// Probability in `0.0..=1.0`.
+    pub chance: f32,
+    pub duration_secs: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FoodDef {
     pub food_points: u16,
     pub saturation: f32,
+    /// Duration in seconds the player must hold right-click to consume this item.
+    pub eat_duration: f32,
+    /// Whether this consumable can be used even when hunger is already full (e.g., Herbal Tea).
+    pub always_edible: bool,
+    /// Whether consuming this item clears active negative food effects (Food Poisoning / Poison).
+    pub cures_negative_effects: bool,
+    /// Optional unsafe food negative effect.
+    pub effect: Option<FoodEffectSpec>,
 }
 
 impl FoodDef {
+    pub const DEFAULT_EAT_DURATION: f32 = 1.2;
+
     pub const fn new(food_points: u16, saturation: f32) -> Self {
         Self {
             food_points,
             saturation,
+            eat_duration: Self::DEFAULT_EAT_DURATION,
+            always_edible: false,
+            cures_negative_effects: false,
+            effect: None,
         }
+    }
+
+    pub const fn with_eat_duration(mut self, secs: f32) -> Self {
+        self.eat_duration = secs;
+        self
+    }
+
+    pub const fn with_effect(mut self, kind: FoodEffectKind, chance: f32, duration_secs: f32) -> Self {
+        self.effect = Some(FoodEffectSpec {
+            kind,
+            chance,
+            duration_secs,
+        });
+        self
+    }
+
+    pub const fn with_always_edible(mut self) -> Self {
+        self.always_edible = true;
+        self
+    }
+
+    pub const fn with_cure(mut self) -> Self {
+        self.cures_negative_effects = true;
+        self
     }
 }
 
@@ -1202,7 +1331,10 @@ impl ItemRegistry {
             tool_tier: None,
             icon_tile: 166,
         });
-        self.register_food(ItemId::RAW_CHICKEN, FoodDef::new(2, 1.2));
+        self.register_food(
+            ItemId::RAW_CHICKEN,
+            FoodDef::new(2, 1.2).with_effect(FoodEffectKind::FoodPoisoning, 0.30, 15.0),
+        );
 
         self.register(ItemDef {
             id: ItemId::COOKED_CHICKEN,
@@ -2187,7 +2319,10 @@ impl ItemRegistry {
             tool_tier: None,
             icon_tile: 348,
         });
-        self.register_food(ItemId::ROTTEN_FLESH, FoodDef::new(4, 0.8));
+        self.register_food(
+            ItemId::ROTTEN_FLESH,
+            FoodDef::new(4, 0.8).with_effect(FoodEffectKind::FoodPoisoning, 0.80, 20.0),
+        );
 
         let armor_defs: [(ItemId, &'static str, &'static str, u16, ArmorSlot, u8, u32); 16] = [
             (ItemId::LEATHER_HELMET, "blockgame:leather_helmet", "Leather Cap", 55, ArmorSlot::Helmet, 1, 356),
@@ -2328,7 +2463,11 @@ impl ItemRegistry {
                 icon_tile,
             });
             if let Some((fp, sat)) = food {
-                self.register_food(id, FoodDef::new(fp, sat));
+                let mut def = FoodDef::new(fp, sat);
+                if id == ItemId::PUFFERFISH {
+                    def = def.with_effect(FoodEffectKind::Poison, 1.0, 10.0);
+                }
+                self.register_food(id, def);
             }
         }
 
@@ -2474,6 +2613,77 @@ impl ItemRegistry {
                 tool_tier: None,
                 icon_tile,
             });
+        }
+
+        // Farming, Cooking, and Hunger Revamp (Issue #12)
+        let farming_non_food_items: [(ItemId, &'static str, &'static str, u16, Option<BlockId>, u32); 10] = [
+            (ItemId::TOMATO_SEEDS, "blockgame:tomato_seeds", "Tomato Seeds", 64, None, 542),
+            (ItemId::MELON_SEEDS, "blockgame:melon_seeds", "Melon Seeds", 64, None, 543),
+            (ItemId::PUMPKIN_SEEDS, "blockgame:pumpkin_seeds", "Pumpkin Seeds", 64, None, 544),
+            (ItemId::SUGAR_CANE, "blockgame:sugar_cane", "Sugar Cane", 64, Some(BlockId::SUGAR_CANE), 545),
+            (ItemId::COMPOST, "blockgame:compost", "Compost", 64, None, 546),
+            (ItemId::BONE_FERTILIZER, "blockgame:bone_fertilizer", "Bone Fertilizer", 64, None, 547),
+            (ItemId::SUGAR, "blockgame:sugar", "Sugar", 64, None, 551),
+            (ItemId::EGG, "blockgame:egg", "Egg", 16, None, 552),
+            (ItemId::MILK_BUCKET, "blockgame:milk_bucket", "Milk Bucket", 1, None, 553),
+            (ItemId::COOKING_POT, "blockgame:cooking_pot", "Cooking Pot", 64, Some(BlockId::COOKING_POT), 566),
+        ];
+        for (id, name, display_name, max_stack, placeable_block, icon_tile) in farming_non_food_items {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack,
+                placeable_block,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+        }
+
+        // New Foods across 4 clear hunger/saturation tiers + Herbal Tea cure
+        let new_foods: [(ItemId, &'static str, &'static str, u16, u32, FoodDef); 15] = [
+            // Tier 1: Raw crops & raw meat
+            (ItemId::CARROT, "blockgame:carrot", "Carrot", 64, 548, FoodDef::new(3, 3.6)),
+            (ItemId::POTATO, "blockgame:potato", "Potato", 64, 549, FoodDef::new(1, 0.6)),
+            (ItemId::TOMATO, "blockgame:tomato", "Tomato", 64, 550, FoodDef::new(2, 2.0)),
+            (ItemId::RAW_MUTTON, "blockgame:raw_mutton", "Raw Mutton", 64, 554, FoodDef::new(2, 1.2)),
+            // Tier 2: Simple furnace / crafted foods
+            (ItemId::BAKED_POTATO, "blockgame:baked_potato", "Baked Potato", 64, 555, FoodDef::new(5, 6.0)),
+            (ItemId::COOKED_MUTTON, "blockgame:cooked_mutton", "Cooked Mutton", 64, 556, FoodDef::new(6, 9.6)),
+            (ItemId::COOKIE, "blockgame:cookie", "Cookie", 64, 557, FoodDef::new(2, 1.2).with_eat_duration(0.8)),
+            (ItemId::PUMPKIN_PIE, "blockgame:pumpkin_pie", "Pumpkin Pie", 64, 558, FoodDef::new(8, 7.2)),
+            // Tier 3-4: Cooking Pot meals (stack to 16, no Bowls required, high hunger + high saturation)
+            (ItemId::TOMATO_SOUP, "blockgame:tomato_soup", "Tomato Soup", 16, 559, FoodDef::new(8, 10.4)),
+            (ItemId::VEGETABLE_STEW, "blockgame:vegetable_stew", "Vegetable Stew", 16, 560, FoodDef::new(9, 12.0)),
+            (ItemId::HEARTY_MEAT_STEW, "blockgame:hearty_meat_stew", "Hearty Meat Stew", 16, 561, FoodDef::new(12, 16.0)),
+            (ItemId::OMELETTE, "blockgame:omelette", "Omelette", 16, 562, FoodDef::new(9, 12.6)),
+            (ItemId::FRUIT_SALAD, "blockgame:fruit_salad", "Fruit Salad", 16, 563, FoodDef::new(7, 8.4)),
+            (ItemId::SWEET_CAKE, "blockgame:sweet_cake", "Sweet Cake", 16, 564, FoodDef::new(10, 12.0)),
+            // Thematic status-effect cure brewed in the Cooking Pot
+            (
+                ItemId::HERBAL_TEA,
+                "blockgame:herbal_tea",
+                "Herbal Tea",
+                16,
+                565,
+                FoodDef::new(2, 2.0).with_always_edible().with_cure(),
+            ),
+        ];
+        for (id, name, display_name, max_stack, icon_tile, food) in new_foods {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack,
+                placeable_block: None,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+            self.register_food(id, food);
         }
     }
 }

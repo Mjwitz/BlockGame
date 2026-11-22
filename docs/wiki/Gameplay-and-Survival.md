@@ -2,7 +2,7 @@
 
 ## Health, Armor, Hunger & Drowning
 - **Health & Hurt Audio**: Displayed as hearts on the HUD. Taking fall damage, drowning, or monster hits reduces health and triggers a visceral, punchy impact sound (blunt physical transient + 55 Hz sub-punch + human vocal grunt). When hunger is high, health regenerates slowly over time.
-- **Hunger**: Displayed as food icons on the HUD. Sprinting and healing consume hunger; eating food (Bread, Apples, Cooked/Raw meats, etc.) with `Right Click` restores hunger.
+- **Hunger, Saturation & Status Effects**: Displayed on the HUD `"ST"` gauge with a **two-tone fill** (bright gold for **Saturation**, warm orange for **Hunger**). Sprinting and healing consume saturation first, then hunger. **Hold `Right Click`** (~1.2s) with food to eat with animation, crunch audio, and a crosshair progress bar. Unsafe foods (Rotten Flesh, Raw Chicken, Pufferfish) can apply **Food Poisoning** or **Poison**, which can be cured with brewed **Herbal Tea**. See **[Farming and Cooking](Farming-and-Cooking)** for full details.
 - **Armor**: Displayed above the health bar when equipped. Equip Helmet, Chestplate, Leggings, and Boots in the 4 armor slots on the inventory screen (`E`). Available tiers: **Leather**, **Iron**, **Gold**, and **Diamond**.
 - **Drowning**: Diving underwater displays an oxygen bubble bar. Surfacing refills oxygen; running out of oxygen deals drowning damage.
 
@@ -11,10 +11,11 @@
 - **Mining Hardness**: Blocks have material hardness and preferred tool types (e.g., Pickaxe for Stone/Ores, Axe for Wood, Shovel for Dirt/Sand/Gravel).
 - **Bow & Arrow**: Craft a Bow and Arrows, then `Right Click` with the Bow selected to fire arrows at mobs or targets.
 
-## Crafting, Smelting, Power & Storage
+## Crafting, Smelting, Cooking, Power & Storage
 - **2x2 Inventory Crafting**: Available anytime by pressing `E`.
-- **3x3 Crafting Table**: Place and `Right Click` to unlock full 3x3 recipes (tools, armor, beds, bows, buckets, chests, furnaces, power machines, and backpacks).
-- **Furnace & Electric Furnace**: Smelt ores and cook food with coal/wood fuel in a standard Furnace, or use EU power in an **Electric Furnace** (`-25 EU/s`).
+- **3x3 Crafting Table**: Place and `Right Click` to unlock full 3x3 recipes (tools, armor, beds, bows, buckets, chests, furnaces, cooking pots, power machines, and backpacks).
+- **Furnace & Electric Furnace**: Smelt ores and roast simple foods (meats, fish, Baked Potatoes) with coal/wood fuel in a standard Furnace, or use EU power in an **Electric Furnace** (`-25 EU/s`).
+- **Cooking Pot**: Craft with `5× Iron Ingot + 2× Planks` to cook multi-ingredient stews, omelettes, Sweet Cake, and **Herbal Tea** using a 4-slot shapeless tray and fuel. See **[Farming and Cooking](Farming-and-Cooking)**.
 - **Upgraded Chests**: Store items in **Wooden** (27 slots), **Iron** (45 slots), **Gold** (63 slots), or **Diamond** (81 slots) Chests.
 - **Powered Storage & Backpacks**: Link chests together using **Storage Cables** and a powered **Storage Terminal** with live search and sorting, or carry unique **Leather / Iron / Diamond Backpacks** (`B`). See **[Power and Storage](Power-and-Storage)** for full details.
 

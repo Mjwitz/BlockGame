@@ -8,9 +8,9 @@ pub const TILE_SIZE: u32 = 32;
 pub const ATLAS_TILES_PER_ROW: u32 = 16;
 
 /// Total width and height of the texture atlas in pixels.
-/// The atlas grid is 16 tiles wide by 32 tiles high (512x1024), providing 512 total tile slots.
+/// The atlas grid is 16 tiles wide by 64 tiles high (512x2048), providing 1024 total tile slots.
 pub const ATLAS_WIDTH: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW; // 512
-pub const ATLAS_HEIGHT: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW * 2; // 1024
+pub const ATLAS_HEIGHT: u32 = TILE_SIZE * ATLAS_TILES_PER_ROW * 4; // 2048
 
 /// Embedded handcrafted Roots & Ridges 32x retro pixel art texture atlas.
 const ROOTS_ATLAS_PNG: &[u8] = include_bytes!("../assets/roots_atlas_512.png");
@@ -40,7 +40,7 @@ impl TextureAtlas {
 
         let pixel_u = 1.0 / ATLAS_WIDTH as f32;
         let pixel_v = 1.0 / ATLAS_HEIGHT as f32;
-        let eps = 0.00025; // Clamped subpixel offset to prevent texture bleed at 512x1024
+        let eps = 0.00025; // Clamped subpixel offset to prevent texture bleed
 
         let u_min = (tile_x * TILE_SIZE as f32) * pixel_u + eps;
         let v_min = (tile_y * TILE_SIZE as f32) * pixel_v + eps;
@@ -95,6 +95,7 @@ impl TextureAtlas {
         paint_fishing_tiles(&mut atlas);
         paint_power_tiles(&mut atlas);
         paint_temple_and_boss_tiles(&mut atlas);
+        paint_farming_and_cooking_tiles(&mut atlas);
 
         atlas
     }
@@ -2762,6 +2763,253 @@ fn paint_temple_and_boss_tiles(atlas: &mut TextureAtlas) {
     paint_mob_pair(atlas, 485, 486, [224, 218, 232], [204, 72, 255], [46, 28, 68], [164, 62, 238]); // ShadowLich
 }
 
+/// Paints all Issue #12 Farming, Cooking, and Hunger tiles (512..=566).
+fn paint_farming_and_cooking_tiles(atlas: &mut TextureAtlas) {
+    let put = |atlas: &mut TextureAtlas, tile: u32, x: u32, y: u32, rgba: [u8; 4]| {
+        if x < TILE_SIZE && y < TILE_SIZE {
+            let ox = (tile % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            let oy = (tile / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+            atlas.image.put_pixel(ox + x, oy + y, Rgba(rgba));
+        }
+    };
+
+    let fill_rect = |atlas: &mut TextureAtlas, tile: u32, x0: u32, y0: u32, w: u32, h: u32, c: [u8; 4]| {
+        for dy in 0..h {
+            for dx in 0..w {
+                put(atlas, tile, x0 + dx, y0 + dy, c);
+            }
+        }
+    };
+
+    let fill_circle = |atlas: &mut TextureAtlas, tile: u32, cx: f32, cy: f32, r: f32, c: [u8; 4]| {
+        let r2 = r * r;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                let dx = x as f32 + 0.5 - cx;
+                let dy = y as f32 + 0.5 - cy;
+                if dx * dx + dy * dy <= r2 {
+                    put(atlas, tile, x, y, c);
+                }
+            }
+        }
+    };
+
+    // 1. Fertilized Farmland tops (512..=515) cloned from dry(150) / moist(244) with speckles
+    let clone_farmland_with_flecks = |atlas: &mut TextureAtlas, src_tile: u32, dst_tile: u32, tint: [f32; 3], fleck: [u8; 4], fleck2: [u8; 4]| {
+        let sx = (src_tile % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let sy = (src_tile / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let dx = (dst_tile % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        let dy = (dst_tile / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+        for y in 0..TILE_SIZE {
+            for x in 0..TILE_SIZE {
+                let p = *atlas.image.get_pixel(sx + x, sy + y);
+                let h = (x.wrapping_mul(37) ^ y.wrapping_mul(91) ^ dst_tile.wrapping_mul(17)) % 23;
+                let out = if h == 0 {
+                    Rgba(fleck)
+                } else if h == 7 {
+                    Rgba(fleck2)
+                } else {
+                    Rgba([
+                        ((p[0] as f32) * tint[0]).clamp(0.0, 255.0) as u8,
+                        ((p[1] as f32) * tint[1]).clamp(0.0, 255.0) as u8,
+                        ((p[2] as f32) * tint[2]).clamp(0.0, 255.0) as u8,
+                        255,
+                    ])
+                };
+                atlas.image.put_pixel(dx + x, dy + y, out);
+            }
+        }
+    };
+    clone_farmland_with_flecks(atlas, 150, 512, [0.92, 0.96, 0.85], [76, 128, 48, 255], [92, 68, 38, 255]); // Compost Dry
+    clone_farmland_with_flecks(atlas, 244, 513, [0.88, 0.96, 0.82], [68, 138, 44, 255], [72, 54, 30, 255]); // Compost Moist
+    clone_farmland_with_flecks(atlas, 150, 514, [1.02, 1.02, 1.00], [238, 236, 220, 255], [208, 204, 185, 255]); // Bone Dry
+    clone_farmland_with_flecks(atlas, 244, 515, [0.96, 0.98, 1.00], [230, 234, 224, 255], [188, 194, 178, 255]); // Bone Moist
+
+    // 2. Crop stages (516..=535): Carrots, Potatoes, Tomatoes, Melon Stem, Pumpkin Stem
+    let paint_crop_stage = |atlas: &mut TextureAtlas, tile: u32, stage: u32, leaf_col: [u8; 4], leaf_dark: [u8; 4], fruit_col: Option<[u8; 4]>| {
+        let height = 7 + stage * 6;
+        let top_y = TILE_SIZE.saturating_sub(height);
+        for stalk in [6u32, 13, 20, 26] {
+            for y in top_y..TILE_SIZE {
+                let wobble = ((y + stalk) % 3) as i32 - 1;
+                let x = (stalk as i32 + wobble).clamp(1, 30) as u32;
+                put(atlas, tile, x, y, if y % 2 == 0 { leaf_col } else { leaf_dark });
+                put(atlas, tile, x + 1, y, leaf_dark);
+                if stage >= 1 && y < TILE_SIZE - 4 && y % 4 == 0 {
+                    put(atlas, tile, x.saturating_sub(1), y, leaf_col);
+                    put(atlas, tile, (x + 2).min(31), y, leaf_col);
+                }
+            }
+        }
+        if let Some(fc) = fruit_col {
+            if stage >= 2 {
+                let r = if stage == 3 { 3.0 } else { 2.0 };
+                let spots = if stage == 3 {
+                    vec![(8.0, 26.0), (16.0, 24.0), (24.0, 26.0), (12.0, 17.0), (21.0, 18.0)]
+                } else {
+                    vec![(10.0, 26.0), (21.0, 25.0)]
+                };
+                for (fx, fy) in spots {
+                    fill_circle(atlas, tile, fx, fy, r, fc);
+                }
+            }
+        }
+    };
+
+    for s in 0..4u32 {
+        paint_crop_stage(atlas, 516 + s, s, [72, 168, 58, 255], [46, 122, 38, 255], Some([238, 126, 32, 255])); // Carrots
+        paint_crop_stage(atlas, 520 + s, s, [64, 152, 54, 255], [42, 108, 36, 255], Some([206, 168, 96, 255])); // Potatoes
+        paint_crop_stage(atlas, 524 + s, s, [54, 148, 48, 255], [34, 102, 32, 255], Some([222, 46, 38, 255])); // Tomatoes
+        paint_crop_stage(atlas, 528 + s, s, [98, 176, 56, 255], [64, 124, 38, 255], Some([168, 214, 72, 255])); // Melon Stem
+        paint_crop_stage(atlas, 532 + s, s, [118, 156, 48, 255], [78, 108, 32, 255], Some([228, 142, 36, 255])); // Pumpkin Stem
+    }
+
+    // 536: Sugar Cane block (segmented green reed stalks)
+    for stalk_x in [5u32, 13, 21, 27] {
+        for y in 0..TILE_SIZE {
+            let seg = y % 8 == 0;
+            let c = if seg { [186, 224, 118, 255] } else if (y + stalk_x) % 2 == 0 { [112, 188, 72, 255] } else { [84, 156, 52, 255] };
+            put(atlas, 536, stalk_x, y, c);
+            put(atlas, 536, stalk_x + 1, y, c);
+            put(atlas, 536, stalk_x + 2, y, [68, 132, 42, 255]);
+        }
+    }
+
+    // 3. Cooking Pot block faces (537..=541)
+    // 537: Top unlit (iron rim + dark interior)
+    fill_rect(atlas, 537, 0, 0, 32, 32, [62, 64, 70, 255]);
+    fill_rect(atlas, 537, 3, 3, 26, 26, [88, 92, 100, 255]);
+    fill_rect(atlas, 537, 6, 6, 20, 20, [34, 36, 40, 255]);
+    // 540: Top lit (bubbling golden-amber broth)
+    fill_rect(atlas, 540, 0, 0, 32, 32, [62, 64, 70, 255]);
+    fill_rect(atlas, 540, 3, 3, 26, 26, [92, 96, 104, 255]);
+    fill_rect(atlas, 540, 6, 6, 20, 20, [218, 138, 42, 255]);
+    fill_circle(atlas, 540, 12.0, 13.0, 2.5, [250, 214, 102, 255]);
+    fill_circle(atlas, 540, 20.0, 18.0, 2.0, [250, 214, 102, 255]);
+    // 538: Side unlit (iron pot over stone hearth)
+    fill_rect(atlas, 538, 0, 0, 32, 32, [76, 78, 84, 255]);
+    fill_rect(atlas, 538, 2, 2, 28, 18, [54, 56, 62, 255]);
+    fill_rect(atlas, 538, 0, 4, 32, 3, [98, 102, 110, 255]);
+    fill_rect(atlas, 538, 4, 21, 24, 9, [42, 42, 46, 255]);
+    // 539: Side lit (glowing embers underneath)
+    fill_rect(atlas, 539, 0, 0, 32, 32, [76, 78, 84, 255]);
+    fill_rect(atlas, 539, 2, 2, 28, 18, [58, 56, 60, 255]);
+    fill_rect(atlas, 539, 0, 4, 32, 3, [104, 106, 114, 255]);
+    fill_rect(atlas, 539, 4, 21, 24, 9, [224, 92, 24, 255]);
+    fill_rect(atlas, 539, 8, 23, 16, 5, [255, 198, 64, 255]);
+    // 541: Bottom
+    fill_rect(atlas, 541, 0, 0, 32, 32, [52, 54, 58, 255]);
+
+    // 4. Seeds & Fertilizers (542..=547)
+    let paint_seeds = |atlas: &mut TextureAtlas, tile: u32, c1: [u8; 4], c2: [u8; 4]| {
+        for (cx, cy) in [(11.0, 14.0), (19.0, 12.0), (15.0, 20.0), (22.0, 21.0), (10.0, 22.0)] {
+            fill_circle(atlas, tile, cx, cy, 2.8, c1);
+            put(atlas, tile, cx as u32, cy as u32, c2);
+        }
+    };
+    paint_seeds(atlas, 542, [224, 196, 120, 255], [186, 142, 72, 255]); // Tomato Seeds
+    paint_seeds(atlas, 543, [44, 54, 38, 255], [88, 104, 72, 255]);    // Melon Seeds
+    paint_seeds(atlas, 544, [238, 226, 184, 255], [198, 178, 128, 255]); // Pumpkin Seeds
+
+    // 545: Sugar Cane item icon
+    for i in 0..22u32 {
+        let x = 6 + i;
+        let y = 26 - i;
+        let c = if i % 6 == 0 { [192, 232, 128, 255] } else { [104, 182, 68, 255] };
+        fill_rect(atlas, 545, x, y, 3, 3, c);
+    }
+    // 546: Compost (earthy rich mound with green specks)
+    fill_circle(atlas, 546, 16.0, 19.0, 9.0, [92, 64, 36, 255]);
+    fill_circle(atlas, 546, 15.0, 16.0, 6.5, [112, 78, 44, 255]);
+    for (x, y) in [(12, 16), (18, 15), (15, 20), (20, 21), (11, 21)] {
+        fill_rect(atlas, 546, x, y, 2, 2, [82, 148, 52, 255]);
+    }
+    // 547: Bone Fertilizer (pale mineral pouch/powder)
+    fill_circle(atlas, 547, 16.0, 19.0, 9.0, [214, 210, 194, 255]);
+    fill_circle(atlas, 547, 15.0, 16.0, 6.5, [242, 240, 228, 255]);
+    for (x, y) in [(13, 15), (19, 17), (16, 21)] {
+        fill_rect(atlas, 547, x, y, 2, 2, [255, 255, 255, 255]);
+    }
+
+    // 5. Raw Crops & Animal Products (548..=554)
+    // 548: Carrot
+    for i in 0..16u32 {
+        let r = (1.5 + (i as f32) * 0.25).min(4.5);
+        fill_circle(atlas, 548, 8.0 + i as f32, 24.0 - i as f32, r, [242, 128, 28, 255]);
+    }
+    fill_circle(atlas, 548, 24.0, 8.0, 4.0, [68, 168, 54, 255]);
+    // 549: Potato
+    fill_circle(atlas, 549, 16.0, 17.0, 8.5, [198, 158, 92, 255]);
+    fill_circle(atlas, 549, 14.0, 15.0, 5.5, [218, 182, 114, 255]);
+    // 550: Tomato
+    fill_circle(atlas, 550, 16.0, 18.0, 8.5, [224, 44, 36, 255]);
+    fill_circle(atlas, 550, 13.0, 15.0, 3.0, [248, 96, 82, 255]);
+    fill_rect(atlas, 550, 14, 7, 4, 4, [58, 152, 46, 255]);
+    // 551: Sugar
+    fill_circle(atlas, 551, 16.0, 20.0, 8.5, [238, 240, 246, 255]);
+    fill_circle(atlas, 551, 16.0, 16.0, 5.5, [255, 255, 255, 255]);
+    // 552: Egg
+    fill_circle(atlas, 552, 16.0, 18.0, 7.5, [236, 224, 198, 255]);
+    fill_circle(atlas, 552, 16.0, 13.0, 5.5, [246, 238, 218, 255]);
+    // 553: Milk Bucket (iron bucket with white milk)
+    paint_bucket_sprite(atlas, 553, false);
+    fill_rect(atlas, 553, 9, 10, 14, 6, [248, 248, 244, 255]);
+    // 554: Raw Mutton
+    fill_circle(atlas, 554, 16.0, 17.0, 8.5, [206, 92, 92, 255]);
+    fill_circle(atlas, 554, 19.0, 15.0, 3.5, [242, 226, 214, 255]);
+
+    // 6. Furnace & Simple Crafted Foods (555..=558)
+    // 555: Baked Potato
+    fill_circle(atlas, 555, 16.0, 17.0, 8.5, [156, 104, 46, 255]);
+    fill_circle(atlas, 555, 16.0, 15.0, 4.5, [244, 214, 120, 255]);
+    // 556: Cooked Mutton
+    fill_circle(atlas, 556, 16.0, 17.0, 8.5, [138, 76, 44, 255]);
+    fill_circle(atlas, 556, 19.0, 15.0, 3.0, [224, 206, 182, 255]);
+    // 557: Cookie
+    fill_circle(atlas, 557, 16.0, 16.0, 9.0, [204, 148, 78, 255]);
+    for (x, y) in [(12, 13), (19, 12), (14, 19), (20, 18), (16, 15)] {
+        fill_rect(atlas, 557, x, y, 2, 2, [74, 44, 24, 255]);
+    }
+    // 558: Pumpkin Pie
+    fill_circle(atlas, 558, 16.0, 18.0, 10.0, [198, 148, 78, 255]);
+    fill_circle(atlas, 558, 16.0, 17.0, 7.5, [224, 118, 32, 255]);
+    fill_circle(atlas, 558, 16.0, 16.0, 2.5, [252, 246, 232, 255]);
+
+    // 7. Cooking Pot Meals & Herbal Tea (559..=565)
+    let paint_dish = |atlas: &mut TextureAtlas, tile: u32, broth: [u8; 4], garnish1: [u8; 4], garnish2: [u8; 4]| {
+        fill_circle(atlas, tile, 16.0, 19.0, 10.5, [122, 82, 48, 255]); // ceramic/wood dish rim
+        fill_circle(atlas, tile, 16.0, 17.5, 8.2, broth);
+        fill_circle(atlas, tile, 13.0, 16.0, 2.2, garnish1);
+        fill_circle(atlas, tile, 19.0, 18.0, 2.2, garnish2);
+        fill_circle(atlas, tile, 16.0, 20.0, 1.8, garnish1);
+    };
+    paint_dish(atlas, 559, [214, 56, 38, 255], [244, 188, 102, 255], [72, 168, 56, 255]); // Tomato Soup
+    paint_dish(atlas, 560, [176, 122, 52, 255], [238, 128, 32, 255], [74, 164, 58, 255]); // Vegetable Stew
+    paint_dish(atlas, 561, [126, 68, 38, 255], [236, 126, 36, 255], [218, 188, 122, 255]); // Hearty Meat Stew
+    paint_dish(atlas, 562, [246, 204, 68, 255], [224, 56, 44, 255], [68, 162, 54, 255]);  // Omelette
+    paint_dish(atlas, 563, [238, 214, 164, 255], [224, 48, 48, 255], [238, 88, 104, 255]); // Fruit Salad
+
+    // 564: Sweet Cake
+    fill_rect(atlas, 564, 6, 14, 20, 12, [196, 142, 74, 255]);
+    fill_rect(atlas, 564, 6, 11, 20, 5, [252, 246, 238, 255]);
+    fill_circle(atlas, 564, 12.0, 11.0, 2.0, [224, 42, 42, 255]);
+    fill_circle(atlas, 564, 20.0, 11.0, 2.0, [224, 42, 42, 255]);
+
+    // 565: Herbal Tea (warm mug with emerald herbal brew + steam)
+    fill_rect(atlas, 565, 8, 11, 14, 15, [218, 206, 188, 255]);
+    fill_rect(atlas, 565, 10, 13, 10, 4, [72, 186, 104, 255]);
+    fill_rect(atlas, 565, 22, 14, 4, 8, [196, 184, 166, 255]);
+    fill_rect(atlas, 565, 12, 6, 2, 4, [220, 244, 230, 200]);
+    fill_rect(atlas, 565, 17, 5, 2, 5, [220, 244, 230, 200]);
+
+    // 566: Cooking Pot item icon
+    fill_rect(atlas, 566, 6, 11, 20, 14, [58, 60, 66, 255]);
+    fill_rect(atlas, 566, 5, 9, 22, 3, [94, 98, 108, 255]);
+    fill_rect(atlas, 566, 3, 12, 3, 4, [148, 104, 58, 255]); // wooden left handle
+    fill_rect(atlas, 566, 26, 12, 3, 4, [148, 104, 58, 255]); // wooden right handle
+    fill_rect(atlas, 566, 9, 25, 14, 3, [232, 112, 28, 255]); // ember glow
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2770,11 +3018,11 @@ mod tests {
     fn test_atlas_dimensions_and_tiles() {
         assert_eq!(TILE_SIZE, 32);
         assert_eq!(ATLAS_WIDTH, 512);
-        assert_eq!(ATLAS_HEIGHT, 1024);
+        assert_eq!(ATLAS_HEIGHT, 2048);
 
         let atlas = TextureAtlas::generate_default();
         assert_eq!(atlas.image.width(), 512);
-        assert_eq!(atlas.image.height(), 1024);
+        assert_eq!(atlas.image.height(), 2048);
 
         // Verify stone tile (Tile 1) is non-transparent
         let stone_px = atlas.image.get_pixel(32 + 16, 16);

@@ -1915,6 +1915,32 @@ impl AudioManager {
         }
     }
 
+    /// Plays a short crisp crunch sound while eating food or sipping Herbal Tea.
+    pub fn play_eat_crunch(&mut self) {
+        const SAMPLE_RATE: f32 = 44100.0;
+        const LEN: usize = 3600; // ~82ms crisp crunch
+        let mut buf = Vec::with_capacity(LEN);
+        let mut rng: u32 = (self.random_f32().to_bits() ^ 0xA3C5_9E11).max(1);
+        let mut lp = 0.0_f32;
+        for i in 0..LEN {
+            let t = i as f32 / LEN as f32;
+            let env = (1.0 - t).powf(1.8) * (t * 18.0).min(1.0);
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            let noise = ((rng as f32) / (u32::MAX as f32)) * 2.0 - 1.0;
+            // Band-shaped crunch noise + subtle bite thump
+            lp += (noise - lp) * 0.35;
+            let thump = (i as f32 / SAMPLE_RATE * std::f32::consts::TAU * 210.0).sin() * 0.25;
+            buf.push((lp * 0.75 + thump) * env * 0.65);
+        }
+        let samples = std::sync::Arc::new(buf);
+        let pitch = 0.88 + 0.24 * self.random_f32();
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, pitch, 0.42, 0.42, SoundCategory::Sfx, 0.0);
+        }
+    }
+
     /// Plays the fishing rod cast whoosh sound.
     pub fn play_fishing_cast(&mut self) {
         let samples = self.fishing_cast.clone();

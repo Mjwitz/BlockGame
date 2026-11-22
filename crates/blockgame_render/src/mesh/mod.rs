@@ -155,10 +155,8 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::WHEAT_0
-                        || block_id == BlockId::WHEAT_1
-                        || block_id == BlockId::WHEAT_2
-                        || block_id == BlockId::WHEAT_3
+                    if block_id.is_farmland_crop()
+                        || block_id == BlockId::SUGAR_CANE
                         || block_id == BlockId::TALL_GRASS
                         || block_id.is_flower()
                     {

@@ -17,7 +17,8 @@
 | :--- | :--- |
 | `Left Click` (hold) | Mine / break targeted block |
 | `Left Click` (tap) | Melee attack mobs or players |
-| `Right Click` | Place block, interact with Chest / Storage Terminal / Crafting Table / Furnace / Power Machine / Bed, open held Backpack, eat food, use Bucket, cast/hook Fishing Rod, shoot Bow, or feed Wheat to animals |
+| `Right Click` | Place block, interact with Chest / Storage Terminal / Crafting Table / Furnace / Cooking Pot / Power Machine / Bed, open held Backpack, apply Fertilizer to Farmland, use Bucket (scoop water or milk Cows), cast/hook Fishing Rod, shoot Bow, or feed Breeding Feeds to animals |
+| `Right Click` (hold) | Eat food or drink Herbal Tea (~1.2s; release or switch hotbar slot to cancel) |
 | `1` – `9` or `Mouse Wheel` | Select active hotbar slot |
 
 ## Inventory, Skills & Recipe Browser

@@ -11,6 +11,36 @@ use crate::world::World;
 #[repr(transparent)]
 pub struct BlockId(pub u8);
 
+/// Passive soil enrichment tier applied to farmland tiles (ADR-0003).
+/// Fertilizers never trigger instant growth; they buff growth speed and/or harvest yield
+/// for a single harvest cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum FertilizerTier {
+    None = 0,
+    Compost = 1,
+    Bone = 2,
+}
+
+impl FertilizerTier {
+    #[inline]
+    pub const fn speed_multiplier(self) -> f32 {
+        match self {
+            Self::None => 1.0,
+            Self::Compost => 1.5,
+            Self::Bone => 2.0,
+        }
+    }
+
+    #[inline]
+    pub const fn bonus_yield(self) -> u16 {
+        match self {
+            Self::None | Self::Compost => 0,
+            Self::Bone => 1,
+        }
+    }
+}
+
 impl BlockId {
     pub const AIR: Self = Self(0);
     pub const STONE: Self = Self(1);
@@ -143,6 +173,42 @@ impl BlockId {
     pub const ARENA_RETURN_PORTAL: Self = Self(124);
     pub const BOSS_ALTAR: Self = Self(125);
     pub const TEMPLE_BRAZIER: Self = Self(126);
+
+    // Farming, Cooking, and Hunger Revamp (Issue #12)
+    pub const FARMLAND_COMPOST: Self = Self(127);
+    pub const FARMLAND_COMPOST_MOIST: Self = Self(128);
+    pub const FARMLAND_BONE: Self = Self(129);
+    pub const FARMLAND_BONE_MOIST: Self = Self(130);
+
+    pub const CARROTS_0: Self = Self(131);
+    pub const CARROTS_1: Self = Self(132);
+    pub const CARROTS_2: Self = Self(133);
+    pub const CARROTS_3: Self = Self(134);
+
+    pub const POTATOES_0: Self = Self(135);
+    pub const POTATOES_1: Self = Self(136);
+    pub const POTATOES_2: Self = Self(137);
+    pub const POTATOES_3: Self = Self(138);
+
+    pub const TOMATOES_0: Self = Self(139);
+    pub const TOMATOES_1: Self = Self(140);
+    pub const TOMATOES_2: Self = Self(141);
+    pub const TOMATOES_3: Self = Self(142);
+
+    pub const MELON_STEM_0: Self = Self(143);
+    pub const MELON_STEM_1: Self = Self(144);
+    pub const MELON_STEM_2: Self = Self(145);
+    pub const MELON_STEM_3: Self = Self(146);
+
+    pub const PUMPKIN_STEM_0: Self = Self(147);
+    pub const PUMPKIN_STEM_1: Self = Self(148);
+    pub const PUMPKIN_STEM_2: Self = Self(149);
+    pub const PUMPKIN_STEM_3: Self = Self(150);
+
+    pub const SUGAR_CANE: Self = Self(151);
+
+    pub const COOKING_POT: Self = Self(152);
+    pub const COOKING_POT_LIT: Self = Self(153);
 
     #[inline]
     pub const fn is_temple_interactive(&self) -> bool {
@@ -298,7 +364,174 @@ impl BlockId {
 
     #[inline]
     pub const fn is_farmland(&self) -> bool {
-        self.0 == Self::FARMLAND.0 || self.0 == Self::FARMLAND_MOIST.0
+        matches!(
+            *self,
+            Self::FARMLAND
+                | Self::FARMLAND_MOIST
+                | Self::FARMLAND_COMPOST
+                | Self::FARMLAND_COMPOST_MOIST
+                | Self::FARMLAND_BONE
+                | Self::FARMLAND_BONE_MOIST
+        )
+    }
+
+    #[inline]
+    pub const fn is_moist_farmland(&self) -> bool {
+        matches!(
+            *self,
+            Self::FARMLAND_MOIST | Self::FARMLAND_COMPOST_MOIST | Self::FARMLAND_BONE_MOIST
+        )
+    }
+
+    #[inline]
+    pub const fn farmland_fertilizer(&self) -> FertilizerTier {
+        match *self {
+            Self::FARMLAND_COMPOST | Self::FARMLAND_COMPOST_MOIST => FertilizerTier::Compost,
+            Self::FARMLAND_BONE | Self::FARMLAND_BONE_MOIST => FertilizerTier::Bone,
+            _ => FertilizerTier::None,
+        }
+    }
+
+    #[inline]
+    pub const fn with_farmland_hydration(&self, hydrated: bool) -> Self {
+        match (self.farmland_fertilizer(), hydrated) {
+            (FertilizerTier::None, false) => Self::FARMLAND,
+            (FertilizerTier::None, true) => Self::FARMLAND_MOIST,
+            (FertilizerTier::Compost, false) => Self::FARMLAND_COMPOST,
+            (FertilizerTier::Compost, true) => Self::FARMLAND_COMPOST_MOIST,
+            (FertilizerTier::Bone, false) => Self::FARMLAND_BONE,
+            (FertilizerTier::Bone, true) => Self::FARMLAND_BONE_MOIST,
+        }
+    }
+
+    #[inline]
+    pub const fn with_farmland_fertilizer(&self, tier: FertilizerTier) -> Self {
+        let moist = self.is_moist_farmland();
+        match (tier, moist) {
+            (FertilizerTier::None, false) => Self::FARMLAND,
+            (FertilizerTier::None, true) => Self::FARMLAND_MOIST,
+            (FertilizerTier::Compost, false) => Self::FARMLAND_COMPOST,
+            (FertilizerTier::Compost, true) => Self::FARMLAND_COMPOST_MOIST,
+            (FertilizerTier::Bone, false) => Self::FARMLAND_BONE,
+            (FertilizerTier::Bone, true) => Self::FARMLAND_BONE_MOIST,
+        }
+    }
+
+    /// Returns true for all farmland-planted crops (standard 4-stage crops and stem crops).
+    #[inline]
+    pub const fn is_farmland_crop(&self) -> bool {
+        matches!(
+            *self,
+            Self::WHEAT_0
+                | Self::WHEAT_1
+                | Self::WHEAT_2
+                | Self::WHEAT_3
+                | Self::CARROTS_0
+                | Self::CARROTS_1
+                | Self::CARROTS_2
+                | Self::CARROTS_3
+                | Self::POTATOES_0
+                | Self::POTATOES_1
+                | Self::POTATOES_2
+                | Self::POTATOES_3
+                | Self::TOMATOES_0
+                | Self::TOMATOES_1
+                | Self::TOMATOES_2
+                | Self::TOMATOES_3
+                | Self::MELON_STEM_0
+                | Self::MELON_STEM_1
+                | Self::MELON_STEM_2
+                | Self::MELON_STEM_3
+                | Self::PUMPKIN_STEM_0
+                | Self::PUMPKIN_STEM_1
+                | Self::PUMPKIN_STEM_2
+                | Self::PUMPKIN_STEM_3
+        )
+    }
+
+    #[inline]
+    pub const fn is_stem_crop(&self) -> bool {
+        matches!(
+            *self,
+            Self::MELON_STEM_0
+                | Self::MELON_STEM_1
+                | Self::MELON_STEM_2
+                | Self::MELON_STEM_3
+                | Self::PUMPKIN_STEM_0
+                | Self::PUMPKIN_STEM_1
+                | Self::PUMPKIN_STEM_2
+                | Self::PUMPKIN_STEM_3
+        )
+    }
+
+    #[inline]
+    pub const fn is_mature_crop(&self) -> bool {
+        matches!(
+            *self,
+            Self::WHEAT_3
+                | Self::CARROTS_3
+                | Self::POTATOES_3
+                | Self::TOMATOES_3
+                | Self::MELON_STEM_3
+                | Self::PUMPKIN_STEM_3
+        )
+    }
+
+    #[inline]
+    pub const fn is_mature_stem(&self) -> bool {
+        matches!(*self, Self::MELON_STEM_3 | Self::PUMPKIN_STEM_3)
+    }
+
+    #[inline]
+    pub const fn next_crop_stage(&self) -> Option<Self> {
+        match *self {
+            Self::WHEAT_0 => Some(Self::WHEAT_1),
+            Self::WHEAT_1 => Some(Self::WHEAT_2),
+            Self::WHEAT_2 => Some(Self::WHEAT_3),
+            Self::CARROTS_0 => Some(Self::CARROTS_1),
+            Self::CARROTS_1 => Some(Self::CARROTS_2),
+            Self::CARROTS_2 => Some(Self::CARROTS_3),
+            Self::POTATOES_0 => Some(Self::POTATOES_1),
+            Self::POTATOES_1 => Some(Self::POTATOES_2),
+            Self::POTATOES_2 => Some(Self::POTATOES_3),
+            Self::TOMATOES_0 => Some(Self::TOMATOES_1),
+            Self::TOMATOES_1 => Some(Self::TOMATOES_2),
+            Self::TOMATOES_2 => Some(Self::TOMATOES_3),
+            Self::MELON_STEM_0 => Some(Self::MELON_STEM_1),
+            Self::MELON_STEM_1 => Some(Self::MELON_STEM_2),
+            Self::MELON_STEM_2 => Some(Self::MELON_STEM_3),
+            Self::PUMPKIN_STEM_0 => Some(Self::PUMPKIN_STEM_1),
+            Self::PUMPKIN_STEM_1 => Some(Self::PUMPKIN_STEM_2),
+            Self::PUMPKIN_STEM_2 => Some(Self::PUMPKIN_STEM_3),
+            _ => None,
+        }
+    }
+
+    /// Returns the stage-0 block for non-stem farmland crops (used for Rapid Sprout auto-replant).
+    #[inline]
+    pub const fn base_replant_stage(&self) -> Option<Self> {
+        match *self {
+            Self::WHEAT_3 => Some(Self::WHEAT_0),
+            Self::CARROTS_3 => Some(Self::CARROTS_0),
+            Self::POTATOES_3 => Some(Self::POTATOES_0),
+            Self::TOMATOES_3 => Some(Self::TOMATOES_0),
+            _ => None,
+        }
+    }
+
+    /// Returns the fruit block produced by a mature Stem Crop.
+    #[inline]
+    pub const fn stem_fruit_block(&self) -> Option<Self> {
+        match *self {
+            Self::MELON_STEM_3 => Some(Self::MELON),
+            Self::PUMPKIN_STEM_3 => Some(Self::PUMPKIN),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn is_cooking_pot(&self) -> bool {
+        matches!(*self, Self::COOKING_POT | Self::COOKING_POT_LIT)
     }
 
     #[inline]
@@ -335,6 +568,7 @@ impl BlockId {
             124 => 14, // ARENA_RETURN_PORTAL
             125 => 12, // BOSS_ALTAR
             126 => 15, // TEMPLE_BRAZIER
+            153 => 12, // COOKING_POT_LIT
             _ => 0,
         }
     }
@@ -347,41 +581,37 @@ impl BlockId {
     /// Whether this block requires attachment or substrate support to remain intact.
     #[inline]
     pub const fn requires_support(&self) -> bool {
-        matches!(
-            *self,
-            Self::TALL_GRASS
-                | Self::WHEAT_0
-                | Self::WHEAT_1
-                | Self::WHEAT_2
-                | Self::WHEAT_3
-                | Self::CACTUS
-                | Self::TORCH
-                | Self::LILY_PAD
-                | Self::SEAGRASS
-                | Self::POPPY
-                | Self::DANDELION
-                | Self::BLUE_ORCHID
-                | Self::ALLIUM
-                | Self::ORANGE_TULIP
-                | Self::PINK_TULIP
-                | Self::OXEYE_DAISY
-        )
+        self.is_farmland_crop()
+            || matches!(
+                *self,
+                Self::TALL_GRASS
+                    | Self::CACTUS
+                    | Self::SUGAR_CANE
+                    | Self::TORCH
+                    | Self::LILY_PAD
+                    | Self::SEAGRASS
+                    | Self::POPPY
+                    | Self::DANDELION
+                    | Self::BLUE_ORCHID
+                    | Self::ALLIUM
+                    | Self::ORANGE_TULIP
+                    | Self::PINK_TULIP
+                    | Self::OXEYE_DAISY
+            )
     }
 
     /// Whether this block can exist submerged in water.
     #[inline]
     pub const fn can_exist_in_water(&self) -> bool {
+        if self.is_farmland() || self.is_farmland_crop() {
+            return false;
+        }
         match *self {
             Self::TORCH
             | Self::TALL_GRASS
             | Self::CACTUS
-            | Self::WHEAT_0
-            | Self::WHEAT_1
-            | Self::WHEAT_2
-            | Self::WHEAT_3
+            | Self::SUGAR_CANE
             | Self::LILY_PAD
-            | Self::FARMLAND
-            | Self::FARMLAND_MOIST
             | Self::POPPY
             | Self::DANDELION
             | Self::BLUE_ORCHID
@@ -402,23 +632,21 @@ impl BlockId {
     /// Whether this block is fragile and gets crushed/dropped when a falling block lands on it.
     #[inline]
     pub const fn is_fragile(&self) -> bool {
-        matches!(
-            *self,
-            Self::TORCH
-                | Self::TALL_GRASS
-                | Self::WHEAT_0
-                | Self::WHEAT_1
-                | Self::WHEAT_2
-                | Self::WHEAT_3
-                | Self::LILY_PAD
-                | Self::POPPY
-                | Self::DANDELION
-                | Self::BLUE_ORCHID
-                | Self::ALLIUM
-                | Self::ORANGE_TULIP
-                | Self::PINK_TULIP
-                | Self::OXEYE_DAISY
-        )
+        self.is_farmland_crop()
+            || matches!(
+                *self,
+                Self::TORCH
+                    | Self::TALL_GRASS
+                    | Self::SUGAR_CANE
+                    | Self::LILY_PAD
+                    | Self::POPPY
+                    | Self::DANDELION
+                    | Self::BLUE_ORCHID
+                    | Self::ALLIUM
+                    | Self::ORANGE_TULIP
+                    | Self::PINK_TULIP
+                    | Self::OXEYE_DAISY
+            )
     }
 
     /// Whether this block is a leaf block subject to decay when logs are absent.
@@ -2056,6 +2284,112 @@ impl BlockRegistry {
             drop_count: (1, 1),
         });
 
+        // Farming, Cooking, and Hunger Revamp (Issue #12)
+        for (id, name, top_tex) in [
+            (BlockId::FARMLAND_COMPOST, "Composted Farmland", 512),
+            (BlockId::FARMLAND_COMPOST_MOIST, "Moist Composted Farmland", 513),
+            (BlockId::FARMLAND_BONE, "Bone-Fertilized Farmland", 514),
+            (BlockId::FARMLAND_BONE_MOIST, "Moist Bone-Fertilized Farmland", 515),
+        ] {
+            registry.register(BlockDefinition {
+                id,
+                name,
+                is_solid: true,
+                is_transparent: false,
+                luminance: 0,
+                textures: [top_tex, 2, 2, 2, 2, 2],
+                hardness: 0.6,
+                required_tool: Some(ToolType::Shovel),
+                min_tier: ToolTier::None,
+                drop_item: Some(ItemId::DIRT),
+                drop_count: (1, 1),
+            });
+        }
+
+        // Standard 4-stage farmland crops
+        let new_crop_stages: [(BlockId, &'static str, u16, ItemId, (u16, u16)); 20] = [
+            (BlockId::CARROTS_0, "Carrots Stage 0", 516, ItemId::CARROT, (1, 1)),
+            (BlockId::CARROTS_1, "Carrots Stage 1", 517, ItemId::CARROT, (1, 1)),
+            (BlockId::CARROTS_2, "Carrots Stage 2", 518, ItemId::CARROT, (1, 1)),
+            (BlockId::CARROTS_3, "Mature Carrots", 519, ItemId::CARROT, (2, 4)),
+            (BlockId::POTATOES_0, "Potatoes Stage 0", 520, ItemId::POTATO, (1, 1)),
+            (BlockId::POTATOES_1, "Potatoes Stage 1", 521, ItemId::POTATO, (1, 1)),
+            (BlockId::POTATOES_2, "Potatoes Stage 2", 522, ItemId::POTATO, (1, 1)),
+            (BlockId::POTATOES_3, "Mature Potatoes", 523, ItemId::POTATO, (2, 4)),
+            (BlockId::TOMATOES_0, "Tomatoes Stage 0", 524, ItemId::TOMATO_SEEDS, (1, 1)),
+            (BlockId::TOMATOES_1, "Tomatoes Stage 1", 525, ItemId::TOMATO_SEEDS, (1, 1)),
+            (BlockId::TOMATOES_2, "Tomatoes Stage 2", 526, ItemId::TOMATO_SEEDS, (1, 1)),
+            (BlockId::TOMATOES_3, "Mature Tomatoes", 527, ItemId::TOMATO, (2, 3)),
+            (BlockId::MELON_STEM_0, "Melon Stem Stage 0", 528, ItemId::MELON_SEEDS, (1, 1)),
+            (BlockId::MELON_STEM_1, "Melon Stem Stage 1", 529, ItemId::MELON_SEEDS, (1, 1)),
+            (BlockId::MELON_STEM_2, "Melon Stem Stage 2", 530, ItemId::MELON_SEEDS, (1, 1)),
+            (BlockId::MELON_STEM_3, "Mature Melon Stem", 531, ItemId::MELON_SEEDS, (1, 1)),
+            (BlockId::PUMPKIN_STEM_0, "Pumpkin Stem Stage 0", 532, ItemId::PUMPKIN_SEEDS, (1, 1)),
+            (BlockId::PUMPKIN_STEM_1, "Pumpkin Stem Stage 1", 533, ItemId::PUMPKIN_SEEDS, (1, 1)),
+            (BlockId::PUMPKIN_STEM_2, "Pumpkin Stem Stage 2", 534, ItemId::PUMPKIN_SEEDS, (1, 1)),
+            (BlockId::PUMPKIN_STEM_3, "Mature Pumpkin Stem", 535, ItemId::PUMPKIN_SEEDS, (1, 1)),
+        ];
+
+        for (id, name, tex, drop_item, drop_count) in new_crop_stages {
+            registry.register(BlockDefinition {
+                id,
+                name,
+                is_solid: false,
+                is_transparent: true,
+                luminance: 0,
+                textures: [tex; 6],
+                hardness: 0.0,
+                required_tool: None,
+                min_tier: ToolTier::None,
+                drop_item: Some(drop_item),
+                drop_count,
+            });
+        }
+
+        registry.register(BlockDefinition {
+            id: BlockId::SUGAR_CANE,
+            name: "Sugar Cane",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [536; 6],
+            hardness: 0.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::SUGAR_CANE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::COOKING_POT,
+            name: "Cooking Pot",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            // PosY: pot top (537), NegY: base (541), Sides: unlit pot (538)
+            textures: [537, 541, 538, 538, 538, 538],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COOKING_POT),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::COOKING_POT_LIT,
+            name: "Lit Cooking Pot",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 12,
+            // PosY: bubbling top (540), NegY: base (541), Sides: glowing embers (539)
+            textures: [540, 541, 539, 539, 539, 539],
+            hardness: 3.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COOKING_POT),
+            drop_count: (1, 1),
+        });
+
         registry
     }
 
@@ -2205,13 +2539,34 @@ where
                         | BlockId::MYCELIUM
                 )
         }
-        BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 | BlockId::WHEAT_3 => {
+        b if b.is_farmland_crop() => {
             let current = get_block(pos);
             if current == BlockId::WATER {
                 return false;
             }
             let below = get_block(pos + IVec3::NEG_Y);
             below.is_farmland()
+        }
+        BlockId::SUGAR_CANE => {
+            let current = get_block(pos);
+            if current == BlockId::WATER {
+                return false;
+            }
+            let below = get_block(pos + IVec3::NEG_Y);
+            if below == BlockId::SUGAR_CANE {
+                return true;
+            }
+            let valid_ground = matches!(
+                below,
+                BlockId::SAND | BlockId::RED_SAND | BlockId::DIRT | BlockId::GRASS
+            );
+            if !valid_ground {
+                return false;
+            }
+            let base = pos + IVec3::NEG_Y;
+            [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
+                .iter()
+                .any(|&off| get_block(base + off).is_water())
         }
         BlockId::CACTUS => {
             let current = get_block(pos);
@@ -2431,18 +2786,43 @@ fn cascade_water_downward(
     let mut modified_positions = Vec::new();
     let mut extra_drops = Vec::new();
 
-    let current = world.get_block(pos);
-    if current.is_fragile() {
-        let drop_item = match current {
+    let fragile_drop = |b: BlockId| -> ItemSlot {
+        match b {
             BlockId::TORCH => ItemSlot::new(crate::item::ItemId::TORCH, 1),
             BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 => {
                 ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1)
             }
             BlockId::WHEAT_3 => ItemSlot::new(crate::item::ItemId::WHEAT, 1),
+            BlockId::CARROTS_0 | BlockId::CARROTS_1 | BlockId::CARROTS_2 => {
+                ItemSlot::new(crate::item::ItemId::CARROT, 1)
+            }
+            BlockId::CARROTS_3 => ItemSlot::new(crate::item::ItemId::CARROT, 2),
+            BlockId::POTATOES_0 | BlockId::POTATOES_1 | BlockId::POTATOES_2 => {
+                ItemSlot::new(crate::item::ItemId::POTATO, 1)
+            }
+            BlockId::POTATOES_3 => ItemSlot::new(crate::item::ItemId::POTATO, 2),
+            BlockId::TOMATOES_0 | BlockId::TOMATOES_1 | BlockId::TOMATOES_2 => {
+                ItemSlot::new(crate::item::ItemId::TOMATO_SEEDS, 1)
+            }
+            BlockId::TOMATOES_3 => ItemSlot::new(crate::item::ItemId::TOMATO, 2),
+            BlockId::MELON_STEM_0
+            | BlockId::MELON_STEM_1
+            | BlockId::MELON_STEM_2
+            | BlockId::MELON_STEM_3 => ItemSlot::new(crate::item::ItemId::MELON_SEEDS, 1),
+            BlockId::PUMPKIN_STEM_0
+            | BlockId::PUMPKIN_STEM_1
+            | BlockId::PUMPKIN_STEM_2
+            | BlockId::PUMPKIN_STEM_3 => ItemSlot::new(crate::item::ItemId::PUMPKIN_SEEDS, 1),
+            BlockId::SUGAR_CANE => ItemSlot::new(crate::item::ItemId::SUGAR_CANE, 1),
             BlockId::TALL_GRASS => ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1),
             BlockId::LILY_PAD => ItemSlot::new(crate::item::ItemId::LILY_PAD, 1),
             _ => ItemSlot::EMPTY,
-        };
+        }
+    };
+
+    let current = world.get_block(pos);
+    if current.is_fragile() {
+        let drop_item = fragile_drop(current);
         if !drop_item.is_empty() {
             extra_drops.push((pos, drop_item));
         }
@@ -2461,16 +2841,7 @@ fn cascade_water_downward(
             modified_positions.push(check_pos);
             check_pos -= IVec3::Y;
         } else if b.is_fragile() {
-            let drop_item = match b {
-                BlockId::TORCH => ItemSlot::new(crate::item::ItemId::TORCH, 1),
-                BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 => {
-                    ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1)
-                }
-                BlockId::WHEAT_3 => ItemSlot::new(crate::item::ItemId::WHEAT, 1),
-                BlockId::TALL_GRASS => ItemSlot::new(crate::item::ItemId::WHEAT_SEEDS, 1),
-                BlockId::LILY_PAD => ItemSlot::new(crate::item::ItemId::LILY_PAD, 1),
-                _ => ItemSlot::EMPTY,
-            };
+            let drop_item = fragile_drop(b);
             if !drop_item.is_empty() {
                 extra_drops.push((check_pos, drop_item));
             }
@@ -2504,6 +2875,47 @@ where
         }
     }
     false
+}
+
+/// Determines whether a sugar cane column containing `pos` can grow up to max height 3.
+pub fn try_grow_sugar_cane<F>(
+    pos: IVec3,
+    registry: &BlockRegistry,
+    mut get_block: F,
+) -> Option<IVec3>
+where
+    F: FnMut(IVec3) -> BlockId,
+{
+    if get_block(pos) != BlockId::SUGAR_CANE {
+        return None;
+    }
+
+    let mut base = pos;
+    while get_block(base + IVec3::NEG_Y) == BlockId::SUGAR_CANE {
+        base += IVec3::NEG_Y;
+    }
+
+    let mut height = 1;
+    let mut top = base;
+    while get_block(top + IVec3::Y) == BlockId::SUGAR_CANE {
+        top += IVec3::Y;
+        height += 1;
+    }
+
+    if height >= 3 {
+        return None;
+    }
+
+    let grow_pos = top + IVec3::Y;
+    if !get_block(grow_pos).is_air() {
+        return None;
+    }
+
+    if can_block_survive(BlockId::SUGAR_CANE, base, registry, &mut get_block) {
+        Some(grow_pos)
+    } else {
+        None
+    }
 }
 
 /// Determines whether a cactus column starting at or containing `pos` can grow, and if so,

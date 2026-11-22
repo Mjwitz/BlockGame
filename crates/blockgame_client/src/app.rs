@@ -116,6 +116,14 @@ pub enum FishingSession {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct EatingState {
+    pub slot: usize,
+    pub timer: f32,
+    pub duration: f32,
+    pub crunch_accum: f32,
+}
+
 pub struct AppState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -161,6 +169,8 @@ pub struct AppState {
     pub inventory_open: bool,
     pub active_chest_pos: Option<IVec3>,
     pub active_furnace_pos: Option<IVec3>,
+    pub active_cooking_pot_pos: Option<IVec3>,
+    pub eating: Option<EatingState>,
     pub active_coal_gen_pos: Option<IVec3>,
     pub active_battery_pos: Option<IVec3>,
     pub active_electric_furnace_pos: Option<IVec3>,
@@ -743,6 +753,7 @@ impl AppState {
         self.skills_open = false;
         self.skill_toast = None;
         self.skills_dirty = false;
+        self.world_manager.is_multiplayer = false;
     }
 
     pub fn join_multiplayer_server(
@@ -776,6 +787,7 @@ impl AppState {
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.is_multiplayer = true;
         world_manager.init_area_around(initial_state.position, &self.device, &self.pipeline);
 
         self.world_manager = world_manager;
@@ -806,6 +818,7 @@ impl AppState {
         self.inventory_open = false;
         self.active_chest_pos = None;
         self.active_furnace_pos = None;
+        self.active_cooking_pot_pos = None;
         self.active_coal_gen_pos = None;
         self.active_battery_pos = None;
         self.active_electric_furnace_pos = None;
@@ -1037,6 +1050,7 @@ impl AppState {
         self.inventory_open = false;
         self.active_chest_pos = None;
         self.active_furnace_pos = None;
+        self.active_cooking_pot_pos = None;
         self.active_coal_gen_pos = None;
         self.active_battery_pos = None;
         self.active_electric_furnace_pos = None;
@@ -1117,6 +1131,7 @@ impl AppState {
         self.inventory_open = false;
         self.active_chest_pos = None;
         self.active_furnace_pos = None;
+        self.active_cooking_pot_pos = None;
         self.active_coal_gen_pos = None;
         self.active_battery_pos = None;
         self.active_electric_furnace_pos = None;
@@ -1422,6 +1437,8 @@ impl ApplicationHandler for BlockGameApp {
             inventory_open: false,
             active_chest_pos: None,
             active_furnace_pos: None,
+            active_cooking_pot_pos: None,
+            eating: None,
             active_coal_gen_pos: None,
             active_battery_pos: None,
             active_electric_furnace_pos: None,
@@ -2630,6 +2647,34 @@ impl ApplicationHandler for BlockGameApp {
                         if handle_jei_panel_click(state, is_right) {
                             return;
                         }
+                        if state.active_cooking_pot_pos.is_some() {
+                            handle_cooking_pot_click(state, is_right);
+                            if let (Some(pos), Some(client)) =
+                                (state.active_cooking_pot_pos, &mut state.mp_client)
+                            {
+                                if let Some(pot) = state
+                                    .world_manager
+                                    .world()
+                                    .lock()
+                                    .unwrap()
+                                    .get_cooking_pot(pos)
+                                    .cloned()
+                                {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::CookingPotUpdate {
+                                            pos,
+                                            ingredients: pot.ingredients,
+                                            fuel: pot.fuel,
+                                            output: pot.output,
+                                            burn_time: pot.burn_time_remaining,
+                                            max_burn_time: pot.max_burn_time,
+                                            cook_progress: pot.cook_progress,
+                                        },
+                                    );
+                                }
+                            }
+                            return;
+                        }
                         if state.active_furnace_pos.is_some() {
                             handle_furnace_click(state, is_right);
                             if let (Some(pos), Some(client)) =
@@ -2962,7 +3007,16 @@ impl ApplicationHandler for BlockGameApp {
                                                 .min(state.player_stats.max_health);
                                         }
                                     }
-                                } else if let Some((akind, apos)) = hit_animal {
+                                } else if let Some((animal_id, akind, apos)) = hit_animal {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::AttackAnimal {
+                                                animal_id,
+                                                damage: base_attack_damage,
+                                                knockback: state.camera.forward().normalize_or_zero(),
+                                            },
+                                        );
+                                    }
                                     state.audio.play_animal_hurt(
                                         akind,
                                         apos,
@@ -3073,6 +3127,35 @@ impl ApplicationHandler for BlockGameApp {
 
                                 state.active_chest_pos = None;
                                 state.active_furnace_pos = Some(hit.hit_voxel);
+                                state.active_cooking_pot_pos = None;
+                                state.inventory_open = true;
+                                state.mouse_captured = false;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                state.window.set_cursor_visible(true);
+                                return;
+                            }
+                            if block_id.is_cooking_pot() {
+                                state.mouse_left_down = false;
+                                state.break_progress = 0.0;
+                                state.breaking_voxel = None;
+                                state.cracking_buffer = None;
+
+                                {
+                                    let mut world_guard =
+                                        state.world_manager.world().lock().unwrap();
+                                    world_guard.get_or_create_cooking_pot(hit.hit_voxel);
+                                }
+
+                                state.active_chest_pos = None;
+                                state.active_furnace_pos = None;
+                                state.active_coal_gen_pos = None;
+                                state.active_battery_pos = None;
+                                state.active_electric_furnace_pos = None;
+                                state.active_storage_terminal_pos = None;
+                                state.active_backpack_id = None;
+                                state.active_cooking_pot_pos = Some(hit.hit_voxel);
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
                                 let _ = state
@@ -3106,6 +3189,7 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                                 state.active_coal_gen_pos = None;
                                 state.active_battery_pos = None;
                                 state.active_electric_furnace_pos = None;
@@ -3128,6 +3212,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.cracking_buffer = None;
                                 state.active_chest_pos = None;
                                 state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                                 state.active_coal_gen_pos = None;
                                 state.active_battery_pos = None;
                                 state.active_electric_furnace_pos = None;
@@ -3165,6 +3250,7 @@ impl ApplicationHandler for BlockGameApp {
                                 }
                                 state.active_chest_pos = None;
                                 state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                                 state.active_coal_gen_pos =
                                     (block_id == BlockId::COAL_GENERATOR).then_some(hit.hit_voxel);
                                 state.active_battery_pos =
@@ -3299,6 +3385,7 @@ impl ApplicationHandler for BlockGameApp {
 
                                 state.active_chest_pos = None;
                                 state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                                 state.crafting_grid = CraftingGrid::new_3x3();
                                 state.inventory_open = true;
                                 state.mouse_captured = false;
@@ -3442,6 +3529,7 @@ impl ApplicationHandler for BlockGameApp {
                                 state.cracking_buffer = None;
                                 state.active_chest_pos = None;
                                 state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                                 state.active_coal_gen_pos = None;
                                 state.active_battery_pos = None;
                                 state.active_electric_furnace_pos = None;
@@ -3599,19 +3687,122 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
-                        // 1d. Animal Breeding: Right-click an animal while holding Wheat
-                        if held_slot.item_id == ItemId::WHEAT {
-                            if state.world_manager.feed_animal(
-                                state.player.eye_position(),
-                                state.camera.forward(),
-                                4.0,
-                            ) {
-                                let mut slot = state.inventory.get(state.active_hotbar_slot);
-                                slot.take(1);
-                                state.inventory.set(state.active_hotbar_slot, slot);
-                                state.grant_skill_xp(SkillKind::Farming, 18);
-                                state.punch_timer = 0.15;
-                                return;
+                        // 1d. Animal Breeding & Cow Milking (Issue #12)
+                        if !held_slot.is_empty() {
+                            let eye = state.player.eye_position();
+                            let fwd = state.camera.forward().normalize_or_zero();
+                            let mut hit_idx: Option<usize> = None;
+                            let mut best_dist = 4.0_f32;
+                            for (idx, a) in state.world_manager.animals.iter().enumerate() {
+                                if a.dead {
+                                    continue;
+                                }
+                                let center = a.position + Vec3::new(0.0, a.kind.dimensions().1 * 0.5, 0.0);
+                                let to = center - eye;
+                                let proj = to.dot(fwd);
+                                if proj > 0.0 && proj < best_dist {
+                                    let perp = (to - fwd * proj).length();
+                                    if perp <= a.kind.dimensions().0 + 0.35 {
+                                        best_dist = proj;
+                                        hit_idx = Some(idx);
+                                    }
+                                }
+                            }
+                            if let Some(a_idx) = hit_idx {
+                                let animal_id = state.world_manager.animals[a_idx].id;
+                                if state.world_manager.animals[a_idx].can_milk(held_slot.item_id) {
+                                    let mut slot = state.inventory.get(state.active_hotbar_slot);
+                                    slot.take(1);
+                                    if slot.is_empty() {
+                                        if state.mp_client.is_none() {
+                                            state.inventory.set(
+                                                state.active_hotbar_slot,
+                                                ItemSlot::new(ItemId::MILK_BUCKET, 1),
+                                            );
+                                        } else {
+                                            state.inventory.set(state.active_hotbar_slot, slot);
+                                        }
+                                    } else {
+                                        state.inventory.set(state.active_hotbar_slot, slot);
+                                        if state.mp_client.is_none() {
+                                            if let Some(rem) = state.inventory.add_item(
+                                                ItemSlot::new(ItemId::MILK_BUCKET, 1),
+                                                &state.item_registry,
+                                            ) {
+                                                state.spawn_drop_synced(
+                                                    state.player.position + Vec3::new(0.0, 0.5, 0.0),
+                                                    Vec3::new(0.0, 2.0, 0.0),
+                                                    rem,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::InteractAnimal {
+                                                animal_id,
+                                                held_item: ItemId::BUCKET,
+                                            },
+                                        );
+                                    }
+                                    state.punch_timer = 0.15;
+                                    return;
+                                } else if state.world_manager.animals[a_idx]
+                                    .kind
+                                    .is_breeding_feed(held_slot.item_id)
+                                {
+                                    let fed = if state.mp_client.is_some() {
+                                        let can = state.world_manager.animals[a_idx].can_breed()
+                                            && state.world_manager.animals[a_idx].love_timer <= 0.0;
+                                        if can {
+                                            if let Some(client) = &mut state.mp_client {
+                                                client.send(
+                                                    &blockgame_core::net::ClientPacket::InteractAnimal {
+                                                        animal_id,
+                                                        held_item: held_slot.item_id,
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        can
+                                    } else {
+                                        state.world_manager.animals[a_idx]
+                                            .try_feed(held_slot.item_id)
+                                    };
+                                    if fed {
+                                        let mut slot = state.inventory.get(state.active_hotbar_slot);
+                                        slot.take(1);
+                                        state.inventory.set(state.active_hotbar_slot, slot);
+                                        state.grant_skill_xp(SkillKind::Farming, 18);
+                                        state.punch_timer = 0.15;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 1e. Passive Soil Fertilizer Application (Compost / Bone Fertilizer on Farmland)
+                        if let Some(tier) = held_slot.item_id.fertilizer_tier() {
+                            if let Some(hit) = state.targeted_block {
+                                if let Some(updated_block) = state.world_manager.apply_fertilizer(
+                                    hit.hit_voxel,
+                                    tier,
+                                    &state.device,
+                                    &state.pipeline,
+                                ) {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::BlockChange {
+                                                pos: hit.hit_voxel,
+                                                block_id: updated_block,
+                                            },
+                                        );
+                                    }
+                                    state.inventory.slots[state.active_hotbar_slot].take(1);
+                                    state.grant_skill_xp(SkillKind::Farming, 6);
+                                    state.punch_timer = 0.18;
+                                    return;
+                                }
                             }
                         }
 
@@ -3668,8 +3859,8 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
-                        // 3. Wheat Seed Planting (Seeds on Farmland -> Wheat Crop)
-                        if held_slot.item_id == ItemId::WHEAT_SEEDS {
+                        // 3. Crop Planting (Wheat, Carrots, Potatoes, Tomatoes, Melon/Pumpkin Stems on Farmland)
+                        if let Some(crop_block) = held_slot.item_id.plantable_farmland_crop() {
                             if let Some(hit) = state.targeted_block {
                                 let block_beneath = {
                                     let world_guard = state.world_manager.world().lock().unwrap();
@@ -3680,7 +3871,7 @@ impl ApplicationHandler for BlockGameApp {
                                 {
                                     let planted = state.world_manager.place_block(
                                         hit.place_voxel,
-                                        BlockId::WHEAT_0,
+                                        crop_block,
                                         &state.player.aabb(),
                                         &state.device,
                                         &state.pipeline,
@@ -3690,12 +3881,12 @@ impl ApplicationHandler for BlockGameApp {
                                             client.send(
                                                 &blockgame_core::net::ClientPacket::BlockChange {
                                                     pos: hit.place_voxel,
-                                                    block_id: BlockId::WHEAT_0,
+                                                    block_id: crop_block,
                                                 },
                                             );
                                         }
                                         state.audio.play_block_place(
-                                            BlockId::WHEAT_0,
+                                            crop_block,
                                             hit.place_voxel.as_vec3() + Vec3::splat(0.5),
                                             state.camera.position,
                                             state.camera.yaw,
@@ -3710,24 +3901,18 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
 
-                        // 4. Check if holding food and hungry or hurt (eat food!)
+                        // 4. Hold-Right-Click Eating / Drinking (Issue #12, ~1.2s with animation & crunch audio)
                         if !held_slot.is_empty() {
                             if let Some(food) = state.item_registry.get_food(held_slot.item_id) {
-                                let food_mult = state.player_skills.farming_food_multiplier();
-                                let scaled_food = ((food.food_points as f32) * food_mult)
-                                    .round()
-                                    .max(food.food_points as f32)
-                                    as u16;
-                                let scaled_sat = food.saturation * food_mult;
-                                if state.player_stats.eat(scaled_food, scaled_sat) {
-                                    let bonus_heal = ((food_mult - 1.0) * 4.0).max(0.0);
-                                    if bonus_heal > 0.0 && !state.player_stats.is_dead {
-                                        state.player_stats.health = (state.player_stats.health
-                                            + bonus_heal)
-                                            .min(state.player_stats.max_health);
-                                    }
-                                    state.inventory.slots[state.active_hotbar_slot].take(1);
-                                    state.punch_timer = 0.2; // Eating bite animation
+                                if state.player_stats.can_consume(&food) {
+                                    state.eating = Some(EatingState {
+                                        slot: state.active_hotbar_slot,
+                                        timer: 0.0,
+                                        duration: food.eat_duration.max(0.4),
+                                        crunch_accum: 0.0,
+                                    });
+                                    state.audio.play_eat_crunch();
+                                    state.punch_timer = 0.16;
                                     return;
                                 }
                             }
@@ -4489,6 +4674,7 @@ impl ApplicationHandler for BlockGameApp {
                     state.cracking_buffer = None;
                     state.active_chest_pos = None;
                     state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                     state.active_coal_gen_pos = None;
                     state.active_battery_pos = None;
                     state.active_electric_furnace_pos = None;
@@ -4594,6 +4780,7 @@ impl ApplicationHandler for BlockGameApp {
                             state.cracking_buffer = None;
                             state.active_chest_pos = None;
                             state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                             state.active_coal_gen_pos = None;
                             state.active_battery_pos = None;
                             state.active_electric_furnace_pos = None;
@@ -4709,6 +4896,7 @@ impl ApplicationHandler for BlockGameApp {
                                         state.cracking_buffer = None;
                                         state.active_chest_pos = None;
                                         state.active_furnace_pos = None;
+                                state.active_cooking_pot_pos = None;
                                         state.active_coal_gen_pos = None;
                                         state.active_battery_pos = None;
                                         state.active_electric_furnace_pos = None;
@@ -5109,6 +5297,28 @@ impl ApplicationHandler for BlockGameApp {
                                             !zones.iter().any(|z| z.contains(t.arena_origin));
                                     }
                                     state.world_manager.temples.synced_protected_zones = zones;
+                                }
+                                blockgame_core::net::ServerPacket::AnimalsSync { animals } => {
+                                    state.world_manager.apply_synced_animals(&animals);
+                                }
+                                blockgame_core::net::ServerPacket::CookingPotSync {
+                                    pos,
+                                    ingredients,
+                                    fuel,
+                                    output,
+                                    burn_time,
+                                    max_burn_time,
+                                    cook_progress,
+                                } => {
+                                    let mut world_guard =
+                                        state.world_manager.world().lock().unwrap();
+                                    let pot = world_guard.get_or_create_cooking_pot(pos);
+                                    pot.ingredients = ingredients;
+                                    pot.fuel = fuel;
+                                    pot.output = output;
+                                    pot.burn_time_remaining = burn_time;
+                                    pot.max_burn_time = max_burn_time;
+                                    pot.cook_progress = cook_progress;
                                 }
                                 blockgame_core::net::ServerPacket::VoiceBroadcast {
                                     sender_id,
@@ -5513,10 +5723,65 @@ impl ApplicationHandler for BlockGameApp {
                             .update_item_drops(dt, state.player.position);
                     }
 
-                    // 3b. Update Animals, Monsters, Arrows & Planted Crops
-                    let animal_drops = state.world_manager.update_animals(dt);
-                    for (pos, drops) in animal_drops {
-                        for drop_slot in drops {
+                    // 3a. Hold-Right-Click Eating / Drinking Tick (Issue #12)
+                    if let Some(eat_slot) = state.eating.as_ref().map(|e| e.slot) {
+                        let slot_changed = eat_slot != state.active_hotbar_slot;
+                        let held = state.inventory.get(state.active_hotbar_slot);
+                        let food_opt = state.item_registry.get_food(held.item_id);
+                        let still_valid = state.mouse_right_down
+                            && !slot_changed
+                            && !state.inventory_open
+                            && !state.skills_open
+                            && !state.player_stats.is_dead
+                            && food_opt
+                                .map(|f| state.player_stats.can_consume(&f))
+                                .unwrap_or(false);
+
+                        if !still_valid {
+                            // Cancel eating without consuming item (release or hotbar slot switch)
+                            state.eating = None;
+                        } else if let Some(food) = food_opt {
+                            // Slow horizontal movement while eating
+                            state.player.velocity.x *= (1.0 - 6.0 * dt).clamp(0.35, 1.0);
+                            state.player.velocity.z *= (1.0 - 6.0 * dt).clamp(0.35, 1.0);
+
+                            let mut finished = false;
+                            if let Some(eating) = &mut state.eating {
+                                eating.timer += dt;
+                                eating.crunch_accum += dt;
+                                if eating.crunch_accum >= 0.28 {
+                                    eating.crunch_accum = 0.0;
+                                    state.audio.play_eat_crunch();
+                                    state.punch_timer = 0.16; // Chomp/bob animation pulse
+                                }
+                                if eating.timer >= eating.duration {
+                                    finished = true;
+                                }
+                            }
+
+                            if finished {
+                                let food_mult = state.player_skills.farming_food_multiplier();
+                                let rng_roll =
+                                    blockgame_core::fishing::next_f32(&mut state.fishing_rng);
+                                if state.player_stats.consume_food(&food, food_mult, rng_roll) {
+                                    state.inventory.slots[state.active_hotbar_slot].take(1);
+                                    state.audio.play_eat_crunch();
+                                    state.punch_timer = 0.2;
+                                }
+                                state.eating = None;
+                            }
+                        }
+                    }
+
+                    // 3b. Update Animals, Monsters, Arrows & Planted Crops (ADR-0004: gated in MP)
+                    if state.mp_client.is_none() {
+                        let held_id = state.inventory.get(state.active_hotbar_slot).item_id;
+                        let animal_drops = state.world_manager.update_animals_with_lure(
+                            dt,
+                            state.player.position,
+                            held_id,
+                        );
+                        for (pos, drop_slot) in animal_drops {
                             state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
                         }
                     }
@@ -5881,21 +6146,27 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         }
                     }
-                    state
-                        .world_manager
-                        .update_crops(dt, &state.device, &state.pipeline);
-                    state
-                        .world_manager
-                        .update_farmland(dt, &state.device, &state.pipeline);
+                    if state.mp_client.is_none() {
+                        state.world_manager.update_farming(
+                            dt,
+                            state.day_night.sun_intensity(),
+                            state.player.position,
+                            &state.device,
+                            &state.pipeline,
+                        );
+                        state
+                            .world_manager
+                            .update_furnaces(dt, &state.device, &state.pipeline);
+                        state
+                            .world_manager
+                            .update_cooking_pots(dt, &state.device, &state.pipeline);
+                    }
                     state
                         .world_manager
                         .update_cacti(dt, &state.device, &state.pipeline);
                     state
                         .world_manager
                         .update_decaying_leaves(dt, &state.device, &state.pipeline);
-                    state
-                        .world_manager
-                        .update_furnaces(dt, &state.device, &state.pipeline);
                     let is_daytime = state.day_night.sun_direction().y > 0.0;
                     state.world_manager.update_power_networks(
                         dt,
@@ -6397,17 +6668,60 @@ impl ApplicationHandler for BlockGameApp {
                                                         );
                                                     }
                                                 }
-                                                // Ripe Wheat Crop drops additional 1..2 seeds + Farming perks & Auto-Replant
-                                                if broken == BlockId::WHEAT_3 {
-                                                    let hash = (target_voxel.x.wrapping_mul(1234567)
-                                                        ^ target_voxel.z.wrapping_mul(7654321))
-                                                        % 2;
-                                                    let seed_count = (hash.abs() + 1) as u16;
-                                                    state.spawn_drop_synced(
-                                                        drop_pos,
-                                                        Vec3::new(0.0, 2.0, 0.0),
-                                                        ItemSlot::new(ItemId::WHEAT_SEEDS, seed_count),
-                                                    );
+                                                // Mature farmland crops: seeds/extra drops, Bone Fertilizer +1 yield, Farming perks & Auto-Replant
+                                                if let Some(replant_stage) = broken.base_replant_stage() {
+                                                    let (fert_tier, reset_farmland) =
+                                                        state.world_manager.consume_fertilizer_on_harvest(
+                                                            target_voxel,
+                                                            &state.device,
+                                                            &state.pipeline,
+                                                        );
+                                                    if let (Some(reset_blk), Some(client)) =
+                                                        (reset_farmland, &mut state.mp_client)
+                                                    {
+                                                        client.send(
+                                                            &blockgame_core::net::ClientPacket::BlockChange {
+                                                                pos: target_voxel - IVec3::Y,
+                                                                block_id: reset_blk,
+                                                            },
+                                                        );
+                                                    }
+
+                                                    let (primary_drop, seed_drop_opt) = match broken {
+                                                        BlockId::WHEAT_3 => {
+                                                            (ItemId::WHEAT, Some(ItemId::WHEAT_SEEDS))
+                                                        }
+                                                        BlockId::CARROTS_3 => (ItemId::CARROT, None),
+                                                        BlockId::POTATOES_3 => (ItemId::POTATO, None),
+                                                        BlockId::TOMATOES_3 => {
+                                                            (ItemId::TOMATO, Some(ItemId::TOMATO_SEEDS))
+                                                        }
+                                                        _ => (ItemId::WHEAT, None),
+                                                    };
+
+                                                    // Bone Fertilizer guaranteed +1 bonus crop yield
+                                                    let fert_bonus = fert_tier.bonus_yield();
+                                                    if fert_bonus > 0 {
+                                                        state.spawn_drop_synced(
+                                                            drop_pos,
+                                                            Vec3::new(0.15, 2.2, -0.15),
+                                                            ItemSlot::new(primary_drop, fert_bonus),
+                                                        );
+                                                    }
+
+                                                    // Seed-based crops drop additional 1..2 seeds on mature harvest
+                                                    if let Some(seed_id) = seed_drop_opt {
+                                                        let hash = (target_voxel.x.wrapping_mul(1234567)
+                                                            ^ target_voxel.z.wrapping_mul(7654321))
+                                                            % 2;
+                                                        let seed_count = (hash.abs() + 1) as u16;
+                                                        state.spawn_drop_synced(
+                                                            drop_pos,
+                                                            Vec3::new(0.0, 2.0, 0.0),
+                                                            ItemSlot::new(seed_id, seed_count),
+                                                        );
+                                                    }
+
                                                     if blockgame_core::fishing::next_f32(
                                                         &mut state.fishing_rng,
                                                     ) < state
@@ -6417,18 +6731,21 @@ impl ApplicationHandler for BlockGameApp {
                                                         state.spawn_drop_synced(
                                                             drop_pos,
                                                             Vec3::new(0.2, 2.3, 0.2),
-                                                            ItemSlot::new(ItemId::WHEAT, 1),
+                                                            ItemSlot::new(primary_drop, 1),
                                                         );
-                                                        state.spawn_drop_synced(
-                                                            drop_pos,
-                                                            Vec3::new(-0.2, 2.3, -0.2),
-                                                            ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
-                                                        );
+                                                        if let Some(seed_id) = seed_drop_opt {
+                                                            state.spawn_drop_synced(
+                                                                drop_pos,
+                                                                Vec3::new(-0.2, 2.3, -0.2),
+                                                                ItemSlot::new(seed_id, 1),
+                                                            );
+                                                        }
                                                     }
+
                                                     if state.player_skills.farming_auto_replant() {
                                                         let replanted = state.world_manager.place_block(
                                                             target_voxel,
-                                                            BlockId::WHEAT_0,
+                                                            replant_stage,
                                                             &state.player.aabb(),
                                                             &state.device,
                                                             &state.pipeline,
@@ -6443,7 +6760,7 @@ impl ApplicationHandler for BlockGameApp {
                                                                 client.send(
                                                                     &blockgame_core::net::ClientPacket::BlockChange {
                                                                         pos: target_voxel,
-                                                                        block_id: BlockId::WHEAT_0,
+                                                                        block_id: replant_stage,
                                                                     },
                                                                 );
                                                             }
@@ -6614,6 +6931,27 @@ impl ApplicationHandler for BlockGameApp {
                                 screen_w,
                                 screen_h,
                                 &furnace,
+                                &state.inventory,
+                                state.active_hotbar_slot,
+                                &state.cursor_held,
+                                ui_cursor,
+                                &state.item_registry,
+                                Some(&jei_params),
+                                modal_params.as_ref(),
+                            );
+                        } else if let Some(pot_pos) = state.active_cooking_pot_pos {
+                            let pot = {
+                                let world_guard = state.world_manager.world().lock().unwrap();
+                                world_guard
+                                    .get_cooking_pot(pot_pos)
+                                    .cloned()
+                                    .unwrap_or_default()
+                            };
+                            UiBuilder::build_cooking_pot_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &pot,
                                 &state.inventory,
                                 state.active_hotbar_slot,
                                 &state.cursor_held,
@@ -6851,6 +7189,18 @@ impl ApplicationHandler for BlockGameApp {
                             state.hotbar_tuck_progress,
                             &state.character_profile.active_appearance,
                         );
+
+                        if let Some(eating) = &state.eating {
+                            if eating.duration > 0.0 {
+                                let progress = (eating.timer / eating.duration).clamp(0.0, 1.0);
+                                UiBuilder::draw_eating_progress_bar(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    progress,
+                                );
+                            }
+                        }
 
                         if let Some(boss_hud) = state
                             .world_manager
@@ -9563,3 +9913,122 @@ fn find_hovered_item(state: &AppState) -> Option<ItemId> {
 
     None
 }
+
+fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
+    let Some(pot_pos) = state.active_cooking_pot_pos else {
+        return;
+    };
+    let (screen_w, screen_h, [mx, my]) = state.ui_metrics();
+
+    let Some((kind, idx)) = UiBuilder::hit_test_cooking_pot_screen(screen_w, screen_h, mx, my)
+    else {
+        return;
+    };
+
+    let mut swap_slot = |slot: &mut ItemSlot, output_only: bool| {
+        if output_only {
+            if !slot.is_empty() {
+                if state.cursor_held.is_empty() {
+                    state.cursor_held = *slot;
+                    *slot = ItemSlot::EMPTY;
+                } else if state.cursor_held.item_id == slot.item_id {
+                    let max_s = state
+                        .item_registry
+                        .get(slot.item_id)
+                        .map(|d| d.max_stack)
+                        .unwrap_or(16);
+                    let space = max_s.saturating_sub(state.cursor_held.count);
+                    let moved = slot.count.min(space);
+                    state.cursor_held.count += moved;
+                    slot.count -= moved;
+                    if slot.count == 0 {
+                        *slot = ItemSlot::EMPTY;
+                    }
+                }
+            }
+            return;
+        }
+
+        if is_right_click {
+            if state.cursor_held.is_empty() {
+                if !slot.is_empty() {
+                    let take = (slot.count + 1) / 2;
+                    state.cursor_held = ItemSlot {
+                        item_id: slot.item_id,
+                        count: take,
+                        durability: slot.durability,
+                    };
+                    slot.count -= take;
+                    if slot.count == 0 {
+                        *slot = ItemSlot::EMPTY;
+                    }
+                }
+            } else if slot.is_empty() {
+                *slot = ItemSlot {
+                    item_id: state.cursor_held.item_id,
+                    count: 1,
+                    durability: state.cursor_held.durability,
+                };
+                state.cursor_held.count -= 1;
+                if state.cursor_held.count == 0 {
+                    state.cursor_held = ItemSlot::EMPTY;
+                }
+            } else if slot.item_id == state.cursor_held.item_id {
+                let max_s = state
+                    .item_registry
+                    .get(slot.item_id)
+                    .map(|d| d.max_stack)
+                    .unwrap_or(64);
+                if slot.count < max_s {
+                    slot.count += 1;
+                    state.cursor_held.count -= 1;
+                    if state.cursor_held.count == 0 {
+                        state.cursor_held = ItemSlot::EMPTY;
+                    }
+                }
+            }
+        } else if !state.cursor_held.is_empty() && slot.item_id == state.cursor_held.item_id {
+            let max_s = state
+                .item_registry
+                .get(slot.item_id)
+                .map(|d| d.max_stack)
+                .unwrap_or(64);
+            let space = max_s.saturating_sub(slot.count);
+            let moved = state.cursor_held.count.min(space);
+            slot.count += moved;
+            state.cursor_held.count -= moved;
+            if state.cursor_held.count == 0 {
+                state.cursor_held = ItemSlot::EMPTY;
+            }
+        } else {
+            std::mem::swap(slot, &mut state.cursor_held);
+        }
+    };
+
+    match kind {
+        0 => {
+            let mut world_guard = state.world_manager.world().lock().unwrap();
+            let pot = world_guard.get_or_create_cooking_pot(pot_pos);
+            if idx < 4 {
+                swap_slot(&mut pot.ingredients[idx], false);
+            }
+        }
+        1 => {
+            let mut world_guard = state.world_manager.world().lock().unwrap();
+            let pot = world_guard.get_or_create_cooking_pot(pot_pos);
+            swap_slot(&mut pot.fuel, false);
+        }
+        2 => {
+            let mut world_guard = state.world_manager.world().lock().unwrap();
+            let pot = world_guard.get_or_create_cooking_pot(pot_pos);
+            swap_slot(&mut pot.output, true);
+        }
+        3 => {
+            if idx < state.inventory.slots.len() {
+                swap_slot(&mut state.inventory.slots[idx], false);
+            }
+        }
+        _ => {}
+    }
+}
+

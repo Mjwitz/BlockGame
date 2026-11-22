@@ -133,6 +133,115 @@ impl FurnaceState {
     }
 }
 
+pub const COOKING_POT_COOK_TIME: f32 = 10.0;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CookingPotState {
+    pub ingredients: [ItemSlot; 4],
+    pub fuel: ItemSlot,
+    pub output: ItemSlot,
+    pub burn_time_remaining: f32,
+    pub max_burn_time: f32,
+    pub cook_progress: f32,
+}
+
+impl Default for CookingPotState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CookingPotState {
+    pub const COOK_TIME: f32 = COOKING_POT_COOK_TIME;
+
+    pub fn new() -> Self {
+        Self {
+            ingredients: [ItemSlot::EMPTY; 4],
+            fuel: ItemSlot::EMPTY,
+            output: ItemSlot::EMPTY,
+            burn_time_remaining: 0.0,
+            max_burn_time: 0.0,
+            cook_progress: 0.0,
+        }
+    }
+
+    #[inline]
+    pub fn is_burning(&self) -> bool {
+        self.burn_time_remaining > 0.0
+    }
+
+    /// Ticks the Cooking Pot for elapsed seconds `dt`.
+    /// Returns true if the block's visual lit state changed (`COOKING_POT` <-> `COOKING_POT_LIT`).
+    pub fn update(&mut self, dt: f32) -> bool {
+        let was_burning = self.is_burning();
+        let recipe_out = crate::crafting::get_cooking_pot_output(&self.ingredients);
+
+        let can_cook = if let Some(out_slot) = recipe_out {
+            if self.output.is_empty() {
+                true
+            } else {
+                // Meals stack up to 16 (no Bowls required)
+                self.output.item_id == out_slot.item_id
+                    && self.output.count.saturating_add(out_slot.count) <= 16
+            }
+        } else {
+            false
+        };
+
+        if !self.is_burning() && can_cook {
+            let fuel_time = crate::crafting::get_fuel_burn_time(self.fuel.item_id);
+            if fuel_time > 0.0 && self.fuel.count > 0 {
+                self.fuel.count -= 1;
+                if self.fuel.count == 0 {
+                    self.fuel = ItemSlot::EMPTY;
+                }
+                self.burn_time_remaining = fuel_time;
+                self.max_burn_time = fuel_time;
+            }
+        }
+
+        if self.burn_time_remaining > 0.0 {
+            self.burn_time_remaining = (self.burn_time_remaining - dt).max(0.0);
+
+            if can_cook {
+                self.cook_progress += dt;
+                if self.cook_progress >= COOKING_POT_COOK_TIME {
+                    self.cook_progress = 0.0;
+                    if let Some(out_slot) = recipe_out {
+                        if self.output.is_empty() {
+                            self.output = out_slot;
+                        } else {
+                            self.output.count = self.output.count.saturating_add(out_slot.count);
+                        }
+                        for slot in &mut self.ingredients {
+                            if slot.is_empty() {
+                                continue;
+                            }
+                            if slot.item_id == crate::item::ItemId::MILK_BUCKET
+                                || slot.item_id == crate::item::ItemId::WATER_BUCKET
+                            {
+                                // Return empty bucket in the input slot so players never lose iron buckets
+                                *slot = ItemSlot::new(crate::item::ItemId::BUCKET, 1);
+                            } else {
+                                slot.count -= 1;
+                                if slot.count == 0 {
+                                    *slot = ItemSlot::EMPTY;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.cook_progress = (self.cook_progress - dt * 2.0).max(0.0);
+            }
+        } else {
+            self.cook_progress = (self.cook_progress - dt * 2.0).max(0.0);
+        }
+
+        was_burning != self.is_burning()
+    }
+}
+
 #[derive(Default)]
 pub struct World {
     chunks: HashMap<ChunkPos, Chunk>,
@@ -140,6 +249,7 @@ pub struct World {
     pub light_sources: HashSet<IVec3>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
+    pub cooking_pots: HashMap<IVec3, CookingPotState>,
     pub power_nodes: HashSet<IVec3>,
     pub coal_generators: HashMap<IVec3, crate::power::CoalGeneratorState>,
     pub batteries: HashMap<IVec3, crate::power::BatteryState>,
@@ -155,12 +265,29 @@ impl World {
             light_sources: HashSet::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
+            cooking_pots: HashMap::new(),
             power_nodes: HashSet::new(),
             coal_generators: HashMap::new(),
             batteries: HashMap::new(),
             electric_furnaces: HashMap::new(),
             powered_storage_terminals: HashSet::new(),
         }
+    }
+
+    pub fn get_or_create_cooking_pot(&mut self, pos: IVec3) -> &mut CookingPotState {
+        self.cooking_pots.entry(pos).or_default()
+    }
+
+    pub fn get_cooking_pot(&self, pos: IVec3) -> Option<&CookingPotState> {
+        self.cooking_pots.get(&pos)
+    }
+
+    pub fn get_cooking_pot_mut(&mut self, pos: IVec3) -> Option<&mut CookingPotState> {
+        self.cooking_pots.get_mut(&pos)
+    }
+
+    pub fn remove_cooking_pot(&mut self, pos: IVec3) -> Option<CookingPotState> {
+        self.cooking_pots.remove(&pos)
     }
 
     pub fn get_or_create_chest(&mut self, pos: IVec3) -> &mut Vec<ItemSlot> {
