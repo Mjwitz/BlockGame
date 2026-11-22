@@ -103,6 +103,9 @@ docker compose -f docker-compose.directory.yml up -d
 ### Real-Time World & Pause Menu
 In multiplayer mode, opening the in-game Pause Menu (`Esc`) does **not** pause the world or server. The game continues running around the player: you can still take damage from monsters, drown, fall, or be interacted with by other players while in the menu.
 
+### Server-Authoritative Farming, Animals & Cooking
+In multiplayer worlds, crops, Stem Crops, Sugar Cane, farmland hydration/fertilizers, passive animals (spawning, herding, breeding, egg laying, milking, and combat), **Furnaces**, and **Cooking Pots** all run authoritatively on `blockgame_server` (20 TPS) using shared `blockgame_core` simulation logic, keeping every connected player in sync and persisting state in the server's world save.
+
 ### Server Console Chat & Command Logging
 The dedicated server console continuously streams all in-game activity:
 - Chat messages: `[CHAT] <PlayerName>: message text`

@@ -1,17 +1,21 @@
 # Mobs and Breeding
 
-## Passive Animals
-Four passive animal species roam the world:
-- **Cow**: Drops Leather and Raw Beef.
-- **Pig**: Drops Raw Porkchop.
-- **Chicken**: Drops Feathers and Raw Chicken.
-- **Sheep**: Drops Wool (used for crafting Beds) and Raw Mutton.
+## Passive Animals & Ranching
+Four passive animal species roam the world and tie directly into farming and cooking:
 
-### Animal Breeding
-1. Hold **Wheat** in your active hotbar slot.
-2. `Right Click` on two adult animals of the same species.
+| Animal | Drops | Breeding Feed (Lure & Breed) | Special Ranching Behavior |
+| :--- | :--- | :--- | :--- |
+| **Cow** | Leather, Raw Beef | **Wheat** | `Right Click` with an empty **Bucket** to collect a **Milk Bucket** (used in Cooking Pot recipes like Sweet Cake) |
+| **Pig** | Raw Porkchop | **Carrot** or **Potato** | — |
+| **Chicken** | Feathers, Raw Chicken | Any **Seeds** (Wheat, Tomato, Melon, Pumpkin) | Passively lays **Eggs** every 5–10 minutes |
+| **Sheep** | Wool (Beds), **1–2 Raw Mutton** | **Wheat** | Raw Mutton can be roasted into Cooked Mutton or cooked in Hearty Meat Stew |
+
+### Herding & Animal Breeding
+1. **Herding**: Hold a species' preferred **Breeding Feed** in your active hotbar slot to lure nearby animals of that species within **10 blocks** to follow you into pens.
+2. **Breeding**: `Right Click` two adult animals of the same species with their Breeding Feed.
 3. Both animals enter love mode (floating heart particles) and produce a **baby animal** that grows into an adult over time.
 4. After breeding, animals have a **5-minute (300-second) cooldown** before they can breed again.
+5. **Persistence & Multiplayer**: Animal love timers, breed cooldowns, baby growth timers, and Chicken egg timers persist across world saves (`entities.bin`), and animal simulation runs authoritatively on the server in multiplayer.
 
 ---
 
