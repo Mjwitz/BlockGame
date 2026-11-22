@@ -1,6 +1,7 @@
 pub mod animal;
 pub mod auth;
 pub mod block;
+pub mod character;
 pub mod chat;
 pub mod chunk;
 pub mod command;
@@ -36,6 +37,11 @@ pub use block::{
     is_leaf_supported, place_water_source, try_grow_cactus, BlockDefinition, BlockId,
     BlockRegistry,
 };
+pub use character::{
+    starter_presets, BodyFrame, CharacterAppearance, CharacterPreset, CharacterProfile, EyeStyle,
+    FacialHairStyle, HairStyle, PantsStyle, RgbColor, ShirtStyle, ShoeStyle,
+    CLOTHING_COLOR_SWATCHES, EYE_COLOR_SWATCHES, HAIR_COLOR_SWATCHES, SKIN_TONE_SWATCHES,
+};
 pub use chat::{
     color_code_to_rgba, escape_color_codes, parse_colored_spans, strip_color_codes, ColorSpan,
 };
@@ -58,8 +64,8 @@ pub use monster::{
     MonsterTickOutcome,
 };
 pub use net::{
-    player_skin_name, ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer,
-    PlayerModelState, ServerPacket, SyncedArrowState, SyncedMonsterState, DEFAULT_SERVER_PORT,
+    ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer, PlayerModelState, ServerPacket,
+    SyncedArrowState, SyncedMonsterState, DEFAULT_SERVER_PORT,
 };
 pub use permissions::{
     permission_matches, BanEntry, BanManager, IpBanEntry, PermissionGroup, PermissionsManager,

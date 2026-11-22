@@ -5968,21 +5968,22 @@ impl UiBuilder {
     pub const TITLE_BTN_SINGLEPLAYER: usize = 0;
     pub const TITLE_BTN_NEW_WORLD: usize = 1;
     pub const TITLE_BTN_MULTIPLAYER: usize = 2;
-    pub const TITLE_BTN_SETTINGS: usize = 3;
-    pub const TITLE_BTN_GUIDE: usize = 4;
-    pub const TITLE_BTN_QUIT: usize = 5;
-    pub const TITLE_BTN_QUICK_RESUME: usize = 6;
-    pub const TITLE_BUTTON_COUNT: usize = 7;
+    pub const TITLE_BTN_CHARACTER_CREATOR: usize = 3;
+    pub const TITLE_BTN_SETTINGS: usize = 4;
+    pub const TITLE_BTN_GUIDE: usize = 5;
+    pub const TITLE_BTN_QUIT: usize = 6;
+    pub const TITLE_BTN_QUICK_RESUME: usize = 7;
+    pub const TITLE_BUTTON_COUNT: usize = 8;
 
-    /// Returns the 7 interactive button rectangles on the Roots & Ridges Title Screen:
-    /// `[0: Singleplayer, 1: New Expedition, 2: Multiplayer, 3: Settings, 4: Guide, 5: Quit, 6: Quick Resume]`.
+    /// Returns the 8 interactive button rectangles on the Roots & Ridges Title Screen:
+    /// `[0: Singleplayer, 1: New Expedition, 2: Multiplayer, 3: Character Creator, 4: Settings, 5: Guide, 6: Quit, 7: Quick Resume]`.
     pub fn title_screen_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; Self::TITLE_BUTTON_COUNT] {
         let dock_w = 340.0_f32.min(screen_w * 0.35);
         let pad_x = 28.0;
         let btn_w = dock_w - pad_x * 2.0;
-        let btn_h = 42.0;
-        let gap = 10.0;
-        let start_y = 150.0_f32.min(screen_h * 0.22);
+        let btn_h = 39.0;
+        let gap = 8.0;
+        let start_y = 142.0_f32.min(screen_h * 0.21);
 
         let card_w = 340.0_f32.min(screen_w * 0.34);
         let card_h = 160.0;
@@ -5994,13 +5995,14 @@ impl UiBuilder {
         let res_btn_y = card_y + card_h - res_btn_h - 14.0;
 
         [
-            [pad_x, start_y, btn_w, btn_h],                         // 0: Continue Expedition / Singleplayer
-            [pad_x, start_y + (btn_h + gap), btn_w, btn_h],         // 1: New Expedition
-            [pad_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],   // 2: Multiplayer & Servers
-            [pad_x, start_y + (btn_h + gap) * 3.0, btn_w, btn_h],   // 3: Game Settings
-            [pad_x, start_y + (btn_h + gap) * 4.0, btn_w, btn_h],   // 4: How to Play & Guide
-            [pad_x, start_y + (btn_h + gap) * 5.0 + 10.0, btn_w, btn_h], // 5: Exit to Desktop
-            [res_btn_x, res_btn_y, res_btn_w, res_btn_h],           // 6: Quick Resume / First World
+            [pad_x, start_y, btn_w, btn_h],                              // 0: Continue Expedition / Singleplayer
+            [pad_x, start_y + (btn_h + gap), btn_w, btn_h],              // 1: New Expedition
+            [pad_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],        // 2: Multiplayer & Servers
+            [pad_x, start_y + (btn_h + gap) * 3.0, btn_w, btn_h],        // 3: Character Creator
+            [pad_x, start_y + (btn_h + gap) * 4.0, btn_w, btn_h],        // 4: Game Settings
+            [pad_x, start_y + (btn_h + gap) * 5.0, btn_w, btn_h],        // 5: How to Play & Guide
+            [pad_x, start_y + (btn_h + gap) * 6.0 + 8.0, btn_w, btn_h],  // 6: Exit to Desktop
+            [res_btn_x, res_btn_y, res_btn_w, res_btn_h],                // 7: Quick Resume / First World
         ]
     }
 
@@ -6399,6 +6401,7 @@ impl UiBuilder {
             (">", "Continue Expedition"),
             ("+", "New Expedition"),
             ("@", "Multiplayer & Servers"),
+            ("&", "Character Creator"),
             ("*", "Game Settings"),
             ("?", "How to Play & Guide"),
             ("X", "Exit to Desktop"),
@@ -8002,7 +8005,8 @@ impl UiBuilder {
         username_input: &str,
         password_input: &str,
         address_input: &str,
-        skin_id: u8,
+        appearance: &blockgame_core::character::CharacterAppearance,
+        preset_label: &str,
         focused_field: usize,
         status_message: Option<(&str, bool)>,
         directory_servers: &[blockgame_core::directory::DirectoryServerEntry],
@@ -8135,31 +8139,25 @@ impl UiBuilder {
             cursor_pos,
         );
 
-        let skin_label = format!(
-            "Skin: {}",
-            blockgame_core::net::player_skin_name(skin_id)
-        );
+        let char_label = format!("Character: {}", preset_label);
         Self::draw_menu_button(
             mesh,
             btns[0][0],
             btns[0][1],
             btns[0][2],
             btns[0][3],
-            &skin_label,
+            &char_label,
             cursor_pos,
             true,
         );
 
-        // Character Face Avatar preview on the left side of the Skin button
-        let face_tile = 272 + ((skin_id as u16) % 4) * 4;
-        let face_uv = TextureAtlas::get_uv_bounds(face_tile);
-        mesh.add_quad(
+        // Procedural 2D Character Portrait on the left side of the Character button
+        Self::draw_character_portrait(
+            mesh,
             btns[0][0] + 8.0,
             btns[0][1] + 4.0,
             28.0,
-            28.0,
-            face_uv,
-            [1.0, 1.0, 1.0, 1.0],
+            appearance,
         );
 
         let can_connect =
@@ -8845,15 +8843,12 @@ impl UiBuilder {
                     white_uv,
                     [0.12, 0.15, 0.22, 0.78],
                 );
-                let face_tile = 272 + ((p.skin_id as u16) % 4) * 4;
-                let face_uv = TextureAtlas::get_uv_bounds(face_tile);
-                mesh.add_quad(
+                Self::draw_character_portrait(
+                    mesh,
                     px + 14.0,
                     ry + 3.0,
                     17.0,
-                    17.0,
-                    face_uv,
-                    [1.0, 1.0, 1.0, 1.0],
+                    &p.appearance,
                 );
 
                 let tag = if p.username.eq_ignore_ascii_case(local_username) {
@@ -9752,6 +9747,861 @@ pub struct FishingHudState {
     pub tackle_summary: String,
 }
 
+/// Active tab in the Main Menu Character Creator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterCreatorTab {
+    Presets = 0,
+    Body = 1,
+    FaceHair = 2,
+    Clothing = 3,
+}
+
+impl CharacterCreatorTab {
+    pub const ALL: [Self; 4] = [Self::Presets, Self::Body, Self::FaceHair, Self::Clothing];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Presets => "Presets",
+            Self::Body => "Body",
+            Self::FaceHair => "Face & Hair",
+            Self::Clothing => "Clothing",
+        }
+    }
+}
+
+/// Pure view state passed to `UiBuilder::build_character_creator_screen`.
+#[derive(Debug, Clone)]
+pub struct CharacterCreatorUiState {
+    pub active_tab: CharacterCreatorTab,
+    pub appearance: blockgame_core::character::CharacterAppearance,
+    pub presets: Vec<blockgame_core::character::CharacterPreset>,
+    pub selected_preset_name: Option<String>,
+    pub preset_name_input: String,
+    pub preset_input_focused: bool,
+    pub face_zoom: bool,
+    pub walk_preview: bool,
+    pub active_color_target: usize,
+    pub status_message: Option<String>,
+}
+
+/// Deterministic hit-test and viewport layout for the Character Creator screen.
+#[derive(Debug, Clone)]
+pub struct CharacterCreatorLayout {
+    /// `[x, y, w, h]` sub-viewport on the left side for live 3D turntable rendering.
+    pub preview_viewport: [f32; 4],
+    pub btn_zoom: [f32; 4],
+    pub btn_walk: [f32; 4],
+    pub btn_randomize: [f32; 4],
+    pub tab_rects: [[f32; 4]; 4],
+    pub btn_revert: [f32; 4],
+    pub btn_done: [f32; 4],
+    /// `(select_rect, optional_delete_rect)` for each preset row on the Presets tab.
+    pub preset_rows: Vec<([f32; 4], Option<[f32; 4]>)>,
+    pub preset_name_input: [f32; 4],
+    pub btn_save_preset: [f32; 4],
+    /// `(rect, group_id, variant_idx)` for style selector buttons in Body / FaceHair / Clothing tabs.
+    /// Group IDs: 0=BodyFrame, 1=EyeStyle, 2=HairStyle, 3=FacialHair, 4=ShirtStyle, 5=PantsStyle, 6=ShoeStyle.
+    pub option_buttons: Vec<([f32; 4], usize, usize)>,
+    /// `(rect, color_target_idx)` for selecting which color slot the swatch grid & RGB sliders edit.
+    pub color_target_buttons: Vec<([f32; 4], usize)>,
+    /// `(rect, color)` for curated color swatches.
+    pub swatch_rects: Vec<([f32; 4], blockgame_core::character::RgbColor)>,
+    /// Horizontal track rects for R, G, B sliders (`0..=255`).
+    pub rgb_slider_rects: [[f32; 4]; 3],
+}
+
+impl UiBuilder {
+    #[inline]
+    fn point_in_rect(p: [f32; 2], r: [f32; 4]) -> bool {
+        Self::is_rect_hovered(p, r[0], r[1], r[2], r[3])
+    }
+
+    /// Procedurally draws a stylized 2D Character Portrait derived from `appearance`.
+    pub fn draw_character_portrait(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        size: f32,
+        appearance: &blockgame_core::character::CharacterAppearance,
+    ) {
+        use blockgame_core::character::{EyeStyle, FacialHairStyle, HairStyle};
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let app = appearance.sanitized();
+
+        // Dark framed portrait background
+        mesh.add_quad(x, y, size, size, white_uv, [0.10, 0.13, 0.18, 0.96]);
+        let pad = (size * 0.05).max(1.0);
+        mesh.add_quad(
+            x + pad,
+            y + pad,
+            size - pad * 2.0,
+            size - pad * 2.0,
+            white_uv,
+            [0.16, 0.21, 0.29, 0.96],
+        );
+
+        let skin = app.skin_tone.to_rgba_f32(1.0);
+        let skin_shade = app.skin_tone.scale(0.86).to_rgba_f32(1.0);
+        let hair = app.hair_color.to_rgba_f32(1.0);
+        let hair_dark = app.hair_color.scale(0.78).to_rgba_f32(1.0);
+        let iris = app.eye_color.to_rgba_f32(1.0);
+        let shirt = app.shirt_primary.to_rgba_f32(1.0);
+        let shirt_a = app.shirt_accent.to_rgba_f32(1.0);
+
+        // Shoulders / shirt collar at bottom
+        mesh.add_quad(
+            x + size * 0.18,
+            y + size * 0.78,
+            size * 0.64,
+            size * 0.18,
+            white_uv,
+            shirt,
+        );
+        mesh.add_quad(
+            x + size * 0.36,
+            y + size * 0.78,
+            size * 0.28,
+            size * 0.08,
+            white_uv,
+            shirt_a,
+        );
+
+        // Back hair for long/bob/curly/twin buns
+        match app.hair_style {
+            HairStyle::LongFlowing => {
+                mesh.add_quad(x + size * 0.17, y + size * 0.20, size * 0.66, size * 0.66, white_uv, hair_dark);
+            }
+            HairStyle::Bob => {
+                mesh.add_quad(x + size * 0.18, y + size * 0.20, size * 0.64, size * 0.54, white_uv, hair_dark);
+            }
+            HairStyle::Curly => {
+                mesh.add_quad(x + size * 0.14, y + size * 0.10, size * 0.72, size * 0.44, white_uv, hair);
+            }
+            HairStyle::TwinBuns => {
+                mesh.add_quad(x + size * 0.12, y + size * 0.12, size * 0.18, size * 0.18, white_uv, hair);
+                mesh.add_quad(x + size * 0.70, y + size * 0.12, size * 0.18, size * 0.18, white_uv, hair);
+            }
+            _ => {}
+        }
+
+        // Neck
+        mesh.add_quad(
+            x + size * 0.41,
+            y + size * 0.70,
+            size * 0.18,
+            size * 0.12,
+            white_uv,
+            skin_shade,
+        );
+
+        // Ears
+        mesh.add_quad(x + size * 0.20, y + size * 0.42, size * 0.08, size * 0.16, white_uv, skin_shade);
+        mesh.add_quad(x + size * 0.72, y + size * 0.42, size * 0.08, size * 0.16, white_uv, skin_shade);
+
+        // Head silhouette (slightly tapered)
+        mesh.add_quad(x + size * 0.25, y + size * 0.22, size * 0.50, size * 0.50, white_uv, skin);
+        mesh.add_quad(x + size * 0.30, y + size * 0.68, size * 0.40, size * 0.06, white_uv, skin_shade);
+
+        // Eyes
+        let eye_h = match app.eye_style {
+            EyeStyle::Wide => size * 0.11,
+            EyeStyle::Almond | EyeStyle::Sharp => size * 0.075,
+            EyeStyle::Standard => size * 0.09,
+        };
+        let eye_y = y + size * 0.44;
+        for ex in [x + size * 0.32, x + size * 0.54] {
+            mesh.add_quad(ex, eye_y, size * 0.13, eye_h, white_uv, [0.95, 0.95, 0.97, 1.0]);
+            mesh.add_quad(ex + size * 0.03, eye_y + eye_h * 0.1, size * 0.075, eye_h * 0.85, white_uv, iris);
+            mesh.add_quad(ex + size * 0.05, eye_y + eye_h * 0.25, size * 0.035, eye_h * 0.5, white_uv, [0.08, 0.08, 0.10, 1.0]);
+        }
+
+        // Facial hair
+        match app.facial_hair {
+            FacialHairStyle::None => {}
+            FacialHairStyle::Stubble => {
+                let st = app.skin_tone.lerp(app.hair_color, 0.35).to_rgba_f32(1.0);
+                mesh.add_quad(x + size * 0.30, y + size * 0.60, size * 0.40, size * 0.13, white_uv, st);
+            }
+            FacialHairStyle::Mustache => {
+                mesh.add_quad(x + size * 0.37, y + size * 0.58, size * 0.26, size * 0.06, white_uv, hair);
+            }
+            FacialHairStyle::ShortBeard => {
+                mesh.add_quad(x + size * 0.29, y + size * 0.59, size * 0.42, size * 0.15, white_uv, hair);
+            }
+            FacialHairStyle::FullBeard => {
+                mesh.add_quad(x + size * 0.27, y + size * 0.58, size * 0.46, size * 0.23, white_uv, hair);
+            }
+        }
+
+        // Top hair / bangs
+        if app.hair_style != HairStyle::Bald {
+            mesh.add_quad(x + size * 0.23, y + size * 0.16, size * 0.54, size * 0.15, white_uv, hair);
+            if matches!(app.hair_style, HairStyle::Spiky) {
+                mesh.add_quad(x + size * 0.32, y + size * 0.09, size * 0.12, size * 0.10, white_uv, hair);
+                mesh.add_quad(x + size * 0.52, y + size * 0.10, size * 0.12, size * 0.09, white_uv, hair);
+            } else if matches!(app.hair_style, HairStyle::SweptBangs | HairStyle::SidePart) {
+                mesh.add_quad(x + size * 0.26, y + size * 0.27, size * 0.36, size * 0.08, white_uv, hair);
+            }
+        }
+    }
+
+    /// Computes the deterministic layout of the Main Menu Character Creator screen.
+    pub fn character_creator_layout(
+        screen_w: f32,
+        screen_h: f32,
+        state: &CharacterCreatorUiState,
+    ) -> CharacterCreatorLayout {
+        use blockgame_core::character::{
+            BodyFrame, EyeStyle, FacialHairStyle, HairStyle, PantsStyle, ShirtStyle, ShoeStyle,
+            CLOTHING_COLOR_SWATCHES, EYE_COLOR_SWATCHES, HAIR_COLOR_SWATCHES, SKIN_TONE_SWATCHES,
+        };
+
+        let margin = 20.0;
+        let top_bar_h = 56.0;
+        let right_w = (screen_w * 0.50).clamp(430.0, 620.0).min(screen_w - 280.0);
+        let right_x = screen_w - right_w - margin;
+        let left_w = (right_x - margin * 2.0).max(200.0);
+        let preview_h = (screen_h - top_bar_h - 90.0).max(200.0);
+        let preview_viewport = [margin, top_bar_h + 6.0, left_w, preview_h];
+
+        // Bottom controls under 3D preview
+        let ctrl_y = preview_viewport[1] + preview_viewport[3] + 12.0;
+        let ctrl_gap = 8.0;
+        let ctrl_w = (left_w - ctrl_gap * 2.0) / 3.0;
+        let btn_zoom = [margin, ctrl_y, ctrl_w, 34.0];
+        let btn_walk = [margin + ctrl_w + ctrl_gap, ctrl_y, ctrl_w, 34.0];
+        let btn_randomize = [margin + (ctrl_w + ctrl_gap) * 2.0, ctrl_y, ctrl_w, 34.0];
+
+        // Right panel tabs
+        let panel_y = top_bar_h + 6.0;
+        let panel_h = (screen_h - panel_y - margin).max(300.0);
+        let tab_gap = 6.0;
+        let inner_x = right_x + 14.0;
+        let inner_w = right_w - 28.0;
+        let tab_w = (inner_w - tab_gap * 3.0) / 4.0;
+        let tab_y = panel_y + 12.0;
+        let tab_rects = [
+            [inner_x, tab_y, tab_w, 30.0],
+            [inner_x + (tab_w + tab_gap), tab_y, tab_w, 30.0],
+            [inner_x + (tab_w + tab_gap) * 2.0, tab_y, tab_w, 30.0],
+            [inner_x + (tab_w + tab_gap) * 3.0, tab_y, tab_w, 30.0],
+        ];
+
+        // Bottom Revert / Done buttons on right panel
+        let footer_y = panel_y + panel_h - 46.0;
+        let footer_w = (inner_w - 12.0) * 0.5;
+        let btn_revert = [inner_x, footer_y, footer_w, 34.0];
+        let btn_done = [inner_x + footer_w + 12.0, footer_y, footer_w, 34.0];
+
+        let mut preset_rows = Vec::new();
+        let mut preset_name_input = [0.0; 4];
+        let mut btn_save_preset = [0.0; 4];
+        let mut option_buttons = Vec::new();
+        let mut color_target_buttons = Vec::new();
+        let mut swatch_rects = Vec::new();
+        let mut rgb_slider_rects = [[0.0; 4]; 3];
+
+        let content_y = tab_y + 42.0;
+
+        match state.active_tab {
+            CharacterCreatorTab::Presets => {
+                // Save Custom Preset bar at top of Presets tab
+                let save_w = 132.0;
+                preset_name_input = [inner_x, content_y + 16.0, inner_w - save_w - 8.0, 32.0];
+                btn_save_preset = [inner_x + inner_w - save_w, content_y + 16.0, save_w, 32.0];
+
+                let list_y = content_y + 62.0;
+                let row_h = 34.0;
+                let max_rows = (((footer_y - 12.0) - list_y) / (row_h + 4.0)).floor().max(1.0) as usize;
+                for (i, preset) in state.presets.iter().take(max_rows).enumerate() {
+                    let ry = list_y + (i as f32) * (row_h + 4.0);
+                    if preset.is_starter {
+                        preset_rows.push(([inner_x, ry, inner_w, row_h], None));
+                    } else {
+                        let del_w = 34.0;
+                        preset_rows.push((
+                            [inner_x, ry, inner_w - del_w - 6.0, row_h],
+                            Some([inner_x + inner_w - del_w, ry, del_w, row_h]),
+                        ));
+                    }
+                }
+            }
+            CharacterCreatorTab::Body => {
+                // Body Frame buttons (group 0)
+                let bw = (inner_w - 12.0) / 3.0;
+                let by = content_y + 18.0;
+                for i in 0..BodyFrame::ALL.len() {
+                    option_buttons.push(([inner_x + (bw + 6.0) * (i as f32), by, bw, 34.0], 0, i));
+                }
+
+                // Skin Tone swatches + RGB sliders
+                let sw_y = by + 64.0;
+                Self::layout_swatches_and_rgb(
+                    inner_x,
+                    sw_y,
+                    inner_w,
+                    &SKIN_TONE_SWATCHES,
+                    &mut swatch_rects,
+                    &mut rgb_slider_rects,
+                );
+            }
+            CharacterCreatorTab::FaceHair => {
+                // Eye Style (group 1, 4 buttons)
+                let ew = (inner_w - 18.0) / 4.0;
+                let ey = content_y + 16.0;
+                for i in 0..EyeStyle::ALL.len() {
+                    option_buttons.push(([inner_x + (ew + 6.0) * (i as f32), ey, ew, 26.0], 1, i));
+                }
+
+                // Hair Style (group 2, 10 buttons in 2 rows of 5)
+                let hw = (inner_w - 24.0) / 5.0;
+                let hy = ey + 44.0;
+                for i in 0..HairStyle::ALL.len() {
+                    let row = i / 5;
+                    let col = i % 5;
+                    option_buttons.push((
+                        [
+                            inner_x + (hw + 6.0) * (col as f32),
+                            hy + (row as f32) * 30.0,
+                            hw,
+                            26.0,
+                        ],
+                        2,
+                        i,
+                    ));
+                }
+
+                // Facial Hair (group 3, 5 buttons in 1 row)
+                let fw = (inner_w - 24.0) / 5.0;
+                let fy = hy + 78.0;
+                for i in 0..FacialHairStyle::ALL.len() {
+                    option_buttons.push(([inner_x + (fw + 6.0) * (i as f32), fy, fw, 26.0], 3, i));
+                }
+
+                // Color target selector: 0 = Eye Color, 1 = Hair Color
+                let cty = fy + 42.0;
+                let ctw = (inner_w - 8.0) * 0.5;
+                color_target_buttons.push(([inner_x, cty, ctw, 26.0], 0));
+                color_target_buttons.push(([inner_x + ctw + 8.0, cty, ctw, 26.0], 1));
+
+                let swatches: &[blockgame_core::character::RgbColor] = if state.active_color_target == 0 {
+                    &EYE_COLOR_SWATCHES
+                } else {
+                    &HAIR_COLOR_SWATCHES
+                };
+                Self::layout_swatches_and_rgb(
+                    inner_x,
+                    cty + 34.0,
+                    inner_w,
+                    swatches,
+                    &mut swatch_rects,
+                    &mut rgb_slider_rects,
+                );
+            }
+            CharacterCreatorTab::Clothing => {
+                // Shirt Style (group 4, 6 buttons in 2 rows of 3)
+                let sw = (inner_w - 12.0) / 3.0;
+                let sy = content_y + 16.0;
+                for i in 0..ShirtStyle::ALL.len() {
+                    let row = i / 3;
+                    let col = i % 3;
+                    option_buttons.push((
+                        [
+                            inner_x + (sw + 6.0) * (col as f32),
+                            sy + (row as f32) * 28.0,
+                            sw,
+                            24.0,
+                        ],
+                        4,
+                        i,
+                    ));
+                }
+
+                // Pants Style (group 5, 5 buttons)
+                let pw = (inner_w - 24.0) / 5.0;
+                let py = sy + 72.0;
+                for i in 0..PantsStyle::ALL.len() {
+                    option_buttons.push(([inner_x + (pw + 6.0) * (i as f32), py, pw, 24.0], 5, i));
+                }
+
+                // Shoe Style (group 6, 4 buttons)
+                let shw = (inner_w - 18.0) / 4.0;
+                let shy = py + 42.0;
+                for i in 0..ShoeStyle::ALL.len() {
+                    option_buttons.push(([inner_x + (shw + 6.0) * (i as f32), shy, shw, 24.0], 6, i));
+                }
+
+                // Color target selector: 0 = Shirt Primary, 1 = Shirt Accent, 2 = Pants, 3 = Shoes
+                let cty = shy + 38.0;
+                let ctw = (inner_w - 18.0) / 4.0;
+                for i in 0..4 {
+                    color_target_buttons.push(([inner_x + (ctw + 6.0) * (i as f32), cty, ctw, 24.0], i));
+                }
+
+                Self::layout_swatches_and_rgb(
+                    inner_x,
+                    cty + 32.0,
+                    inner_w,
+                    &CLOTHING_COLOR_SWATCHES,
+                    &mut swatch_rects,
+                    &mut rgb_slider_rects,
+                );
+            }
+        }
+
+        CharacterCreatorLayout {
+            preview_viewport,
+            btn_zoom,
+            btn_walk,
+            btn_randomize,
+            tab_rects,
+            btn_revert,
+            btn_done,
+            preset_rows,
+            preset_name_input,
+            btn_save_preset,
+            option_buttons,
+            color_target_buttons,
+            swatch_rects,
+            rgb_slider_rects,
+        }
+    }
+
+    fn layout_swatches_and_rgb(
+        x: f32,
+        y: f32,
+        w: f32,
+        swatches: &[blockgame_core::character::RgbColor],
+        out_swatches: &mut Vec<([f32; 4], blockgame_core::character::RgbColor)>,
+        out_sliders: &mut [[f32; 4]; 3],
+    ) {
+        let cols = 7usize;
+        let gap = 5.0;
+        let sw_size = ((w - gap * (cols as f32 - 1.0)) / (cols as f32)).min(32.0);
+        for (i, &c) in swatches.iter().enumerate() {
+            let row = i / cols;
+            let col = i % cols;
+            out_swatches.push((
+                [
+                    x + (col as f32) * (sw_size + gap),
+                    y + (row as f32) * (sw_size + gap),
+                    sw_size,
+                    sw_size,
+                ],
+                c,
+            ));
+        }
+        let rows = (swatches.len() + cols - 1) / cols;
+        let slider_y = y + (rows as f32) * (sw_size + gap) + 12.0;
+        let label_w = 34.0;
+        let track_w = (w - label_w - 42.0).max(80.0);
+        for ch in 0..3 {
+            out_sliders[ch] = [x + label_w, slider_y + (ch as f32) * 24.0, track_w, 16.0];
+        }
+    }
+
+    /// Builds the Main Menu split-screen Character Creator UI overlay (left side stays transparent for the 3D turntable).
+    pub fn build_character_creator_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        state: &CharacterCreatorUiState,
+        cursor_pos: [f32; 2],
+    ) {
+        use blockgame_core::character::{
+            BodyFrame, EyeStyle, FacialHairStyle, HairStyle, PantsStyle, ShirtStyle, ShoeStyle,
+        };
+
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let layout = Self::character_creator_layout(screen_w, screen_h, state);
+
+        // Top header bar
+        mesh.add_quad(0.0, 0.0, screen_w, 56.0, white_uv, [0.05, 0.07, 0.11, 0.94]);
+        mesh.add_quad(0.0, 54.0, screen_w, 2.0, white_uv, [0.85, 0.68, 0.28, 0.90]);
+        Self::draw_string(
+            mesh,
+            24.0,
+            16.0,
+            "CHARACTER CREATOR",
+            14.0,
+            20.0,
+            1.6,
+            [0.98, 0.97, 0.94, 1.0],
+        );
+        let hint = "Drag character to rotate  |  Customize freely";
+        Self::draw_string(
+            mesh,
+            24.0,
+            39.0,
+            hint,
+            7.5,
+            10.0,
+            0.8,
+            [0.75, 0.80, 0.88, 0.85],
+        );
+
+        // Left preview frame border (interior stays clear so the 3D turntable shows through!)
+        let pv = layout.preview_viewport;
+        let border = 2.0;
+        let frame_col = [0.35, 0.42, 0.55, 0.85];
+        mesh.add_quad(pv[0] - border, pv[1] - border, pv[2] + border * 2.0, border, white_uv, frame_col);
+        mesh.add_quad(pv[0] - border, pv[1] + pv[3], pv[2] + border * 2.0, border, white_uv, frame_col);
+        mesh.add_quad(pv[0] - border, pv[1], border, pv[3], white_uv, frame_col);
+        mesh.add_quad(pv[0] + pv[2], pv[1], border, pv[3], white_uv, frame_col);
+
+        // Preview control buttons
+        let zoom_label = if state.face_zoom { "View: Full Body" } else { "View: Face Zoom" };
+        let walk_label = if state.walk_preview { "Pose: Walking" } else { "Pose: Idle" };
+        Self::draw_menu_button(mesh, layout.btn_zoom[0], layout.btn_zoom[1], layout.btn_zoom[2], layout.btn_zoom[3], zoom_label, cursor_pos, true);
+        Self::draw_menu_button(mesh, layout.btn_walk[0], layout.btn_walk[1], layout.btn_walk[2], layout.btn_walk[3], walk_label, cursor_pos, true);
+        Self::draw_menu_button(mesh, layout.btn_randomize[0], layout.btn_randomize[1], layout.btn_randomize[2], layout.btn_randomize[3], "Randomize", cursor_pos, true);
+
+        // Right customization panel
+        let right_x = layout.tab_rects[0][0] - 14.0;
+        let right_w = screen_w - right_x - 20.0;
+        let panel_y = 62.0;
+        let panel_h = (screen_h - panel_y - 20.0).max(300.0);
+        mesh.add_quad(right_x, panel_y, right_w, panel_h, white_uv, [0.36, 0.41, 0.52, 0.85]);
+        mesh.add_quad(right_x + 1.5, panel_y + 1.5, right_w - 3.0, panel_h - 3.0, white_uv, [0.07, 0.09, 0.13, 0.95]);
+
+        // Tabs
+        for (i, tab) in CharacterCreatorTab::ALL.iter().enumerate() {
+            let r = layout.tab_rects[i];
+            let active = *tab == state.active_tab;
+            let hovered = Self::point_in_rect(cursor_pos, r);
+            let bg = if active {
+                [0.24, 0.34, 0.48, 0.98]
+            } else if hovered {
+                [0.16, 0.21, 0.30, 0.95]
+            } else {
+                [0.11, 0.14, 0.20, 0.95]
+            };
+            mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, bg);
+            if active {
+                mesh.add_quad(r[0], r[1] + r[3] - 2.5, r[2], 2.5, white_uv, [0.95, 0.78, 0.30, 1.0]);
+            }
+            let lbl = tab.label();
+            let lw = Self::string_width(lbl, 8.0, 1.0);
+            Self::draw_string(
+                mesh,
+                r[0] + (r[2] - lw) * 0.5,
+                r[1] + 9.0,
+                lbl,
+                8.0,
+                11.0,
+                1.0,
+                if active { [1.0, 0.98, 0.92, 1.0] } else { [0.78, 0.82, 0.90, 1.0] },
+            );
+        }
+
+        let inner_x = layout.tab_rects[0][0];
+        let content_y = layout.tab_rects[0][1] + 42.0;
+
+        // Draw active tab contents
+        match state.active_tab {
+            CharacterCreatorTab::Presets => {
+                Self::draw_text_input_box(
+                    mesh,
+                    layout.preset_name_input[0],
+                    layout.preset_name_input[1],
+                    layout.preset_name_input[2],
+                    layout.preset_name_input[3],
+                    "Save Active Character as Custom Preset:",
+                    &state.preset_name_input,
+                    "Enter preset name...",
+                    state.preset_input_focused,
+                    cursor_pos,
+                );
+                Self::draw_menu_button(
+                    mesh,
+                    layout.btn_save_preset[0],
+                    layout.btn_save_preset[1],
+                    layout.btn_save_preset[2],
+                    layout.btn_save_preset[3],
+                    "Save Preset",
+                    cursor_pos,
+                    true,
+                );
+
+                for (i, (row_r, del_r)) in layout.preset_rows.iter().enumerate() {
+                    if let Some(preset) = state.presets.get(i) {
+                        let selected = state
+                            .selected_preset_name
+                            .as_deref()
+                            .map(|n| n.eq_ignore_ascii_case(&preset.name))
+                            .unwrap_or(false);
+                        let hovered = Self::point_in_rect(cursor_pos, *row_r);
+                        let bg = if selected {
+                            [0.20, 0.32, 0.44, 0.96]
+                        } else if hovered {
+                            [0.15, 0.20, 0.28, 0.94]
+                        } else {
+                            [0.10, 0.13, 0.19, 0.92]
+                        };
+                        mesh.add_quad(row_r[0], row_r[1], row_r[2], row_r[3], white_uv, bg);
+                        if selected {
+                            mesh.add_quad(row_r[0], row_r[1], 3.0, row_r[3], white_uv, [0.95, 0.78, 0.30, 1.0]);
+                        }
+                        Self::draw_character_portrait(
+                            mesh,
+                            row_r[0] + 6.0,
+                            row_r[1] + 4.0,
+                            26.0,
+                            &preset.appearance,
+                        );
+                        Self::draw_string(
+                            mesh,
+                            row_r[0] + 40.0,
+                            row_r[1] + 11.0,
+                            &preset.name,
+                            8.5,
+                            12.0,
+                            1.0,
+                            [0.96, 0.97, 1.0, 1.0],
+                        );
+                        let badge = if preset.is_starter { "STARTER" } else { "CUSTOM" };
+                        let bw = Self::string_width(badge, 7.0, 0.8);
+                        Self::draw_string(
+                            mesh,
+                            row_r[0] + row_r[2] - bw - 10.0,
+                            row_r[1] + 12.0,
+                            badge,
+                            7.0,
+                            10.0,
+                            0.8,
+                            if preset.is_starter {
+                                [0.92, 0.78, 0.35, 0.90]
+                            } else {
+                                [0.55, 0.84, 0.96, 0.90]
+                            },
+                        );
+
+                        if let Some(dr) = del_r {
+                            let d_hov = Self::point_in_rect(cursor_pos, *dr);
+                            mesh.add_quad(
+                                dr[0],
+                                dr[1],
+                                dr[2],
+                                dr[3],
+                                white_uv,
+                                if d_hov { [0.68, 0.22, 0.22, 0.96] } else { [0.36, 0.15, 0.17, 0.92] },
+                            );
+                            Self::draw_string(mesh, dr[0] + 12.0, dr[1] + 10.0, "X", 9.0, 13.0, 1.0, [1.0, 0.95, 0.95, 1.0]);
+                        }
+                    }
+                }
+            }
+            CharacterCreatorTab::Body => {
+                Self::draw_string(mesh, inner_x, content_y, "BODY FRAME", 8.0, 11.0, 1.0, [0.95, 0.78, 0.30, 0.95]);
+                for &(r, group, idx) in &layout.option_buttons {
+                    if group == 0 {
+                        let active = state.appearance.body_frame as usize == idx;
+                        Self::draw_creator_chip(mesh, r, BodyFrame::ALL[idx].display_name(), active, cursor_pos);
+                    }
+                }
+                Self::draw_string(mesh, inner_x, content_y + 64.0, "SKIN TONE", 8.0, 11.0, 1.0, [0.95, 0.78, 0.30, 0.95]);
+                Self::draw_swatches_and_rgb(
+                    mesh,
+                    &layout.swatch_rects,
+                    &layout.rgb_slider_rects,
+                    state.appearance.skin_tone,
+                    cursor_pos,
+                );
+            }
+            CharacterCreatorTab::FaceHair => {
+                Self::draw_string(mesh, inner_x, content_y, "EYE STYLE", 7.5, 10.0, 0.9, [0.95, 0.78, 0.30, 0.95]);
+                Self::draw_string(mesh, inner_x, content_y + 44.0, "HAIRSTYLE", 7.5, 10.0, 0.9, [0.95, 0.78, 0.30, 0.95]);
+                Self::draw_string(mesh, inner_x, content_y + 122.0, "FACIAL HAIR (INHERITS HAIR COLOR)", 7.5, 10.0, 0.9, [0.95, 0.78, 0.30, 0.95]);
+
+                for &(r, group, idx) in &layout.option_buttons {
+                    let (label, active) = match group {
+                        1 => (EyeStyle::ALL[idx].display_name(), state.appearance.eye_style as usize == idx),
+                        2 => (HairStyle::ALL[idx].display_name(), state.appearance.hair_style as usize == idx),
+                        3 => (FacialHairStyle::ALL[idx].display_name(), state.appearance.facial_hair as usize == idx),
+                        _ => ("", false),
+                    };
+                    Self::draw_creator_chip(mesh, r, label, active, cursor_pos);
+                }
+
+                for &(r, target) in &layout.color_target_buttons {
+                    let label = if target == 0 { "Eye Color" } else { "Hair Color" };
+                    Self::draw_creator_chip(mesh, r, label, state.active_color_target == target, cursor_pos);
+                }
+                let active_color = if state.active_color_target == 0 {
+                    state.appearance.eye_color
+                } else {
+                    state.appearance.hair_color
+                };
+                Self::draw_swatches_and_rgb(
+                    mesh,
+                    &layout.swatch_rects,
+                    &layout.rgb_slider_rects,
+                    active_color,
+                    cursor_pos,
+                );
+            }
+            CharacterCreatorTab::Clothing => {
+                Self::draw_string(mesh, inner_x, content_y, "SHIRT STYLE", 7.5, 10.0, 0.9, [0.95, 0.78, 0.30, 0.95]);
+                Self::draw_string(mesh, inner_x, content_y + 72.0, "PANTS STYLE", 7.5, 10.0, 0.9, [0.95, 0.78, 0.30, 0.95]);
+                Self::draw_string(mesh, inner_x, content_y + 114.0, "SHOE STYLE", 7.5, 10.0, 0.9, [0.95, 0.78, 0.30, 0.95]);
+
+                for &(r, group, idx) in &layout.option_buttons {
+                    let (label, active) = match group {
+                        4 => (ShirtStyle::ALL[idx].display_name(), state.appearance.shirt_style as usize == idx),
+                        5 => (PantsStyle::ALL[idx].display_name(), state.appearance.pants_style as usize == idx),
+                        6 => (ShoeStyle::ALL[idx].display_name(), state.appearance.shoe_style as usize == idx),
+                        _ => ("", false),
+                    };
+                    Self::draw_creator_chip(mesh, r, label, active, cursor_pos);
+                }
+
+                let target_labels = ["Shirt Main", "Shirt Accent", "Pants", "Shoes"];
+                for &(r, target) in &layout.color_target_buttons {
+                    Self::draw_creator_chip(mesh, r, target_labels[target], state.active_color_target == target, cursor_pos);
+                }
+                let active_color = match state.active_color_target {
+                    0 => state.appearance.shirt_primary,
+                    1 => state.appearance.shirt_accent,
+                    2 => state.appearance.pants_color,
+                    _ => state.appearance.shoe_color,
+                };
+                Self::draw_swatches_and_rgb(
+                    mesh,
+                    &layout.swatch_rects,
+                    &layout.rgb_slider_rects,
+                    active_color,
+                    cursor_pos,
+                );
+            }
+        }
+
+        // Optional status banner above footer
+        if let Some(ref msg) = state.status_message {
+            Self::draw_string(
+                mesh,
+                inner_x,
+                layout.btn_revert[1] - 18.0,
+                msg,
+                7.5,
+                10.5,
+                0.8,
+                [0.62, 0.94, 0.68, 1.0],
+            );
+        }
+
+        // Footer Revert & Done buttons
+        Self::draw_menu_button(
+            mesh,
+            layout.btn_revert[0],
+            layout.btn_revert[1],
+            layout.btn_revert[2],
+            layout.btn_revert[3],
+            "Revert Changes",
+            cursor_pos,
+            true,
+        );
+        Self::draw_menu_button(
+            mesh,
+            layout.btn_done[0],
+            layout.btn_done[1],
+            layout.btn_done[2],
+            layout.btn_done[3],
+            "Done (Save & Back)",
+            cursor_pos,
+            true,
+        );
+    }
+
+    fn draw_creator_chip(
+        mesh: &mut UiMesh,
+        r: [f32; 4],
+        label: &str,
+        active: bool,
+        cursor_pos: [f32; 2],
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let hovered = Self::point_in_rect(cursor_pos, r);
+        let border_col = if active {
+            [0.95, 0.78, 0.30, 1.0]
+        } else if hovered {
+            [0.55, 0.65, 0.80, 0.9]
+        } else {
+            [0.28, 0.33, 0.42, 0.85]
+        };
+        let bg = if active {
+            [0.22, 0.33, 0.48, 0.96]
+        } else if hovered {
+            [0.16, 0.21, 0.30, 0.94]
+        } else {
+            [0.11, 0.14, 0.20, 0.92]
+        };
+        mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border_col);
+        mesh.add_quad(r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, white_uv, bg);
+
+        let char_w = if label.len() > 10 { 6.2 } else { 7.0 };
+        let lw = Self::string_width(label, char_w, 0.7);
+        Self::draw_string(
+            mesh,
+            r[0] + (r[2] - lw).max(4.0) * 0.5,
+            r[1] + (r[3] - 10.0) * 0.5,
+            label,
+            char_w,
+            10.0,
+            0.7,
+            if active { [1.0, 0.98, 0.92, 1.0] } else { [0.85, 0.88, 0.94, 1.0] },
+        );
+    }
+
+    fn draw_swatches_and_rgb(
+        mesh: &mut UiMesh,
+        swatches: &[([f32; 4], blockgame_core::character::RgbColor)],
+        sliders: &[[f32; 4]; 3],
+        current: blockgame_core::character::RgbColor,
+        cursor_pos: [f32; 2],
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        for &(r, col) in swatches {
+            let selected = col == current;
+            let hovered = Self::point_in_rect(cursor_pos, r);
+            let border = if selected {
+                [1.0, 0.86, 0.32, 1.0]
+            } else if hovered {
+                [0.85, 0.90, 0.98, 0.95]
+            } else {
+                [0.24, 0.28, 0.36, 0.90]
+            };
+            mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+            let pad = if selected { 2.5 } else { 1.5 };
+            mesh.add_quad(
+                r[0] + pad,
+                r[1] + pad,
+                r[2] - pad * 2.0,
+                r[3] - pad * 2.0,
+                white_uv,
+                col.to_rgba_f32(1.0),
+            );
+        }
+
+        let channels = [
+            ("R", current.r, [0.88, 0.28, 0.28, 1.0]),
+            ("G", current.g, [0.28, 0.82, 0.36, 1.0]),
+            ("B", current.b, [0.30, 0.56, 0.94, 1.0]),
+        ];
+        for (i, &(lbl, val, fill)) in channels.iter().enumerate() {
+            let tr = sliders[i];
+            Self::draw_string(mesh, tr[0] - 26.0, tr[1] + 2.0, lbl, 8.0, 11.0, 1.0, fill);
+            mesh.add_quad(tr[0], tr[1], tr[2], tr[3], white_uv, [0.16, 0.19, 0.26, 0.96]);
+            let frac = (val as f32) / 255.0;
+            mesh.add_quad(tr[0], tr[1], tr[2] * frac, tr[3], white_uv, fill);
+            let knob_x = tr[0] + tr[2] * frac - 4.0;
+            mesh.add_quad(knob_x, tr[1] - 2.0, 8.0, tr[3] + 4.0, white_uv, [0.98, 0.98, 1.0, 1.0]);
+            let num = format!("{}", val);
+            Self::draw_string(mesh, tr[0] + tr[2] + 8.0, tr[1] + 2.0, &num, 7.5, 10.5, 0.8, [0.88, 0.90, 0.95, 1.0]);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10278,6 +11128,7 @@ mod tests {
             version: "0.1.0".to_string(),
             voice_enabled: true,
         };
+        let sample_app = blockgame_core::character::CharacterAppearance::default();
         UiBuilder::build_multiplayer_lobby_screen(
             &mut mesh,
             1280.0,
@@ -10285,7 +11136,8 @@ mod tests {
             "Alice_99",
             "secret123",
             "127.0.0.1:25565",
-            1,
+            &sample_app,
+            "Wayfarer",
             0,
             Some(("Ready to connect", false)),
             &[sample_srv],
@@ -10303,7 +11155,7 @@ mod tests {
             2,
             "BuilderBob",
             glam::Vec3::new(4.0, 64.5, 0.0),
-            2,
+            sample_app,
         );
         p.health = 14.0;
         UiBuilder::draw_player_nametags(&mut tag_mesh, 1280.0, 720.0, vp, cam.position, &[p.clone()]);
@@ -10360,5 +11212,38 @@ mod tests {
         assert_eq!(hitboxes.len(), 2);
         assert_eq!(hitboxes[0].command, "/tpaccept");
         assert_eq!(hitboxes[1].command, "/tpdeny");
+    }
+
+    #[test]
+    fn test_build_character_creator_screen_and_portrait() {
+        let profile = blockgame_core::CharacterProfile::default();
+        for tab in CharacterCreatorTab::ALL {
+            let state = CharacterCreatorUiState {
+                active_tab: tab,
+                appearance: profile.active_appearance,
+                presets: profile.all_presets(),
+                selected_preset_name: profile.selected_preset_name.clone(),
+                preset_name_input: "My Hero".to_string(),
+                preset_input_focused: false,
+                face_zoom: false,
+                walk_preview: true,
+                active_color_target: 0,
+                status_message: Some("Ready".to_string()),
+            };
+            let mut mesh = UiMesh::new();
+            UiBuilder::build_character_creator_screen(&mut mesh, 1280.0, 720.0, &state, [640.0, 360.0]);
+            assert!(!mesh.vertices.is_empty());
+            assert!(!mesh.indices.is_empty());
+        }
+
+        let mut portrait_mesh = UiMesh::new();
+        UiBuilder::draw_character_portrait(
+            &mut portrait_mesh,
+            10.0,
+            10.0,
+            48.0,
+            &profile.active_appearance,
+        );
+        assert!(!portrait_mesh.indices.is_empty());
     }
 }

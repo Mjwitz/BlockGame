@@ -16,6 +16,7 @@ use glam::{IVec3, Vec3};
 use crate::{
     auth::{derive_client_password_token, validate_username, AuthDatabase},
     block::BlockId,
+    character::CharacterAppearance,
     chunk::ChunkPos,
     command::{
         execute_command, CommandOutput, CommandSource, OnlinePlayerInfo, PendingTpaRequest,
@@ -37,16 +38,6 @@ pub const NET_MAGIC: &[u8; 4] = b"BGMP";
 pub const DEFAULT_SERVER_PORT: u16 = 25565;
 const MAX_PACKET_SIZE: usize = 16 * 1024 * 1024; // 16 MB max frame
 
-/// Returns the human-readable name for a player skin preset (`0..=3`).
-pub fn player_skin_name(skin_id: u8) -> &'static str {
-    match skin_id % 4 {
-        0 => "Explorer Cyan",
-        1 => "Crimson Knight",
-        2 => "Forest Ranger",
-        _ => "Gold Miner",
-    }
-}
-
 /// Complete state of a player character for 3D model rendering, animations, and nametags.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerModelState {
@@ -62,13 +53,18 @@ pub struct PlayerModelState {
     pub swing_anim: f32,
     pub hurt_timer: f32,
     pub is_sneaking: bool,
-    pub skin_id: u8,
+    pub appearance: CharacterAppearance,
     pub health: f32,
     pub max_health: f32,
 }
 
 impl PlayerModelState {
-    pub fn new(player_id: u32, username: impl Into<String>, position: Vec3, skin_id: u8) -> Self {
+    pub fn new(
+        player_id: u32,
+        username: impl Into<String>,
+        position: Vec3,
+        appearance: CharacterAppearance,
+    ) -> Self {
         Self {
             player_id,
             username: username.into(),
@@ -82,7 +78,7 @@ impl PlayerModelState {
             swing_anim: 0.0,
             hurt_timer: 0.0,
             is_sneaking: false,
-            skin_id: skin_id % 4,
+            appearance: appearance.sanitized(),
             health: 20.0,
             max_health: 20.0,
         }
@@ -95,7 +91,7 @@ pub enum ClientPacket {
     AuthRequest {
         username: String,
         password_token: [u8; 32],
-        skin_id: u8,
+        appearance: CharacterAppearance,
     },
     PlayerStateUpdate {
         position: Vec3,
@@ -214,7 +210,7 @@ pub enum ServerPacket {
         seed: u32,
         day_night_time: f32,
         player_state: SavedPlayerState,
-        skin_id: u8,
+        appearance: CharacterAppearance,
     },
     WorldDeltaSync {
         modified_chunks: Vec<(ChunkPos, Vec<(u16, BlockId)>)>,
@@ -316,12 +312,12 @@ impl ClientPacket {
             Self::AuthRequest {
                 username,
                 password_token,
-                skin_id,
+                appearance,
             } => {
                 write_u8(&mut payload, 1)?;
                 write_string(&mut payload, username)?;
                 payload.write_all(password_token)?;
-                write_u8(&mut payload, *skin_id)?;
+                appearance.write_binary(&mut payload)?;
             }
             Self::PlayerStateUpdate {
                 position,
@@ -471,11 +467,11 @@ impl ClientPacket {
                 let username = read_string(&mut r)?;
                 let mut password_token = [0u8; 32];
                 r.read_exact(&mut password_token)?;
-                let skin_id = read_u8(&mut r)?;
+                let appearance = CharacterAppearance::read_binary(&mut r)?;
                 Ok(Self::AuthRequest {
                     username,
                     password_token,
-                    skin_id,
+                    appearance,
                 })
             }
             2 => {
@@ -645,7 +641,7 @@ impl ServerPacket {
                 seed,
                 day_night_time,
                 player_state,
-                skin_id,
+                appearance,
             } => {
                 write_u8(&mut payload, 1)?;
                 write_bool(&mut payload, *success)?;
@@ -655,7 +651,7 @@ impl ServerPacket {
                 write_u32(&mut payload, *seed)?;
                 write_f32(&mut payload, *day_night_time)?;
                 write_saved_player_state(&mut payload, player_state)?;
-                write_u8(&mut payload, *skin_id)?;
+                appearance.write_binary(&mut payload)?;
             }
             Self::WorldDeltaSync {
                 modified_chunks,
@@ -901,7 +897,7 @@ impl ServerPacket {
                 let seed = read_u32(&mut r)?;
                 let day_night_time = read_f32(&mut r)?;
                 let player_state = read_saved_player_state(&mut r)?;
-                let skin_id = read_u8(&mut r)?;
+                let appearance = CharacterAppearance::read_binary(&mut r)?;
                 Ok(Self::AuthResponse {
                     success,
                     player_id,
@@ -910,7 +906,7 @@ impl ServerPacket {
                     seed,
                     day_night_time,
                     player_state,
-                    skin_id,
+                    appearance,
                 })
             }
             2 => {
@@ -1602,7 +1598,7 @@ fn apply_command_output(
                 if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
                     c.saved_state.skills.set_level(skill, level);
                     let updated = c.saved_state.skills.clone();
-                    auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+                    auth_db.update_player_state(&c.username, c.model.appearance, c.saved_state.clone());
                     let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
                     let _ = auth_db.save_to_dir(world_dir);
                     direct_sends.push((target_pid, ServerPacket::SkillsUpdate { skills: updated }));
@@ -1629,7 +1625,7 @@ fn apply_command_output(
                 if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
                     let lvl_up = c.saved_state.skills.add_xp(skill, amount);
                     let updated = c.saved_state.skills.clone();
-                    auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+                    auth_db.update_player_state(&c.username, c.model.appearance, c.saved_state.clone());
                     let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
                     let _ = auth_db.save_to_dir(world_dir);
                     direct_sends.push((target_pid, ServerPacket::SkillsUpdate { skills: updated }));
@@ -1664,7 +1660,7 @@ fn apply_command_output(
                 if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
                     c.saved_state.skills = PlayerSkills::new();
                     let updated = c.saved_state.skills.clone();
-                    auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+                    auth_db.update_player_state(&c.username, c.model.appearance, c.saved_state.clone());
                     let _ = crate::save::save_player_data(world_dir, &c.username, &c.saved_state);
                     let _ = auth_db.save_to_dir(world_dir);
                     direct_sends.push((target_pid, ServerPacket::SkillsUpdate { skills: updated }));
@@ -1711,7 +1707,7 @@ fn apply_command_output(
         fresh.position = *default_spawn;
 
         // Reset auth_db account
-        auth_db.update_player_state(&target_name, 0, fresh.clone());
+        auth_db.update_player_state(&target_name, CharacterAppearance::default(), fresh.clone());
         let _ = auth_db.save_to_dir(world_dir);
 
         // Reset online client if connected
@@ -1919,7 +1915,7 @@ fn run_server_loop(
                 player_id: pid,
                 username: String::new(),
                 session_token: [0u8; 16],
-                model: PlayerModelState::new(pid, "", default_spawn, 0),
+                model: PlayerModelState::new(pid, "", default_spawn, CharacterAppearance::default()),
                 saved_state: SavedPlayerState::default(),
                 is_sleeping: false,
                 last_activity: Instant::now(),
@@ -2046,7 +2042,7 @@ fn run_server_loop(
                     ClientPacket::AuthRequest {
                         username,
                         password_token,
-                        skin_id,
+                        appearance,
                     } => {
                         let canonical = username.trim().to_ascii_lowercase();
                         let already_online = clients.iter().any(|c| {
@@ -2070,7 +2066,7 @@ fn run_server_loop(
                                     seed: 0,
                                     day_night_time: 0.25,
                                     player_state: SavedPlayerState::default(),
-                                    skin_id: 0,
+                                    appearance: CharacterAppearance::default(),
                                 },
                             ));
                             continue;
@@ -2094,7 +2090,7 @@ fn run_server_loop(
                                     seed: 0,
                                     day_night_time: 0.25,
                                     player_state: SavedPlayerState::default(),
-                                    skin_id: 0,
+                                    appearance: CharacterAppearance::default(),
                                 },
                             ));
                             continue;
@@ -2112,7 +2108,7 @@ fn run_server_loop(
                                     seed: 0,
                                     day_night_time: 0.25,
                                     player_state: SavedPlayerState::default(),
-                                    skin_id: 0,
+                                    appearance: CharacterAppearance::default(),
                                 },
                             ));
                             continue;
@@ -2121,7 +2117,7 @@ fn run_server_loop(
                         match auth_db.authenticate_or_register(
                             &username,
                             &password_token,
-                            skin_id,
+                            appearance.sanitized(),
                             default_spawn,
                         ) {
                             Err(err) => {
@@ -2135,7 +2131,7 @@ fn run_server_loop(
                                         seed: 0,
                                         day_night_time: 0.25,
                                         player_state: SavedPlayerState::default(),
-                                        skin_id: 0,
+                                        appearance: CharacterAppearance::default(),
                                     },
                                 ));
                                 continue;
@@ -2173,7 +2169,7 @@ fn run_server_loop(
                                     let _ = perms_manager.add_player_group(&account.username, "admin");
                                     let _ = perms_manager.save_to_dir(&world_dir);
                                     player_state.rank = "admin".to_string();
-                                    auth_db.update_player_state(&account.username, account.skin_id, player_state.clone());
+                                    auth_db.update_player_state(&account.username, account.appearance, player_state.clone());
                                 } else {
                                     if player_state.rank.is_empty() {
                                         player_state.rank = "default".to_string();
@@ -2206,7 +2202,7 @@ fn run_server_loop(
                                     swing_anim: 0.0,
                                     hurt_timer: 0.0,
                                     is_sneaking: false,
-                                    skin_id: account.skin_id,
+                                    appearance: account.appearance,
                                     health: account.player_state.stats.health,
                                     max_health: account.player_state.stats.max_health,
                                 };
@@ -2231,7 +2227,7 @@ fn run_server_loop(
                                         seed: save_data.metadata.seed,
                                         day_night_time: save_data.metadata.day_night_time,
                                         player_state: account.player_state.clone(),
-                                        skin_id: account.skin_id,
+                                        appearance: account.appearance,
                                     },
                                 ));
 
@@ -2755,7 +2751,7 @@ fn run_server_loop(
                         clients[idx].saved_state.stats.game_mode = preserved_gm;
                         auth_db.update_player_state(
                             &clients[idx].username,
-                            clients[idx].model.skin_id,
+                            clients[idx].model.appearance,
                             clients[idx].saved_state.clone(),
                         );
                     }
@@ -2763,7 +2759,7 @@ fn run_server_loop(
                         clients[idx].saved_state.skills = skills;
                         auth_db.update_player_state(
                             &clients[idx].username,
-                            clients[idx].model.skin_id,
+                            clients[idx].model.appearance,
                             clients[idx].saved_state.clone(),
                         );
                         let _ = crate::save::save_player_data(
@@ -3013,7 +3009,7 @@ fn run_server_loop(
                 log::info!("Player '{}' (id {}) disconnected", removed.username, removed.player_id);
                 auth_db.update_player_state(
                     &removed.username,
-                    removed.model.skin_id,
+                    removed.model.appearance,
                     removed.saved_state,
                 );
                 let _ = auth_db.save_to_dir(&world_dir);
@@ -3325,7 +3321,7 @@ fn run_server_loop(
                 if c.authenticated {
                     auth_db.update_player_state(
                         &c.username,
-                        c.model.skin_id,
+                        c.model.appearance,
                         c.saved_state.clone(),
                     );
                 }
@@ -3341,7 +3337,7 @@ fn run_server_loop(
     // Final save on clean server shutdown
     for c in &clients {
         if c.authenticated {
-            auth_db.update_player_state(&c.username, c.model.skin_id, c.saved_state.clone());
+            auth_db.update_player_state(&c.username, c.model.appearance, c.saved_state.clone());
         }
     }
     let _ = auth_db.save_to_dir(&world_dir);
@@ -3372,7 +3368,7 @@ pub struct MultiplayerClient {
     pub player_id: u32,
     pub username: String,
     pub local_prefix: String,
-    pub skin_id: u8,
+    pub appearance: CharacterAppearance,
     pub session_token: [u8; 16],
     pub remote_players: HashMap<u32, PlayerModelState>,
     pub chat_history: Vec<ChatEntry>,
@@ -3387,7 +3383,7 @@ impl MultiplayerClient {
         addr_str: &str,
         username: &str,
         password: &str,
-        skin_id: u8,
+        appearance: CharacterAppearance,
     ) -> Result<(Self, ServerPacket), String> {
         validate_username(username)?;
         let addrs: Vec<SocketAddr> = addr_str
@@ -3410,7 +3406,7 @@ impl MultiplayerClient {
         let auth_req = ClientPacket::AuthRequest {
             username: username.trim().to_string(),
             password_token,
-            skin_id: skin_id % 4,
+            appearance: appearance.sanitized(),
         };
         let bytes = auth_req.encode().map_err(|e| e.to_string())?;
         stream.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -3444,7 +3440,7 @@ impl MultiplayerClient {
             player_id,
             session_token,
             ref message,
-            skin_id: assigned_skin,
+            appearance: assigned_appearance,
             ..
         } = auth_resp
         {
@@ -3458,7 +3454,7 @@ impl MultiplayerClient {
                 player_id,
                 username: username.trim().to_string(),
                 local_prefix: String::new(),
-                skin_id: assigned_skin,
+                appearance: assigned_appearance,
                 session_token,
                 remote_players: HashMap::new(),
                 chat_history: vec![ChatEntry {
@@ -3686,7 +3682,7 @@ fn write_player_model<W: Write>(w: &mut W, p: &PlayerModelState) -> io::Result<(
     write_f32(w, p.swing_anim)?;
     write_f32(w, p.hurt_timer)?;
     write_bool(w, p.is_sneaking)?;
-    write_u8(w, p.skin_id)?;
+    p.appearance.write_binary(w)?;
     write_f32(w, p.health)?;
     write_f32(w, p.max_health)
 }
@@ -3705,7 +3701,7 @@ fn read_player_model<R: Read>(r: &mut R) -> io::Result<PlayerModelState> {
         swing_anim: read_f32(r)?,
         hurt_timer: read_f32(r)?,
         is_sneaking: read_bool(r)?,
-        skin_id: read_u8(r)?,
+        appearance: CharacterAppearance::read_binary(r)?,
         health: read_f32(r)?,
         max_health: read_f32(r)?,
     })
@@ -3850,7 +3846,7 @@ mod tests {
         assert_eq!(pkt, decoded);
 
         let spkt = ServerPacket::PlayerJoined {
-            player: PlayerModelState::new(7, "BuilderBob", Vec3::new(2.0, 70.0, 3.0), 2),
+            player: PlayerModelState::new(7, "BuilderBob", Vec3::new(2.0, 70.0, 3.0), CharacterAppearance::randomized(2)),
         };
         let sframed = spkt.encode().unwrap();
         let sdecoded = ServerPacket::decode(&sframed[8..]).unwrap();
@@ -3877,31 +3873,31 @@ mod tests {
 
         // 1. Client 1 ("Alice") connects & registers
         let (mut client_alice, auth_alice) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "Alice", "alice_pass", 1)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "Alice", "alice_pass", CharacterAppearance::randomized(1))
                 .expect("Alice should authenticate");
 
         if let ServerPacket::AuthResponse {
             success,
             seed,
-            skin_id,
+            appearance,
             ..
         } = auth_alice
         {
             assert!(success);
             assert_eq!(seed, 424242);
-            assert_eq!(skin_id, 1);
+            assert_eq!(appearance, CharacterAppearance::randomized(1));
         } else {
             panic!("Expected AuthResponse");
         }
 
         // 2. Duplicate login as "Alice" while Alice is online is rejected
         let dup_res =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "alice", "alice_pass", 0);
+            MultiplayerClient::connect_and_authenticate(&addr_str, "alice", "alice_pass", CharacterAppearance::randomized(0));
         assert!(dup_res.is_err());
 
         // 3. Client 2 ("Bob") connects & registers
         let (mut client_bob, _auth_bob) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "Bob", "bob_pass", 2)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "Bob", "bob_pass", CharacterAppearance::randomized(2))
                 .expect("Bob should authenticate");
 
         // 4. Alice places a Diamond Block at (5, 70, 5) and sends a chat message
@@ -3978,14 +3974,14 @@ mod tests {
 
         // 1. Client 1 (Alice) connects
         let (mut client_alice, _auth_alice) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "AliceDrop", "pass", 1)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "AliceDrop", "pass", CharacterAppearance::randomized(1))
                 .expect("Alice should authenticate");
         let alice_id = client_alice.player_id;
         assert_ne!(alice_id, 0);
 
         // 2. Client 2 (Bob) connects
         let (mut client_bob, _auth_bob) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "BobDrop", "pass", 2)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobDrop", "pass", CharacterAppearance::randomized(2))
                 .expect("Bob should authenticate");
         let bob_id = client_bob.player_id;
         assert_ne!(bob_id, 0);
@@ -4075,7 +4071,7 @@ mod tests {
 
         // 9. Client 3 (Charlie) connects; WorldDeltaSync must contain 0 item drops
         let (mut client_charlie, _auth_charlie) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "CharlieDrop", "pass", 3)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "CharlieDrop", "pass", CharacterAppearance::randomized(3))
                 .expect("Charlie should authenticate");
         thread::sleep(Duration::from_millis(120));
         let charlie_packets = client_charlie.poll_packets();
@@ -4118,12 +4114,12 @@ mod tests {
 
         // 1. Connect admin player (first to join -> auto-assigned admin group)
         let (mut client_admin, _auth_admin) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "AdminUser", "secret1", 0)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "AdminUser", "secret1", CharacterAppearance::randomized(0))
                 .expect("Admin should authenticate");
 
         // 2. Connect regular player Bob
         let (mut client_bob, _auth_bob) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", CharacterAppearance::randomized(1))
                 .expect("Bob should authenticate");
 
         thread::sleep(Duration::from_millis(150));
@@ -4176,7 +4172,7 @@ mod tests {
 
         // 6. Bob tries to reconnect while banned; should be rejected
         let reconnect_res =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1);
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", CharacterAppearance::randomized(1));
         match reconnect_res {
             Err(err_msg) => {
                 assert!(
@@ -4195,7 +4191,7 @@ mod tests {
 
         // 8. Bob can now successfully log back in
         let (mut client_bob2, _auth_bob2) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", 1)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobUser", "secret2", CharacterAppearance::randomized(1))
                 .expect("Bob should be able to reconnect after unban");
 
         // 9. Admin issues /ban-ip on BobUser
@@ -4214,7 +4210,7 @@ mod tests {
 
         // 10. Someone tries to log in from the same IP with a DIFFERENT username (Alt account)
         let alt_res =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "BobAltAccount", "diff_pass", 0);
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobAltAccount", "diff_pass", CharacterAppearance::randomized(0));
         match alt_res {
             Err(err_msg) => {
                 assert!(
@@ -4233,7 +4229,7 @@ mod tests {
 
         // 12. Alt account can now connect after IP unban
         let (mut client_alt, _) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "BobAltAccount", "diff_pass", 0)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "BobAltAccount", "diff_pass", CharacterAppearance::randomized(0))
                 .expect("Alt account should be able to connect after IP unban");
 
         // Clean shutdown
@@ -4274,9 +4270,9 @@ mod tests {
         .expect("Failed to start server");
 
         let addr_str = server.local_addr().to_string();
-        let (mut p1, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepA", "pw1", 0).unwrap();
-        let (mut p2, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepB", "pw2", 1).unwrap();
-        let (mut p3, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepC", "pw3", 0).unwrap();
+        let (mut p1, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepA", "pw1", CharacterAppearance::randomized(0)).unwrap();
+        let (mut p2, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepB", "pw2", CharacterAppearance::randomized(1)).unwrap();
+        let (mut p3, _) = MultiplayerClient::connect_and_authenticate(&addr_str, "SleepC", "pw3", CharacterAppearance::randomized(0)).unwrap();
 
         // 1 of 3 sleeping (< 50%): should remain nighttime
         p1.send(&ClientPacket::SetSleeping { sleeping: true });
@@ -4326,7 +4322,7 @@ mod tests {
 
         // 1. Player connects and authenticates
         let (mut client, _) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "UngracefulUser", "pass123", 0)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "UngracefulUser", "pass123", CharacterAppearance::randomized(0))
                 .expect("Initial connection failed");
 
         thread::sleep(Duration::from_millis(100));
@@ -4356,7 +4352,7 @@ mod tests {
 
         // 4. The player can now immediately reconnect without getting 'User is already logged in'
         let (mut client2, _) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "UngracefulUser", "pass123", 0)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "UngracefulUser", "pass123", CharacterAppearance::randomized(0))
                 .expect("Player must be able to reconnect after ungraceful disconnect");
         thread::sleep(Duration::from_millis(100));
         assert_eq!(server.online_player_count(), 1);
@@ -4404,7 +4400,7 @@ mod tests {
 
         let addr_str = server.local_addr().to_string();
         let (mut client, auth) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "Skiller", "pw123", 0)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "Skiller", "pw123", CharacterAppearance::randomized(0))
                 .expect("Client should authenticate");
         if let ServerPacket::AuthResponse { player_state, .. } = auth {
             assert_eq!(player_state.skills.level(crate::skills::SkillKind::Mining), 1);
@@ -4434,7 +4430,7 @@ mod tests {
         client.disconnect();
         thread::sleep(Duration::from_millis(120));
         let (mut client2, auth2) =
-            MultiplayerClient::connect_and_authenticate(&addr_str, "Skiller", "pw123", 0)
+            MultiplayerClient::connect_and_authenticate(&addr_str, "Skiller", "pw123", CharacterAppearance::randomized(0))
                 .expect("Client should reconnect");
         if let ServerPacket::AuthResponse { player_state, .. } = auth2 {
             assert_eq!(player_state.skills.level(crate::skills::SkillKind::Mining), 125);

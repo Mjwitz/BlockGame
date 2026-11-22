@@ -63,9 +63,22 @@ pub enum AppScreen {
         username_input: String,
         password_input: String,
         address_input: String,
-        skin_id: u8,
         focused_field: usize,
         status_message: Option<(String, bool)>,
+    },
+    CharacterCreator {
+        tab: blockgame_render::CharacterCreatorTab,
+        draft: blockgame_core::CharacterAppearance,
+        initial_snapshot: blockgame_core::CharacterAppearance,
+        selected_preset_name: Option<String>,
+        preset_name_input: String,
+        preset_input_focused: bool,
+        preview_yaw: f32,
+        face_zoom: bool,
+        walk_preview: bool,
+        active_color_target: usize,
+        status_message: Option<String>,
+        return_to_multiplayer: bool,
     },
     InGame,
     Paused {
@@ -178,11 +191,18 @@ pub struct AppState {
     pub falling_block_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub wind_turbine_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
     pub player_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub player_held_items_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub preview_character_dynamic_mesh: blockgame_render::DynamicMeshBuffers,
+    pub character_pipeline: blockgame_render::CharacterPipeline,
     // Multiplayer & 3D Player Model State
     pub mp_client: Option<blockgame_core::net::MultiplayerClient>,
     pub mp_hosted_server: Option<blockgame_core::net::MultiplayerServer>,
     pub local_username: String,
-    pub local_skin_id: u8,
+    pub character_profile: blockgame_core::CharacterProfile,
+    pub creator_dragging_preview: bool,
+    pub creator_last_drag_x: f32,
+    pub creator_active_rgb_slider: Option<usize>,
+    pub creator_randomize_counter: u64,
     pub third_person: bool,
     pub chat_open: bool,
     pub chat_input: String,
@@ -527,9 +547,110 @@ impl AppState {
             swing_anim,
             hurt_timer: 0.0,
             is_sneaking: self.shift_down && !self.inventory_open && !self.skills_open && !self.player.flying,
-            skin_id: self.local_skin_id,
+            appearance: self.character_profile.active_appearance,
             health: self.player_stats.health,
             max_health: self.player_stats.max_health,
+        }
+    }
+
+    pub fn character_preset_label(&self) -> String {
+        self.character_profile
+            .selected_preset_name
+            .clone()
+            .unwrap_or_else(|| "Custom".to_string())
+    }
+
+    pub fn open_character_creator(&mut self, return_to_multiplayer: bool) {
+        self.creator_dragging_preview = false;
+        self.creator_active_rgb_slider = None;
+        self.screen = AppScreen::CharacterCreator {
+            tab: blockgame_render::CharacterCreatorTab::Body,
+            draft: self.character_profile.active_appearance,
+            initial_snapshot: self.character_profile.active_appearance,
+            selected_preset_name: self.character_profile.selected_preset_name.clone(),
+            preset_name_input: String::new(),
+            preset_input_focused: false,
+            preview_yaw: std::f32::consts::FRAC_PI_2,
+            face_zoom: false,
+            walk_preview: false,
+            active_color_target: 0,
+            status_message: None,
+            return_to_multiplayer,
+        };
+    }
+
+    pub fn build_creator_ui_state(&self) -> Option<blockgame_render::CharacterCreatorUiState> {
+        if let AppScreen::CharacterCreator {
+            tab,
+            draft,
+            selected_preset_name,
+            preset_name_input,
+            preset_input_focused,
+            face_zoom,
+            walk_preview,
+            active_color_target,
+            status_message,
+            ..
+        } = &self.screen
+        {
+            Some(blockgame_render::CharacterCreatorUiState {
+                active_tab: *tab,
+                appearance: *draft,
+                presets: self.character_profile.all_presets(),
+                selected_preset_name: selected_preset_name.clone(),
+                preset_name_input: preset_name_input.clone(),
+                preset_input_focused: *preset_input_focused,
+                face_zoom: *face_zoom,
+                walk_preview: *walk_preview,
+                active_color_target: *active_color_target,
+                status_message: status_message.clone(),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn apply_creator_rgb_slider(&mut self, channel: usize, ui_x: f32, screen_w: f32, screen_h: f32) {
+        let Some(ui_state) = self.build_creator_ui_state() else {
+            return;
+        };
+        let layout = UiBuilder::character_creator_layout(screen_w, screen_h, &ui_state);
+        if channel >= 3 {
+            return;
+        }
+        let tr = layout.rgb_slider_rects[channel];
+        if tr[2] <= 1.0 {
+            return;
+        }
+        let frac = ((ui_x - tr[0]) / tr[2]).clamp(0.0, 1.0);
+        let val = (frac * 255.0).round() as u8;
+
+        if let AppScreen::CharacterCreator {
+            tab,
+            draft,
+            active_color_target,
+            selected_preset_name,
+            ..
+        } = &mut self.screen
+        {
+            let target_color = match (*tab, *active_color_target) {
+                (blockgame_render::CharacterCreatorTab::Body, _) => Some(&mut draft.skin_tone),
+                (blockgame_render::CharacterCreatorTab::FaceHair, 0) => Some(&mut draft.eye_color),
+                (blockgame_render::CharacterCreatorTab::FaceHair, _) => Some(&mut draft.hair_color),
+                (blockgame_render::CharacterCreatorTab::Clothing, 0) => Some(&mut draft.shirt_primary),
+                (blockgame_render::CharacterCreatorTab::Clothing, 1) => Some(&mut draft.shirt_accent),
+                (blockgame_render::CharacterCreatorTab::Clothing, 2) => Some(&mut draft.pants_color),
+                (blockgame_render::CharacterCreatorTab::Clothing, _) => Some(&mut draft.shoe_color),
+                _ => None,
+            };
+            if let Some(col) = target_color {
+                match channel {
+                    0 => col.r = val,
+                    1 => col.g = val,
+                    _ => col.b = val,
+                }
+                *selected_preset_name = None;
+            }
         }
     }
 
@@ -629,26 +750,26 @@ impl AppState {
         username: &str,
         password: &str,
         addr: &str,
-        skin_id: u8,
+        appearance: blockgame_core::CharacterAppearance,
     ) -> Result<String, String> {
         self.disconnect_multiplayer();
 
         let (client, auth_pkt) =
             blockgame_core::net::MultiplayerClient::connect_and_authenticate(
-                addr, username, password, skin_id,
+                addr, username, password, appearance,
             )?;
 
-        let (seed, day_night_time, initial_state, assigned_skin, welcome_msg) =
+        let (seed, day_night_time, initial_state, assigned_appearance, welcome_msg) =
             if let blockgame_core::net::ServerPacket::AuthResponse {
                 seed,
                 day_night_time,
                 player_state,
-                skin_id: assigned_skin,
+                appearance: assigned_appearance,
                 message,
                 ..
             } = auth_pkt
             {
-                (seed, day_night_time, player_state, assigned_skin, message)
+                (seed, day_night_time, player_state, assigned_appearance, message)
             } else {
                 return Err("Invalid authentication response packet".to_string());
             };
@@ -701,7 +822,7 @@ impl AppState {
         self.cracking_buffer = None;
         self.active_world_metadata = None;
         self.local_username = username.trim().to_string();
-        self.local_skin_id = assigned_skin % 4;
+        self.character_profile.active_appearance = assigned_appearance.sanitized();
         self.chat_open = false;
         self.chat_input.clear();
         self.chat_scroll = 0;
@@ -732,7 +853,7 @@ impl AppState {
         username: &str,
         password: &str,
         addr: &str,
-        skin_id: u8,
+        appearance: blockgame_core::CharacterAppearance,
     ) -> Result<String, String> {
         self.disconnect_multiplayer();
 
@@ -769,7 +890,7 @@ impl AppState {
         let port = server.local_addr().port();
         let connect_addr = format!("127.0.0.1:{}", port);
 
-        match self.join_multiplayer_server(username, password, &connect_addr, skin_id) {
+        match self.join_multiplayer_server(username, password, &connect_addr, appearance) {
             Ok(msg) => {
                 self.mp_hosted_server = Some(server);
                 Ok(msg)
@@ -1179,6 +1300,11 @@ impl ApplicationHandler for BlockGameApp {
 
         let atlas = TextureAtlas::generate_default();
         let pipeline = VoxelPipeline::new(&device, &queue, surface_format, &atlas);
+        let character_pipeline = blockgame_render::CharacterPipeline::new(
+            &device,
+            surface_format,
+            &pipeline.camera_bind_group_layout,
+        );
         let wireframe_pipeline =
             WireframePipeline::new(&device, surface_format, &pipeline.camera_bind_group_layout);
         let ui_pipeline =
@@ -1336,10 +1462,23 @@ impl ApplicationHandler for BlockGameApp {
             player_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
                 "Dynamic Player Model Mesh",
             ),
+            player_held_items_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Player Held Items Mesh",
+            ),
+            preview_character_dynamic_mesh: blockgame_render::DynamicMeshBuffers::new(
+                "Dynamic Character Preview Mesh",
+            ),
+            character_pipeline,
             mp_client: None,
             mp_hosted_server: None,
             local_username: "Player1".to_string(),
-            local_skin_id: 0,
+            character_profile: blockgame_core::CharacterProfile::load(std::path::Path::new(
+                "characters.yaml",
+            )),
+            creator_dragging_preview: false,
+            creator_last_drag_x: 0.0,
+            creator_active_rgb_slider: None,
+            creator_randomize_counter: 1,
             third_person: false,
             chat_open: false,
             chat_input: String::new(),
@@ -1447,6 +1586,17 @@ impl ApplicationHandler for BlockGameApp {
                             screen_h,
                         );
                     }
+                } else if matches!(state.screen, AppScreen::CharacterCreator { .. }) {
+                    let (screen_w, screen_h, ui_cpos) = state.ui_metrics();
+                    if state.creator_dragging_preview {
+                        let dx = ui_cpos[0] - state.creator_last_drag_x;
+                        state.creator_last_drag_x = ui_cpos[0];
+                        if let AppScreen::CharacterCreator { preview_yaw, .. } = &mut state.screen {
+                            *preview_yaw -= dx * 0.014;
+                        }
+                    } else if let Some(ch) = state.creator_active_rgb_slider {
+                        state.apply_creator_rgb_slider(ch, ui_cpos[0], screen_w, screen_h);
+                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1486,6 +1636,8 @@ impl ApplicationHandler for BlockGameApp {
                     if state.active_settings_slider.take().is_some() {
                         state.settings.save(std::path::Path::new("settings.cfg"));
                     }
+                    state.creator_dragging_preview = false;
+                    state.creator_active_rgb_slider = None;
                 }
 
                 // Handle Title Screen, World Select, Create World, Settings, Multiplayer Lobby, and Pause Menu clicks
@@ -1539,11 +1691,18 @@ impl ApplicationHandler for BlockGameApp {
                                         username_input: state.local_username.clone(),
                                         password_input: String::new(),
                                         address_input: "127.0.0.1:25565".to_string(),
-                                        skin_id: state.local_skin_id,
                                         focused_field: 0,
                                         status_message: None,
                                     };
                                     state.refresh_directory_servers();
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[UiBuilder::TITLE_BTN_CHARACTER_CREATOR][0],
+                                    rects[UiBuilder::TITLE_BTN_CHARACTER_CREATOR][1],
+                                    rects[UiBuilder::TITLE_BTN_CHARACTER_CREATOR][2],
+                                    rects[UiBuilder::TITLE_BTN_CHARACTER_CREATOR][3],
+                                ) {
+                                    state.open_character_creator(false);
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
                                     rects[UiBuilder::TITLE_BTN_SETTINGS][0],
@@ -1981,12 +2140,12 @@ impl ApplicationHandler for BlockGameApp {
                                 username_input,
                                 password_input,
                                 address_input,
-                                skin_id,
                                 focused_field,
                                 status_message,
                             } => {
-                                let (user_r, pass_r, addr_r, [skin_r, join_r, host_r, back_r]) =
+                                let (user_r, pass_r, addr_r, [char_r, join_r, host_r, back_r]) =
                                     UiBuilder::multiplayer_lobby_layout(screen_w, screen_h);
+                                let active_appearance = state.character_profile.active_appearance;
                                 if UiBuilder::is_rect_hovered(
                                     cpos, user_r[0], user_r[1], user_r[2], user_r[3],
                                 ) {
@@ -1994,7 +2153,6 @@ impl ApplicationHandler for BlockGameApp {
                                         username_input,
                                         password_input,
                                         address_input,
-                                        skin_id,
                                         focused_field: 0,
                                         status_message,
                                     };
@@ -2005,7 +2163,6 @@ impl ApplicationHandler for BlockGameApp {
                                         username_input,
                                         password_input,
                                         address_input,
-                                        skin_id,
                                         focused_field: 1,
                                         status_message,
                                     };
@@ -2016,23 +2173,13 @@ impl ApplicationHandler for BlockGameApp {
                                         username_input,
                                         password_input,
                                         address_input,
-                                        skin_id,
                                         focused_field: 2,
                                         status_message,
                                     };
                                 } else if UiBuilder::is_rect_hovered(
-                                    cpos, skin_r[0], skin_r[1], skin_r[2], skin_r[3],
+                                    cpos, char_r[0], char_r[1], char_r[2], char_r[3],
                                 ) {
-                                    let next_skin = (skin_id + 1) % 4;
-                                    state.local_skin_id = next_skin;
-                                    state.screen = AppScreen::MultiplayerLobby {
-                                        username_input,
-                                        password_input,
-                                        address_input,
-                                        skin_id: next_skin,
-                                        focused_field,
-                                        status_message,
-                                    };
+                                    state.open_character_creator(true);
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos, join_r[0], join_r[1], join_r[2], join_r[3],
                                 ) {
@@ -2040,13 +2187,12 @@ impl ApplicationHandler for BlockGameApp {
                                         &username_input,
                                         &password_input,
                                         &address_input,
-                                        skin_id,
+                                        active_appearance,
                                     ) {
                                         state.screen = AppScreen::MultiplayerLobby {
                                             username_input,
                                             password_input,
                                             address_input,
-                                            skin_id,
                                             focused_field,
                                             status_message: Some((err, true)),
                                         };
@@ -2058,13 +2204,12 @@ impl ApplicationHandler for BlockGameApp {
                                         &username_input,
                                         &password_input,
                                         &address_input,
-                                        skin_id,
+                                        active_appearance,
                                     ) {
                                         state.screen = AppScreen::MultiplayerLobby {
                                             username_input,
                                             password_input,
                                             address_input,
-                                            skin_id,
                                             focused_field,
                                             status_message: Some((err, true)),
                                         };
@@ -2088,7 +2233,6 @@ impl ApplicationHandler for BlockGameApp {
                                             username_input,
                                             password_input,
                                             address_input,
-                                            skin_id,
                                             focused_field,
                                             status_message,
                                         };
@@ -2117,13 +2261,12 @@ impl ApplicationHandler for BlockGameApp {
                                                     &username_input,
                                                     &password_input,
                                                     &new_addr,
-                                                    skin_id,
+                                                    active_appearance,
                                                 ) {
                                                     state.screen = AppScreen::MultiplayerLobby {
                                                         username_input,
                                                         password_input,
                                                         address_input: new_addr,
-                                                        skin_id,
                                                         focused_field,
                                                         status_message: Some((err, true)),
                                                     };
@@ -2133,7 +2276,6 @@ impl ApplicationHandler for BlockGameApp {
                                                     username_input,
                                                     password_input,
                                                     address_input: new_addr,
-                                                    skin_id,
                                                     focused_field,
                                                     status_message: None,
                                                 };
@@ -2143,12 +2285,273 @@ impl ApplicationHandler for BlockGameApp {
                                                 username_input,
                                                 password_input,
                                                 address_input,
-                                                skin_id,
                                                 focused_field,
                                                 status_message,
                                             };
                                         }
                                     }
+                                }
+                            }
+                            AppScreen::CharacterCreator {
+                                mut tab,
+                                mut draft,
+                                initial_snapshot,
+                                mut selected_preset_name,
+                                mut preset_name_input,
+                                mut preset_input_focused,
+                                preview_yaw,
+                                mut face_zoom,
+                                mut walk_preview,
+                                mut active_color_target,
+                                mut status_message,
+                                return_to_multiplayer,
+                            } => {
+                                use blockgame_core::character::{
+                                    BodyFrame, EyeStyle, FacialHairStyle, HairStyle, PantsStyle,
+                                    ShirtStyle, ShoeStyle,
+                                };
+                                use blockgame_render::CharacterCreatorTab;
+
+                                let ui_state = blockgame_render::CharacterCreatorUiState {
+                                    active_tab: tab,
+                                    appearance: draft,
+                                    presets: state.character_profile.all_presets(),
+                                    selected_preset_name: selected_preset_name.clone(),
+                                    preset_name_input: preset_name_input.clone(),
+                                    preset_input_focused,
+                                    face_zoom,
+                                    walk_preview,
+                                    active_color_target,
+                                    status_message: status_message.clone(),
+                                };
+                                let layout = UiBuilder::character_creator_layout(
+                                    screen_w, screen_h, &ui_state,
+                                );
+                                let hit = |r: [f32; 4]| {
+                                    UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
+                                };
+
+                                preset_input_focused = false;
+                                let mut exit_to_menu = false;
+
+                                if hit(layout.preview_viewport) {
+                                    state.creator_dragging_preview = true;
+                                    state.creator_last_drag_x = cpos[0];
+                                } else if hit(layout.btn_zoom) {
+                                    face_zoom = !face_zoom;
+                                } else if hit(layout.btn_walk) {
+                                    walk_preview = !walk_preview;
+                                } else if hit(layout.btn_randomize) {
+                                    state.creator_randomize_counter =
+                                        state.creator_randomize_counter.wrapping_add(1);
+                                    let seed = state.creator_randomize_counter
+                                        ^ ((state.total_time * 1000.0) as u64).wrapping_mul(0x9E37_79B9);
+                                    draft = blockgame_core::CharacterAppearance::randomized(seed);
+                                    selected_preset_name = None;
+                                    status_message = Some("Randomized character!".to_string());
+                                } else if hit(layout.btn_revert) {
+                                    draft = initial_snapshot;
+                                    selected_preset_name =
+                                        state.character_profile.selected_preset_name.clone();
+                                    status_message = Some("Reverted session edits.".to_string());
+                                } else if hit(layout.btn_done) {
+                                    state.character_profile.active_appearance = draft.sanitized();
+                                    state.character_profile.selected_preset_name =
+                                        selected_preset_name.clone();
+                                    state
+                                        .character_profile
+                                        .save(std::path::Path::new("characters.yaml"));
+                                    exit_to_menu = true;
+                                } else {
+                                    // Check tabs
+                                    let mut handled = false;
+                                    for (i, r) in layout.tab_rects.iter().enumerate() {
+                                        if hit(*r) {
+                                            tab = CharacterCreatorTab::ALL[i];
+                                            active_color_target = 0;
+                                            status_message = None;
+                                            handled = true;
+                                            break;
+                                        }
+                                    }
+
+                                    // Presets tab interactions
+                                    if !handled && tab == CharacterCreatorTab::Presets {
+                                        if hit(layout.preset_name_input) {
+                                            preset_input_focused = true;
+                                            handled = true;
+                                        } else if hit(layout.btn_save_preset) {
+                                            let saved = state
+                                                .character_profile
+                                                .save_custom_preset(&preset_name_input, draft);
+                                            state
+                                                .character_profile
+                                                .save(std::path::Path::new("characters.yaml"));
+                                            selected_preset_name = Some(saved.clone());
+                                            preset_name_input.clear();
+                                            status_message =
+                                                Some(format!("Saved preset '{}'.", saved));
+                                            handled = true;
+                                        } else {
+                                            for (i, (row_r, del_r)) in
+                                                layout.preset_rows.iter().enumerate()
+                                            {
+                                                if let Some(dr) = del_r {
+                                                    if hit(*dr) {
+                                                        if let Some(p) = ui_state.presets.get(i) {
+                                                            let name = p.name.clone();
+                                                            if state
+                                                                .character_profile
+                                                                .delete_custom_preset(&name)
+                                                            {
+                                                                state.character_profile.save(
+                                                                    std::path::Path::new(
+                                                                        "characters.yaml",
+                                                                    ),
+                                                                );
+                                                                if selected_preset_name.as_deref()
+                                                                    == Some(name.as_str())
+                                                                {
+                                                                    selected_preset_name = None;
+                                                                }
+                                                                status_message = Some(format!(
+                                                                    "Deleted preset '{}'.",
+                                                                    name
+                                                                ));
+                                                            }
+                                                        }
+                                                        handled = true;
+                                                        break;
+                                                    }
+                                                }
+                                                if hit(*row_r) {
+                                                    if let Some(p) = ui_state.presets.get(i) {
+                                                        draft = p.appearance;
+                                                        selected_preset_name = Some(p.name.clone());
+                                                        status_message = Some(format!(
+                                                            "Loaded '{}'.",
+                                                            p.name
+                                                        ));
+                                                    }
+                                                    handled = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Style option chips
+                                    if !handled {
+                                        for &(r, group, idx) in &layout.option_buttons {
+                                            if hit(r) {
+                                                match group {
+                                                    0 => draft.body_frame = BodyFrame::ALL[idx],
+                                                    1 => draft.eye_style = EyeStyle::ALL[idx],
+                                                    2 => draft.hair_style = HairStyle::ALL[idx],
+                                                    3 => draft.facial_hair = FacialHairStyle::ALL[idx],
+                                                    4 => draft.shirt_style = ShirtStyle::ALL[idx],
+                                                    5 => draft.pants_style = PantsStyle::ALL[idx],
+                                                    6 => draft.shoe_style = ShoeStyle::ALL[idx],
+                                                    _ => {}
+                                                }
+                                                selected_preset_name = None;
+                                                handled = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // Color target selector
+                                    if !handled {
+                                        for &(r, target) in &layout.color_target_buttons {
+                                            if hit(r) {
+                                                active_color_target = target;
+                                                handled = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // Color swatch clicks
+                                    if !handled {
+                                        for &(r, col) in &layout.swatch_rects {
+                                            if hit(r) {
+                                                match (tab, active_color_target) {
+                                                    (CharacterCreatorTab::Body, _) => draft.skin_tone = col,
+                                                    (CharacterCreatorTab::FaceHair, 0) => draft.eye_color = col,
+                                                    (CharacterCreatorTab::FaceHair, _) => draft.hair_color = col,
+                                                    (CharacterCreatorTab::Clothing, 0) => draft.shirt_primary = col,
+                                                    (CharacterCreatorTab::Clothing, 1) => draft.shirt_accent = col,
+                                                    (CharacterCreatorTab::Clothing, 2) => draft.pants_color = col,
+                                                    (CharacterCreatorTab::Clothing, _) => draft.shoe_color = col,
+                                                    _ => {}
+                                                }
+                                                selected_preset_name = None;
+                                                handled = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // RGB slider drag start
+                                    if !handled {
+                                        for (ch, r) in layout.rgb_slider_rects.iter().enumerate() {
+                                            let expanded = [r[0], r[1] - 4.0, r[2], r[3] + 8.0];
+                                            if r[2] > 1.0 && hit(expanded) {
+                                                state.creator_active_rgb_slider = Some(ch);
+                                                let frac = ((cpos[0] - r[0]) / r[2]).clamp(0.0, 1.0);
+                                                let val = (frac * 255.0).round() as u8;
+                                                let target_col = match (tab, active_color_target) {
+                                                    (CharacterCreatorTab::Body, _) => Some(&mut draft.skin_tone),
+                                                    (CharacterCreatorTab::FaceHair, 0) => Some(&mut draft.eye_color),
+                                                    (CharacterCreatorTab::FaceHair, _) => Some(&mut draft.hair_color),
+                                                    (CharacterCreatorTab::Clothing, 0) => Some(&mut draft.shirt_primary),
+                                                    (CharacterCreatorTab::Clothing, 1) => Some(&mut draft.shirt_accent),
+                                                    (CharacterCreatorTab::Clothing, 2) => Some(&mut draft.pants_color),
+                                                    (CharacterCreatorTab::Clothing, _) => Some(&mut draft.shoe_color),
+                                                    _ => None,
+                                                };
+                                                if let Some(c) = target_col {
+                                                    match ch {
+                                                        0 => c.r = val,
+                                                        1 => c.g = val,
+                                                        _ => c.b = val,
+                                                    }
+                                                    selected_preset_name = None;
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if exit_to_menu {
+                                    state.screen = if return_to_multiplayer {
+                                        AppScreen::MultiplayerLobby {
+                                            username_input: state.local_username.clone(),
+                                            password_input: String::new(),
+                                            address_input: "127.0.0.1:25565".to_string(),
+                                            focused_field: 0,
+                                            status_message: None,
+                                        }
+                                    } else {
+                                        AppScreen::Title
+                                    };
+                                } else {
+                                    state.screen = AppScreen::CharacterCreator {
+                                        tab,
+                                        draft,
+                                        initial_snapshot,
+                                        selected_preset_name,
+                                        preset_name_input,
+                                        preset_input_focused,
+                                        preview_yaw,
+                                        face_zoom,
+                                        walk_preview,
+                                        active_color_target,
+                                        status_message,
+                                        return_to_multiplayer,
+                                    };
                                 }
                             }
                             AppScreen::InGame => {}
@@ -3631,17 +4034,16 @@ impl ApplicationHandler for BlockGameApp {
                             mut username_input,
                             mut password_input,
                             mut address_input,
-                            skin_id,
                             mut focused_field,
                             status_message,
                         } => {
+                            let active_appearance = state.character_profile.active_appearance;
                             if key == KeyCode::Tab {
                                 focused_field = (focused_field + 1) % 3;
                                 state.screen = AppScreen::MultiplayerLobby {
                                     username_input,
                                     password_input,
                                     address_input,
-                                    skin_id,
                                     focused_field,
                                     status_message,
                                 };
@@ -3652,13 +4054,12 @@ impl ApplicationHandler for BlockGameApp {
                                     &username_input,
                                     &password_input,
                                     &address_input,
-                                    skin_id,
+                                    active_appearance,
                                 ) {
                                     state.screen = AppScreen::MultiplayerLobby {
                                         username_input,
                                         password_input,
                                         address_input,
-                                        skin_id,
                                         focused_field,
                                         status_message: Some((err, true)),
                                     };
@@ -3680,7 +4081,6 @@ impl ApplicationHandler for BlockGameApp {
                                     username_input,
                                     password_input,
                                     address_input,
-                                    skin_id,
                                     focused_field,
                                     status_message: None,
                                 };
@@ -3713,9 +4113,75 @@ impl ApplicationHandler for BlockGameApp {
                                     username_input,
                                     password_input,
                                     address_input,
-                                    skin_id,
                                     focused_field,
                                     status_message: None,
+                                };
+                            }
+                        }
+                        AppScreen::CharacterCreator {
+                            tab,
+                            draft,
+                            initial_snapshot,
+                            mut selected_preset_name,
+                            mut preset_name_input,
+                            preset_input_focused,
+                            preview_yaw,
+                            face_zoom,
+                            walk_preview,
+                            active_color_target,
+                            mut status_message,
+                            return_to_multiplayer,
+                        } => {
+                            if key == KeyCode::Escape {
+                                state.character_profile.active_appearance = draft.sanitized();
+                                state.character_profile.selected_preset_name = selected_preset_name;
+                                state
+                                    .character_profile
+                                    .save(std::path::Path::new("characters.yaml"));
+                                state.screen = if return_to_multiplayer {
+                                    AppScreen::MultiplayerLobby {
+                                        username_input: state.local_username.clone(),
+                                        password_input: String::new(),
+                                        address_input: "127.0.0.1:25565".to_string(),
+                                        focused_field: 0,
+                                        status_message: None,
+                                    }
+                                } else {
+                                    AppScreen::Title
+                                };
+                            } else if preset_input_focused {
+                                if key == KeyCode::Enter {
+                                    let saved = state
+                                        .character_profile
+                                        .save_custom_preset(&preset_name_input, draft);
+                                    state
+                                        .character_profile
+                                        .save(std::path::Path::new("characters.yaml"));
+                                    selected_preset_name = Some(saved.clone());
+                                    preset_name_input.clear();
+                                    status_message = Some(format!("Saved preset '{}'.", saved));
+                                } else if key == KeyCode::Backspace {
+                                    preset_name_input.pop();
+                                } else if let Some(t) = text {
+                                    for ch in t.chars() {
+                                        if !ch.is_control() && preset_name_input.len() < 24 {
+                                            preset_name_input.push(ch);
+                                        }
+                                    }
+                                }
+                                state.screen = AppScreen::CharacterCreator {
+                                    tab,
+                                    draft,
+                                    initial_snapshot,
+                                    selected_preset_name,
+                                    preset_name_input,
+                                    preset_input_focused,
+                                    preview_yaw,
+                                    face_zoom,
+                                    walk_preview,
+                                    active_color_target,
+                                    status_message,
+                                    return_to_multiplayer,
                                 };
                             }
                         }
@@ -4710,7 +5176,6 @@ impl ApplicationHandler for BlockGameApp {
                             username_input: state.local_username.clone(),
                             password_input: String::new(),
                             address_input: "127.0.0.1:25565".to_string(),
-                            skin_id: state.local_skin_id,
                             focused_field: 0,
                             status_message: Some((reason, true)),
                         };
@@ -6798,11 +7263,11 @@ impl ApplicationHandler for BlockGameApp {
                             username_input,
                             password_input,
                             address_input,
-                            skin_id,
                             focused_field,
                             status_message,
                         } => {
                             let status_ref = status_message.as_ref().map(|(m, err)| (m.as_str(), *err));
+                            let preset_lbl = state.character_preset_label();
                             UiBuilder::build_multiplayer_lobby_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
@@ -6810,7 +7275,8 @@ impl ApplicationHandler for BlockGameApp {
                                 username_input,
                                 password_input,
                                 address_input,
-                                *skin_id,
+                                &state.character_profile.active_appearance,
+                                &preset_lbl,
                                 *focused_field,
                                 status_ref,
                                 &state.directory_servers,
@@ -6819,6 +7285,17 @@ impl ApplicationHandler for BlockGameApp {
                                 state.directory_error.as_deref(),
                                 ui_cursor,
                             );
+                        }
+                        AppScreen::CharacterCreator { .. } => {
+                            if let Some(creator_ui) = state.build_creator_ui_state() {
+                                UiBuilder::build_character_creator_screen(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    &creator_ui,
+                                    ui_cursor,
+                                );
+                            }
                         }
                         AppScreen::InGame | AppScreen::Paused { .. } => {}
                     }
@@ -7031,9 +7508,9 @@ impl ApplicationHandler for BlockGameApp {
                     players_to_render.push(state.current_local_player_model());
                 }
                 if !players_to_render.is_empty() {
-                    let players_mesh = blockgame_render::build_players_mesh(
+                    let players_mesh = blockgame_render::build_character_rig_mesh(
                         &players_to_render,
-                        &state.item_registry,
+                        state.total_time,
                     );
                     state.player_dynamic_mesh.update(
                         &state.device,
@@ -7041,8 +7518,72 @@ impl ApplicationHandler for BlockGameApp {
                         &players_mesh.vertices,
                         &players_mesh.indices,
                     );
+                    let held_items_mesh = blockgame_render::build_player_held_items_mesh(
+                        &players_to_render,
+                        &state.item_registry,
+                        state.total_time,
+                    );
+                    state.player_held_items_dynamic_mesh.update(
+                        &state.device,
+                        &state.queue,
+                        &held_items_mesh.vertices,
+                        &held_items_mesh.indices,
+                    );
                 } else {
                     state.player_dynamic_mesh.clear();
+                    state.player_held_items_dynamic_mesh.clear();
+                }
+
+                // Upload live 3D Character Creator turntable preview mesh when on CharacterCreator screen
+                let mut creator_preview_viewport_phys: Option<[f32; 4]> = None;
+                if let AppScreen::CharacterCreator {
+                    draft,
+                    preview_yaw,
+                    face_zoom,
+                    walk_preview,
+                    ..
+                } = state.screen
+                {
+                    let (ui_w, ui_h, _) = state.ui_metrics();
+                    if let Some(creator_ui) = state.build_creator_ui_state() {
+                        let layout =
+                            UiBuilder::character_creator_layout(ui_w, ui_h, &creator_ui);
+                        let pv = layout.preview_viewport;
+                        let sx = state.surface_config.width as f32 / ui_w.max(1.0);
+                        let sy = state.surface_config.height as f32 / ui_h.max(1.0);
+                        let px = (pv[0] * sx).clamp(0.0, state.surface_config.width as f32 - 2.0);
+                        let py = (pv[1] * sy).clamp(0.0, state.surface_config.height as f32 - 2.0);
+                        let pw = (pv[2] * sx)
+                            .clamp(2.0, (state.surface_config.width as f32 - px).max(2.0));
+                        let ph = (pv[3] * sy)
+                            .clamp(2.0, (state.surface_config.height as f32 - py).max(2.0));
+                        creator_preview_viewport_phys = Some([px, py, pw, ph]);
+
+                        let walk_anim = if walk_preview {
+                            state.total_time * 5.2
+                        } else {
+                            0.0
+                        };
+                        let preview_mesh = blockgame_render::build_single_character_preview_mesh(
+                            &draft,
+                            preview_yaw,
+                            walk_anim,
+                            state.total_time,
+                        );
+                        state.preview_character_dynamic_mesh.update(
+                            &state.device,
+                            &state.queue,
+                            &preview_mesh.vertices,
+                            &preview_mesh.indices,
+                        );
+                        let cam_uni =
+                            blockgame_render::preview_camera_uniform(face_zoom, pw / ph.max(1.0));
+                        state
+                            .character_pipeline
+                            .update_preview_camera(&state.queue, &cam_uni);
+                    }
+                } else {
+                    state.preview_character_dynamic_mesh.clear();
                 }
 
                 // 8. Render frame
@@ -7158,8 +7699,15 @@ impl ApplicationHandler for BlockGameApp {
                     // Render animated spinning 3D Wind Turbine rotor blades
                     state.wind_turbine_dynamic_mesh.draw(&mut render_pass);
 
-                    // Render 3D articulated player models (remote players & 3rd-person local player)
-                    state.player_dynamic_mesh.draw(&mut render_pass);
+                    // Render 3D held items anchored to player hands (textured voxel atlas pass)
+                    state.player_held_items_dynamic_mesh.draw(&mut render_pass);
+
+                    // Render 3D stylized low-poly player characters (dedicated vertex-colored pass)
+                    if state.player_dynamic_mesh.index_count > 0 {
+                        render_pass.set_pipeline(&state.character_pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                        state.player_dynamic_mesh.draw(&mut render_pass);
+                    }
 
                     // Render targeted block selection wireframe or progressive cracking overlay
                     if let Some((crack_buf, vertex_count)) = &state.cracking_buffer {
@@ -7185,6 +7733,44 @@ impl ApplicationHandler for BlockGameApp {
                             Some(&frustum),
                             Some(state.camera.position),
                         );
+                }
+
+                // Live 3D Character Creator Turntable Preview Pass (sub-viewport on left side)
+                if let Some(pv) = creator_preview_viewport_phys {
+                    if state.preview_character_dynamic_mesh.index_count > 0 {
+                        let mut preview_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Character Creator 3D Preview Pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: Some(
+                                    wgpu::RenderPassDepthStencilAttachment {
+                                        view: &state.depth_view,
+                                        depth_ops: Some(wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(1.0),
+                                            store: wgpu::StoreOp::Store,
+                                        }),
+                                        stencil_ops: None,
+                                    },
+                                ),
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                        preview_pass.set_viewport(pv[0], pv[1], pv[2], pv[3], 0.0, 1.0);
+                        preview_pass.set_pipeline(&state.character_pipeline.render_pipeline);
+                        preview_pass.set_bind_group(
+                            0,
+                            &state.character_pipeline.preview_camera_bind_group,
+                            &[],
+                        );
+                        state.preview_character_dynamic_mesh.draw(&mut preview_pass);
+                    }
                 }
 
                 // 2D UI Overlay Pass (Draws HUD or Inventory over 3D world)

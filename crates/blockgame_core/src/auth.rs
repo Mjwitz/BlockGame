@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use glam::Vec3;
 
 use crate::{
+    character::CharacterAppearance,
     item::{Inventory, ItemId, ItemSlot},
     player::PlayerStats,
     save::SavedPlayerState,
@@ -204,7 +205,7 @@ pub struct UserAccount {
     pub username: String,
     pub salt: [u8; 16],
     pub password_hash: [u8; 32],
-    pub skin_id: u8,
+    pub appearance: CharacterAppearance,
     pub player_state: SavedPlayerState,
 }
 
@@ -230,12 +231,13 @@ impl AuthDatabase {
         &mut self,
         username: &str,
         client_password_token: &[u8; 32],
-        requested_skin_id: u8,
+        requested_appearance: CharacterAppearance,
         default_spawn: Vec3,
     ) -> Result<(UserAccount, [u8; 16], bool), String> {
         validate_username(username)?;
         let display_name = username.trim().to_string();
         let key = display_name.to_ascii_lowercase();
+        let sanitized_appearance = requested_appearance.sanitized();
 
         self.nonce_counter = self.nonce_counter.wrapping_add(1);
         let session_token = generate_random_16_bytes(self.nonce_counter);
@@ -248,7 +250,7 @@ impl AuthDatabase {
                     account.username
                 ));
             }
-            account.skin_id = requested_skin_id % 4;
+            account.appearance = sanitized_appearance;
             Ok((account.clone(), session_token, false))
         } else {
             self.nonce_counter = self.nonce_counter.wrapping_add(1);
@@ -262,7 +264,7 @@ impl AuthDatabase {
                 username: display_name,
                 salt,
                 password_hash,
-                skin_id: requested_skin_id % 4,
+                appearance: sanitized_appearance,
                 player_state,
             };
             self.accounts.insert(key, account.clone());
@@ -270,11 +272,16 @@ impl AuthDatabase {
         }
     }
 
-    /// Updates a user's persisted player state (position, inventory, health/hunger, skin).
-    pub fn update_player_state(&mut self, username: &str, skin_id: u8, state: SavedPlayerState) {
+    /// Updates a user's persisted player state (position, inventory, health/hunger, appearance).
+    pub fn update_player_state(
+        &mut self,
+        username: &str,
+        appearance: CharacterAppearance,
+        state: SavedPlayerState,
+    ) {
         let key = username.trim().to_ascii_lowercase();
         if let Some(account) = self.accounts.get_mut(&key) {
-            account.skin_id = skin_id % 4;
+            account.appearance = appearance.sanitized();
             account.player_state = state;
         }
     }
@@ -302,7 +309,8 @@ impl AuthDatabase {
             w.write_all(name_bytes)?;
             w.write_all(&account.salt)?;
             w.write_all(&account.password_hash)?;
-            w.write_all(&[account.skin_id])?;
+            // Reserved legacy skin byte (appearances are client-owned per ADR-0002)
+            w.write_all(&[0u8])?;
 
             let p = &account.player_state;
             for f in [
@@ -380,9 +388,8 @@ impl AuthDatabase {
             r.read_exact(&mut salt)?;
             let mut password_hash = [0u8; 32];
             r.read_exact(&mut password_hash)?;
-            let mut skin_buf = [0u8; 1];
-            r.read_exact(&mut skin_buf)?;
-            let skin_id = skin_buf[0];
+            let mut _legacy_skin_buf = [0u8; 1];
+            r.read_exact(&mut _legacy_skin_buf)?;
 
             let position = Vec3::new(read_f32(&mut r)?, read_f32(&mut r)?, read_f32(&mut r)?);
             let velocity = Vec3::new(read_f32(&mut r)?, read_f32(&mut r)?, read_f32(&mut r)?);
@@ -455,7 +462,7 @@ impl AuthDatabase {
                     username,
                     salt,
                     password_hash,
-                    skin_id,
+                    appearance: CharacterAppearance::default(),
                     player_state,
                 },
             );
@@ -516,25 +523,27 @@ mod tests {
 
         let token_correct = derive_client_password_token("MinerSteve", "secret123");
         let token_wrong = derive_client_password_token("MinerSteve", "wrongpass");
+        let app1 = CharacterAppearance::randomized(1);
+        let app2 = CharacterAppearance::randomized(2);
 
         // 1. First login registers the user
         let (acc, _session, is_new) = db
-            .authenticate_or_register("MinerSteve", &token_correct, 2, spawn)
+            .authenticate_or_register("MinerSteve", &token_correct, app1, spawn)
             .expect("First login should register");
         assert!(is_new);
         assert_eq!(acc.username, "MinerSteve");
-        assert_eq!(acc.skin_id, 2);
+        assert_eq!(acc.appearance, app1);
 
         // 2. Returning login with wrong password fails
-        let err = db.authenticate_or_register("minersteve", &token_wrong, 1, spawn);
+        let err = db.authenticate_or_register("minersteve", &token_wrong, app2, spawn);
         assert!(err.is_err());
 
         // 3. Returning login with right password succeeds
         let (acc2, _session2, is_new2) = db
-            .authenticate_or_register("MinerSteve", &token_correct, 3, spawn)
+            .authenticate_or_register("MinerSteve", &token_correct, app2, spawn)
             .expect("Returning login should succeed");
         assert!(!is_new2);
-        assert_eq!(acc2.skin_id, 3);
+        assert_eq!(acc2.appearance, app2);
 
         // 4. Save and load roundtrip
         let temp_dir = std::env::temp_dir().join("blockgame_auth_test_dir");
@@ -543,10 +552,11 @@ mod tests {
 
         let mut loaded_db = AuthDatabase::load_from_dir(&temp_dir).unwrap();
         let (acc3, _, is_new3) = loaded_db
-            .authenticate_or_register("MinerSteve", &token_correct, 3, spawn)
+            .authenticate_or_register("MinerSteve", &token_correct, app2, spawn)
             .unwrap();
         assert!(!is_new3);
         assert_eq!(acc3.username, "MinerSteve");
+        assert_eq!(acc3.appearance, app2);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
