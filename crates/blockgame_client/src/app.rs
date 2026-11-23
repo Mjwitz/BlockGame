@@ -170,6 +170,10 @@ pub struct AppState {
     pub active_chest_pos: Option<IVec3>,
     pub active_furnace_pos: Option<IVec3>,
     pub active_cooking_pot_pos: Option<IVec3>,
+    pub active_shop_snapshot: Option<blockgame_core::ShopUiSnapshot>,
+    pub shop_tab: blockgame_render::ShopUiTab,
+    pub shop_selected_enhance_slot: Option<usize>,
+    pub shop_status_message: String,
     pub eating: Option<EatingState>,
     pub active_coal_gen_pos: Option<IVec3>,
     pub active_battery_pos: Option<IVec3>,
@@ -1165,6 +1169,10 @@ impl AppState {
     pub fn respawn_player(&mut self) {
         self.player_stats.reset();
         self.death_handled = false;
+        self.active_shop_snapshot = None;
+        self.world_manager
+            .villages
+            .clear_guard_hostility_on_player_death("singleplayer");
         self.player.velocity = Vec3::ZERO;
         self.player.fall_distance = 0.0;
         self.mouse_left_down = false;
@@ -1438,6 +1446,10 @@ impl ApplicationHandler for BlockGameApp {
             active_chest_pos: None,
             active_furnace_pos: None,
             active_cooking_pot_pos: None,
+            active_shop_snapshot: None,
+            shop_tab: blockgame_render::ShopUiTab::Buy,
+            shop_selected_enhance_slot: None,
+            shop_status_message: String::new(),
             eating: None,
             active_coal_gen_pos: None,
             active_battery_pos: None,
@@ -2640,6 +2652,171 @@ impl ApplicationHandler for BlockGameApp {
                 if state.inventory_open {
                     if pressed {
                         let is_right = button == MouseButton::Right;
+                        if let Some(snapshot) = state.active_shop_snapshot.clone() {
+                            if !is_right {
+                                let screen_w = state.surface_config.width as f32;
+                                let screen_h = state.surface_config.height as f32;
+                                let ui_cursor = state.cursor_pos;
+                                if let Some(action) = UiBuilder::hit_test_shop_screen(
+                                    screen_w,
+                                    screen_h,
+                                    &snapshot,
+                                    state.shop_tab,
+                                    &state.inventory,
+                                    ui_cursor,
+                                    &state.item_registry,
+                                ) {
+                                    let world_ticks = state.day_night.time.max(0.0) as u64;
+                                    match action {
+                                        blockgame_render::ShopUiAction::Close => {
+                                            state.active_shop_snapshot = None;
+                                            state.inventory_open = false;
+                                            state.shop_status_message.clear();
+                                            state.mouse_captured = true;
+                                            let _ = state
+                                                .window
+                                                .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+                                                .or_else(|_| {
+                                                    state.window.set_cursor_grab(
+                                                        winit::window::CursorGrabMode::Confined,
+                                                    )
+                                                });
+                                            state.window.set_cursor_visible(false);
+                                        }
+                                        blockgame_render::ShopUiAction::SwitchTab(tab) => {
+                                            state.shop_tab = tab;
+                                            state.shop_status_message.clear();
+                                        }
+                                        blockgame_render::ShopUiAction::SelectEnhanceSlot(idx) => {
+                                            state.shop_selected_enhance_slot = Some(idx);
+                                        }
+                                        blockgame_render::ShopUiAction::Buy(offer_idx) => {
+                                            if let Some(client) = &mut state.mp_client {
+                                                client.send(
+                                                    &blockgame_core::net::ClientPacket::ShopBuy {
+                                                        npc_id: snapshot.npc_id,
+                                                        offer_idx,
+                                                    },
+                                                );
+                                            } else {
+                                                let res = state.world_manager.villages.buy_item(
+                                                    snapshot.npc_id,
+                                                    "singleplayer",
+                                                    offer_idx,
+                                                    &mut state.inventory,
+                                                    &state.item_registry,
+                                                    world_ticks,
+                                                );
+                                                state.shop_status_message = match res {
+                                                    Ok(s) => {
+                                                        if let Some(t) = s.leveled_up_to {
+                                                            format!("Purchased! Shop Tier {} unlocked!", t)
+                                                        } else {
+                                                            "Purchase complete!".to_string()
+                                                        }
+                                                    }
+                                                    Err(e) => e.message(),
+                                                };
+                                                state.active_shop_snapshot = state
+                                                    .world_manager
+                                                    .villages
+                                                    .build_shop_snapshot(
+                                                        snapshot.npc_id,
+                                                        "singleplayer",
+                                                        world_ticks,
+                                                    );
+                                            }
+                                        }
+                                        blockgame_render::ShopUiAction::Sell(offer_idx) => {
+                                            if let Some(client) = &mut state.mp_client {
+                                                client.send(
+                                                    &blockgame_core::net::ClientPacket::ShopSell {
+                                                        npc_id: snapshot.npc_id,
+                                                        offer_idx,
+                                                    },
+                                                );
+                                            } else {
+                                                let res = state.world_manager.villages.sell_item(
+                                                    snapshot.npc_id,
+                                                    "singleplayer",
+                                                    offer_idx,
+                                                    &mut state.inventory,
+                                                    &state.item_registry,
+                                                    world_ticks,
+                                                );
+                                                state.shop_status_message = match res {
+                                                    Ok(s) => {
+                                                        format!("Sold for +{} Gold Coins!", s.coins_delta)
+                                                    }
+                                                    Err(e) => e.message(),
+                                                };
+                                                state.active_shop_snapshot = state
+                                                    .world_manager
+                                                    .villages
+                                                    .build_shop_snapshot(
+                                                        snapshot.npc_id,
+                                                        "singleplayer",
+                                                        world_ticks,
+                                                    );
+                                            }
+                                        }
+                                        blockgame_render::ShopUiAction::ApplyEnhance(offer_idx) => {
+                                            if let Some(inv_idx) = state.shop_selected_enhance_slot {
+                                                if let Some(client) = &mut state.mp_client {
+                                                    client.send(
+                                                        &blockgame_core::net::ClientPacket::ShopEnhance {
+                                                            npc_id: snapshot.npc_id,
+                                                            inv_slot_idx: inv_idx as u16,
+                                                            offer_idx,
+                                                        },
+                                                    );
+                                                } else {
+                                                    let res = state
+                                                        .world_manager
+                                                        .villages
+                                                        .enhance_item(
+                                                            snapshot.npc_id,
+                                                            "singleplayer",
+                                                            inv_idx,
+                                                            offer_idx,
+                                                            &mut state.inventory,
+                                                            &state.item_registry,
+                                                            world_ticks,
+                                                        );
+                                                    state.shop_status_message = match res {
+                                                        Ok(s) => {
+                                                            state.shop_selected_enhance_slot = None;
+                                                            if let Some(t) = s.leveled_up_to {
+                                                                format!(
+                                                                    "Enhanced! Shop Tier {} unlocked!",
+                                                                    t
+                                                                )
+                                                            } else {
+                                                                "Item enhanced and restored to full durability!".to_string()
+                                                            }
+                                                        }
+                                                        Err(e) => e.message(),
+                                                    };
+                                                    state.active_shop_snapshot = state
+                                                        .world_manager
+                                                        .villages
+                                                        .build_shop_snapshot(
+                                                            snapshot.npc_id,
+                                                            "singleplayer",
+                                                            world_ticks,
+                                                        );
+                                                }
+                                            } else {
+                                                state.shop_status_message =
+                                                    "Select an unenhanced item on the left first."
+                                                        .to_string();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return;
+                        }
                         if state.jei_recipe_modal.is_some() {
                             handle_recipe_modal_click(state, is_right);
                             return;
@@ -2864,6 +3041,7 @@ impl ApplicationHandler for BlockGameApp {
                                 blockgame_core::fishing::next_f32(&mut state.fishing_rng)
                                     < state.player_skills.combat_crit_chance();
                             let mut attack_damage = base_attack_damage
+                                * held_slot_for_boss.weapon_damage_multiplier()
                                 * state.player_skills.combat_damage_multiplier()
                                 + state.player_skills.combat_flat_bonus();
                             if crit_roll {
@@ -2958,6 +3136,45 @@ impl ApplicationHandler for BlockGameApp {
                                 } else {
                                     None
                                 };
+                                if hit_mp_boss.is_none()
+                                    && hit_monster.is_none()
+                                    && hit_animal.is_none()
+                                {
+                                    if let Some((npc_id, _is_guard, _name, _dist)) =
+                                        state.world_manager.raycast_village_npc(
+                                            state.player.eye_position(),
+                                            state.camera.forward(),
+                                            3.8,
+                                        )
+                                    {
+                                        let kb = state.camera.forward();
+                                        if let Some(client) = &mut state.mp_client {
+                                            client.send(
+                                                &blockgame_core::net::ClientPacket::AttackVillageNpc {
+                                                    npc_id,
+                                                    damage: attack_damage,
+                                                    knockback: kb,
+                                                },
+                                            );
+                                        } else {
+                                            let world_ticks =
+                                                state.day_night.time.max(0.0) as u64;
+                                            let _ = state.world_manager.villages.damage_npc(
+                                                npc_id,
+                                                attack_damage,
+                                                kb,
+                                                Some("singleplayer"),
+                                                world_ticks,
+                                            );
+                                        }
+                                        state.audio.play_hurt();
+                                        state.mouse_left_down = false;
+                                        state.breaking_voxel = None;
+                                        state.break_progress = 0.0;
+                                        state.cracking_buffer = None;
+                                        return;
+                                    }
+                                }
                                 if let Some((mid, mkind, mpos, invulnerable)) = hit_mp_boss {
                                     if !invulnerable {
                                         if let Some(client) = &mut state.mp_client {
@@ -3547,6 +3764,47 @@ impl ApplicationHandler for BlockGameApp {
                             return;
                         }
 
+                        // 1a. Right-click a Village Shopkeeper to open the 3-tab Shop UI
+                        if let Some((npc_id, is_guard, _name, _dist)) =
+                            state.world_manager.raycast_village_npc(
+                                state.player.eye_position(),
+                                state.camera.forward(),
+                                4.5,
+                            )
+                        {
+                            if !is_guard {
+                                if let Some(client) = &mut state.mp_client {
+                                    client.send(
+                                        &blockgame_core::net::ClientPacket::InteractShopkeeper {
+                                            npc_id,
+                                        },
+                                    );
+                                } else {
+                                    let world_ticks = state.day_night.time.max(0.0) as u64;
+                                    if let Some(snap) = state
+                                        .world_manager
+                                        .villages
+                                        .build_shop_snapshot(npc_id, "singleplayer", world_ticks)
+                                    {
+                                        state.active_shop_snapshot = Some(snap);
+                                        state.shop_tab = blockgame_render::ShopUiTab::Buy;
+                                        state.shop_selected_enhance_slot = None;
+                                        state.shop_status_message.clear();
+                                        state.inventory_open = true;
+                                        state.active_chest_pos = None;
+                                        state.active_furnace_pos = None;
+                                        state.active_cooking_pot_pos = None;
+                                        state.mouse_captured = false;
+                                        let _ = state
+                                            .window
+                                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                        state.window.set_cursor_visible(true);
+                                    }
+                                }
+                                return;
+                            }
+                        }
+
                         // 1b. Bow Firing (consumes 1 Arrow from inventory)
                         if held_slot.item_id == ItemId::BOW {
                             let mut arrow_slot_idx = None;
@@ -3561,6 +3819,7 @@ impl ApplicationHandler for BlockGameApp {
                                 blockgame_core::fishing::next_f32(&mut state.fishing_rng)
                                     < state.player_skills.combat_crit_chance();
                             let mut bow_damage = 6.0
+                                * held_slot.weapon_damage_multiplier()
                                 * state.player_skills.combat_damage_multiplier()
                                 + state.player_skills.combat_flat_bonus();
                             if crit_roll {
@@ -3611,7 +3870,8 @@ impl ApplicationHandler for BlockGameApp {
                                     let mut tackle = blockgame_core::FishingTackleStats::from_inventory(
                                         rod_kind,
                                         &state.inventory,
-                                    );
+                                    )
+                                    .with_rod_enhancement(held_slot.enhancement);
                                     tackle.bite_speed_mult *=
                                         state.player_skills.fishing_bite_speed_mult();
                                     tackle.bar_height = (tackle.bar_height
@@ -4675,6 +4935,7 @@ impl ApplicationHandler for BlockGameApp {
                     state.active_chest_pos = None;
                     state.active_furnace_pos = None;
                                 state.active_cooking_pot_pos = None;
+                                state.active_shop_snapshot = None;
                     state.active_coal_gen_pos = None;
                     state.active_battery_pos = None;
                     state.active_electric_furnace_pos = None;
@@ -4781,6 +5042,7 @@ impl ApplicationHandler for BlockGameApp {
                             state.active_chest_pos = None;
                             state.active_furnace_pos = None;
                                 state.active_cooking_pot_pos = None;
+                                state.active_shop_snapshot = None;
                             state.active_coal_gen_pos = None;
                             state.active_battery_pos = None;
                             state.active_electric_furnace_pos = None;
@@ -4897,6 +5159,7 @@ impl ApplicationHandler for BlockGameApp {
                                         state.active_chest_pos = None;
                                         state.active_furnace_pos = None;
                                 state.active_cooking_pot_pos = None;
+                                state.active_shop_snapshot = None;
                                         state.active_coal_gen_pos = None;
                                         state.active_battery_pos = None;
                                         state.active_electric_furnace_pos = None;
@@ -5300,6 +5563,37 @@ impl ApplicationHandler for BlockGameApp {
                                 }
                                 blockgame_core::net::ServerPacket::AnimalsSync { animals } => {
                                     state.world_manager.apply_synced_animals(&animals);
+                                }
+                                blockgame_core::net::ServerPacket::VillageNpcsSync { npcs } => {
+                                    state.world_manager.mp_village_npcs = npcs;
+                                }
+                                blockgame_core::net::ServerPacket::ShopUiSync {
+                                    snapshot,
+                                    status_message,
+                                } => {
+                                    let was_open = state.active_shop_snapshot.is_some();
+                                    state.active_shop_snapshot = Some(snapshot);
+                                    state.shop_status_message = status_message;
+                                    if !was_open {
+                                        state.shop_tab = blockgame_render::ShopUiTab::Buy;
+                                        state.shop_selected_enhance_slot = None;
+                                    }
+                                    state.inventory_open = true;
+                                    state.active_chest_pos = None;
+                                    state.active_furnace_pos = None;
+                                    state.active_cooking_pot_pos = None;
+                                    state.mouse_captured = false;
+                                    let _ = state
+                                        .window
+                                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                    state.window.set_cursor_visible(true);
+                                }
+                                blockgame_core::net::ServerPacket::InventorySync { slots } => {
+                                    for (i, slot) in slots.into_iter().enumerate() {
+                                        if i < state.inventory.len() {
+                                            state.inventory.set(i, slot);
+                                        }
+                                    }
                                 }
                                 blockgame_core::net::ServerPacket::CookingPotSync {
                                     pos,
@@ -5791,6 +6085,33 @@ impl ApplicationHandler for BlockGameApp {
                         state.day_night.sun_intensity(),
                         state.mp_client.is_some(),
                     );
+                    let world_ticks = state.day_night.time.max(0.0) as u64;
+                    let guard_dmg = state.world_manager.update_villages(
+                        dt,
+                        state.player.position,
+                        world_ticks,
+                        state.mp_client.is_some(),
+                    );
+                    if guard_dmg > 0.0 && !state.player_stats.game_mode.is_creative() {
+                        let mult = state.armor.damage_multiplier(&state.item_registry);
+                        state.player_stats.take_damage(guard_dmg * mult);
+                        state.audio.play_hurt();
+                    }
+                    if let Some(client) = &mut state.mp_client {
+                        for bp in state.world_manager.pending_village_blueprints.drain(..) {
+                            client.send(
+                                &blockgame_core::net::ClientPacket::RegisterVillageBlueprint {
+                                    village_id: bp.village_id,
+                                    theme: bp.theme,
+                                    origin: bp.origin,
+                                    shops: bp.shops,
+                                    guard_positions: bp.guard_positions,
+                                },
+                            );
+                        }
+                    } else {
+                        state.world_manager.pending_village_blueprints.clear();
+                    }
                     for msg in state.world_manager.pending_temple_messages.drain(..) {
                         state.local_chat_messages.push(blockgame_core::net::ChatEntry {
                             sender: String::new(),
@@ -6343,8 +6664,12 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                     _ => 1.0,
                                 };
+                                let held_enh_speed = state
+                                    .inventory
+                                    .get(state.active_hotbar_slot)
+                                    .mining_speed_multiplier();
                                 let break_time = if base_break_time.is_finite() {
-                                    base_break_time / skill_speed.max(1.0)
+                                    base_break_time / (skill_speed.max(1.0) * held_enh_speed)
                                 } else {
                                     base_break_time
                                 };
@@ -6461,6 +6786,21 @@ impl ApplicationHandler for BlockGameApp {
                                                         Vec3::new(0.0, 2.5, 0.0),
                                                         drop_slot,
                                                     );
+
+                                                    let prospector_chance = state
+                                                        .inventory
+                                                        .get(state.active_hotbar_slot)
+                                                        .prospector_bonus_chance();
+                                                    if prospector_chance > 0.0
+                                                        && blockgame_core::fishing::next_f32(&mut state.fishing_rng)
+                                                            < prospector_chance
+                                                    {
+                                                        state.spawn_drop_synced(
+                                                            drop_pos,
+                                                            Vec3::new(0.25, 2.5, -0.25),
+                                                            ItemSlot::new(drop_item, drop_count),
+                                                        );
+                                                    }
 
                                                     match break_speed_skill_for_block(broken) {
                                                         Some(SkillKind::Mining) => {
@@ -6938,6 +7278,19 @@ impl ApplicationHandler for BlockGameApp {
                                 &state.item_registry,
                                 Some(&jei_params),
                                 modal_params.as_ref(),
+                            );
+                        } else if let Some(shop_snap) = &state.active_shop_snapshot {
+                            UiBuilder::build_shop_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                shop_snap,
+                                state.shop_tab,
+                                state.shop_selected_enhance_slot,
+                                &state.shop_status_message,
+                                &state.inventory,
+                                ui_cursor,
+                                &state.item_registry,
                             );
                         } else if let Some(pot_pos) = state.active_cooking_pot_pos {
                             let pot = {
@@ -7858,6 +8211,7 @@ impl ApplicationHandler for BlockGameApp {
                 if render_local_model {
                     players_to_render.push(state.current_local_player_model());
                 }
+                players_to_render.extend(state.world_manager.collect_village_npc_render_models());
                 if !players_to_render.is_empty() {
                     let players_mesh = blockgame_render::build_character_rig_mesh(
                         &players_to_render,
@@ -8640,6 +8994,7 @@ fn handle_storage_terminal_click(state: &mut AppState, is_right_click: bool) {
                             item_id: state.cursor_held.item_id,
                             count: 1,
                             durability: state.cursor_held.durability,
+                            enhancement: state.cursor_held.enhancement,
                         };
                         if blockgame_core::storage::deposit_into_network(
                             &mut world_guard,
@@ -9376,6 +9731,7 @@ fn add_to_chest_slots(
                 item_id: item.item_id,
                 count: transfer,
                 durability: item.durability,
+                enhancement: item.enhancement,
             };
             item.count -= transfer;
             if item.count == 0 {
@@ -9957,6 +10313,7 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
                         item_id: slot.item_id,
                         count: take,
                         durability: slot.durability,
+                        enhancement: slot.enhancement,
                     };
                     slot.count -= take;
                     if slot.count == 0 {
@@ -9968,6 +10325,7 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
                     item_id: state.cursor_held.item_id,
                     count: 1,
                     durability: state.cursor_held.durability,
+                    enhancement: state.cursor_held.enhancement,
                 };
                 state.cursor_held.count -= 1;
                 if state.cursor_held.count == 0 {

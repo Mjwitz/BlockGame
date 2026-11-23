@@ -298,6 +298,7 @@ pub fn deposit_into_network(
                     item_id: slot.item_id,
                     count: take,
                     durability: slot.durability,
+                    enhancement: slot.enhancement,
                 };
                 slot.count -= take;
                 if slot.count == 0 {
@@ -338,6 +339,7 @@ pub fn withdraw_from_network(
     }
     let mut taken = 0u16;
     let mut taken_durability = 0u16;
+    let mut taken_enhancement = None;
 
     for &cpos in chests {
         let Some(chest) = world.get_chest_mut(cpos) else {
@@ -345,21 +347,26 @@ pub fn withdraw_from_network(
         };
         for s in chest.iter_mut() {
             if !s.is_empty() && s.item_id == item_id {
+                if taken > 0 && s.enhancement != taken_enhancement {
+                    continue;
+                }
                 let need = max_count - taken;
                 let pull = s.count.min(need);
                 if taken == 0 {
                     taken_durability = s.durability;
+                    taken_enhancement = s.enhancement;
                 }
                 s.count -= pull;
                 taken += pull;
                 if s.count == 0 {
                     *s = ItemSlot::EMPTY;
                 }
-                if taken >= max_count || taken_durability > 0 {
+                if taken >= max_count || taken_durability > 0 || taken_enhancement.is_some() {
                     return ItemSlot {
                         item_id,
                         count: taken,
                         durability: taken_durability,
+                        enhancement: taken_enhancement,
                     };
                 }
             }
@@ -371,6 +378,7 @@ pub fn withdraw_from_network(
             item_id,
             count: taken,
             durability: taken_durability,
+            enhancement: taken_enhancement,
         }
     } else {
         ItemSlot::EMPTY

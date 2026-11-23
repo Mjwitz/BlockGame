@@ -1035,8 +1035,17 @@ impl TerrainGenerator {
         for temple in self.find_temples_for_chunk(pos) {
             crate::temple_gen::stamp_temple_exterior(&mut chunk, &temple);
         }
+        for village in self.find_villages_for_chunk(pos) {
+            crate::village_gen::stamp_village(&mut chunk, &village);
+        }
 
         chunk
+    }
+
+    /// Returns the winning Voronoi macro biome cell ID at world coordinates `(wx, wz)`.
+    #[inline]
+    pub fn macro_biome_cell_id(&self, wx: i32, wz: i32) -> u64 {
+        self.sample_macro_cells(wx as f64, wz as f64).1
     }
 
     /// Evaluates underground voxel coordinate to place ore veins (Diamond, Gold, Iron, Copper, Coal)
@@ -2111,10 +2120,13 @@ impl TerrainGenerator {
             }
         }
 
-        // Re-stamp intersecting boss temples so foliage/trees never clip into temple interiors
+        // Re-stamp intersecting boss temples & villages so foliage/trees never clip into interiors
         let cpos = chunk.pos;
         for temple in self.find_temples_for_chunk(cpos) {
             crate::temple_gen::stamp_temple_exterior(chunk, &temple);
+        }
+        for village in self.find_villages_for_chunk(cpos) {
+            crate::village_gen::stamp_village(chunk, &village);
         }
     }
 }

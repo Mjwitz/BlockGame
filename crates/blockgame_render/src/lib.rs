@@ -28,7 +28,7 @@ pub use pipeline::{
 };
 pub use ui::{
     CharacterCreatorLayout, CharacterCreatorTab, CharacterCreatorUiState, FishingHudPhase,
-    FishingHudState, UiBuilder, UiMesh, UiPipeline, UiVertex,
+    FishingHudState, ShopUiAction, ShopUiTab, UiBuilder, UiMesh, UiPipeline, UiVertex,
 };
 pub use wireframe::{LineVertex, WireframePipeline};
 

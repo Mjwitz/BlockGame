@@ -290,6 +290,15 @@ impl ItemId {
 
     pub const COOKING_POT: Self = Self(265);
 
+    // NPC Villages & Trading (Issue #11)
+    pub const GOLD_COIN: Self = Self(266);
+    pub const MINERS_LANTERN: Self = Self(267);
+    pub const VANGUARD_BLADE: Self = Self(268);
+    pub const MASTER_ANGLER_LURE: Self = Self(269);
+    pub const GOLDEN_APPLE_PIE: Self = Self(270);
+    pub const ROYAL_FEAST: Self = Self(271);
+    pub const SPICED_ELIXIR: Self = Self(272);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
@@ -328,7 +337,7 @@ impl ItemId {
         }
     }
 
-    /// Extra base melee damage for unique boss weapons.
+    /// Extra base melee damage for unique boss or shop weapons.
     #[inline]
     pub const fn boss_weapon_damage(&self) -> Option<f32> {
         match *self {
@@ -336,6 +345,7 @@ impl ItemId {
             Self::FROSTBLADE => Some(11.5),
             Self::VERDANT_GREATBLADE => Some(10.5),
             Self::SHADOWFANG_BLADE => Some(12.5),
+            Self::VANGUARD_BLADE => Some(10.0),
             _ => None,
         }
     }
@@ -347,6 +357,95 @@ impl ItemId {
             Self::VERDANT_GREATBLADE => 0.15,
             Self::SHADOWFANG_BLADE => 0.08,
             _ => 0.0,
+        }
+    }
+}
+
+/// Shop-exclusive Enhancement applied to a single tool, weapon, armor piece, or fishing rod (ADR-0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Enhancement {
+    Reinforced = 1,
+    Haste = 2,
+    Prospector = 3,
+    Keen = 4,
+    Bulwark = 5,
+    TreasureHunter = 6,
+    LuckyCast = 7,
+}
+
+impl Enhancement {
+    pub const ALL: [Self; 7] = [
+        Self::Reinforced,
+        Self::Haste,
+        Self::Prospector,
+        Self::Keen,
+        Self::Bulwark,
+        Self::TreasureHunter,
+        Self::LuckyCast,
+    ];
+
+    #[inline]
+    pub const fn to_u8(self) -> u8 {
+        self as u8
+    }
+
+    #[inline]
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(Self::Reinforced),
+            2 => Some(Self::Haste),
+            3 => Some(Self::Prospector),
+            4 => Some(Self::Keen),
+            5 => Some(Self::Bulwark),
+            6 => Some(Self::TreasureHunter),
+            7 => Some(Self::LuckyCast),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Reinforced => "Reinforced",
+            Self::Haste => "Haste",
+            Self::Prospector => "Prospector",
+            Self::Keen => "Keen",
+            Self::Bulwark => "Bulwark",
+            Self::TreasureHunter => "Treasure Hunter",
+            Self::LuckyCast => "Lucky Cast",
+        }
+    }
+
+    #[inline]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Reinforced => "+100% Max Durability",
+            Self::Haste => "+35% Mining Speed",
+            Self::Prospector => "+25% Bonus Ore Drops",
+            Self::Keen => "+25% Weapon Damage",
+            Self::Bulwark => "+5% Damage Reduction",
+            Self::TreasureHunter => "+50% Treasure Odds",
+            Self::LuckyCast => "+35% Rare Fish Odds",
+        }
+    }
+
+    /// Returns true if this Enhancement can be applied to `item_id`.
+    pub fn is_compatible_with(self, item_id: ItemId, registry: &ItemRegistry) -> bool {
+        let Some(def) = registry.get(item_id) else {
+            return false;
+        };
+        let is_fishing_rod = crate::fishing::FishingRodKind::from_item(item_id).is_some();
+        let is_armor = registry.get_armor(item_id).is_some();
+        match self {
+            Self::Reinforced => def.durability.is_some(),
+            Self::Haste | Self::Prospector => matches!(
+                def.tool_type,
+                Some(ToolType::Pickaxe | ToolType::Axe | ToolType::Shovel)
+            ),
+            Self::Keen => matches!(def.tool_type, Some(ToolType::Sword)) || item_id == ItemId::BOW,
+            Self::Bulwark => is_armor,
+            Self::TreasureHunter | Self::LuckyCast => is_fishing_rod,
         }
     }
 }
@@ -369,6 +468,7 @@ pub struct ItemSlot {
     pub item_id: ItemId,
     pub count: u16,
     pub durability: u16,
+    pub enhancement: Option<Enhancement>,
 }
 
 impl Default for ItemSlot {
@@ -382,6 +482,7 @@ impl ItemSlot {
         item_id: ItemId::EMPTY,
         count: 0,
         durability: 0,
+        enhancement: None,
     };
 
     pub const fn new(item_id: ItemId, count: u16) -> Self {
@@ -389,6 +490,7 @@ impl ItemSlot {
             item_id,
             count,
             durability: 0,
+            enhancement: None,
         }
     }
 
@@ -397,6 +499,21 @@ impl ItemSlot {
             item_id,
             count,
             durability,
+            enhancement: None,
+        }
+    }
+
+    pub const fn with_enhancement(
+        item_id: ItemId,
+        count: u16,
+        durability: u16,
+        enhancement: Option<Enhancement>,
+    ) -> Self {
+        Self {
+            item_id,
+            count,
+            durability,
+            enhancement,
         }
     }
 
@@ -405,12 +522,30 @@ impl ItemSlot {
         self.item_id.is_empty() || self.count == 0
     }
 
+    #[inline(always)]
+    pub fn is_enhanced(&self) -> bool {
+        self.enhancement.is_some()
+    }
+
+    /// Applies an Enhancement to an unenhanced item and restores it to full durability.
+    /// Returns `false` if the slot is empty or already enhanced.
+    pub fn apply_enhancement(&mut self, enhancement: Enhancement) -> bool {
+        if self.is_empty() || self.enhancement.is_some() {
+            return false;
+        }
+        self.enhancement = Some(enhancement);
+        self.durability = 0; // Restore to pristine full durability
+        true
+    }
+
     #[inline]
     pub fn can_stack_with(&self, other: &Self) -> bool {
         if self.is_empty() || other.is_empty() {
             return false;
         }
-        self.item_id == other.item_id && self.durability == other.durability
+        self.item_id == other.item_id
+            && self.durability == other.durability
+            && self.enhancement == other.enhancement
     }
 
     /// Takes up to `amount` items from this slot and returns a new slot with them.
@@ -424,6 +559,7 @@ impl ItemSlot {
             item_id: self.item_id,
             count: take_amount,
             durability: self.durability,
+            enhancement: self.enhancement,
         };
         if self.count == 0 {
             *self = ItemSlot::EMPTY;
@@ -440,38 +576,82 @@ impl ItemSlot {
         self.take(half)
     }
 
-    /// Returns the remaining durability given the item's max durability.
-    /// If self.durability == 0, the tool is pristine (full durability).
+    /// Returns the effective max durability, accounting for the `Reinforced` Enhancement (+100%).
+    #[inline]
+    pub const fn effective_max_durability(&self, base_max_durability: u16) -> u16 {
+        if matches!(self.enhancement, Some(Enhancement::Reinforced)) {
+            base_max_durability.saturating_mul(2)
+        } else {
+            base_max_durability
+        }
+    }
+
+    /// Returns the mining speed multiplier granted by this slot's Enhancement.
+    #[inline]
+    pub fn mining_speed_multiplier(&self) -> f32 {
+        if matches!(self.enhancement, Some(Enhancement::Haste)) {
+            1.35
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns the bonus ore/block drop chance granted by this slot's Enhancement.
+    #[inline]
+    pub fn prospector_bonus_chance(&self) -> f32 {
+        if matches!(self.enhancement, Some(Enhancement::Prospector)) {
+            0.25
+        } else {
+            0.0
+        }
+    }
+
+    /// Returns the weapon damage multiplier granted by this slot's Enhancement.
+    #[inline]
+    pub fn weapon_damage_multiplier(&self) -> f32 {
+        if matches!(self.enhancement, Some(Enhancement::Keen)) {
+            1.25
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns the remaining durability given the item's base max durability.
+    /// If self.durability == 0, the tool is pristine (full effective durability).
     /// Otherwise, self.durability stores the remaining durability points.
     #[inline]
     pub fn remaining_durability(&self, max_durability: u16) -> u16 {
+        let eff_max = self.effective_max_durability(max_durability);
         if self.durability == 0 {
-            max_durability
+            eff_max
         } else {
-            self.durability
+            self.durability.min(eff_max)
         }
     }
 
     /// Returns true if this slot contains a tool that has taken damage.
     #[inline]
     pub fn is_damaged(&self, max_durability: u16) -> bool {
-        self.durability > 0 && self.durability < max_durability
+        let eff_max = self.effective_max_durability(max_durability);
+        self.durability > 0 && self.durability < eff_max
     }
 
     /// Returns the fraction of remaining durability in the range [0.0, 1.0].
     #[inline]
     pub fn durability_fraction(&self, max_durability: u16) -> f32 {
-        if max_durability == 0 {
+        let eff_max = self.effective_max_durability(max_durability);
+        if eff_max == 0 {
             return 1.0;
         }
-        (self.remaining_durability(max_durability) as f32) / (max_durability as f32)
+        (self.remaining_durability(max_durability) as f32) / (eff_max as f32)
     }
 
     /// Damages the tool by `amount` points.
     /// Returns `true` if the tool broke (durability reached 0), resetting this slot to `EMPTY`.
     /// Returns `false` if the tool took damage but did not break.
     pub fn damage_tool(&mut self, amount: u16, max_durability: u16) -> bool {
-        if max_durability == 0 || self.is_empty() {
+        let eff_max = self.effective_max_durability(max_durability);
+        if eff_max == 0 || self.is_empty() {
             return false;
         }
         let current = self.remaining_durability(max_durability);
@@ -602,10 +782,16 @@ impl ArmorEquipment {
         total.min(20)
     }
 
-    /// Returns the damage multiplier (1.0 with 0 armor, down to 0.20 at 20 armor points).
+    /// Returns the damage multiplier (1.0 with 0 armor, down to 0.20 at 20 armor points,
+    /// plus 5% extra damage reduction per `Bulwark`-enhanced armor piece down to 0.15).
     pub fn damage_multiplier(&self, registry: &ItemRegistry) -> f32 {
         let defense = self.total_defense(registry) as f32;
-        (1.0 - defense * 0.04).clamp(0.2, 1.0)
+        let bulwark_pieces = self
+            .slots
+            .iter()
+            .filter(|s| !s.is_empty() && matches!(s.enhancement, Some(Enhancement::Bulwark)))
+            .count() as f32;
+        (1.0 - defense * 0.04 - bulwark_pieces * 0.05).clamp(0.15, 1.0)
     }
 
     /// Applies durability wear to all equipped armor pieces when taking damage.
@@ -2685,6 +2871,96 @@ impl ItemRegistry {
             });
             self.register_food(id, food);
         }
+
+        // NPC Villages & Trading (Issue #11)
+        self.register(ItemDef {
+            id: ItemId::GOLD_COIN,
+            name: "blockgame:gold_coin",
+            display_name: "Gold Coin",
+            max_stack: 1000,
+            placeable_block: None,
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 567,
+        });
+        self.register(ItemDef {
+            id: ItemId::MINERS_LANTERN,
+            name: "blockgame:miners_lantern",
+            display_name: "Miner's Lantern",
+            max_stack: 16,
+            placeable_block: Some(BlockId::SEA_LANTERN),
+            durability: None,
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 568,
+        });
+        self.register(ItemDef {
+            id: ItemId::VANGUARD_BLADE,
+            name: "blockgame:vanguard_blade",
+            display_name: "Vanguard Blade",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(2000),
+            tool_type: Some(ToolType::Sword),
+            tool_tier: Some(ToolTier::Diamond),
+            icon_tile: 569,
+        });
+        self.register(ItemDef {
+            id: ItemId::MASTER_ANGLER_LURE,
+            name: "blockgame:master_angler_lure",
+            display_name: "Master Angler's Lure",
+            max_stack: 1,
+            placeable_block: None,
+            durability: Some(120),
+            tool_type: None,
+            tool_tier: None,
+            icon_tile: 570,
+        });
+
+        let village_foods: [(ItemId, &'static str, &'static str, u16, u32, FoodDef); 3] = [
+            (
+                ItemId::GOLDEN_APPLE_PIE,
+                "blockgame:golden_apple_pie",
+                "Golden Apple Pie",
+                16,
+                571,
+                FoodDef::new(14, 18.0).with_always_edible().with_cure(),
+            ),
+            (
+                ItemId::ROYAL_FEAST,
+                "blockgame:royal_feast",
+                "Royal Feast",
+                16,
+                572,
+                FoodDef::new(18, 22.0).with_always_edible(),
+            ),
+            (
+                ItemId::SPICED_ELIXIR,
+                "blockgame:spiced_elixir",
+                "Spiced Elixir",
+                16,
+                573,
+                FoodDef::new(6, 12.0)
+                    .with_eat_duration(0.8)
+                    .with_always_edible()
+                    .with_cure(),
+            ),
+        ];
+        for (id, name, display_name, max_stack, icon_tile, food) in village_foods {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack,
+                placeable_block: None,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
+            self.register_food(id, food);
+        }
     }
 }
 
@@ -2752,6 +3028,33 @@ impl Inventory {
         }
     }
 
+    /// Counts total items matching `item_id` across all slots.
+    pub fn count_item(&self, item_id: ItemId) -> u32 {
+        self.slots
+            .iter()
+            .filter(|s| !s.is_empty() && s.item_id == item_id)
+            .map(|s| s.count as u32)
+            .sum()
+    }
+
+    /// Removes up to `amount` items matching `item_id` across inventory slots.
+    /// Returns the actual number of items removed.
+    pub fn remove_item(&mut self, item_id: ItemId, mut amount: u32) -> u32 {
+        let mut removed = 0u32;
+        for s in self.slots.iter_mut() {
+            if amount == 0 {
+                break;
+            }
+            if !s.is_empty() && s.item_id == item_id {
+                let take = (s.count as u32).min(amount) as u16;
+                s.take(take);
+                removed += take as u32;
+                amount -= take as u32;
+            }
+        }
+        removed
+    }
+
     /// Attempts to add items into inventory. Fills existing stacks first, then empty slots.
     /// Returns any remaining items that could not fit.
     pub fn add_item(&mut self, mut slot: ItemSlot, registry: &ItemRegistry) -> Option<ItemSlot> {
@@ -2782,6 +3085,7 @@ impl Inventory {
                     item_id: slot.item_id,
                     count: add_amt,
                     durability: slot.durability,
+                    enhancement: slot.enhancement,
                 };
                 slot.count -= add_amt;
                 if slot.count == 0 {

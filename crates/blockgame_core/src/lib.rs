@@ -25,6 +25,7 @@ pub mod skills;
 pub mod storage;
 pub mod temple;
 pub mod tool;
+pub mod village;
 pub mod voice;
 pub mod world;
 
@@ -69,7 +70,8 @@ pub use monster::{
 };
 pub use net::{
     ChatEntry, ClientPacket, MultiplayerClient, MultiplayerServer, PlayerModelState, ServerPacket,
-    SyncedAnimalState, SyncedArrowState, SyncedMonsterState, DEFAULT_SERVER_PORT,
+    SyncedAnimalState, SyncedArrowState, SyncedMonsterState, SyncedVillageNpcState,
+    DEFAULT_SERVER_PORT,
 };
 pub use permissions::{
     permission_matches, BanEntry, BanManager, IpBanEntry, PermissionGroup, PermissionsManager,
@@ -100,5 +102,13 @@ pub use temple::{
     BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE,
 };
 pub use tool::{ToolTier, ToolType};
+pub use village::{
+    village_id_from_grid, GuardHostility, PlayerShopState, ShopBuyEntry, ShopEnhanceEntry,
+    ShopOffer, ShopSellEntry, ShopUiSnapshot, ShopkeeperEntity, ShopkeeperProfession, TradeError,
+    TradeSuccess, VillageGuardEntity, VillageManager, VillageRecord, VillageSpawnBlueprint,
+    VillageTheme, VillageTickOutcome, ENHANCE_UNLOCK_TIER, MAX_SHOP_TIER, TICKS_PER_DAY,
+    VILLAGE_GRID_SIZE, VILLAGE_MIN_ORIGIN_DIST, VILLAGE_RESTOCK_TICKS,
+    VILLAGE_SPAWN_CHANCE_PERCENT, VILLAGE_TEMPLE_EXCLUSION_RADIUS,
+};
 pub use world::{chunk_to_world_coords, world_to_chunk_coords, CookingPotState, World};
 

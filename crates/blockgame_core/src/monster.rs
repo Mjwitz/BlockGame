@@ -265,6 +265,8 @@ impl ArrowProjectile {
 #[derive(Debug, Clone, Default)]
 pub struct MonsterTickOutcome {
     pub damage_to_player: f32,
+    /// Damage dealt by a hostile monster to a Village NPC: `(npc_id, damage, knockback_dir)`.
+    pub damage_to_npc: Option<(u32, f32, Vec3)>,
     pub spawned_arrow: Option<(Vec3, Vec3)>,
     /// Additional projectiles with explicit `(origin, velocity, damage)` (used by bosses/temple archers).
     pub extra_arrows: Vec<(Vec3, Vec3, f32)>,
@@ -481,6 +483,18 @@ impl MonsterEntity {
         world: &World,
         registry: &BlockRegistry,
     ) -> MonsterTickOutcome {
+        self.update_with_npc_targets(dt, player_pos, &[], sun_intensity, world, registry)
+    }
+
+    pub fn update_with_npc_targets(
+        &mut self,
+        dt: f32,
+        player_pos: Vec3,
+        npc_targets: &[(u32, Vec3)],
+        sun_intensity: f32,
+        world: &World,
+        registry: &BlockRegistry,
+    ) -> MonsterTickOutcome {
         let mut outcome = MonsterTickOutcome::default();
         if self.dead {
             return outcome;
@@ -627,7 +641,27 @@ impl MonsterEntity {
             self.burning_timer = (self.burning_timer - dt).max(0.0);
         }
 
-        let to_player = player_pos - self.position;
+        // Choose nearest target: player or (for overworld mobs) a nearby Village NPC
+        let mut target_pos = player_pos;
+        let mut target_npc_id: Option<u32> = None;
+        let mut best_horiz_dist = Vec3::new(
+            player_pos.x - self.position.x,
+            0.0,
+            player_pos.z - self.position.z,
+        )
+        .length();
+        if !self.kind.is_temple_mob() {
+            for &(npc_id, npos) in npc_targets {
+                let d = Vec3::new(npos.x - self.position.x, 0.0, npos.z - self.position.z).length();
+                if d < best_horiz_dist && (npos.y - self.position.y).abs() < 10.0 {
+                    best_horiz_dist = d;
+                    target_pos = npos;
+                    target_npc_id = Some(npc_id);
+                }
+            }
+        }
+
+        let to_player = target_pos - self.position;
         let horiz_to_player = Vec3::new(to_player.x, 0.0, to_player.z);
         let dist = horiz_to_player.length();
 
@@ -693,7 +727,12 @@ impl MonsterEntity {
                         && to_player.y.abs() <= 2.0
                         && self.attack_cooldown <= 0.0
                     {
-                        outcome.damage_to_player = self.kind.attack_damage();
+                        if let Some(npc_id) = target_npc_id {
+                            outcome.damage_to_npc =
+                                Some((npc_id, self.kind.attack_damage(), dir));
+                        } else {
+                            outcome.damage_to_player = self.kind.attack_damage();
+                        }
                         self.attack_cooldown = if self.kind == MonsterKind::JungleStalker {
                             0.85
                         } else {
