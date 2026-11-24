@@ -675,6 +675,9 @@ impl MonsterEntity {
             36.0
         } else if self.kind.is_temple_minion() {
             24.0
+        } else if target_npc_id.is_some() {
+            // Reach past the torchlit perimeter of a Village so night monsters march into town
+            28.0
         } else {
             18.0
         };
@@ -758,7 +761,7 @@ impl MonsterEntity {
 
                     if dist <= 18.0 && self.attack_cooldown <= 0.0 {
                         let shoot_origin = self.position + Vec3::new(0.0, 1.5, 0.0);
-                        let target_aim = player_pos + Vec3::new(0.0, 1.1, 0.0);
+                        let target_aim = target_pos + Vec3::new(0.0, 1.1, 0.0);
                         let delta = target_aim - shoot_origin;
                         let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
                         let aim_dir =
@@ -1029,8 +1032,18 @@ impl MonsterEntity {
 
         let (half_width, height) = self.kind.dimensions();
 
-        // Jump over 1-block obstacles when chasing
-        if self.is_moving && self.on_ground && target_vel.length_squared() > 0.1 {
+        let bx = self.position.x.floor() as i32;
+        let bz = self.position.z.floor() as i32;
+        let feet_in_water = world
+            .get_block(IVec3::new(bx, (self.position.y + 0.15).floor() as i32, bz))
+            .is_water();
+        let body_in_water = world
+            .get_block(IVec3::new(bx, (self.position.y + 0.85).floor() as i32, bz))
+            .is_water();
+        let in_water = feet_in_water || body_in_water;
+
+        // Jump over 1-block obstacles or path around walls/buildings when chasing
+        if self.is_moving && (self.on_ground || in_water) && target_vel.length_squared() > 0.1 {
             let dir = target_vel.normalize_or_zero();
             let probe = self.position + dir * (half_width + 0.45);
             if aabb_intersects_solid(probe, half_width, height, 1e-4, world, registry) {
@@ -1046,22 +1059,53 @@ impl MonsterEntity {
                             registry,
                         );
                 if can_jump_over {
-                    self.velocity.y =
-                        if matches!(self.kind, MonsterKind::Spider | MonsterKind::JungleStalker) {
-                            6.5
-                        } else {
-                            7.5
-                        };
+                    self.velocity.y = if in_water {
+                        6.8
+                    } else if matches!(self.kind, MonsterKind::Spider | MonsterKind::JungleStalker)
+                    {
+                        6.5
+                    } else {
+                        7.5
+                    };
                     self.on_ground = false;
+                } else if self.in_combat && !self.kind.is_boss() {
+                    // Blocked by a wall/building/cliff while chasing: route around it via voxel A*
+                    let path = crate::village::find_voxel_path(
+                        self.position,
+                        target_pos,
+                        world,
+                        registry,
+                        120,
+                    );
+                    if let Some(&wp) = path.first() {
+                        let steer = Vec3::new(
+                            wp.x - self.position.x,
+                            0.0,
+                            wp.z - self.position.z,
+                        )
+                        .normalize_or_zero();
+                        if steer.length_squared() > 0.001 {
+                            target_vel = steer * speed;
+                            self.yaw = steer.x.atan2(steer.z);
+                        }
+                    } else {
+                        self.yaw += PI * 0.75;
+                    }
                 } else {
                     self.yaw += PI * 0.75;
                 }
             }
         }
 
-        // Gravity & horizontal acceleration
-        self.velocity.y = (self.velocity.y - 26.0 * dt).max(-45.0);
-        let accel = if self.on_ground { 10.0 } else { 3.0 };
+        // Gravity / water buoyancy & horizontal acceleration
+        if body_in_water {
+            self.velocity.y = (self.velocity.y + 22.0 * dt).clamp(-2.5, 4.2);
+        } else if feet_in_water {
+            self.velocity.y = (self.velocity.y + 6.0 * dt).clamp(-1.8, 2.4);
+        } else {
+            self.velocity.y = (self.velocity.y - 26.0 * dt).max(-45.0);
+        }
+        let accel = if self.on_ground || in_water { 10.0 } else { 3.0 };
         self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
         self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
 
