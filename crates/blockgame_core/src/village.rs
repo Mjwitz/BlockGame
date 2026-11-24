@@ -915,24 +915,16 @@ impl VillageManager {
     /// Correctly handles day wraparound and sleeping skips without ever wrapping backwards.
     pub fn advance_clock(&mut self, day_night_time: f32) -> u64 {
         let cur = day_night_time.rem_euclid(TICKS_PER_DAY as f32);
+        let cur_u64 = (cur as u64).min(TICKS_PER_DAY - 1);
+        let mut day = self.total_world_ticks / TICKS_PER_DAY;
         if let Some(prev) = self.last_day_time {
-            let delta = if cur >= prev {
-                cur - prev
-            } else {
+            if cur < prev {
                 // Wrapped past 24,000 (midnight/new day or sleep skip)
-                (TICKS_PER_DAY as f32 - prev) + cur
-            };
-            let delta_ticks = delta.round().max(0.0) as u64;
-            if delta_ticks > 0 {
-                self.total_world_ticks = self.total_world_ticks.saturating_add(delta_ticks);
-                self.last_day_time = Some(cur);
-            }
-        } else {
-            self.last_day_time = Some(cur);
-            if self.total_world_ticks == 0 {
-                self.total_world_ticks = cur as u64;
+                day = day.saturating_add(1);
             }
         }
+        self.total_world_ticks = day.saturating_mul(TICKS_PER_DAY).saturating_add(cur_u64);
+        self.last_day_time = Some(cur);
         self.total_world_ticks
     }
 
@@ -1417,7 +1409,8 @@ impl VillageManager {
     ) -> VillageTickOutcome {
         let mut outcome = VillageTickOutcome::default();
         let time_of_day = world_ticks % TICKS_PER_DAY;
-        let is_night_or_dusk = time_of_day >= 12_500 && time_of_day <= 23_200;
+        // Sun sets around 12_000 (dusk starts ~11_500) and rises around 0 (dawn clears ~600)
+        let is_night_or_dusk = time_of_day >= 11_500 || time_of_day <= 600;
 
         // Refresh guard hostility timers while hostile players remain near the village;
         // expire entries once they stay away for 1 full in-game day.
@@ -1437,7 +1430,7 @@ impl VillageManager {
             });
         }
 
-        // 1. Tick Shopkeepers: wander near courtyard by day, shelter at home_pos by night.
+        // 1. Tick Shopkeepers: wander near courtyard by safe day, shelter at home_pos at night or when monsters are nearby.
         for sk in &mut self.shopkeepers {
             if sk.dead {
                 continue;
@@ -1446,7 +1439,14 @@ impl VillageManager {
                 sk.hurt_timer = (sk.hurt_timer - dt).max(0.0);
             }
 
-            let goal = if is_night_or_dusk {
+            let monster_nearby = monsters.iter().any(|m| {
+                !m.dead
+                    && (m.position.distance_squared(sk.position) <= 18.0 * 18.0
+                        || m.position.distance_squared(sk.home_pos) <= 18.0 * 18.0)
+            });
+            let should_shelter = is_night_or_dusk || monster_nearby;
+
+            let goal = if should_shelter {
                 sk.home_pos
             } else {
                 sk.wander_timer -= dt;
@@ -1461,7 +1461,7 @@ impl VillageManager {
             };
 
             let goal_dist = Vec3::new(goal.x - sk.position.x, 0.0, goal.z - sk.position.z).length();
-            let speed = if is_night_or_dusk { 2.8 } else { 1.6 };
+            let speed = if should_shelter { 2.8 } else { 1.6 };
             if goal_dist > 0.45 {
                 let steer_target = steer_along_path(
                     sk.position,
@@ -2664,6 +2664,43 @@ mod tests {
             home_pos,
             final_pos,
             dist_home
+        );
+    }
+
+    #[test]
+    fn test_clock_no_phase_drift_and_shopkeeper_shelters_from_night_and_monsters() {
+        use crate::monster::MonsterKind;
+
+        let (mut mgr, _sk_id, _guard_id) = make_test_manager();
+
+        // Simulate 1,200 fractional 60-FPS frames (~0.3333 ticks/frame = 400 ticks)
+        let mut day_time = 11_600.0_f32;
+        for _ in 0..1_200 {
+            day_time = (day_time + (1.0 / 3.0)).rem_euclid(TICKS_PER_DAY as f32);
+            mgr.advance_clock(day_time);
+        }
+        let expected_tod = day_time as u64;
+        assert_eq!(
+            mgr.total_world_ticks % TICKS_PER_DAY,
+            expected_tod,
+            "total_world_ticks % 24000 must stay locked in phase with day_night_time"
+        );
+
+        // Even at midday (6_000), if a living monster is within 18 blocks, Shopkeeper shelters at home_pos
+        let world = World::new();
+        let reg = BlockRegistry::new();
+        let sk_home = mgr.shopkeepers[0].home_pos;
+        mgr.shopkeepers[0].position = mgr.shopkeepers[0].courtyard_pos; // outside (304, 45, 300)
+        let mut monsters = vec![MonsterEntity::new(
+            1,
+            MonsterKind::Zombie,
+            sk_home + Vec3::new(8.0, 0.0, 0.0),
+        )];
+        mgr.tick(0.2, 6_000, &[], &mut monsters, &world, &reg);
+        assert!(
+            mgr.shopkeepers[0].velocity.x < -1.0,
+            "Shopkeeper should retreat toward home_pos when a monster is nearby, got vel {:?}",
+            mgr.shopkeepers[0].velocity
         );
     }
 }
