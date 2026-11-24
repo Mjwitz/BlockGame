@@ -1753,27 +1753,50 @@ fn is_block_passable_for_npc(pos: IVec3, world: &World, registry: &BlockRegistry
     !registry.get(b).map_or(false, |d| d.is_solid)
 }
 
-/// Finds a walkable standing `y` (feet block) at column `(x, z)` within `ref_y - 2 ..= ref_y + 1`.
+#[inline]
+fn is_block_non_solid_for_npc(pos: IVec3, world: &World, registry: &BlockRegistry) -> bool {
+    let b = world.get_block(pos);
+    !registry.get(b).map_or(false, |d| d.is_solid)
+}
+
+/// Finds a walkable (dry) or swimmable (water-surface) `y` at column `(x, z)` near `ref_y`.
+/// Returns `Some((y, is_water))`. Dry land is always preferred over water.
 fn walkable_y_near(
     x: i32,
     z: i32,
     ref_y: i32,
     world: &World,
     registry: &BlockRegistry,
-) -> Option<i32> {
+) -> Option<(i32, bool)> {
+    // 1. Prefer dry solid ground within step-up/drop-down range
     for dy in [0, 1, -1, -2] {
         let y = ref_y + dy;
         if is_block_solid_for_npc(IVec3::new(x, y - 1, z), world, registry)
             && is_block_passable_for_npc(IVec3::new(x, y, z), world, registry)
             && is_block_passable_for_npc(IVec3::new(x, y + 1, z), world, registry)
         {
-            return Some(y);
+            return Some((y, false));
+        }
+    }
+    // 2. Fall back to water surface (so NPCs in water can swim out to the nearest bank)
+    for dy in [0, 1, 2, 3, -1, -2] {
+        let y = ref_y + dy;
+        let cur = world.get_block(IVec3::new(x, y, z));
+        let above = IVec3::new(x, y + 1, z);
+        if cur.is_water()
+            && !world.get_block(above).is_water()
+            && is_block_non_solid_for_npc(above, world, registry)
+            && is_block_non_solid_for_npc(IVec3::new(x, y + 2, z), world, registry)
+        {
+            // Swim at the water surface (feet at y, able to step onto y+1 shoreline)
+            return Some((y, true));
         }
     }
     None
 }
 
-/// Bounded 4-neighbor voxel A* pathfinder that routes NPCs around walls and through doorways.
+/// Bounded 4-neighbor voxel A* pathfinder that routes NPCs around walls, through doorways,
+/// and out of water back onto dry land.
 /// Returns a sequence of tile-center waypoints from the step after `start` to `goal` (or the
 /// closest reachable tile if `max_expansions` is hit).
 pub fn find_voxel_path(
@@ -1786,13 +1809,14 @@ pub fn find_voxel_path(
     let sx = start.x.floor() as i32;
     let sz = start.z.floor() as i32;
     let start_ref_y = start.y.floor() as i32;
-    let Some(sy) = walkable_y_near(sx, sz, start_ref_y, world, registry) else {
+    let Some((sy, _)) = walkable_y_near(sx, sz, start_ref_y, world, registry) else {
         return Vec::new();
     };
 
     let gx = goal.x.floor() as i32;
     let gz = goal.z.floor() as i32;
     let gy = walkable_y_near(gx, gz, goal.y.floor() as i32, world, registry)
+        .map(|(y, _)| y)
         .unwrap_or(goal.y.floor() as i32);
     if sx == gx && sz == gz && (sy - gy).abs() <= 1 {
         return Vec::new();
@@ -1837,15 +1861,17 @@ pub fn find_voxel_path(
         for &(dx, dz) in &[(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let nx = cx + dx;
             let nz = cz + dz;
-            let Some(ny) = walkable_y_near(nx, nz, cy, world, registry) else {
+            let Some((ny, is_water)) = walkable_y_near(nx, nz, cy, world, registry) else {
                 continue;
             };
             // Ensure headroom at current column when stepping up 1 block
-            if ny > cy && !is_block_passable_for_npc(IVec3::new(cx, cy + 2, cz), world, registry) {
+            if ny > cy && !is_block_non_solid_for_npc(IVec3::new(cx, cy + 2, cz), world, registry) {
                 continue;
             }
             let next_key = (nx, ny, nz);
-            let next_g = g + 1;
+            // Strongly prefer dry land (+1) over swimming through water (+6)
+            let step_cost = if is_water { 6 } else { 1 };
+            let next_g = g + step_cost;
             let is_better = visited
                 .get(&next_key)
                 .map_or(true, |&(prev_g, _)| next_g < prev_g);
@@ -1928,14 +1954,33 @@ fn step_npc_physics(
     world: &World,
     registry: &BlockRegistry,
 ) {
-    vel.y = (vel.y - 26.0 * dt).max(-40.0);
+    let bx = pos.x.floor() as i32;
+    let bz = pos.z.floor() as i32;
+    let feet_in_water = world
+        .get_block(IVec3::new(bx, (pos.y + 0.15).floor() as i32, bz))
+        .is_water();
+    let body_in_water = world
+        .get_block(IVec3::new(bx, (pos.y + 0.85).floor() as i32, bz))
+        .is_water();
+    let in_water = feet_in_water || body_in_water;
 
-    // Horizontal step with 1-block auto-hop and jump-assist over obstacles
+    if body_in_water {
+        // Swim upward toward the water surface instead of sinking to the riverbed
+        vel.y = (vel.y + 22.0 * dt).clamp(-2.5, 4.2);
+    } else if feet_in_water {
+        // Gentle surface buoyancy so NPC stays at the waterline and can climb onto shore
+        vel.y = (vel.y + 6.0 * dt).clamp(-1.8, 2.4);
+    } else {
+        vel.y = (vel.y - 26.0 * dt).max(-40.0);
+    }
+
+    // Horizontal step with 1-block auto-hop (on ground or climbing out of water) and jump-assist
+    let can_step_up = *on_ground || in_water;
     let mut blocked_horiz = false;
     let next_x = pos.x + vel.x * dt;
     if !npc_collides(Vec3::new(next_x, pos.y, pos.z), half_width, height, world, registry) {
         pos.x = next_x;
-    } else if *on_ground
+    } else if can_step_up
         && !npc_collides(
             Vec3::new(next_x, pos.y + 1.05, pos.z),
             half_width,
@@ -1956,7 +2001,7 @@ fn step_npc_physics(
     let next_z = pos.z + vel.z * dt;
     if !npc_collides(Vec3::new(pos.x, pos.y, next_z), half_width, height, world, registry) {
         pos.z = next_z;
-    } else if *on_ground
+    } else if can_step_up
         && !npc_collides(
             Vec3::new(pos.x, pos.y + 1.05, next_z),
             half_width,
@@ -1974,8 +2019,8 @@ fn step_npc_physics(
         vel.z = 0.0;
     }
 
-    if blocked_horiz && *on_ground {
-        vel.y = 7.6;
+    if blocked_horiz && (*on_ground || in_water) {
+        vel.y = if in_water { 6.8 } else { 7.6 };
         *on_ground = false;
     }
 
@@ -2701,6 +2746,57 @@ mod tests {
             mgr.shopkeepers[0].velocity.x < -1.0,
             "Shopkeeper should retreat toward home_pos when a monster is nearby, got vel {:?}",
             mgr.shopkeepers[0].velocity
+        );
+    }
+
+    #[test]
+    fn test_guard_swims_out_of_water_and_returns_to_village() {
+        use crate::chunk::{Chunk, ChunkPos};
+
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        // Dry land at y = 5 for x = 8..16, and a 2-block-deep pond (water at y = 4..=5, stone floor at y = 3) for x = 1..8
+        for x in 0..16 {
+            for z in 0..16 {
+                if x < 8 {
+                    chunk.set(x, 3, z, BlockId::STONE);
+                    chunk.set(x, 4, z, BlockId::WATER);
+                    chunk.set(x, 5, z, BlockId::WATER);
+                } else {
+                    for y in 3..=5 {
+                        chunk.set(x, y, z, BlockId::COBBLESTONE);
+                    }
+                }
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let reg = BlockRegistry::new();
+        let village_home = Vec3::new(11.5, 6.0, 8.5);
+
+        let mut mgr = VillageManager::new();
+        let bp = VillageSpawnBlueprint {
+            village_id: 88,
+            theme: VillageTheme::Plains,
+            origin: IVec3::new(11, 5, 8),
+            shops: vec![],
+            guard_positions: vec![village_home],
+        };
+        mgr.ensure_village_spawned(&bp, 0);
+        // Drop the Guard into the bottom of the 2-block-deep water pond
+        mgr.guards[0].position = Vec3::new(3.5, 4.0, 8.5);
+
+        let mut monsters = Vec::new();
+        // Tick 10 seconds in 0.05s physics steps
+        for _ in 0..200 {
+            mgr.tick(0.05, 6_000, &[], &mut monsters, &world, &reg);
+        }
+
+        let pos = mgr.guards[0].position;
+        assert!(
+            pos.x >= 8.0 && pos.y >= 5.5,
+            "Guard should have swum out of the pond onto dry land (x>=8, y>=5.5), ended at {:?}",
+            pos
         );
     }
 }
