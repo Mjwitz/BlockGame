@@ -1789,37 +1789,41 @@ pub fn find_voxel_path(
 
     let gx = goal.x.floor() as i32;
     let gz = goal.z.floor() as i32;
-    if sx == gx && sz == gz {
+    let gy = walkable_y_near(gx, gz, goal.y.floor() as i32, world, registry)
+        .unwrap_or(goal.y.floor() as i32);
+    if sx == gx && sz == gz && (sy - gy).abs() <= 1 {
         return Vec::new();
     }
 
-    let heuristic = |x: i32, z: i32| (x - gx).abs() + (z - gz).abs();
+    let heuristic = |x: i32, y: i32, z: i32| (x - gx).abs() + (z - gz).abs() + (y - gy).abs() * 2;
 
     // BinaryHeap stores Reverse<(f_score, g_score, x, y, z)>
     let mut open: BinaryHeap<Reverse<(i32, i32, i32, i32, i32)>> = BinaryHeap::new();
-    // (x, z) -> (best_g, y, parent_xz)
-    let mut visited: HashMap<(i32, i32), (i32, i32, (i32, i32))> = HashMap::new();
+    // (x, y, z) -> (best_g, parent_xyz)
+    let mut visited: HashMap<(i32, i32, i32), (i32, (i32, i32, i32))> = HashMap::new();
 
-    open.push(Reverse((heuristic(sx, sz), 0, sx, sy, sz)));
-    visited.insert((sx, sz), (0, sy, (sx, sz)));
+    let start_key = (sx, sy, sz);
+    open.push(Reverse((heuristic(sx, sy, sz), 0, sx, sy, sz)));
+    visited.insert(start_key, (0, start_key));
 
-    let mut best_node = (sx, sz);
-    let mut best_h = heuristic(sx, sz);
+    let mut best_node = start_key;
+    let mut best_h = heuristic(sx, sy, sz);
     let mut expansions = 0usize;
 
     while let Some(Reverse((_, g, cx, cy, cz))) = open.pop() {
-        if let Some(&(known_g, _, _)) = visited.get(&(cx, cz)) {
+        let cur_key = (cx, cy, cz);
+        if let Some(&(known_g, _)) = visited.get(&cur_key) {
             if g > known_g {
                 continue;
             }
         }
-        let h = heuristic(cx, cz);
+        let h = heuristic(cx, cy, cz);
         if h < best_h {
             best_h = h;
-            best_node = (cx, cz);
+            best_node = cur_key;
         }
-        if cx == gx && cz == gz {
-            best_node = (cx, cz);
+        if cx == gx && cz == gz && (cy - gy).abs() <= 1 {
+            best_node = cur_key;
             break;
         }
         expansions += 1;
@@ -1837,29 +1841,30 @@ pub fn find_voxel_path(
             if ny > cy && !is_block_passable_for_npc(IVec3::new(cx, cy + 2, cz), world, registry) {
                 continue;
             }
+            let next_key = (nx, ny, nz);
             let next_g = g + 1;
             let is_better = visited
-                .get(&(nx, nz))
-                .map_or(true, |&(prev_g, _, _)| next_g < prev_g);
+                .get(&next_key)
+                .map_or(true, |&(prev_g, _)| next_g < prev_g);
             if is_better {
-                visited.insert((nx, nz), (next_g, ny, (cx, cz)));
-                let f = next_g + heuristic(nx, nz);
+                visited.insert(next_key, (next_g, cur_key));
+                let f = next_g + heuristic(nx, ny, nz);
                 open.push(Reverse((f, next_g, nx, ny, nz)));
             }
         }
     }
 
-    if best_node == (sx, sz) {
+    if best_node == start_key {
         return Vec::new();
     }
 
     let mut rev_path = Vec::new();
     let mut cur = best_node;
-    while cur != (sx, sz) {
-        let Some(&(_, y, parent)) = visited.get(&cur) else {
+    while cur != start_key {
+        let Some(&(_, parent)) = visited.get(&cur) else {
             break;
         };
-        rev_path.push(Vec3::new(cur.0 as f32 + 0.5, y as f32, cur.1 as f32 + 0.5));
+        rev_path.push(Vec3::new(cur.0 as f32 + 0.5, cur.1 as f32, cur.2 as f32 + 0.5));
         if parent == cur {
             break;
         }

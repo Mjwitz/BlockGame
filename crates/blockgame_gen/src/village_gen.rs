@@ -415,7 +415,10 @@ pub fn stamp_village(chunk: &mut Chunk, village: &VillagePlacement) {
                     } else {
                         (px + w, pz)
                     };
-                    set_world_in_chunk(chunk, wx, py - 1, wz, floor);
+                    // Solid foundation skirt so walkways never float with hollow space underneath
+                    for dy in -6i32..=-1 {
+                        set_world_in_chunk(chunk, wx, py + dy, wz, floor);
+                    }
                     set_world_in_chunk(chunk, wx, py, wz, path);
                     for dy in 1..=4 {
                         set_world_in_chunk(chunk, wx, py + dy, wz, BlockId::AIR);
@@ -500,12 +503,21 @@ pub fn stamp_village(chunk: &mut Chunk, village: &VillagePlacement) {
         // Interior lighting torches & profession counter
         set_world_in_chunk(chunk, sc.x - 2, sc.y + 3, sc.z - 2, BlockId::TORCH);
         set_world_in_chunk(chunk, sc.x + 2, sc.y + 3, sc.z + 2, BlockId::TORCH);
+        // Solid 3x2 entrance apron in front of the doorway (never floating with hollow space underneath)
+        for fwd in 4i32..=5 {
+            for side in -1i32..=1 {
+                let ax = sc.x + shop.door_dir.x * fwd + shop.door_dir.z * side;
+                let az = sc.z + shop.door_dir.z * fwd - shop.door_dir.x * side;
+                for dy in -6i32..=-1 {
+                    set_world_in_chunk(chunk, ax, sc.y + dy, az, floor);
+                }
+                set_world_in_chunk(chunk, ax, sc.y, az, path);
+                for dy in 1i32..=4 {
+                    set_world_in_chunk(chunk, ax, sc.y + dy, az, BlockId::AIR);
+                }
+            }
+        }
         // Exterior lantern beside door
-        let front_x = sc.x + shop.door_dir.x * 4;
-        let front_z = sc.z + shop.door_dir.z * 4;
-        set_world_in_chunk(chunk, front_x, sc.y, front_z, path);
-        set_world_in_chunk(chunk, front_x, sc.y + 1, front_z, BlockId::AIR);
-        set_world_in_chunk(chunk, front_x, sc.y + 2, front_z, BlockId::AIR);
         let lamp_x = sc.x + shop.door_dir.x * 4 + shop.door_dir.z;
         let lamp_z = sc.z + shop.door_dir.z * 4 - shop.door_dir.x;
         set_world_in_chunk(chunk, lamp_x, sc.y + 1, lamp_z, pillar);
