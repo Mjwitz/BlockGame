@@ -15,9 +15,9 @@ use crate::{
 };
 
 /// Coarse overworld grid spacing (in blocks) for deterministic Village placement.
-pub const VILLAGE_GRID_SIZE: i32 = 480;
+pub const VILLAGE_GRID_SIZE: i32 = 384;
 /// Percentage chance (0..=100) that an eligible Village grid cell spawns a Village.
-pub const VILLAGE_SPAWN_CHANCE_PERCENT: u64 = 50;
+pub const VILLAGE_SPAWN_CHANCE_PERCENT: u64 = 65;
 /// Minimum horizontal distance from world origin `(0, 0)` before Villages may generate.
 pub const VILLAGE_MIN_ORIGIN_DIST: i32 = 160;
 /// Horizontal exclusion radius around any Boss Temple where Villages will not spawn.
@@ -682,7 +682,9 @@ impl VillageGuardEntity {
     pub const HEIGHT: f32 = 1.85;
     pub const MAX_HEALTH: f32 = 50.0;
     pub const ATTACK_DAMAGE: f32 = 6.0;
-    pub const AGGRO_RANGE: f32 = 16.0;
+    pub const AGGRO_RANGE: f32 = 18.0;
+    /// Maximum horizontal distance from the village before a Guard loses interest and returns home.
+    pub const MAX_CHASE_DIST_FROM_VILLAGE: f32 = 30.0;
     pub const MELEE_RANGE: f32 = 2.1;
 
     pub fn new(id: u32, village_id: u64, theme: VillageTheme, home_pos: Vec3) -> Self {
@@ -1487,31 +1489,53 @@ impl VillageManager {
                 g.swing_anim = (g.swing_anim - dt * 3.5).max(0.0);
             }
 
-            // Find nearest hostile monster within aggro range
+            // Distance-based interest decay: the farther from the village a Guard roams,
+            // the less interested they are in chasing targets, until they lose interest
+            // at MAX_CHASE_DIST_FROM_VILLAGE and return home.
+            let village_center = self
+                .villages
+                .get(&g.village_id)
+                .map(|r| Vec3::new(r.origin.x as f32 + 0.5, g.home_pos.y, r.origin.z as f32 + 0.5))
+                .unwrap_or(g.home_pos);
+            let home_dist = Vec3::new(
+                g.position.x - village_center.x,
+                0.0,
+                g.position.z - village_center.z,
+            )
+            .length();
+            let interest =
+                (1.0 - (home_dist / VillageGuardEntity::MAX_CHASE_DIST_FROM_VILLAGE)).clamp(0.0, 1.0);
+            let effective_aggro = VillageGuardEntity::AGGRO_RANGE * interest;
+
+            // Find nearest hostile monster within decayed aggro range
             let mut target_monster: Option<(usize, Vec3, f32)> = None;
-            for (idx, m) in monsters.iter().enumerate() {
-                if m.dead {
-                    continue;
-                }
-                let d = (m.position - g.position).length();
-                if d <= VillageGuardEntity::AGGRO_RANGE
-                    && target_monster.map_or(true, |(_, _, best)| d < best)
-                {
-                    target_monster = Some((idx, m.position, d));
+            if effective_aggro > 0.5 {
+                for (idx, m) in monsters.iter().enumerate() {
+                    if m.dead {
+                        continue;
+                    }
+                    let d = (m.position - g.position).length();
+                    if d <= effective_aggro
+                        && target_monster.map_or(true, |(_, _, best)| d < best)
+                    {
+                        target_monster = Some((idx, m.position, d));
+                    }
                 }
             }
 
-            // Find nearest hostile player for this village
+            // Find nearest hostile player for this village within decayed aggro range
             let mut target_player: Option<(String, Vec3, f32)> = None;
-            if let Some(rec) = self.villages.get(&g.village_id) {
-                for (pkey, ppos) in players {
-                    let key = pkey.to_ascii_lowercase();
-                    if rec.guard_hostility.contains_key(&key) {
-                        let d = (*ppos - g.position).length();
-                        if d <= VillageGuardEntity::AGGRO_RANGE
-                            && target_player.as_ref().map_or(true, |(_, _, best)| d < *best)
-                        {
-                            target_player = Some((pkey.clone(), *ppos, d));
+            if effective_aggro > 0.5 {
+                if let Some(rec) = self.villages.get(&g.village_id) {
+                    for (pkey, ppos) in players {
+                        let key = pkey.to_ascii_lowercase();
+                        if rec.guard_hostility.contains_key(&key) {
+                            let d = (*ppos - g.position).length();
+                            if d <= effective_aggro
+                                && target_player.as_ref().map_or(true, |(_, _, best)| d < *best)
+                            {
+                                target_player = Some((pkey.clone(), *ppos, d));
+                            }
                         }
                     }
                 }
@@ -1582,29 +1606,45 @@ impl VillageManager {
                     g.health = (g.health + 1.0 * dt).min(g.max_health);
                 }
 
-                // Gentle patrol around village square
-                g.patrol_timer -= dt;
-                if g.patrol_timer <= 0.0 {
-                    g.patrol_timer = 4.0 + ((g.id as f32 * 1.37) % 3.0);
-                    let ang = ((world_ticks as f32) * 0.009 + g.id as f32 * 2.7).sin() * 3.14;
-                    g.patrol_target =
-                        g.home_pos + Vec3::new(ang.cos() * 6.5, 0.0, ang.sin() * 6.5);
-                }
-                let to_patrol = Vec3::new(
-                    g.patrol_target.x - g.position.x,
-                    0.0,
-                    g.patrol_target.z - g.position.z,
-                );
-                let dist = to_patrol.length();
-                if dist > 0.6 {
-                    let dir = to_patrol / dist;
-                    g.yaw = dir.x.atan2(dir.z);
-                    g.velocity.x = dir.x * 2.1;
-                    g.velocity.z = dir.z * 2.1;
-                    g.walk_anim += dt * 4.5;
+                // If the Guard wandered far from the village (e.g. lost interest during a chase),
+                // return briskly to the central square; otherwise patrol gently around home.
+                if home_dist > 9.0 {
+                    let to_home = Vec3::new(
+                        g.home_pos.x - g.position.x,
+                        0.0,
+                        g.home_pos.z - g.position.z,
+                    );
+                    let dir = to_home.normalize_or_zero();
+                    if dir.length_squared() > 0.001 {
+                        g.yaw = dir.x.atan2(dir.z);
+                        g.velocity.x = dir.x * 3.4;
+                        g.velocity.z = dir.z * 3.4;
+                        g.walk_anim += dt * 6.5;
+                    }
                 } else {
-                    g.velocity.x *= (1.0 - 8.0 * dt).max(0.0);
-                    g.velocity.z *= (1.0 - 8.0 * dt).max(0.0);
+                    g.patrol_timer -= dt;
+                    if g.patrol_timer <= 0.0 {
+                        g.patrol_timer = 4.0 + ((g.id as f32 * 1.37) % 3.0);
+                        let ang = ((world_ticks as f32) * 0.009 + g.id as f32 * 2.7).sin() * 3.14;
+                        g.patrol_target =
+                            g.home_pos + Vec3::new(ang.cos() * 4.5, 0.0, ang.sin() * 4.5);
+                    }
+                    let to_patrol = Vec3::new(
+                        g.patrol_target.x - g.position.x,
+                        0.0,
+                        g.patrol_target.z - g.position.z,
+                    );
+                    let dist = to_patrol.length();
+                    if dist > 0.6 {
+                        let dir = to_patrol / dist;
+                        g.yaw = dir.x.atan2(dir.z);
+                        g.velocity.x = dir.x * 2.1;
+                        g.velocity.z = dir.z * 2.1;
+                        g.walk_anim += dt * 4.5;
+                    } else {
+                        g.velocity.x *= (1.0 - 8.0 * dt).max(0.0);
+                        g.velocity.z *= (1.0 - 8.0 * dt).max(0.0);
+                    }
                 }
             }
 
@@ -1636,7 +1676,8 @@ fn step_npc_physics(
 ) {
     vel.y = (vel.y - 26.0 * dt).max(-40.0);
 
-    // Horizontal step with 1-block auto-hop
+    // Horizontal step with 1-block auto-hop and jump-assist over obstacles
+    let mut blocked_horiz = false;
     let next_x = pos.x + vel.x * dt;
     if !npc_collides(Vec3::new(next_x, pos.y, pos.z), half_width, height, world, registry) {
         pos.x = next_x;
@@ -1652,6 +1693,9 @@ fn step_npc_physics(
         pos.y += 1.02;
         pos.x = next_x;
     } else {
+        if vel.x.abs() > 0.5 {
+            blocked_horiz = true;
+        }
         vel.x = 0.0;
     }
 
@@ -1670,7 +1714,15 @@ fn step_npc_physics(
         pos.y += 1.02;
         pos.z = next_z;
     } else {
+        if vel.z.abs() > 0.5 {
+            blocked_horiz = true;
+        }
         vel.z = 0.0;
+    }
+
+    if blocked_horiz && *on_ground {
+        vel.y = 7.6;
+        *on_ground = false;
     }
 
     let next_y = pos.y + vel.y * dt;
@@ -2246,6 +2298,38 @@ mod tests {
         assert!(
             stats.health > health_before,
             "Regeneration buff should restore health over time"
+        );
+    }
+
+    #[test]
+    fn test_guard_loses_interest_far_from_village_and_returns_home() {
+        let (mut mgr, sk_id, guard_id) = make_test_manager();
+        let world = World::new();
+        let reg = BlockRegistry::new();
+
+        // Make alice hostile to the village
+        let _ = mgr.damage_npc(sk_id, 2.0, Vec3::ZERO, Some("alice"), 1000);
+
+        // Move guard 32 blocks away from village center (beyond MAX_CHASE_DIST_FROM_VILLAGE)
+        let g = mgr.guards.iter_mut().find(|g| g.id == guard_id).unwrap();
+        g.position = Vec3::new(332.5, 45.0, 300.5);
+        g.on_ground = true;
+
+        // Place hostile player right next to the far-away guard
+        let players = vec![("alice".to_string(), Vec3::new(334.0, 45.0, 300.5))];
+        let mut monsters = Vec::new();
+        let out = mgr.tick(0.2, 1000, &players, &mut monsters, &world, &reg);
+
+        // Guard should have lost interest (no melee hit) and be heading back toward village (negative X)
+        assert!(
+            out.guard_damage_to_players.is_empty(),
+            "Guard far from village should lose interest in chasing"
+        );
+        let g_after = mgr.guards.iter().find(|g| g.id == guard_id).unwrap();
+        assert!(
+            g_after.velocity.x < -1.0,
+            "Guard should head back toward village center, got vel {:?}",
+            g_after.velocity
         );
     }
 }

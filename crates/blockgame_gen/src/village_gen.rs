@@ -98,11 +98,11 @@ impl TerrainGenerator {
         let excl_sq = (VILLAGE_TEMPLE_EXCLUSION_RADIUS as i64)
             * (VILLAGE_TEMPLE_EXCLUSION_RADIUS as i64);
 
-        // Try up to 4 deterministic candidate coordinates inside this cell so a single
+        // Try up to 6 deterministic candidate coordinates inside this cell so a single
         // river/ocean/non-village biome edge doesn't waste an entire grid cell.
         let mut chosen: Option<(i32, i32, i32, VillageTheme)> = None;
         let mut cand_h = h;
-        for attempt in 0..4 {
+        for attempt in 0..6 {
             if attempt > 0 {
                 cand_h = cand_h
                     .wrapping_mul(6364136223846793005)
@@ -183,7 +183,7 @@ impl TerrainGenerator {
             let (offset, door_dir) = shop_slots[i];
             let cx = ox + offset.x;
             let cz = oz + offset.z;
-            // Clamp shop floor within +/-3 blocks of square height so paths connect cleanly
+            // Clamp shop floor within +/-2 blocks of square height so paths connect cleanly
             let raw_y = self.surface_height(cx, cz);
             let cy = raw_y.clamp(surface_y - 2, surface_y + 2).max(self.water_level + 1);
             let center = IVec3::new(cx, cy, cz);
@@ -202,12 +202,12 @@ impl TerrainGenerator {
             });
         }
 
-        // 2..=3 Village Guards patrolling the central square
+        // 2..=3 Village Guards patrolling clear tiles in the central square (away from well and lamp posts)
         let guard_count = 2 + (((h >> 48) % 2) as usize);
         let guard_offsets = [
-            IVec3::new(4, 0, 4),
-            IVec3::new(-4, 0, -4),
-            IVec3::new(-4, 0, 4),
+            IVec3::new(3, 0, 0),
+            IVec3::new(-3, 0, 0),
+            IVec3::new(0, 0, 3),
         ];
         let mut guard_positions = Vec::with_capacity(guard_count);
         for i in 0..guard_count {
@@ -353,6 +353,17 @@ pub fn stamp_village(chunk: &mut Chunk, village: &VillagePlacement) {
                 set_world_in_chunk(chunk, o.x + dx, o.y + dy, o.z + dz, b);
             }
             for dy in 1i32..=7 {
+                set_world_in_chunk(chunk, o.x + dx, o.y + dy, o.z + dz, BlockId::AIR);
+            }
+        }
+    }
+    // Gentle outer apron (ring at ±6) so hillsides don't create sheer 2+ block cliffs around the square
+    for dx in -6i32..=6 {
+        for dz in -6i32..=6 {
+            if dx.abs() < 6 && dz.abs() < 6 {
+                continue;
+            }
+            for dy in 2i32..=5 {
                 set_world_in_chunk(chunk, o.x + dx, o.y + dy, o.z + dz, BlockId::AIR);
             }
         }
@@ -573,6 +584,35 @@ mod tests {
             Some(BlockId::WATER),
             "Village center well should contain water at origin"
         );
+        // Every Guard spawn position must have clear AIR at feet and head (never inside lamp posts/blocks)
+        for &gpos in &v.guard_positions {
+            let gx = gpos.x.floor() as i32;
+            let gy = gpos.y.floor() as i32;
+            let gz = gpos.z.floor() as i32;
+            let gcpos = ChunkPos::new(
+                gx.div_euclid(CHUNK_SIZE_X as i32),
+                gy.div_euclid(CHUNK_SIZE_Y as i32),
+                gz.div_euclid(CHUNK_SIZE_Z as i32),
+            );
+            let gchunk = gen.generate_chunk(gcpos);
+            let glx = gx.rem_euclid(CHUNK_SIZE_X as i32) as usize;
+            let gly = gy.rem_euclid(CHUNK_SIZE_Y as i32) as usize;
+            let glz = gz.rem_euclid(CHUNK_SIZE_Z as i32) as usize;
+            assert_eq!(
+                gchunk.get(glx, gly, glz),
+                Some(BlockId::AIR),
+                "Guard feet at {:?} should be AIR",
+                gpos
+            );
+            if gly + 1 < CHUNK_SIZE_Y {
+                assert_eq!(
+                    gchunk.get(glx, gly + 1, glz),
+                    Some(BlockId::AIR),
+                    "Guard head at {:?} should be AIR",
+                    gpos
+                );
+            }
+        }
     }
 
     #[test]
@@ -584,8 +624,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("Seed {} had no Village within 6 rings", seed));
             let dist = ((nearest.origin.x as f64).hypot(nearest.origin.z as f64)) as i32;
             assert!(
-                dist >= VILLAGE_MIN_ORIGIN_DIST && dist <= 1600,
-                "Seed {} nearest Village distance {} out of expected 160..=1600 range",
+                dist >= VILLAGE_MIN_ORIGIN_DIST && dist <= 1200,
+                "Seed {} nearest Village distance {} out of expected 160..=1200 range",
                 seed,
                 dist
             );

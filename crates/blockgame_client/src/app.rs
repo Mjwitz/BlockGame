@@ -2654,9 +2654,7 @@ impl ApplicationHandler for BlockGameApp {
                         let is_right = button == MouseButton::Right;
                         if let Some(snapshot) = state.active_shop_snapshot.clone() {
                             if !is_right {
-                                let screen_w = state.surface_config.width as f32;
-                                let screen_h = state.surface_config.height as f32;
-                                let ui_cursor = state.cursor_pos;
+                                let (screen_w, screen_h, ui_cursor) = state.ui_metrics();
                                 if let Some(action) = UiBuilder::hit_test_shop_screen(
                                     screen_w,
                                     screen_h,
