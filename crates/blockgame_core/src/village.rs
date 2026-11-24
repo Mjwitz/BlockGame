@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 use glam::{IVec3, Vec3};
 
@@ -553,6 +554,8 @@ pub struct ShopkeeperEntity {
     pub dead: bool,
     pub wander_target: Vec3,
     pub wander_timer: f32,
+    pub path: Vec<Vec3>,
+    pub path_recalc_timer: f32,
     pub shared_stock: HashMap<u16, u16>,
     pub last_shared_restock_cycle: u64,
     pub player_states: HashMap<String, PlayerShopState>,
@@ -594,6 +597,8 @@ impl ShopkeeperEntity {
             dead: false,
             wander_target: courtyard_pos,
             wander_timer: 2.0,
+            path: Vec::new(),
+            path_recalc_timer: 0.0,
             shared_stock: HashMap::new(),
             last_shared_restock_cycle: world_ticks / VILLAGE_RESTOCK_TICKS,
             player_states: HashMap::new(),
@@ -669,6 +674,8 @@ pub struct VillageGuardEntity {
     pub home_pos: Vec3,
     pub patrol_target: Vec3,
     pub patrol_timer: f32,
+    pub path: Vec<Vec3>,
+    pub path_recalc_timer: f32,
     pub health: f32,
     pub max_health: f32,
     pub hurt_timer: f32,
@@ -705,6 +712,8 @@ impl VillageGuardEntity {
             home_pos,
             patrol_target: home_pos,
             patrol_timer: 1.5,
+            path: Vec::new(),
+            path_recalc_timer: 0.0,
             health: Self::MAX_HEALTH,
             max_health: Self::MAX_HEALTH,
             hurt_timer: 0.0,
@@ -1434,7 +1443,7 @@ impl VillageManager {
                 sk.hurt_timer = (sk.hurt_timer - dt).max(0.0);
             }
 
-            let target = if is_night_or_dusk {
+            let goal = if is_night_or_dusk {
                 sk.home_pos
             } else {
                 sk.wander_timer -= dt;
@@ -1448,16 +1457,33 @@ impl VillageManager {
                 sk.wander_target
             };
 
-            let to_target = Vec3::new(target.x - sk.position.x, 0.0, target.z - sk.position.z);
-            let dist = to_target.length();
+            let goal_dist = Vec3::new(goal.x - sk.position.x, 0.0, goal.z - sk.position.z).length();
             let speed = if is_night_or_dusk { 2.8 } else { 1.6 };
-            if dist > 0.45 {
-                let dir = to_target / dist;
-                sk.yaw = dir.x.atan2(dir.z);
-                sk.velocity.x = dir.x * speed;
-                sk.velocity.z = dir.z * speed;
-                sk.walk_anim += dt * speed * 2.4;
+            if goal_dist > 0.45 {
+                let steer_target = steer_along_path(
+                    sk.position,
+                    goal,
+                    &mut sk.path,
+                    &mut sk.path_recalc_timer,
+                    dt,
+                    world,
+                    registry,
+                );
+                let to_steer = Vec3::new(
+                    steer_target.x - sk.position.x,
+                    0.0,
+                    steer_target.z - sk.position.z,
+                );
+                let steer_dist = to_steer.length();
+                if steer_dist > 0.05 {
+                    let dir = to_steer / steer_dist;
+                    sk.yaw = dir.x.atan2(dir.z);
+                    sk.velocity.x = dir.x * speed;
+                    sk.velocity.z = dir.z * speed;
+                    sk.walk_anim += dt * speed * 2.4;
+                }
             } else {
+                sk.path.clear();
                 sk.velocity.x *= (1.0 - 8.0 * dt).max(0.0);
                 sk.velocity.z *= (1.0 - 8.0 * dt).max(0.0);
             }
@@ -1552,7 +1578,16 @@ impl VillageManager {
             if monster_closer {
                 if let Some((m_idx, mpos, dist)) = target_monster {
                     in_combat = true;
-                    let horiz = Vec3::new(mpos.x - g.position.x, 0.0, mpos.z - g.position.z);
+                    let steer = steer_along_path(
+                        g.position,
+                        mpos,
+                        &mut g.path,
+                        &mut g.path_recalc_timer,
+                        dt,
+                        world,
+                        registry,
+                    );
+                    let horiz = Vec3::new(steer.x - g.position.x, 0.0, steer.z - g.position.z);
                     let dir = horiz.normalize_or_zero();
                     if dir.length_squared() > 0.001 {
                         g.yaw = dir.x.atan2(dir.z);
@@ -1566,14 +1601,25 @@ impl VillageManager {
                         g.velocity.z *= (1.0 - 8.0 * dt).max(0.0);
                     }
                     if dist <= VillageGuardEntity::MELEE_RANGE && g.attack_cooldown <= 0.0 {
-                        monsters[m_idx].take_damage(VillageGuardEntity::ATTACK_DAMAGE, dir);
+                        let kb_dir = Vec3::new(mpos.x - g.position.x, 0.0, mpos.z - g.position.z)
+                            .normalize_or_zero();
+                        monsters[m_idx].take_damage(VillageGuardEntity::ATTACK_DAMAGE, kb_dir);
                         g.attack_cooldown = 0.9;
                         g.swing_anim = 1.0;
                     }
                 }
             } else if let Some((pkey, ppos, dist)) = target_player {
                 in_combat = true;
-                let horiz = Vec3::new(ppos.x - g.position.x, 0.0, ppos.z - g.position.z);
+                let steer = steer_along_path(
+                    g.position,
+                    ppos,
+                    &mut g.path,
+                    &mut g.path_recalc_timer,
+                    dt,
+                    world,
+                    registry,
+                );
+                let horiz = Vec3::new(steer.x - g.position.x, 0.0, steer.z - g.position.z);
                 let dir = horiz.normalize_or_zero();
                 if dir.length_squared() > 0.001 {
                     g.yaw = dir.x.atan2(dir.z);
@@ -1587,10 +1633,12 @@ impl VillageManager {
                     g.velocity.z *= (1.0 - 8.0 * dt).max(0.0);
                 }
                 if dist <= VillageGuardEntity::MELEE_RANGE && g.attack_cooldown <= 0.0 {
+                    let kb_dir = Vec3::new(ppos.x - g.position.x, 0.0, ppos.z - g.position.z)
+                        .normalize_or_zero();
                     outcome.guard_damage_to_players.push((
                         pkey,
                         VillageGuardEntity::ATTACK_DAMAGE,
-                        dir,
+                        kb_dir,
                     ));
                     g.attack_cooldown = 0.95;
                     g.swing_anim = 1.0;
@@ -1607,13 +1655,18 @@ impl VillageManager {
                 }
 
                 // If the Guard wandered far from the village (e.g. lost interest during a chase),
-                // return briskly to the central square; otherwise patrol gently around home.
+                // return briskly to the central square using A* pathfinding; otherwise patrol gently.
                 if home_dist > 9.0 {
-                    let to_home = Vec3::new(
-                        g.home_pos.x - g.position.x,
-                        0.0,
-                        g.home_pos.z - g.position.z,
+                    let steer = steer_along_path(
+                        g.position,
+                        g.home_pos,
+                        &mut g.path,
+                        &mut g.path_recalc_timer,
+                        dt,
+                        world,
+                        registry,
                     );
+                    let to_home = Vec3::new(steer.x - g.position.x, 0.0, steer.z - g.position.z);
                     let dir = to_home.normalize_or_zero();
                     if dir.length_squared() > 0.001 {
                         g.yaw = dir.x.atan2(dir.z);
@@ -1629,19 +1682,34 @@ impl VillageManager {
                         g.patrol_target =
                             g.home_pos + Vec3::new(ang.cos() * 4.5, 0.0, ang.sin() * 4.5);
                     }
-                    let to_patrol = Vec3::new(
+                    let dist = Vec3::new(
                         g.patrol_target.x - g.position.x,
                         0.0,
                         g.patrol_target.z - g.position.z,
-                    );
-                    let dist = to_patrol.length();
+                    )
+                    .length();
                     if dist > 0.6 {
-                        let dir = to_patrol / dist;
-                        g.yaw = dir.x.atan2(dir.z);
-                        g.velocity.x = dir.x * 2.1;
-                        g.velocity.z = dir.z * 2.1;
-                        g.walk_anim += dt * 4.5;
+                        let steer = steer_along_path(
+                            g.position,
+                            g.patrol_target,
+                            &mut g.path,
+                            &mut g.path_recalc_timer,
+                            dt,
+                            world,
+                            registry,
+                        );
+                        let to_patrol =
+                            Vec3::new(steer.x - g.position.x, 0.0, steer.z - g.position.z);
+                        let sdist = to_patrol.length();
+                        if sdist > 0.05 {
+                            let dir = to_patrol / sdist;
+                            g.yaw = dir.x.atan2(dir.z);
+                            g.velocity.x = dir.x * 2.1;
+                            g.velocity.z = dir.z * 2.1;
+                            g.walk_anim += dt * 4.5;
+                        }
                     } else {
+                        g.path.clear();
                         g.velocity.x *= (1.0 - 8.0 * dt).max(0.0);
                         g.velocity.z *= (1.0 - 8.0 * dt).max(0.0);
                     }
@@ -1662,6 +1730,184 @@ impl VillageManager {
 
         outcome
     }
+}
+
+#[inline]
+fn is_block_solid_for_npc(pos: IVec3, world: &World, registry: &BlockRegistry) -> bool {
+    let b = world.get_block(pos);
+    if b.is_air() || b.is_water() {
+        return false;
+    }
+    registry.get(b).map_or(false, |d| d.is_solid)
+}
+
+#[inline]
+fn is_block_passable_for_npc(pos: IVec3, world: &World, registry: &BlockRegistry) -> bool {
+    let b = world.get_block(pos);
+    if b.is_water() {
+        return false;
+    }
+    !registry.get(b).map_or(false, |d| d.is_solid)
+}
+
+/// Finds a walkable standing `y` (feet block) at column `(x, z)` within `ref_y - 2 ..= ref_y + 1`.
+fn walkable_y_near(
+    x: i32,
+    z: i32,
+    ref_y: i32,
+    world: &World,
+    registry: &BlockRegistry,
+) -> Option<i32> {
+    for dy in [0, 1, -1, -2] {
+        let y = ref_y + dy;
+        if is_block_solid_for_npc(IVec3::new(x, y - 1, z), world, registry)
+            && is_block_passable_for_npc(IVec3::new(x, y, z), world, registry)
+            && is_block_passable_for_npc(IVec3::new(x, y + 1, z), world, registry)
+        {
+            return Some(y);
+        }
+    }
+    None
+}
+
+/// Bounded 4-neighbor voxel A* pathfinder that routes NPCs around walls and through doorways.
+/// Returns a sequence of tile-center waypoints from the step after `start` to `goal` (or the
+/// closest reachable tile if `max_expansions` is hit).
+pub fn find_voxel_path(
+    start: Vec3,
+    goal: Vec3,
+    world: &World,
+    registry: &BlockRegistry,
+    max_expansions: usize,
+) -> Vec<Vec3> {
+    let sx = start.x.floor() as i32;
+    let sz = start.z.floor() as i32;
+    let start_ref_y = start.y.floor() as i32;
+    let Some(sy) = walkable_y_near(sx, sz, start_ref_y, world, registry) else {
+        return Vec::new();
+    };
+
+    let gx = goal.x.floor() as i32;
+    let gz = goal.z.floor() as i32;
+    if sx == gx && sz == gz {
+        return Vec::new();
+    }
+
+    let heuristic = |x: i32, z: i32| (x - gx).abs() + (z - gz).abs();
+
+    // BinaryHeap stores Reverse<(f_score, g_score, x, y, z)>
+    let mut open: BinaryHeap<Reverse<(i32, i32, i32, i32, i32)>> = BinaryHeap::new();
+    // (x, z) -> (best_g, y, parent_xz)
+    let mut visited: HashMap<(i32, i32), (i32, i32, (i32, i32))> = HashMap::new();
+
+    open.push(Reverse((heuristic(sx, sz), 0, sx, sy, sz)));
+    visited.insert((sx, sz), (0, sy, (sx, sz)));
+
+    let mut best_node = (sx, sz);
+    let mut best_h = heuristic(sx, sz);
+    let mut expansions = 0usize;
+
+    while let Some(Reverse((_, g, cx, cy, cz))) = open.pop() {
+        if let Some(&(known_g, _, _)) = visited.get(&(cx, cz)) {
+            if g > known_g {
+                continue;
+            }
+        }
+        let h = heuristic(cx, cz);
+        if h < best_h {
+            best_h = h;
+            best_node = (cx, cz);
+        }
+        if cx == gx && cz == gz {
+            best_node = (cx, cz);
+            break;
+        }
+        expansions += 1;
+        if expansions >= max_expansions {
+            break;
+        }
+
+        for &(dx, dz) in &[(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let nx = cx + dx;
+            let nz = cz + dz;
+            let Some(ny) = walkable_y_near(nx, nz, cy, world, registry) else {
+                continue;
+            };
+            // Ensure headroom at current column when stepping up 1 block
+            if ny > cy && !is_block_passable_for_npc(IVec3::new(cx, cy + 2, cz), world, registry) {
+                continue;
+            }
+            let next_g = g + 1;
+            let is_better = visited
+                .get(&(nx, nz))
+                .map_or(true, |&(prev_g, _, _)| next_g < prev_g);
+            if is_better {
+                visited.insert((nx, nz), (next_g, ny, (cx, cz)));
+                let f = next_g + heuristic(nx, nz);
+                open.push(Reverse((f, next_g, nx, ny, nz)));
+            }
+        }
+    }
+
+    if best_node == (sx, sz) {
+        return Vec::new();
+    }
+
+    let mut rev_path = Vec::new();
+    let mut cur = best_node;
+    while cur != (sx, sz) {
+        let Some(&(_, y, parent)) = visited.get(&cur) else {
+            break;
+        };
+        rev_path.push(Vec3::new(cur.0 as f32 + 0.5, y as f32, cur.1 as f32 + 0.5));
+        if parent == cur {
+            break;
+        }
+        cur = parent;
+    }
+    rev_path.reverse();
+    rev_path
+}
+
+/// Maintains a cached A* waypoint path for an NPC and returns the immediate steering target.
+/// Falls back cleanly to `goal` when no voxel path is needed or the world is empty.
+fn steer_along_path(
+    pos: Vec3,
+    goal: Vec3,
+    path: &mut Vec<Vec3>,
+    recalc_timer: &mut f32,
+    dt: f32,
+    world: &World,
+    registry: &BlockRegistry,
+) -> Vec3 {
+    *recalc_timer = (*recalc_timer - dt).max(0.0);
+
+    // Pop waypoints we have already reached horizontally
+    while let Some(&wp) = path.first() {
+        let d_sq = (wp.x - pos.x).powi(2) + (wp.z - pos.z).powi(2);
+        if d_sq <= 0.42 * 0.42 {
+            path.remove(0);
+        } else {
+            break;
+        }
+    }
+
+    let goal_moved = path.last().map_or(true, |&last| {
+        (last.x - goal.x).powi(2) + (last.z - goal.z).powi(2) > 2.25
+    });
+    let goal_dist_sq = (goal.x - pos.x).powi(2) + (goal.z - pos.z).powi(2);
+
+    if *recalc_timer <= 0.0 && goal_dist_sq > 1.0 && (path.is_empty() || goal_moved) {
+        let computed = find_voxel_path(pos, goal, world, registry, 180);
+        if !computed.is_empty() {
+            *path = computed;
+        } else {
+            path.clear();
+        }
+        *recalc_timer = 0.55;
+    }
+
+    path.first().copied().unwrap_or(goal)
 }
 
 fn step_npc_physics(
@@ -2330,6 +2576,86 @@ mod tests {
             g_after.velocity.x < -1.0,
             "Guard should head back toward village center, got vel {:?}",
             g_after.velocity
+        );
+    }
+
+    #[test]
+    fn test_shopkeeper_paths_around_hut_wall_through_doorway() {
+        use crate::chunk::{Chunk, ChunkPos};
+
+        let mut world = World::new();
+        // Insert chunk (0, 0, 0) covering x=0..16, y=0..16, z=0..16
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        // Solid ground floor at y = 4
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 4, z, BlockId::COBBLESTONE);
+            }
+        }
+        // Build a 7x7 shop hut centered at (8, 5, 8) -> walls at x=5..=11, z=5..=11, y=5..=7
+        // with a single 1-wide doorway on the South wall at (8, 5..=6, 11)
+        for x in 5..=11 {
+            for z in 5..=11 {
+                let is_wall = x == 5 || x == 11 || z == 5 || z == 11;
+                if is_wall {
+                    let is_door = x == 8 && z == 11;
+                    for y in 5..=7 {
+                        if !(is_door && y <= 6) {
+                            chunk.set(x, y, z, BlockId::PLANKS);
+                        }
+                    }
+                }
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let reg = BlockRegistry::new();
+        let home_pos = Vec3::new(8.5, 5.0, 8.5);
+        let behind_north_wall = Vec3::new(8.5, 5.0, 3.5);
+
+        // Verify A* finds a complete path from behind the North wall into home_pos
+        let path = find_voxel_path(behind_north_wall, home_pos, &world, &reg, 250);
+        assert!(
+            !path.is_empty(),
+            "Expected A* to find a path around the shop walls and through the South doorway"
+        );
+        let last = *path.last().unwrap();
+        assert!(
+            (last.x - home_pos.x).abs() < 0.6 && (last.z - home_pos.z).abs() < 0.6,
+            "Path should end at home_pos {:?}, got {:?}",
+            home_pos,
+            last
+        );
+
+        // Simulate a Shopkeeper behind the North wall at night walking back into their hut
+        let mut mgr = VillageManager::new();
+        let bp = VillageSpawnBlueprint {
+            village_id: 77,
+            theme: VillageTheme::Plains,
+            origin: IVec3::new(8, 4, 13),
+            shops: vec![(
+                ShopkeeperProfession::Baker,
+                home_pos,
+                Vec3::new(8.5, 5.0, 13.5),
+            )],
+            guard_positions: vec![],
+        };
+        mgr.ensure_village_spawned(&bp, 0);
+        mgr.shopkeepers[0].position = behind_north_wall;
+
+        let mut monsters = Vec::new();
+        // Tick 12 seconds of night (tick 18_000) in 0.1s steps
+        for _ in 0..120 {
+            mgr.tick(0.1, 18_000, &[], &mut monsters, &world, &reg);
+        }
+        let final_pos = mgr.shopkeepers[0].position;
+        let dist_home = Vec3::new(final_pos.x - home_pos.x, 0.0, final_pos.z - home_pos.z).length();
+        assert!(
+            dist_home < 1.2,
+            "Shopkeeper should have navigated around the walls and through the doorway to {:?}, ended at {:?} (dist {:.2})",
+            home_pos,
+            final_pos,
+            dist_home
         );
     }
 }
