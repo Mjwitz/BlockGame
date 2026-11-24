@@ -687,12 +687,14 @@ pub struct VillageGuardEntity {
 impl VillageGuardEntity {
     pub const HALF_WIDTH: f32 = 0.32;
     pub const HEIGHT: f32 = 1.85;
-    pub const MAX_HEALTH: f32 = 50.0;
-    pub const ATTACK_DAMAGE: f32 = 6.0;
+    pub const MAX_HEALTH: f32 = 100.0;
+    pub const ATTACK_DAMAGE: f32 = 10.0;
     pub const AGGRO_RANGE: f32 = 18.0;
     /// Maximum horizontal distance from the village before a Guard loses interest and returns home.
     pub const MAX_CHASE_DIST_FROM_VILLAGE: f32 = 30.0;
-    pub const MELEE_RANGE: f32 = 2.1;
+    pub const MELEE_RANGE: f32 = 2.5;
+    /// Built-in armor damage multiplier (35% damage reduction).
+    pub const ARMOR_DAMAGE_MULT: f32 = 0.65;
 
     pub fn new(id: u32, village_id: u64, theme: VillageTheme, home_pos: Vec3) -> Self {
         let name = format!("Village Guard");
@@ -727,13 +729,14 @@ impl VillageGuardEntity {
         if self.dead || amount <= 0.0 {
             return false;
         }
-        self.health = (self.health - amount).max(0.0);
+        let mitigated = (amount * Self::ARMOR_DAMAGE_MULT).max(0.5);
+        self.health = (self.health - mitigated).max(0.0);
         self.hurt_timer = 0.35;
         self.out_of_combat_timer = 0.0;
         let kb = Vec3::new(knockback_dir.x, 0.0, knockback_dir.z).normalize_or_zero();
-        self.velocity.x += kb.x * 3.5;
-        self.velocity.z += kb.z * 3.5;
-        self.velocity.y = self.velocity.y.max(2.5);
+        self.velocity.x += kb.x * 2.5;
+        self.velocity.z += kb.z * 2.5;
+        self.velocity.y = self.velocity.y.max(2.0);
         if self.health <= 0.0 {
             self.dead = true;
             true
@@ -1604,7 +1607,7 @@ impl VillageManager {
                         let kb_dir = Vec3::new(mpos.x - g.position.x, 0.0, mpos.z - g.position.z)
                             .normalize_or_zero();
                         monsters[m_idx].take_damage(VillageGuardEntity::ATTACK_DAMAGE, kb_dir);
-                        g.attack_cooldown = 0.9;
+                        g.attack_cooldown = 0.75;
                         g.swing_anim = 1.0;
                     }
                 }
@@ -1640,7 +1643,7 @@ impl VillageManager {
                         VillageGuardEntity::ATTACK_DAMAGE,
                         kb_dir,
                     ));
-                    g.attack_cooldown = 0.95;
+                    g.attack_cooldown = 0.85;
                     g.swing_anim = 1.0;
                 }
             }
@@ -1648,10 +1651,10 @@ impl VillageManager {
             if in_combat {
                 g.out_of_combat_timer = 0.0;
             } else {
-                // Slow out-of-combat health regeneration (1 HP/sec after 5s out of combat)
+                // Out-of-combat health regeneration (2.5 HP/sec after 3.5s out of combat)
                 g.out_of_combat_timer += dt;
-                if g.out_of_combat_timer >= 5.0 && g.health < g.max_health {
-                    g.health = (g.health + 1.0 * dt).min(g.max_health);
+                if g.out_of_combat_timer >= 3.5 && g.health < g.max_health {
+                    g.health = (g.health + 2.5 * dt).min(g.max_health);
                 }
 
                 // If the Guard wandered far from the village (e.g. lost interest during a chase),
