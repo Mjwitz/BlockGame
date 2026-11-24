@@ -15,9 +15,9 @@ use crate::{
 };
 
 /// Coarse overworld grid spacing (in blocks) for deterministic Village placement.
-pub const VILLAGE_GRID_SIZE: i32 = 640;
-/// Percentage chance (0..=100) that an eligible 640-block grid cell spawns a Village.
-pub const VILLAGE_SPAWN_CHANCE_PERCENT: u64 = 40;
+pub const VILLAGE_GRID_SIZE: i32 = 480;
+/// Percentage chance (0..=100) that an eligible Village grid cell spawns a Village.
+pub const VILLAGE_SPAWN_CHANCE_PERCENT: u64 = 50;
 /// Minimum horizontal distance from world origin `(0, 0)` before Villages may generate.
 pub const VILLAGE_MIN_ORIGIN_DIST: i32 = 160;
 /// Horizontal exclusion radius around any Boss Temple where Villages will not spawn.

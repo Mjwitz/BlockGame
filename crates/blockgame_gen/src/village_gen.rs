@@ -76,9 +76,9 @@ pub fn biome_to_village_theme(biome: Biome) -> Option<VillageTheme> {
 }
 
 impl TerrainGenerator {
-    /// Returns the deterministic Village placed in 640-block grid cell `(gx, gz)`, if eligible.
-    /// Enforces ~40% spawn chance, >=160 blocks from world origin, 4 themed biome families,
-    /// and strict Boss Temple exclusion (same Voronoi biome cell or within 320 blocks).
+    /// Returns the deterministic Village placed in grid cell `(gx, gz)`, if eligible.
+    /// Enforces `VILLAGE_SPAWN_CHANCE_PERCENT` (~50%) spawn chance, >=160 blocks from world origin,
+    /// 4 themed biome families, and strict Boss Temple exclusion (same Voronoi biome cell or within 320 blocks).
     pub fn find_village_in_grid(&self, gx: i32, gz: i32) -> Option<VillagePlacement> {
         let base_x = gx * VILLAGE_GRID_SIZE;
         if base_x >= ARENA_BAND_START_X - VILLAGE_GRID_SIZE {
@@ -92,48 +92,69 @@ impl TerrainGenerator {
             return None;
         }
 
-        let margin = 64;
+        let margin = 48;
         let span = (VILLAGE_GRID_SIZE - margin * 2) as u64;
-        let ox = base_x + margin + (((h >> 8) & 0xFFFF) % span) as i32;
-        let oz = base_z + margin + (((h >> 24) & 0xFFFF) % span) as i32;
-
-        // Never spawn within 160 blocks of world origin (0, 0)
-        let dist_origin_sq = (ox as i64) * (ox as i64) + (oz as i64) * (oz as i64);
         let min_d = VILLAGE_MIN_ORIGIN_DIST as i64;
-        if dist_origin_sq < min_d * min_d {
-            return None;
-        }
-
-        let surface_y = self.surface_height(ox, oz);
-        if surface_y <= self.water_level + 2 || surface_y >= 94 {
-            return None;
-        }
-
-        let biome = self.get_biome(ox, oz, surface_y);
-        let theme = biome_to_village_theme(biome)?;
-
-        // Exclude any Village that shares a Voronoi biome cell with a Boss Temple
-        // or lies within VILLAGE_TEMPLE_EXCLUSION_RADIUS (320 blocks) of one.
-        let my_cell = self.macro_biome_cell_id(ox, oz);
-        let tgx_center = ox.div_euclid(TEMPLE_GRID_SIZE);
-        let tgz_center = oz.div_euclid(TEMPLE_GRID_SIZE);
         let excl_sq = (VILLAGE_TEMPLE_EXCLUSION_RADIUS as i64)
             * (VILLAGE_TEMPLE_EXCLUSION_RADIUS as i64);
-        for tgx in (tgx_center - 2)..=(tgx_center + 2) {
-            for tgz in (tgz_center - 2)..=(tgz_center + 2) {
-                if let Some(temple) = self.find_temple_in_grid(tgx, tgz) {
-                    let dx = (temple.origin.x - ox) as i64;
-                    let dz = (temple.origin.z - oz) as i64;
-                    if dx * dx + dz * dz <= excl_sq {
-                        return None;
-                    }
-                    if self.macro_biome_cell_id(temple.origin.x, temple.origin.z) == my_cell {
-                        return None;
+
+        // Try up to 4 deterministic candidate coordinates inside this cell so a single
+        // river/ocean/non-village biome edge doesn't waste an entire grid cell.
+        let mut chosen: Option<(i32, i32, i32, VillageTheme)> = None;
+        let mut cand_h = h;
+        for attempt in 0..4 {
+            if attempt > 0 {
+                cand_h = cand_h
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+            }
+            let ox = base_x + margin + (((cand_h >> 8) & 0xFFFF) % span) as i32;
+            let oz = base_z + margin + (((cand_h >> 24) & 0xFFFF) % span) as i32;
+
+            // Never spawn within 160 blocks of world origin (0, 0)
+            let dist_origin_sq = (ox as i64) * (ox as i64) + (oz as i64) * (oz as i64);
+            if dist_origin_sq < min_d * min_d {
+                continue;
+            }
+
+            let surface_y = self.surface_height(ox, oz);
+            if surface_y <= self.water_level + 2 || surface_y >= 94 {
+                continue;
+            }
+
+            let biome = self.get_biome(ox, oz, surface_y);
+            let Some(theme) = biome_to_village_theme(biome) else {
+                continue;
+            };
+
+            // Exclude any Village that shares a Voronoi biome cell with a Boss Temple
+            // or lies within VILLAGE_TEMPLE_EXCLUSION_RADIUS (320 blocks) of one.
+            let my_cell = self.macro_biome_cell_id(ox, oz);
+            let tgx_center = ox.div_euclid(TEMPLE_GRID_SIZE);
+            let tgz_center = oz.div_euclid(TEMPLE_GRID_SIZE);
+            let mut blocked_by_temple = false;
+            'temple_check: for tgx in (tgx_center - 2)..=(tgx_center + 2) {
+                for tgz in (tgz_center - 2)..=(tgz_center + 2) {
+                    if let Some(temple) = self.find_temple_in_grid(tgx, tgz) {
+                        let dx = (temple.origin.x - ox) as i64;
+                        let dz = (temple.origin.z - oz) as i64;
+                        if dx * dx + dz * dz <= excl_sq
+                            || self.macro_biome_cell_id(temple.origin.x, temple.origin.z)
+                                == my_cell
+                        {
+                            blocked_by_temple = true;
+                            break 'temple_check;
+                        }
                     }
                 }
             }
+            if !blocked_by_temple {
+                chosen = Some((ox, oz, surface_y, theme));
+                break;
+            }
         }
 
+        let (ox, oz, surface_y, theme) = chosen?;
         let village_id = village_id_from_grid(self.seed, gx, gz);
         let origin = IVec3::new(ox, surface_y, oz);
 
@@ -552,5 +573,22 @@ mod tests {
             Some(BlockId::WATER),
             "Village center well should contain water at origin"
         );
+    }
+
+    #[test]
+    fn test_village_discoverable_within_reasonable_distance_across_seeds() {
+        for seed in [42_u32, 1337, 2025, 9999, 12345] {
+            let gen = TerrainGenerator::new(seed);
+            let nearest = gen
+                .find_nearest_village(0, 0, None, 6)
+                .unwrap_or_else(|| panic!("Seed {} had no Village within 6 rings", seed));
+            let dist = ((nearest.origin.x as f64).hypot(nearest.origin.z as f64)) as i32;
+            assert!(
+                dist >= VILLAGE_MIN_ORIGIN_DIST && dist <= 1600,
+                "Seed {} nearest Village distance {} out of expected 160..=1600 range",
+                seed,
+                dist
+            );
+        }
     }
 }

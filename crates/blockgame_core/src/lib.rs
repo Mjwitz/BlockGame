@@ -99,7 +99,7 @@ pub use temple::{
     populate_arena_treasure_chest, spawn_arena_encounter, temple_id_from_grid, BossHudState,
     TempleBounds, TempleInstanceState, TempleKind, TempleManager, ARENA_BAND_START_X,
     ARENA_FLOOR_Y, ARENA_HALF_SIZE, ARENA_HEIGHT, ARENA_ORIGIN_BASE_X, BOSS_HUD_MAX_DISTANCE,
-    BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE,
+    BOSS_RECHALLENGE_COOLDOWN_SECS, TEMPLE_GRID_SIZE, TEMPLE_SPAWN_CHANCE_PERCENT,
 };
 pub use tool::{ToolTier, ToolType};
 pub use village::{
