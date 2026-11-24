@@ -3443,6 +3443,18 @@ impl UiBuilder {
                             format!("POISON {:.0}s", eff.remaining_secs.ceil()),
                             [0.42, 0.96, 0.46, 0.98],
                         ),
+                        blockgame_core::item::FoodEffectKind::Speed => (
+                            format!("SPEED {:.0}s", eff.remaining_secs.ceil()),
+                            [0.45, 0.88, 1.00, 0.98],
+                        ),
+                        blockgame_core::item::FoodEffectKind::Regeneration => (
+                            format!("REGENERATION {:.0}s", eff.remaining_secs.ceil()),
+                            [1.00, 0.56, 0.72, 0.98],
+                        ),
+                        blockgame_core::item::FoodEffectKind::MiningHaste => (
+                            format!("HASTE {:.0}s", eff.remaining_secs.ceil()),
+                            [1.00, 0.86, 0.36, 0.98],
+                        ),
                     };
                     let tw = Self::string_width(&text, 7.5, 0.5);
                     let bx = (screen_w - tw) * 0.5;
@@ -3648,7 +3660,7 @@ impl UiBuilder {
     ) {
         mesh.clear();
 
-        let mut hovered_item_name: Option<&str> = None;
+        let mut hovered_item_name: Option<String> = None;
 
         // 1. Semi-transparent backdrop overlay
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
@@ -3717,7 +3729,7 @@ impl UiBuilder {
                             && cursor_pos[1] >= sy
                             && cursor_pos[1] <= sy + slot_size
                         {
-                            hovered_item_name = Some(def.display_name);
+                            hovered_item_name = slot.tooltip_label(registry);
                         }
                     }
                 }
@@ -3756,7 +3768,7 @@ impl UiBuilder {
                     && cursor_pos[1] >= result_y
                     && cursor_pos[1] <= result_y + r_size
                 {
-                    hovered_item_name = Some(def.display_name);
+                    hovered_item_name = res.tooltip_label(registry);
                 }
             }
         }
@@ -3795,7 +3807,7 @@ impl UiBuilder {
                             && cursor_pos[1] >= sy
                             && cursor_pos[1] <= sy + slot_size
                         {
-                            hovered_item_name = Some(def.display_name);
+                            hovered_item_name = item_slot.tooltip_label(registry);
                         }
                     }
                 }
@@ -3842,7 +3854,7 @@ impl UiBuilder {
                         && cursor_pos[1] >= sy
                         && cursor_pos[1] <= sy + slot_size
                     {
-                        hovered_item_name = Some(def.display_name);
+                        hovered_item_name = item_slot.tooltip_label(registry);
                     }
                 }
             }
@@ -3874,7 +3886,7 @@ impl UiBuilder {
                         && cursor_pos[1] >= ay
                         && cursor_pos[1] <= ay + slot_size
                     {
-                        hovered_item_name = Some(def.display_name);
+                        hovered_item_name = item_slot.tooltip_label(registry);
                     }
                 }
             } else {
@@ -3892,6 +3904,7 @@ impl UiBuilder {
         }
 
         // 5. JEI Catalog Panel on right side
+        let mut jei_hover: Option<&str> = None;
         if let Some(jei) = jei_params {
             Self::draw_jei_panel(
                 mesh,
@@ -3900,7 +3913,7 @@ impl UiBuilder {
                 jei,
                 cursor_pos,
                 registry,
-                &mut hovered_item_name,
+                &mut jei_hover,
             );
         }
 
@@ -3913,8 +3926,11 @@ impl UiBuilder {
                 modal,
                 cursor_pos,
                 registry,
-                &mut hovered_item_name,
+                &mut jei_hover,
             );
+        }
+        if let Some(j) = jei_hover {
+            hovered_item_name = Some(j.to_string());
         }
 
         // 7. Cursor Held Item Stack (follows mouse position)
@@ -3932,7 +3948,7 @@ impl UiBuilder {
 
         // 6. Hover Tooltip (drawn on top of all slots and cursor items)
         if let Some(name) = hovered_item_name {
-            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
+            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], &name);
         }
     }
 
@@ -11387,13 +11403,7 @@ impl UiBuilder {
                         !s.is_enhanced() && offer.enhancement.is_compatible_with(s.item_id, registry)
                     });
                     let dyn_price = selected_item.map_or(offer.base_price_coins, |s| {
-                        blockgame_core::village::EnhanceOffer::new(
-                            offer.tier,
-                            offer.enhancement,
-                            offer.base_price_coins,
-                            offer.max_stock,
-                        )
-                        .price_for_item(s.item_id, registry)
+                        offer.price_for_item(s.item_id, registry)
                     });
                     let can_apply = offer.unlocked
                         && offer.stock_remaining > 0

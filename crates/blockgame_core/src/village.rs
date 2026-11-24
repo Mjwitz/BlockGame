@@ -77,7 +77,7 @@ impl VillageTheme {
             Self::Plains => "Plains Village",
             Self::Desert => "Desert Oasis Village",
             Self::Taiga => "Taiga Timber Village",
-            Self::Savanna => "Savanna Outpost Village",
+            Self::Savanna => "Savanna Acacia Village",
         }
     }
 
@@ -854,6 +854,19 @@ pub struct ShopUiSnapshot {
     pub enhance_offers: Vec<ShopEnhanceEntry>,
 }
 
+impl ShopEnhanceEntry {
+    /// Computes the Gold Coin fee to apply this Enhancement to `item_id`.
+    pub fn price_for_item(&self, item_id: ItemId, registry: &ItemRegistry) -> u32 {
+        EnhanceOffer::new(
+            self.tier,
+            self.enhancement,
+            self.base_price_coins,
+            self.max_stock,
+        )
+        .price_for_item(item_id, registry)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct VillageTickOutcome {
     /// Damage dealt by Village Guards to specific players: `(player_key, damage, knockback_dir)`.
@@ -866,6 +879,10 @@ pub struct VillageManager {
     pub shopkeepers: Vec<ShopkeeperEntity>,
     pub guards: Vec<VillageGuardEntity>,
     pub next_npc_id: u32,
+    /// Monotonic world tick counter (never wraps at 24,000) driving daily buyback resets,
+    /// 3-day stock restocks, and 1-day Guard aggro decay.
+    pub total_world_ticks: u64,
+    last_day_time: Option<f32>,
 }
 
 impl VillageManager {
@@ -875,7 +892,34 @@ impl VillageManager {
             shopkeepers: Vec::new(),
             guards: Vec::new(),
             next_npc_id: 1,
+            total_world_ticks: 0,
+            last_day_time: None,
         }
+    }
+
+    /// Advances the monotonic `total_world_ticks` clock from the wrapped `day_night_time` (0..24000).
+    /// Correctly handles day wraparound and sleeping skips without ever wrapping backwards.
+    pub fn advance_clock(&mut self, day_night_time: f32) -> u64 {
+        let cur = day_night_time.rem_euclid(TICKS_PER_DAY as f32);
+        if let Some(prev) = self.last_day_time {
+            let delta = if cur >= prev {
+                cur - prev
+            } else {
+                // Wrapped past 24,000 (midnight/new day or sleep skip)
+                (TICKS_PER_DAY as f32 - prev) + cur
+            };
+            let delta_ticks = delta.round().max(0.0) as u64;
+            if delta_ticks > 0 {
+                self.total_world_ticks = self.total_world_ticks.saturating_add(delta_ticks);
+                self.last_day_time = Some(cur);
+            }
+        } else {
+            self.last_day_time = Some(cur);
+            if self.total_world_ticks == 0 {
+                self.total_world_ticks = cur as u64;
+            }
+        }
+        self.total_world_ticks
     }
 
     /// Idempotently spawns a Village's Shopkeepers and Village Guards on first discovery.
@@ -2125,4 +2169,84 @@ mod tests {
             assert_eq!(decoded, pkt);
         }
     }
+
+    #[test]
+    fn test_monotonic_clock_wraparound_drives_restock_buyback_and_aggro_decay() {
+        let (mut mgr, sk_id, _guard_id) = make_test_manager();
+
+        // Day 0 afternoon -> midnight wrap -> Day 1 morning
+        let t0 = mgr.advance_clock(12_000.0);
+        assert_eq!(t0, 12_000);
+        let t1 = mgr.advance_clock(23_500.0);
+        assert_eq!(t1, 23_500);
+
+        // Trigger guard retaliation on Day 0 at tick 23_500
+        let _ = mgr.damage_npc(sk_id, 2.0, Vec3::ZERO, Some("alice"), t1);
+        assert!(mgr.is_player_hostile_to_village(42, "alice", t1));
+
+        // Wrap past midnight into Day 1 (day_night_time resets near 0)
+        let t2 = mgr.advance_clock(500.0);
+        assert_eq!(t2, 24_500);
+        // Step 1 full day forward across another midnight wrap -> Day 2
+        let _ = mgr.advance_clock(12_500.0);
+        let t3 = mgr.advance_clock(500.0);
+        assert_eq!(t3, 48_500);
+        assert!(
+            !mgr.is_player_hostile_to_village(42, "alice", t3),
+            "Guard aggro should expire after 1 full in-game day across midnight wraparounds"
+        );
+
+        // Step 1 more full day -> Day 3 (72_500 ticks >= 3-day restock interval)
+        let _ = mgr.advance_clock(12_500.0);
+        let t4 = mgr.advance_clock(500.0);
+        assert_eq!(t4, 72_500);
+        assert!(t4 / VILLAGE_RESTOCK_TICKS >= 1);
+    }
+
+    #[test]
+    fn test_enhanced_tooltip_and_specialty_food_buffs() {
+        use crate::item::{FoodEffectKind, ItemRegistry};
+        use crate::player::PlayerStats;
+
+        let registry = ItemRegistry::new();
+        let plain = ItemSlot::new(ItemId::DIAMOND_PICKAXE, 1);
+        assert_eq!(
+            plain.tooltip_label(&registry).as_deref(),
+            Some("Diamond Pickaxe")
+        );
+
+        let enhanced = ItemSlot::with_enhancement(
+            ItemId::DIAMOND_PICKAXE,
+            1,
+            0,
+            Some(Enhancement::Reinforced),
+        );
+        let label = enhanced.tooltip_label(&registry).expect("enhanced tooltip");
+        assert!(label.contains("Diamond Pickaxe"));
+        assert!(label.contains("Reinforced"));
+
+        // Verify specialty food buffs and that curing negative effects preserves positive buffs
+        let mut stats = PlayerStats::default();
+        stats.health = 10.0;
+        stats.add_status_effect(FoodEffectKind::Poison, 10.0);
+        stats.add_status_effect(FoodEffectKind::Regeneration, 30.0);
+        stats.add_status_effect(FoodEffectKind::Speed, 45.0);
+        stats.add_status_effect(FoodEffectKind::MiningHaste, 45.0);
+
+        stats.clear_negative_effects();
+        assert!(!stats.has_status_effect(FoodEffectKind::Poison));
+        assert!(stats.has_status_effect(FoodEffectKind::Regeneration));
+        assert!(stats.has_status_effect(FoodEffectKind::Speed));
+        assert!(stats.has_status_effect(FoodEffectKind::MiningHaste));
+        assert!(stats.speed_buff_multiplier() > 1.0);
+        assert!(stats.mining_haste_multiplier() > 1.0);
+
+        let health_before = stats.health;
+        stats.update(2.0, 50.0, false);
+        assert!(
+            stats.health > health_before,
+            "Regeneration buff should restore health over time"
+        );
+    }
 }
+

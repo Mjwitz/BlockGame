@@ -278,6 +278,7 @@ pub struct WorldManager {
     pub mp_village_npcs: Vec<blockgame_core::SyncedVillageNpcState>,
     announced_mp_villages: HashSet<u64>,
     pub pending_village_blueprints: Vec<blockgame_core::VillageSpawnBlueprint>,
+    pub pending_mp_npc_arrow_hits: Vec<(u32, f32, Vec3)>,
 }
 
 impl WorldManager {
@@ -334,6 +335,7 @@ impl WorldManager {
             mp_village_npcs: Vec::new(),
             announced_mp_villages: HashSet::new(),
             pending_village_blueprints: Vec::new(),
+            pending_mp_npc_arrow_hits: Vec::new(),
         }
     }
 
@@ -2090,9 +2092,10 @@ impl WorldManager {
         &mut self,
         dt: f32,
         player_pos: Vec3,
-        world_ticks: u64,
+        day_night_time: f32,
         is_multiplayer: bool,
     ) -> f32 {
+        let world_ticks = self.villages.advance_clock(day_night_time);
         let p_cpos = ChunkPos::new(
             (player_pos.x.floor() as i32).div_euclid(16),
             (player_pos.y.floor() as i32).div_euclid(16),
@@ -2638,7 +2641,52 @@ impl WorldManager {
                         {
                             animal.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
                             arrow.dead = true;
+                            hit = true;
                             break;
+                        }
+                    }
+                }
+                if !hit {
+                    let kb = arrow.velocity.normalize_or_zero();
+                    if self.is_multiplayer {
+                        for n in &self.mp_village_npcs {
+                            let pos = n.position;
+                            if p.x >= pos.x - 0.5
+                                && p.x <= pos.x + 0.5
+                                && p.y >= pos.y - 0.1
+                                && p.y <= pos.y + 1.95
+                                && p.z >= pos.z - 0.5
+                                && p.z <= pos.z + 0.5
+                            {
+                                self.pending_mp_npc_arrow_hits.push((n.id, arrow.damage, kb));
+                                arrow.dead = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        let hit_npc_id = self
+                            .villages
+                            .living_npc_targets()
+                            .into_iter()
+                            .find(|(_, pos)| {
+                                p.x >= pos.x - 0.5
+                                    && p.x <= pos.x + 0.5
+                                    && p.y >= pos.y - 0.1
+                                    && p.y <= pos.y + 1.95
+                                    && p.z >= pos.z - 0.5
+                                    && p.z <= pos.z + 0.5
+                            })
+                            .map(|(id, _)| id);
+                        if let Some(npc_id) = hit_npc_id {
+                            let wt = self.villages.total_world_ticks;
+                            let _ = self.villages.damage_npc(
+                                npc_id,
+                                arrow.damage,
+                                kb,
+                                Some("singleplayer"),
+                                wt,
+                            );
+                            arrow.dead = true;
                         }
                     }
                 }
@@ -2653,6 +2701,31 @@ impl WorldManager {
                 {
                     total_player_damage += arrow.damage;
                     arrow.dead = true;
+                } else if !self.is_multiplayer {
+                    let hit_npc_id = self
+                        .villages
+                        .living_npc_targets()
+                        .into_iter()
+                        .find(|(_, pos)| {
+                            p.x >= pos.x - 0.5
+                                && p.x <= pos.x + 0.5
+                                && p.y >= pos.y - 0.1
+                                && p.y <= pos.y + 1.95
+                                && p.z >= pos.z - 0.5
+                                && p.z <= pos.z + 0.5
+                        })
+                        .map(|(id, _)| id);
+                    if let Some(npc_id) = hit_npc_id {
+                        let wt = self.villages.total_world_ticks;
+                        let _ = self.villages.damage_npc(
+                            npc_id,
+                            arrow.damage,
+                            arrow.velocity.normalize_or_zero(),
+                            None,
+                            wt,
+                        );
+                        arrow.dead = true;
+                    }
                 }
             }
         }

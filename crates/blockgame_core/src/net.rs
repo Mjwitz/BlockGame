@@ -2463,6 +2463,7 @@ fn run_server_loop(
     let mut farming_sim = crate::farming::FarmingSimulation::from_save_data(&save_data);
     let mut station_sync_accum: f32 = 0.0;
     let mut animal_sync_accum: f32 = 0.0;
+    let mut village_sync_accum: f32 = 0.0;
     let mut animal_spawn_accum: f32 = 0.0;
     let mut had_animals = !save_data.animals.is_empty();
     let mut temple_monsters: Vec<crate::monster::MonsterEntity> = Vec::new();
@@ -3407,7 +3408,7 @@ fn run_server_loop(
                         ));
                     }
                     ClientPacket::InteractShopkeeper { npc_id } if clients[idx].authenticated => {
-                        let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
                         let uname = clients[idx].username.clone();
                         if let Some(snapshot) =
                             save_data
@@ -3424,7 +3425,7 @@ fn run_server_loop(
                         }
                     }
                     ClientPacket::ShopBuy { npc_id, offer_idx } if clients[idx].authenticated => {
-                        let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
                         let uname = clients[idx].username.clone();
                         let res = save_data.villages.buy_item(
                             npc_id,
@@ -3465,7 +3466,7 @@ fn run_server_loop(
                         }
                     }
                     ClientPacket::ShopSell { npc_id, offer_idx } if clients[idx].authenticated => {
-                        let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
                         let uname = clients[idx].username.clone();
                         let res = save_data.villages.sell_item(
                             npc_id,
@@ -3504,7 +3505,7 @@ fn run_server_loop(
                         inv_slot_idx,
                         offer_idx,
                     } if clients[idx].authenticated => {
-                        let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
                         let uname = clients[idx].username.clone();
                         let res = save_data.villages.enhance_item(
                             npc_id,
@@ -3550,7 +3551,7 @@ fn run_server_loop(
                         damage,
                         knockback,
                     } if clients[idx].authenticated => {
-                        let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
                         let uname = clients[idx].username.clone();
                         let _ = save_data.villages.damage_npc(
                             npc_id,
@@ -3567,18 +3568,35 @@ fn run_server_loop(
                         shops,
                         guard_positions,
                     } if clients[idx].authenticated => {
-                        let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
-                        let bp = crate::village::VillageSpawnBlueprint {
-                            village_id,
-                            theme,
-                            origin,
-                            shops,
-                            guard_positions,
-                        };
-                        if save_data.villages.ensure_village_spawned(&bp, world_ticks) {
-                            let npcs = collect_synced_village_npcs(&save_data.villages);
-                            outgoing_broadcasts
-                                .push((None, ServerPacket::VillageNpcsSync { npcs }));
+                        let dist_sq = (origin.x as i64) * (origin.x as i64)
+                            + (origin.z as i64) * (origin.z as i64);
+                        let min_d = crate::village::VILLAGE_MIN_ORIGIN_DIST as i64;
+                        let valid_origin = dist_sq >= min_d * min_d
+                            && origin.x < crate::temple::ARENA_BAND_START_X
+                            && (3..=5).contains(&shops.len())
+                            && (2..=3).contains(&guard_positions.len())
+                            && shops.iter().all(|(_, h, c)| {
+                                h.distance(origin.as_vec3()) <= 28.0
+                                    && c.distance(origin.as_vec3()) <= 28.0
+                            })
+                            && guard_positions
+                                .iter()
+                                .all(|gp| gp.distance(origin.as_vec3()) <= 24.0);
+                        if valid_origin {
+                            let world_ticks =
+                                save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                            let bp = crate::village::VillageSpawnBlueprint {
+                                village_id,
+                                theme,
+                                origin,
+                                shops,
+                                guard_positions,
+                            };
+                            if save_data.villages.ensure_village_spawned(&bp, world_ticks) {
+                                let npcs = collect_synced_village_npcs(&save_data.villages);
+                                outgoing_broadcasts
+                                    .push((None, ServerPacket::VillageNpcsSync { npcs }));
+                            }
                         }
                     }
                     ClientPacket::SpawnItemDrop {
@@ -4001,11 +4019,13 @@ fn run_server_loop(
 
             // Tick temple re-challenge cooldowns and active server-authoritative boss encounters
             save_data.temples.tick_cooldowns(dt);
+            let mut server_npc_damage: Vec<(u32, f32, Vec3)> = Vec::new();
             if (!temple_monsters.is_empty() || had_temple_monsters) && !all_players.is_empty() {
                 had_temple_monsters = !temple_monsters.is_empty();
                 let mut newly_summoned = Vec::new();
                 let mut tick_damage_events: Vec<(u32, f32)> = Vec::new();
                 let mut tick_announcements: Vec<String> = Vec::new();
+                let server_npc_targets = save_data.villages.living_npc_targets();
 
                 for m in temple_monsters.iter_mut() {
                     if m.dead {
@@ -4020,10 +4040,20 @@ fn run_server_loop(
                             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
                         });
                     let Some(target) = nearest else { continue; };
-                    let outcome = m.update(dt, target.position, 0.0, &world, &block_registry);
+                    let outcome = m.update_with_npc_targets(
+                        dt,
+                        target.position,
+                        &server_npc_targets,
+                        0.0,
+                        &world,
+                        &block_registry,
+                    );
 
                     if outcome.damage_to_player > 0.0 {
                         tick_damage_events.push((target.player_id, outcome.damage_to_player));
+                    }
+                    if let Some(ev) = outcome.damage_to_npc {
+                        server_npc_damage.push(ev);
                     }
                     if let Some((origin, vel)) = outcome.spawned_arrow {
                         let aid = next_temple_arrow_id;
@@ -4397,7 +4427,13 @@ fn run_server_loop(
 
                 // B2. Authoritative NPC Villages (Shopkeepers & Village Guards)
                 {
-                    let world_ticks = save_data.metadata.day_night_time.max(0.0) as u64;
+                    let world_ticks =
+                        save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                    for (npc_id, dmg, kb) in server_npc_damage {
+                        let _ = save_data
+                            .villages
+                            .damage_npc(npc_id, dmg, kb, None, world_ticks);
+                    }
                     let mut village_players: Vec<(String, Vec3)> = Vec::new();
                     for c in &clients {
                         if c.authenticated && !c.is_dead && c.model.health > 0.0 {
@@ -4438,10 +4474,12 @@ fn run_server_loop(
                             }
                         }
                     }
-                    if animal_sync_accum == 0.0
+                    village_sync_accum += dt;
+                    if village_sync_accum >= 0.15
                         && (!save_data.villages.shopkeepers.is_empty()
                             || !save_data.villages.guards.is_empty())
                     {
+                        village_sync_accum = 0.0;
                         let synced_npcs = collect_synced_village_npcs(&save_data.villages);
                         broadcast_pkt(
                             &mut clients,

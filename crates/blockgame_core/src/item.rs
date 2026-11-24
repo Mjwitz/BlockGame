@@ -527,6 +527,24 @@ impl ItemSlot {
         self.enhancement.is_some()
     }
 
+    /// Formats a tooltip display label including any shop-exclusive Enhancement name and effect.
+    pub fn tooltip_label(&self, registry: &ItemRegistry) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let def = registry.get(self.item_id)?;
+        if let Some(enh) = self.enhancement {
+            Some(format!(
+                "{} [{} - {}]",
+                def.display_name,
+                enh.display_name(),
+                enh.description()
+            ))
+        } else {
+            Some(def.display_name.to_string())
+        }
+    }
+
     /// Applies an Enhancement to an unenhanced item and restores it to full durability.
     /// Returns `false` if the slot is empty or already enhanced.
     pub fn apply_enhancement(&mut self, enhancement: Enhancement) -> bool {
@@ -665,12 +683,15 @@ impl ItemSlot {
     }
 }
 
-/// Negative status effects that can be inflicted by unsafe foods.
+/// Status effects applied by unsafe or specialty foods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum FoodEffectKind {
     FoodPoisoning = 1,
     Poison = 2,
+    Speed = 3,
+    Regeneration = 4,
+    MiningHaste = 5,
 }
 
 impl FoodEffectKind {
@@ -678,8 +699,16 @@ impl FoodEffectKind {
         match v {
             1 => Some(Self::FoodPoisoning),
             2 => Some(Self::Poison),
+            3 => Some(Self::Speed),
+            4 => Some(Self::Regeneration),
+            5 => Some(Self::MiningHaste),
             _ => None,
         }
+    }
+
+    #[inline]
+    pub const fn is_negative(self) -> bool {
+        matches!(self, Self::FoodPoisoning | Self::Poison)
     }
 }
 
@@ -2925,7 +2954,10 @@ impl ItemRegistry {
                 "Golden Apple Pie",
                 16,
                 571,
-                FoodDef::new(14, 18.0).with_always_edible().with_cure(),
+                FoodDef::new(14, 18.0)
+                    .with_always_edible()
+                    .with_cure()
+                    .with_effect(FoodEffectKind::Regeneration, 1.0, 30.0),
             ),
             (
                 ItemId::ROYAL_FEAST,
@@ -2933,7 +2965,9 @@ impl ItemRegistry {
                 "Royal Feast",
                 16,
                 572,
-                FoodDef::new(18, 22.0).with_always_edible(),
+                FoodDef::new(18, 22.0)
+                    .with_always_edible()
+                    .with_effect(FoodEffectKind::MiningHaste, 1.0, 45.0),
             ),
             (
                 ItemId::SPICED_ELIXIR,
@@ -2944,7 +2978,8 @@ impl ItemRegistry {
                 FoodDef::new(6, 12.0)
                     .with_eat_duration(0.8)
                     .with_always_edible()
-                    .with_cure(),
+                    .with_cure()
+                    .with_effect(FoodEffectKind::Speed, 1.0, 45.0),
             ),
         ];
         for (id, name, display_name, max_stack, icon_tile, food) in village_foods {

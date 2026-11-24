@@ -2666,7 +2666,7 @@ impl ApplicationHandler for BlockGameApp {
                                     ui_cursor,
                                     &state.item_registry,
                                 ) {
-                                    let world_ticks = state.day_night.time.max(0.0) as u64;
+                                    let world_ticks = state.world_manager.villages.advance_clock(state.day_night.time);
                                     match action {
                                         blockgame_render::ShopUiAction::Close => {
                                             state.active_shop_snapshot = None;
@@ -3158,7 +3158,7 @@ impl ApplicationHandler for BlockGameApp {
                                             );
                                         } else {
                                             let world_ticks =
-                                                state.day_night.time.max(0.0) as u64;
+                                                state.world_manager.villages.advance_clock(state.day_night.time);
                                             let _ = state.world_manager.villages.damage_npc(
                                                 npc_id,
                                                 attack_damage,
@@ -3780,7 +3780,7 @@ impl ApplicationHandler for BlockGameApp {
                                         },
                                     );
                                 } else {
-                                    let world_ticks = state.day_night.time.max(0.0) as u64;
+                                    let world_ticks = state.world_manager.villages.advance_clock(state.day_night.time);
                                     if let Some(snap) = state
                                         .world_manager
                                         .villages
@@ -5730,8 +5730,9 @@ impl ApplicationHandler for BlockGameApp {
                         }
                     }
 
-                    // 2. Step player physics against voxel world (with Agility skill speed & jump modifiers)
-                    let agi_speed = state.player_skills.agility_speed_multiplier();
+                    // 2. Step player physics against voxel world (with Agility skill + food buff modifiers)
+                    let agi_speed = state.player_skills.agility_speed_multiplier()
+                        * state.player_stats.speed_buff_multiplier();
                     let agi_jump = state.player_skills.agility_jump_multiplier();
                     let fall_damage = {
                         let world_guard = state.world_manager.world().lock().unwrap();
@@ -6085,11 +6086,10 @@ impl ApplicationHandler for BlockGameApp {
                         state.day_night.sun_intensity(),
                         state.mp_client.is_some(),
                     );
-                    let world_ticks = state.day_night.time.max(0.0) as u64;
                     let guard_dmg = state.world_manager.update_villages(
                         dt,
                         state.player.position,
-                        world_ticks,
+                        state.day_night.time,
                         state.mp_client.is_some(),
                     );
                     if guard_dmg > 0.0 && !state.player_stats.game_mode.is_creative() {
@@ -6136,6 +6136,23 @@ impl ApplicationHandler for BlockGameApp {
                             state.player.half_width,
                             state.player.height,
                         );
+                    if !state.world_manager.pending_mp_npc_arrow_hits.is_empty() {
+                        if let Some(client) = &mut state.mp_client {
+                            for (npc_id, damage, knockback) in
+                                state.world_manager.pending_mp_npc_arrow_hits.drain(..)
+                            {
+                                client.send(
+                                    &blockgame_core::net::ClientPacket::AttackVillageNpc {
+                                        npc_id,
+                                        damage,
+                                        knockback,
+                                    },
+                                );
+                            }
+                        } else {
+                            state.world_manager.pending_mp_npc_arrow_hits.clear();
+                        }
+                    }
                     if !mp_arrow_hits.is_empty() {
                         if let Some(client) = &mut state.mp_client {
                             for (monster_id, damage, knockback) in mp_arrow_hits {
@@ -6667,7 +6684,8 @@ impl ApplicationHandler for BlockGameApp {
                                 let held_enh_speed = state
                                     .inventory
                                     .get(state.active_hotbar_slot)
-                                    .mining_speed_multiplier();
+                                    .mining_speed_multiplier()
+                                    * state.player_stats.mining_haste_multiplier();
                                 let break_time = if base_break_time.is_finite() {
                                     base_break_time / (skill_speed.max(1.0) * held_enh_speed)
                                 } else {
@@ -7669,6 +7687,24 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         if state.third_person && !state.player_stats.is_dead {
                             nametag_models.push(state.current_local_player_model());
+                        }
+                        if let Some((target_npc_id, _, _, _)) = state
+                            .world_manager
+                            .raycast_village_npc(
+                                state.player.eye_position(),
+                                state.camera.forward(),
+                                10.0,
+                            )
+                        {
+                            let target_pid = 0x8000_0000 | target_npc_id;
+                            if let Some(model) = state
+                                .world_manager
+                                .collect_village_npc_render_models()
+                                .into_iter()
+                                .find(|m| m.player_id == target_pid)
+                            {
+                                nametag_models.push(model);
+                            }
                         }
                         if !nametag_models.is_empty() {
                             UiBuilder::draw_player_nametags(

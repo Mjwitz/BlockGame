@@ -1387,7 +1387,7 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
 }
 
 const VILLAGES_MAGIC: &[u8; 4] = b"BGVL";
-const VILLAGES_VERSION: u32 = 1;
+const VILLAGES_VERSION: u32 = 2;
 
 pub fn save_villages_file(
     world_dir: &Path,
@@ -1398,6 +1398,7 @@ pub fn save_villages_file(
     w.write_all(VILLAGES_MAGIC)?;
     write_u32(&mut w, VILLAGES_VERSION)?;
     write_u32(&mut w, villages.next_npc_id)?;
+    write_u64(&mut w, villages.total_world_ticks)?;
 
     // Village records
     write_u32(&mut w, villages.villages.len() as u32)?;
@@ -1483,12 +1484,15 @@ pub fn load_villages_file(world_dir: &Path) -> io::Result<Option<crate::village:
         return Ok(None);
     }
     let version = read_u32(&mut r)?;
-    if version != VILLAGES_VERSION {
+    if version != 1 && version != VILLAGES_VERSION {
         return Ok(None);
     }
 
     let mut mgr = crate::village::VillageManager::new();
     mgr.next_npc_id = read_u32(&mut r)?.max(1);
+    if version >= 2 {
+        mgr.total_world_ticks = read_u64(&mut r)?;
+    }
 
     let vcount = read_u32(&mut r)? as usize;
     for _ in 0..vcount {
