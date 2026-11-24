@@ -307,6 +307,8 @@ pub struct MonsterEntity {
     pub invuln_timer: f32,
     pub barrage_timer: f32,
     pub temple_id: Option<u64>,
+    pub path: Vec<Vec3>,
+    pub path_recalc_timer: f32,
 }
 
 impl MonsterEntity {
@@ -343,6 +345,8 @@ impl MonsterEntity {
             invuln_timer: 0.0,
             barrage_timer: 0.0,
             temple_id: None,
+            path: Vec::new(),
+            path_recalc_timer: 0.0,
         }
     }
 
@@ -695,7 +699,32 @@ impl MonsterEntity {
 
         if spider_hostile && dist < aggro_range && to_player.y.abs() < vertical_range {
             self.in_combat = true;
-            let dir = horiz_to_player.normalize_or_zero();
+            let eye_pos = self.position + Vec3::new(0.0, 1.5, 0.0);
+            let target_aim = target_pos + Vec3::new(0.0, 1.1, 0.0);
+            let has_los = has_line_of_sight(eye_pos, target_aim, world, registry);
+            let direct_dir = horiz_to_player.normalize_or_zero();
+
+            // When line of sight is blocked by a wall/building, route around it via cached A*
+            let dir = if !has_los && !self.kind.is_boss() {
+                let steer = crate::village::steer_along_path(
+                    self.position,
+                    target_pos,
+                    &mut self.path,
+                    &mut self.path_recalc_timer,
+                    dt,
+                    world,
+                    registry,
+                );
+                let to_steer = Vec3::new(steer.x - self.position.x, 0.0, steer.z - self.position.z);
+                if to_steer.length_squared() > 0.0025 {
+                    to_steer.normalize()
+                } else {
+                    direct_dir
+                }
+            } else {
+                self.path.clear();
+                direct_dir
+            };
             self.yaw = dir.x.atan2(dir.z);
 
             match self.kind {
@@ -709,30 +738,32 @@ impl MonsterEntity {
                         MonsterKind::ShadowKnight => 2.0,
                         _ => 1.65,
                     };
-                    if dist > melee_range * 0.75 {
+                    if !has_los || dist > melee_range * 0.75 {
                         target_vel = dir * speed;
                         self.is_moving = true;
                     } else {
                         self.is_moving = false;
                     }
-                    // Jungle Stalker leaps periodically toward the player
+                    // Jungle Stalker leaps periodically toward the player when LOS is clear
                     if self.kind == MonsterKind::JungleStalker
+                        && has_los
                         && self.on_ground
                         && dist > 3.5
                         && dist < 10.0
                         && self.special_cooldown <= 0.0
                     {
-                        self.velocity = dir * 9.5 + Vec3::new(0.0, 5.5, 0.0);
+                        self.velocity = direct_dir * 9.5 + Vec3::new(0.0, 5.5, 0.0);
                         self.on_ground = false;
                         self.special_cooldown = 4.0;
                     }
-                    if dist <= melee_range
+                    if has_los
+                        && dist <= melee_range
                         && to_player.y.abs() <= 2.0
                         && self.attack_cooldown <= 0.0
                     {
                         if let Some(npc_id) = target_npc_id {
                             outcome.damage_to_npc =
-                                Some((npc_id, self.kind.attack_damage(), dir));
+                                Some((npc_id, self.kind.attack_damage(), direct_dir));
                         } else {
                             outcome.damage_to_player = self.kind.attack_damage();
                         }
@@ -749,7 +780,11 @@ impl MonsterEntity {
                     } else {
                         11.5
                     };
-                    if dist > keep_max {
+                    if !has_los {
+                        // No line of sight: do not shoot at walls — walk around to an opening!
+                        target_vel = dir * speed;
+                        self.is_moving = true;
+                    } else if dist > keep_max {
                         target_vel = dir * speed;
                         self.is_moving = true;
                     } else if dist < 4.5 {
@@ -759,9 +794,8 @@ impl MonsterEntity {
                         self.is_moving = false;
                     }
 
-                    if dist <= 18.0 && self.attack_cooldown <= 0.0 {
-                        let shoot_origin = self.position + Vec3::new(0.0, 1.5, 0.0);
-                        let target_aim = target_pos + Vec3::new(0.0, 1.1, 0.0);
+                    if has_los && dist <= 18.0 && self.attack_cooldown <= 0.0 {
+                        let shoot_origin = eye_pos;
                         let delta = target_aim - shoot_origin;
                         let horiz_d = Vec3::new(delta.x, 0.0, delta.z).length();
                         let aim_dir =
@@ -1180,6 +1214,33 @@ pub fn has_sky_access(pos: IVec3, world: &World, registry: &BlockRegistry) -> bo
     true
 }
 
+/// Returns `true` if a straight ray from `from` to `to` has no obstructing solid blocks.
+pub fn has_line_of_sight(
+    from: Vec3,
+    to: Vec3,
+    world: &World,
+    registry: &BlockRegistry,
+) -> bool {
+    let delta = to - from;
+    let dist = delta.length();
+    if dist <= 0.35 {
+        return true;
+    }
+    let dir = delta / dist;
+    let step = 0.35_f32;
+    let mut t = 0.30_f32;
+    while t < dist - 0.25 {
+        let p = from + dir * t;
+        let bpos = IVec3::new(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+        let b = world.get_block(bpos);
+        if registry.is_solid(b) {
+            return false;
+        }
+        t += step;
+    }
+    true
+}
+
 /// Computes effective light level (0.0..=15.0) at `pos` combining scaled sky light and nearby emissive block light.
 /// Sky light passes through leaves with mild attenuation (1 level per leaf block), preventing daytime spawning under trees.
 pub fn compute_light_at(
@@ -1366,5 +1427,100 @@ mod tests {
             &world,
             &registry
         ));
+    }
+
+    #[test]
+    fn test_skeleton_does_not_shoot_through_wall_and_paths_to_opening() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 4, z, BlockId::COBBLESTONE);
+            }
+        }
+        // Solid wall across z = 8 from x = 4..=12, y = 5..=7, leaving openings on the sides
+        for x in 4..=12 {
+            for y in 5..=7 {
+                chunk.set(x, y, 8, BlockId::PLANKS);
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let target_pos = Vec3::new(8.5, 5.0, 11.5);
+        let mut skel = MonsterEntity::new(1, MonsterKind::Skeleton, Vec3::new(8.5, 5.0, 5.5));
+        skel.attack_cooldown = 0.0;
+        skel.on_ground = true;
+
+        // First tick behind wall: must NOT fire an arrow into the wall, and must move laterally toward the opening
+        let out = skel.update(0.1, target_pos, 0.0, &world, &registry);
+        assert!(
+            out.spawned_arrow.is_none(),
+            "Skeleton must not shoot through a solid wall without line of sight"
+        );
+        assert!(skel.is_moving, "Skeleton should walk around the wall to gain LOS");
+
+        // Tick forward until it routes around the wall and gets a clean shot
+        let mut eventually_fired = false;
+        for _ in 0..120 {
+            let o = skel.update(0.1, target_pos, 0.0, &world, &registry);
+            if o.spawned_arrow.is_some() {
+                eventually_fired = true;
+                break;
+            }
+        }
+        assert!(
+            eventually_fired,
+            "Skeleton should walk around the wall to an opening and shoot once LOS is clear (ended at {:?})",
+            skel.position
+        );
+    }
+
+    #[test]
+    fn test_zombie_paths_around_wall_to_opening() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 4, z, BlockId::COBBLESTONE);
+            }
+        }
+        // Solid 7x7 hut walls at x=5..=11, z=5..=11 with a 1-wide South doorway at (8, 5..=6, 11)
+        for x in 5..=11 {
+            for z in 5..=11 {
+                let is_wall = x == 5 || x == 11 || z == 5 || z == 11;
+                if is_wall {
+                    let is_door = x == 8 && z == 11;
+                    for y in 5..=7 {
+                        if !(is_door && y <= 6) {
+                            chunk.set(x, y, z, BlockId::PLANKS);
+                        }
+                    }
+                }
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let target_pos = Vec3::new(8.5, 5.0, 8.5);
+        let mut zombie = MonsterEntity::new(2, MonsterKind::Zombie, Vec3::new(8.5, 5.0, 3.5));
+        zombie.on_ground = true;
+
+        for _ in 0..140 {
+            zombie.update(0.1, target_pos, 0.0, &world, &registry);
+        }
+        let dist = Vec3::new(
+            zombie.position.x - target_pos.x,
+            0.0,
+            zombie.position.z - target_pos.z,
+        )
+        .length();
+        assert!(
+            dist < 2.2,
+            "Zombie should route around the hut wall through the South doorway to {:?}, ended at {:?} (dist {:.2})",
+            target_pos,
+            zombie.position,
+            dist
+        );
     }
 }

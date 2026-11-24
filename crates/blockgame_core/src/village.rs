@@ -1905,7 +1905,7 @@ pub fn find_voxel_path(
 
 /// Maintains a cached A* waypoint path for an NPC and returns the immediate steering target.
 /// Falls back cleanly to `goal` when no voxel path is needed or the world is empty.
-fn steer_along_path(
+pub(crate) fn steer_along_path(
     pos: Vec3,
     goal: Vec3,
     path: &mut Vec<Vec3>,
