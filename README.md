@@ -71,7 +71,7 @@ Download the latest archive from the [GitHub Releases](https://github.com/Mjwitz
   ```bash
   sudo apt-get update
   sudo apt-get install -y build-essential pkg-config libasound2-dev \
-    libx11-dev libxi-dev libxcursor-dev libxrandr-dev libwayland-dev libxkbcommon-dev
+    libx11-dev libxi-dev libxcursor-dev libxrandr-dev libwayland-dev libxkbcommon-dev libudev-dev
   ```
 
 #### Build & Run

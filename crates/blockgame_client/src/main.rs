@@ -1,6 +1,7 @@
 pub mod achievement_toast;
 mod app;
 pub mod audio;
+pub mod controller;
 mod headless;
 pub mod settings;
 pub mod voice;

@@ -2,6 +2,7 @@ pub mod atlas;
 pub mod camera;
 pub mod character_mesh;
 pub mod character_pipeline;
+pub mod controller_glyphs;
 pub mod day_night;
 pub mod font;
 pub mod mesh;
@@ -10,6 +11,9 @@ pub mod ui;
 pub mod wireframe;
 
 pub use atlas::TextureAtlas;
+pub use controller_glyphs::{
+    glyph_tile_id, ControllerFamily, GamepadButton, GlyphStyle, InputMode,
+};
 pub use camera::{Camera, CameraUniform, Frustum, FrustumPlane};
 pub use character_mesh::{
     build_character_rig_mesh, build_player_held_items_mesh, build_single_character_preview_mesh,

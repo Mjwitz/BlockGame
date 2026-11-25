@@ -1149,5 +1149,59 @@ mod tests {
             player.position
         );
     }
+
+    #[test]
+    fn test_analog_wish_dir_scales_walk_speed() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, 0)));
+        for z in 0..8 {
+            for x in 0..16 {
+                world.set_block(IVec3::new(x, 0, z), BlockId::STONE);
+            }
+        }
+
+        let mut full_speed = PlayerPhysics::new(Vec3::new(2.0, 1.0, 4.0));
+        full_speed.on_ground = true;
+        let mut half_speed = PlayerPhysics::new(Vec3::new(2.0, 1.0, 4.0));
+        half_speed.on_ground = true;
+
+        for _ in 0..60 {
+            full_speed.update(1.0 / 60.0, Vec3::new(1.0, 0.0, 0.0), false, false, &world, &registry);
+            half_speed.update(1.0 / 60.0, Vec3::new(0.5, 0.0, 0.0), false, false, &world, &registry);
+        }
+
+        let full_dx = full_speed.position.x - 2.0;
+        let half_dx = half_speed.position.x - 2.0;
+        assert!(full_dx > 3.0, "expected full walk distance > 3.0, got {full_dx}");
+        assert!(
+            (half_dx / full_dx - 0.5).abs() < 0.05,
+            "expected half analog stick to cover ~50% distance, got {half_dx} vs {full_dx}"
+        );
+    }
+
+    #[test]
+    fn test_creative_flight_ascend_and_descend() {
+        let registry = BlockRegistry::new();
+        let world = World::new();
+        let mut player = PlayerPhysics::new(Vec3::new(0.0, 20.0, 0.0));
+        player.flying = true;
+
+        player.update(0.5, Vec3::new(0.0, 1.0, 0.0), false, false, &world, &registry);
+        assert!(
+            player.position.y > 27.0,
+            "expected positive wish_dir.y to ascend while flying, got {}",
+            player.position.y
+        );
+
+        let peak_y = player.position.y;
+        player.update(0.5, Vec3::new(0.0, -1.0, 0.0), false, false, &world, &registry);
+        assert!(
+            (player.position.y - 20.0).abs() < 1e-3 && player.position.y < peak_y,
+            "expected negative wish_dir.y to descend symmetrically while flying, got {}",
+            player.position.y
+        );
+    }
 }
+
 
