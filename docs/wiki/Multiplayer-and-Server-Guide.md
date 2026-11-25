@@ -36,6 +36,9 @@ motd=&aA BlockGame Dedicated Server
 directory-url=http://15.204.81.97:25569
 public-host=auto
 max-players=20
+
+# Gameplay Settings
+broadcast-achievements=true
 ```
 
 To use a custom config file path (e.g. for multiple server instances):

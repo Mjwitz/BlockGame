@@ -28,6 +28,7 @@
 | `E` | Open / close 2x2 inventory & crafting screen (also shows Armor slots and JEI-style recipe sidebar) |
 | `B` | Open / close your portable **Backpack** (opens the backpack in your active hotbar slot or first backpack in inventory) |
 | `K` | Open / close the **Skills & Milestones** menu (view levels 1–1000, perks, and milestone unlocks) |
+| `J` | Open / close the **Achievements** screen (also accessible from the Main Menu and Pause Menu) |
 | `Left Click` (in UI) | Pick up / place full item stack |
 | `Right Click` (in UI) | Pick up half stack / place single item (or clear search bar in Storage Terminal / JEI) |
 | `Shift + Left Click` | Quick-transfer stack between inventory, hotbar, chests, backpacks, storage terminals, or furnaces |

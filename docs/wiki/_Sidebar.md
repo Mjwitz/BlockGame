@@ -4,6 +4,7 @@
 - [[Controls and UI|Controls-and-UI]]
 - [[Character Creator|Character-Creator]]
 - [[Gameplay and Survival|Gameplay-and-Survival]]
+- [[Achievements]]
 - [[Farming and Cooking|Farming-and-Cooking]]
 - [[Power and Storage|Power-and-Storage]]
 - [[Mobs and Breeding|Mobs-and-Breeding]]
