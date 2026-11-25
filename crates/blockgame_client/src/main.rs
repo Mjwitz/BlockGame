@@ -1,3 +1,4 @@
+pub mod achievement_toast;
 mod app;
 pub mod audio;
 mod headless;

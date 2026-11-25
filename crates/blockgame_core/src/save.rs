@@ -17,7 +17,7 @@ use crate::{
 };
 
 const SAVE_MAGIC: &[u8; 4] = b"BGSV";
-pub const SAVE_VERSION: u32 = 3;
+pub const SAVE_VERSION: u32 = 4;
 
 pub const CHUNK_MAGIC: &[u8; 4] = b"BGCH";
 pub const CONTAINER_MAGIC: &[u8; 4] = b"BGCT";
@@ -35,6 +35,9 @@ pub struct WorldMetadata {
     pub total_time: f32,
     pub day_night_time: f32,
     pub game_mode: crate::player::GameMode,
+    /// Whether Achievement Eligibility is intact for this world.
+    /// Permanently cleared if Creative mode or admin/cheat commands are used.
+    pub achievements_enabled: bool,
 }
 
 impl WorldMetadata {
@@ -50,6 +53,7 @@ impl WorldMetadata {
             total_time: 0.0,
             day_night_time: 0.25, // Morning start
             game_mode: crate::player::GameMode::Survival,
+            achievements_enabled: true,
         }
     }
 }
@@ -360,7 +364,7 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
     }
 
     let version = read_u32(&mut r)?;
-    if version != 1 && version != 2 && version != SAVE_VERSION {
+    if version != 1 && version != 2 && version != 3 && version != SAVE_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported save version: {}", version),
@@ -376,6 +380,13 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
     let game_mode = read_u8(&mut r)
         .map(crate::player::GameMode::from_u8)
         .unwrap_or(crate::player::GameMode::Survival);
+    let achievements_enabled = if version >= 4 {
+        read_u8(&mut r)
+            .map(|b| b != 0)
+            .unwrap_or(game_mode == crate::player::GameMode::Survival)
+    } else {
+        game_mode == crate::player::GameMode::Survival
+    };
 
     Ok(WorldMetadata {
         name,
@@ -385,6 +396,7 @@ pub fn load_world_metadata(world_dir: &Path) -> io::Result<WorldMetadata> {
         total_time,
         day_night_time,
         game_mode,
+        achievements_enabled,
     })
 }
 
@@ -1322,6 +1334,7 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
         write_f32(&mut w, data.metadata.total_time)?;
         write_f32(&mut w, data.metadata.day_night_time)?;
         write_u8(&mut w, data.metadata.game_mode as u8)?;
+        write_u8(&mut w, u8::from(data.metadata.achievements_enabled))?;
 
         w.flush()?;
     }
@@ -1746,7 +1759,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
             ));
         }
         let version = read_u32(&mut r)?;
-        if version != 1 && version != 2 && version != SAVE_VERSION {
+        if version != 1 && version != 2 && version != 3 && version != SAVE_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Unsupported save version: {}", version),
@@ -1765,6 +1778,13 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 .unwrap_or(crate::player::GameMode::Survival)
         } else {
             crate::player::GameMode::Survival
+        };
+        let achievements_enabled = if version >= 4 {
+            read_u8(&mut r)
+                .map(|b| b != 0)
+                .unwrap_or(game_mode == crate::player::GameMode::Survival)
+        } else {
+            game_mode == crate::player::GameMode::Survival
         };
 
         let legacy_player = if version < 3 {
@@ -1823,6 +1843,7 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
                 total_time,
                 day_night_time,
                 game_mode,
+                achievements_enabled,
             },
             legacy_player,
         )
@@ -2732,6 +2753,65 @@ mod tests {
             .expect("old player.dat without skills suffix must still load")
             .expect("player exists");
         assert_eq!(loaded_old.skills, crate::skills::PlayerSkills::new());
+
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_achievements_enabled_v4_roundtrip_and_v3_compat() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "blockgame_test_ach_meta_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        fs::create_dir_all(&temp_root).unwrap();
+
+        let mut meta = WorldMetadata::new("Tainted Survival", 777);
+        meta.game_mode = crate::GameMode::Survival;
+        meta.achievements_enabled = false;
+        let player = SavedPlayerState {
+            position: Vec3::new(0.0, 20.0, 0.0),
+            velocity: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            stats: PlayerStats::new(),
+            inventory: Inventory::default(),
+            active_hotbar_slot: 0,
+            rank: "default".to_string(),
+            homes: HashMap::new(),
+            skills: crate::skills::PlayerSkills::new(),
+        };
+        let mut save = WorldSaveData::new(meta, player);
+        let world_dir = save_world_to_dir(&temp_root, &mut save).unwrap();
+
+        let loaded_meta = load_world_metadata(&world_dir).unwrap();
+        assert_eq!(loaded_meta.game_mode, crate::GameMode::Survival);
+        assert!(!loaded_meta.achievements_enabled);
+        let loaded = load_world_from_dir(&temp_root, "Tainted_Survival").unwrap();
+        assert!(!loaded.metadata.achievements_enabled);
+
+        for (folder, mode, expected_enabled) in [
+            ("legacy_v3_surv", crate::GameMode::Survival, true),
+            ("legacy_v3_creat", crate::GameMode::Creative, false),
+        ] {
+            let dir = temp_root.join(folder);
+            fs::create_dir_all(&dir).unwrap();
+            let mut buf = Vec::new();
+            buf.write_all(SAVE_MAGIC).unwrap();
+            write_u32(&mut buf, 3).unwrap();
+            write_string(&mut buf, folder).unwrap();
+            write_string(&mut buf, folder).unwrap();
+            write_u32(&mut buf, 42).unwrap();
+            write_u64(&mut buf, 1000).unwrap();
+            write_f32(&mut buf, 10.0).unwrap();
+            write_f32(&mut buf, 0.25).unwrap();
+            write_u8(&mut buf, mode as u8).unwrap();
+            fs::write(dir.join("level.dat"), &buf).unwrap();
+
+            let m = load_world_metadata(&dir).unwrap();
+            assert_eq!(m.game_mode, mode);
+            assert_eq!(m.achievements_enabled, expected_enabled);
+        }
 
         let _ = fs::remove_dir_all(&temp_root);
     }

@@ -38,3 +38,7 @@ public-host=auto
 
 # Maximum reported player slots
 max-players=20
+
+# --- Gameplay Settings ---
+# Broadcast player Achievement unlocks in multiplayer chat (default: true)
+broadcast-achievements=true

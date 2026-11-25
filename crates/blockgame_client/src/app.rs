@@ -87,6 +87,9 @@ pub enum AppScreen {
     Guide {
         page: usize,
     },
+    Achievements {
+        return_to_pause: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +271,13 @@ pub struct AppState {
     pub skill_toast: Option<(String, String, f32)>,
     pub skills_dirty: bool,
     pub agility_xp_timer: f32,
+    // Achievements System (Issue #18, ADR 0007)
+    pub achievements: blockgame_core::AchievementEngine,
+    pub achievement_toasts: crate::achievement_toast::AchievementToastQueue,
+    pub achievements_open: bool,
+    pub achievements_category: usize,
+    pub achievements_scroll: usize,
+    pub biome_check_timer: f32,
     // Movement inputs
     moving_forward: bool,
     moving_backward: bool,
@@ -676,6 +686,9 @@ impl AppState {
         let lvlup = self.player_skills.add_xp(skill, amount);
         self.skills_dirty = true;
         if let Some(lu) = lvlup {
+            self.record_achievement_event(blockgame_core::AchievementEvent::SkillLevelReached {
+                level: lu.new_level as u32,
+            });
             self.audio.play_fishing_catch();
             let title = format!("{} Level {}!", lu.skill.name(), lu.new_level);
             let subtitle = if let Some(first_ms) = lu.unlocked_milestones.first() {
@@ -719,7 +732,85 @@ impl AppState {
         }
     }
 
+    /// Feeds a gameplay event into the shared AchievementEngine, enqueues HUD toasts
+    /// with chime audio, notifies multiplayer servers for optional chat broadcast,
+    /// and persists unlocks atomically to `achievements.yaml`.
+    pub fn record_achievement_event(&mut self, event: blockgame_core::AchievementEvent) {
+        if self.player_stats.game_mode.is_creative() {
+            return;
+        }
+        let unlocked = self.achievements.record_event(&event);
+        if unlocked.is_empty() {
+            return;
+        }
+        for def in unlocked {
+            let icon_tile = self
+                .item_registry
+                .get(def.icon)
+                .map_or(0, |d| d.icon_tile as u16);
+            let toast = crate::achievement_toast::AchievementToast::new(
+                def.title,
+                def.description,
+                icon_tile,
+            );
+            if self.achievement_toasts.push(toast) {
+                self.audio.play_achievement_unlock();
+            }
+            if let Some(client) = &mut self.mp_client {
+                client.send(&blockgame_core::net::ClientPacket::AchievementUnlocked {
+                    achievement_id: def.id.to_string(),
+                });
+            }
+        }
+        self.save_achievements_if_dirty();
+    }
+
+    /// Checks whether the player currently wears a full set of Diamond Armor.
+    pub fn check_full_diamond_armor_achievement(&mut self) {
+        if blockgame_core::is_full_diamond_armor(&self.armor.slots) {
+            self.record_achievement_event(
+                blockgame_core::AchievementEvent::EquippedFullDiamondArmor,
+            );
+        }
+    }
+
+    /// Atomically persists `achievements.yaml` if any unlock or Career Stat changed.
+    pub fn save_achievements_if_dirty(&mut self) {
+        if let Err(err) = self
+            .achievements
+            .save_if_dirty(std::path::Path::new(blockgame_core::DEFAULT_ACHIEVEMENTS_PATH))
+        {
+            log::warn!("Failed to save achievements.yaml: {}", err);
+        }
+    }
+
+    /// Permanently disables Achievement Eligibility for the active singleplayer world.
+    pub fn taint_singleplayer_achievements(&mut self, reason: &str) {
+        if self.mp_client.is_some() {
+            return;
+        }
+        let was_eligible = self.achievements.is_eligible();
+        self.achievements.set_eligible(false);
+        if let Some(meta) = &mut self.active_world_metadata {
+            meta.achievements_enabled = false;
+        }
+        if was_eligible {
+            self.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                sender: "Achievements".to_string(),
+                prefix: String::new(),
+                message: format!("[Achievements] Disabled for this world ({reason})."),
+                is_system: true,
+                age: 0.0,
+            });
+            if self.local_chat_messages.len() > 100 {
+                self.local_chat_messages.remove(0);
+            }
+        }
+    }
+
     pub fn disconnect_multiplayer(&mut self) {
+        self.save_achievements_if_dirty();
+        self.achievements_open = false;
         let model = self.current_local_player_model();
         let inv = self.inventory.clone();
         let hotbar = self.active_hotbar_slot;
@@ -946,8 +1037,10 @@ impl AppState {
                 client.send(&blockgame_core::net::ClientPacket::SkillsSync { skills });
             }
             self.skills_dirty = false;
+            self.save_achievements_if_dirty();
             return true;
         }
+        self.save_achievements_if_dirty();
         let Some(mut meta) = self.active_world_metadata.clone() else {
             return false;
         };
@@ -1003,6 +1096,9 @@ impl AppState {
         let mut meta = WorldMetadata::new(&display_name, seed);
         meta.folder_name = folder_name;
         meta.game_mode = game_mode;
+        meta.achievements_enabled = game_mode == blockgame_core::GameMode::Survival;
+        self.achievements.set_eligible(meta.achievements_enabled);
+        self.achievements_open = false;
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
@@ -1149,6 +1245,11 @@ impl AppState {
         self.breaking_voxel = None;
         self.break_progress = 0.0;
         self.cracking_buffer = None;
+        self.achievements.set_eligible(
+            save_data.metadata.achievements_enabled
+                && save_data.metadata.game_mode == blockgame_core::GameMode::Survival,
+        );
+        self.achievements_open = false;
         self.active_world_metadata = Some(save_data.metadata);
 
         self.screen = AppScreen::InGame;
@@ -1555,6 +1656,14 @@ impl ApplicationHandler for BlockGameApp {
             skill_toast: None,
             skills_dirty: false,
             agility_xp_timer: 0.0,
+            achievements: blockgame_core::AchievementEngine::load_default(std::path::Path::new(
+                blockgame_core::DEFAULT_ACHIEVEMENTS_PATH,
+            )),
+            achievement_toasts: crate::achievement_toast::AchievementToastQueue::new(),
+            achievements_open: false,
+            achievements_category: 0,
+            achievements_scroll: 0,
+            biome_check_timer: 0.0,
             moving_forward: false,
             moving_backward: false,
             moving_left: false,
@@ -1629,13 +1738,23 @@ impl ApplicationHandler for BlockGameApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if state.screen != AppScreen::InGame {
-                    return;
-                }
                 let scroll = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
                 };
+                if matches!(state.screen, AppScreen::Achievements { .. })
+                    || (state.screen == AppScreen::InGame && state.achievements_open)
+                {
+                    if scroll > 0.0 {
+                        state.achievements_scroll = state.achievements_scroll.saturating_sub(1);
+                    } else if scroll < 0.0 {
+                        state.achievements_scroll = (state.achievements_scroll + 1).min(16);
+                    }
+                    return;
+                }
+                if state.screen != AppScreen::InGame {
+                    return;
+                }
                 if state.chat_open {
                     if scroll > 0.0 {
                         state.chat_scroll = (state.chat_scroll + 1).min(100);
@@ -1644,7 +1763,7 @@ impl ApplicationHandler for BlockGameApp {
                     }
                     return;
                 }
-                if state.skills_open || state.inventory_open {
+                if state.skills_open || state.achievements_open || state.inventory_open {
                     return;
                 }
                 if scroll > 0.0 {
@@ -1754,6 +1873,18 @@ impl ApplicationHandler for BlockGameApp {
                                     state.screen = AppScreen::Guide { page: 0 };
                                 } else if UiBuilder::is_rect_hovered(
                                     cpos,
+                                    rects[UiBuilder::TITLE_BTN_ACHIEVEMENTS][0],
+                                    rects[UiBuilder::TITLE_BTN_ACHIEVEMENTS][1],
+                                    rects[UiBuilder::TITLE_BTN_ACHIEVEMENTS][2],
+                                    rects[UiBuilder::TITLE_BTN_ACHIEVEMENTS][3],
+                                ) {
+                                    // Achievements
+                                    state.achievements_scroll = 0;
+                                    state.screen = AppScreen::Achievements {
+                                        return_to_pause: false,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
                                     rects[UiBuilder::TITLE_BTN_QUIT][0],
                                     rects[UiBuilder::TITLE_BTN_QUIT][1],
                                     rects[UiBuilder::TITLE_BTN_QUIT][2],
@@ -1780,6 +1911,33 @@ impl ApplicationHandler for BlockGameApp {
                                             focused_field: 0,
                                             game_mode: blockgame_core::GameMode::Survival,
                                         };
+                                    }
+                                }
+                            }
+                            AppScreen::Achievements { return_to_pause } => {
+                                let (tab_rects, close_rect, _) =
+                                    UiBuilder::achievements_screen_rects(screen_w, screen_h);
+                                if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    close_rect[0],
+                                    close_rect[1],
+                                    close_rect[2],
+                                    close_rect[3],
+                                ) {
+                                    state.screen = if return_to_pause {
+                                        AppScreen::Paused {
+                                            status_message: None,
+                                        }
+                                    } else {
+                                        AppScreen::Title
+                                    };
+                                } else {
+                                    for (i, r) in tab_rects.iter().enumerate() {
+                                        if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
+                                            state.achievements_category = i;
+                                            state.achievements_scroll = 0;
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -2008,8 +2166,9 @@ impl ApplicationHandler for BlockGameApp {
                                     rects[2][2],
                                     rects[2][3],
                                 ) {
-                                    // Settings
-                                    state.screen = AppScreen::Settings {
+                                    // Achievements
+                                    state.achievements_scroll = 0;
+                                    state.screen = AppScreen::Achievements {
                                         return_to_pause: true,
                                     };
                                 } else if UiBuilder::is_rect_hovered(
@@ -2018,6 +2177,17 @@ impl ApplicationHandler for BlockGameApp {
                                     rects[3][1],
                                     rects[3][2],
                                     rects[3][3],
+                                ) {
+                                    // Settings
+                                    state.screen = AppScreen::Settings {
+                                        return_to_pause: true,
+                                    };
+                                } else if UiBuilder::is_rect_hovered(
+                                    cpos,
+                                    rects[4][0],
+                                    rects[4][1],
+                                    rects[4][2],
+                                    rects[4][3],
                                 ) {
                                     // Save & Quit to Title
                                     state.save_active_world();
@@ -2617,6 +2787,39 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
 
+                if state.achievements_open {
+                    if pressed && button == MouseButton::Left {
+                        let (screen_w, screen_h, ui_cpos) = state.ui_metrics();
+                        let (tab_rects, close_rect, _) =
+                            UiBuilder::achievements_screen_rects(screen_w, screen_h);
+                        if UiBuilder::is_rect_hovered(
+                            ui_cpos,
+                            close_rect[0],
+                            close_rect[1],
+                            close_rect[2],
+                            close_rect[3],
+                        ) {
+                            state.achievements_open = false;
+                            if !state.inventory_open && !state.chat_open && !state.player_stats.is_dead {
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
+                        } else {
+                            for (i, r) in tab_rects.iter().enumerate() {
+                                if UiBuilder::is_rect_hovered(ui_cpos, r[0], r[1], r[2], r[3]) {
+                                    state.achievements_category = i;
+                                    state.achievements_scroll = 0;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if state.skills_open {
                     if pressed && button == MouseButton::Left {
                         let (screen_w, screen_h, ui_cpos) = state.ui_metrics();
@@ -2705,16 +2908,18 @@ impl ApplicationHandler for BlockGameApp {
                                                     &state.item_registry,
                                                     world_ticks,
                                                 );
-                                                state.shop_status_message = match res {
+                                                let (msg, spent_opt) = match res {
                                                     Ok(s) => {
-                                                        if let Some(t) = s.leveled_up_to {
+                                                        let m = if let Some(t) = s.leveled_up_to {
                                                             format!("Purchased! Shop Tier {} unlocked!", t)
                                                         } else {
                                                             "Purchase complete!".to_string()
-                                                        }
+                                                        };
+                                                        (m, Some(s.coins_delta.unsigned_abs() as u64))
                                                     }
-                                                    Err(e) => e.message(),
+                                                    Err(e) => (e.message(), None),
                                                 };
+                                                state.shop_status_message = msg;
                                                 state.active_shop_snapshot = state
                                                     .world_manager
                                                     .villages
@@ -2723,6 +2928,18 @@ impl ApplicationHandler for BlockGameApp {
                                                         "singleplayer",
                                                         world_ticks,
                                                     );
+                                                if let Some(coins_spent) = spent_opt {
+                                                    let tier = state
+                                                        .active_shop_snapshot
+                                                        .as_ref()
+                                                        .map_or(1, |sn| sn.shop_tier);
+                                                    state.record_achievement_event(
+                                                        blockgame_core::AchievementEvent::ShopTradeCompleted {
+                                                            coins_spent,
+                                                            new_shop_tier: tier,
+                                                        },
+                                                    );
+                                                }
                                             }
                                         }
                                         blockgame_render::ShopUiAction::Sell(offer_idx) => {
@@ -2742,12 +2959,14 @@ impl ApplicationHandler for BlockGameApp {
                                                     &state.item_registry,
                                                     world_ticks,
                                                 );
-                                                state.shop_status_message = match res {
-                                                    Ok(s) => {
-                                                        format!("Sold for +{} Gold Coins!", s.coins_delta)
-                                                    }
-                                                    Err(e) => e.message(),
+                                                let (msg, ok) = match res {
+                                                    Ok(s) => (
+                                                        format!("Sold for +{} Gold Coins!", s.coins_delta),
+                                                        true,
+                                                    ),
+                                                    Err(e) => (e.message(), false),
                                                 };
+                                                state.shop_status_message = msg;
                                                 state.active_shop_snapshot = state
                                                     .world_manager
                                                     .villages
@@ -2756,6 +2975,18 @@ impl ApplicationHandler for BlockGameApp {
                                                         "singleplayer",
                                                         world_ticks,
                                                     );
+                                                if ok {
+                                                    let tier = state
+                                                        .active_shop_snapshot
+                                                        .as_ref()
+                                                        .map_or(1, |sn| sn.shop_tier);
+                                                    state.record_achievement_event(
+                                                        blockgame_core::AchievementEvent::ShopTradeCompleted {
+                                                            coins_spent: 0,
+                                                            new_shop_tier: tier,
+                                                        },
+                                                    );
+                                                }
                                             }
                                         }
                                         blockgame_render::ShopUiAction::ApplyEnhance(offer_idx) => {
@@ -2781,20 +3012,22 @@ impl ApplicationHandler for BlockGameApp {
                                                             &state.item_registry,
                                                             world_ticks,
                                                         );
-                                                    state.shop_status_message = match res {
+                                                    let (msg, spent_opt) = match res {
                                                         Ok(s) => {
                                                             state.shop_selected_enhance_slot = None;
-                                                            if let Some(t) = s.leveled_up_to {
+                                                            let m = if let Some(t) = s.leveled_up_to {
                                                                 format!(
                                                                     "Enhanced! Shop Tier {} unlocked!",
                                                                     t
                                                                 )
                                                             } else {
                                                                 "Item enhanced and restored to full durability!".to_string()
-                                                            }
+                                                            };
+                                                            (m, Some(s.coins_delta.unsigned_abs() as u64))
                                                         }
-                                                        Err(e) => e.message(),
+                                                        Err(e) => (e.message(), None),
                                                     };
+                                                    state.shop_status_message = msg;
                                                     state.active_shop_snapshot = state
                                                         .world_manager
                                                         .villages
@@ -2803,6 +3036,21 @@ impl ApplicationHandler for BlockGameApp {
                                                             "singleplayer",
                                                             world_ticks,
                                                         );
+                                                    if let Some(coins_spent) = spent_opt {
+                                                        let tier = state
+                                                            .active_shop_snapshot
+                                                            .as_ref()
+                                                            .map_or(1, |sn| sn.shop_tier);
+                                                        state.record_achievement_event(
+                                                            blockgame_core::AchievementEvent::ShopTradeCompleted {
+                                                                coins_spent,
+                                                                new_shop_tier: tier,
+                                                            },
+                                                        );
+                                                        state.record_achievement_event(
+                                                            blockgame_core::AchievementEvent::EnhancementApplied,
+                                                        );
+                                                    }
                                                 }
                                             } else {
                                                 state.shop_status_message =
@@ -2912,6 +3160,7 @@ impl ApplicationHandler for BlockGameApp {
                             }
                         } else {
                             handle_inventory_click(state, is_right);
+                            state.check_full_diamond_armor_achievement();
                         }
                     }
                     return;
@@ -3157,13 +3406,18 @@ impl ApplicationHandler for BlockGameApp {
                                         } else {
                                             let world_ticks =
                                                 state.world_manager.villages.advance_clock(state.day_night.time);
-                                            let _ = state.world_manager.villages.damage_npc(
+                                            let hit = state.world_manager.villages.damage_npc(
                                                 npc_id,
                                                 attack_damage,
                                                 kb,
                                                 Some("singleplayer"),
                                                 world_ticks,
                                             );
+                                            if hit.is_some() {
+                                                state.record_achievement_event(
+                                                    blockgame_core::AchievementEvent::VillageGuardProvoked,
+                                                );
+                                            }
                                         }
                                         state.audio.play_hurt();
                                         state.mouse_left_down = false;
@@ -3214,6 +3468,15 @@ impl ApplicationHandler for BlockGameApp {
                                         state.player_stats.health = (state.player_stats.health
                                             + attack_damage * weapon_lifesteal)
                                             .min(state.player_stats.max_health);
+                                    }
+                                    if killed {
+                                        state.record_achievement_event(
+                                            blockgame_core::AchievementEvent::MonsterKilled {
+                                                is_boss: mkind.is_boss(),
+                                                boss_key: blockgame_core::boss_achievement_key(mkind)
+                                                    .map(str::to_string),
+                                            },
+                                        );
                                     }
                                     if killed && !state.player_stats.is_dead {
                                         let ls = state.player_skills.combat_lifesteal_on_kill();
@@ -3421,6 +3684,19 @@ impl ApplicationHandler for BlockGameApp {
                                 return;
                             }
                             if block_id == BlockId::STORAGE_TERMINAL {
+                                let storage_ready = {
+                                    let world_guard = state.world_manager.world().lock().unwrap();
+                                    let info = blockgame_core::storage::collect_storage_network(
+                                        &world_guard,
+                                        hit.hit_voxel,
+                                    );
+                                    info.is_powered && !info.chests.is_empty()
+                                };
+                                if storage_ready {
+                                    state.record_achievement_event(
+                                        blockgame_core::AchievementEvent::PoweredStorageTerminalOpened,
+                                    );
+                                }
                                 state.mouse_left_down = false;
                                 state.break_progress = 0.0;
                                 state.breaking_voxel = None;
@@ -3701,6 +3977,9 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                 } else if is_night {
                                     state.day_night.set_time(1000.0);
+                                    state.record_achievement_event(
+                                        blockgame_core::AchievementEvent::SleptInBed,
+                                    );
                                     state.player_stats.health = (state.player_stats.health + 4.0)
                                         .min(state.player_stats.max_health);
                                     state.local_chat_messages.push(
@@ -3940,6 +4219,7 @@ impl ApplicationHandler for BlockGameApp {
                                 let idx = armor_slot.index();
                                 let prev = std::mem::replace(&mut state.armor.slots[idx], held_slot);
                                 state.inventory.set(state.active_hotbar_slot, prev);
+                                state.check_full_diamond_armor_achievement();
                                 state.punch_timer = 0.12;
                                 return;
                             }
@@ -4002,6 +4282,10 @@ impl ApplicationHandler for BlockGameApp {
                                                 held_item: ItemId::BUCKET,
                                             },
                                         );
+                                    } else {
+                                        state.record_achievement_event(
+                                            blockgame_core::AchievementEvent::CowMilked,
+                                        );
                                     }
                                     state.punch_timer = 0.15;
                                     return;
@@ -4058,6 +4342,9 @@ impl ApplicationHandler for BlockGameApp {
                                     }
                                     state.inventory.slots[state.active_hotbar_slot].take(1);
                                     state.grant_skill_xp(SkillKind::Farming, 6);
+                                    state.record_achievement_event(
+                                        blockgame_core::AchievementEvent::FertilizerApplied,
+                                    );
                                     state.punch_timer = 0.18;
                                     return;
                                 }
@@ -4341,6 +4628,11 @@ impl ApplicationHandler for BlockGameApp {
                                                 state.camera.position,
                                                 state.camera.yaw,
                                             );
+                                            if blockgame_core::is_eu_generator_block(block_id) {
+                                                state.record_achievement_event(
+                                                    blockgame_core::AchievementEvent::GeneratorPlaced,
+                                                );
+                                            }
                                             if !state.player_stats.game_mode.is_creative() {
                                                 state.inventory.slots[state.active_hotbar_slot]
                                                     .take(1);
@@ -4633,6 +4925,17 @@ impl ApplicationHandler for BlockGameApp {
                                 state.screen = AppScreen::Title;
                             }
                         }
+                        AppScreen::Achievements { return_to_pause } => {
+                            if key == KeyCode::Escape {
+                                state.screen = if return_to_pause {
+                                    AppScreen::Paused {
+                                        status_message: None,
+                                    }
+                                } else {
+                                    AppScreen::Title
+                                };
+                            }
+                        }
                         AppScreen::Title | AppScreen::InGame => {}
                     }
                     return;
@@ -4729,6 +5032,51 @@ impl ApplicationHandler for BlockGameApp {
                                                 ),
                                             );
                                         }
+                                    }
+                                } else if msg.to_ascii_lowercase().starts_with("/gamemode ")
+                                    || msg.to_ascii_lowercase().starts_with("/gm ")
+                                {
+                                    let parts: Vec<&str> = msg.split_whitespace().collect();
+                                    if let Some(mode) =
+                                        parts.get(1).and_then(|s| blockgame_core::GameMode::parse(s))
+                                    {
+                                        state.player_stats.game_mode = mode;
+                                        if let Some(meta) = &mut state.active_world_metadata {
+                                            meta.game_mode = mode;
+                                        }
+                                        if !mode.is_creative() && state.player.flying {
+                                            state.player.flying = false;
+                                        }
+                                        state.taint_singleplayer_achievements(
+                                            "admin/cheat command /gamemode used",
+                                        );
+                                        state.local_chat_messages.push(
+                                            blockgame_core::net::ChatEntry {
+                                                sender: "System".to_string(),
+                                                prefix: String::new(),
+                                                message: format!(
+                                                    "Game mode changed to {:?}.",
+                                                    mode
+                                                ),
+                                                is_system: true,
+                                                age: 0.0,
+                                            },
+                                        );
+                                    } else {
+                                        state.local_chat_messages.push(
+                                            blockgame_core::net::ChatEntry {
+                                                sender: "System".to_string(),
+                                                prefix: String::new(),
+                                                message:
+                                                    "Usage: /gamemode <survival|creative|0|1>"
+                                                        .to_string(),
+                                                is_system: true,
+                                                age: 0.0,
+                                            },
+                                        );
+                                    }
+                                    if state.local_chat_messages.len() > 100 {
+                                        state.local_chat_messages.remove(0);
                                     }
                                 } else {
                                     let sender = if state.local_username.is_empty() {
@@ -4905,6 +5253,7 @@ impl ApplicationHandler for BlockGameApp {
                     state.break_progress = 0.0;
                     state.breaking_voxel = None;
                     state.cracking_buffer = None;
+                    state.achievements_open = false;
                     state.skills_open = !state.skills_open;
                     if state.skills_open {
                         state.moving_forward = false;
@@ -4925,7 +5274,34 @@ impl ApplicationHandler for BlockGameApp {
                             .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                         state.window.set_cursor_visible(false);
                     }
-                } else if key == kb.inventory && pressed && !state.skills_open {
+                } else if key == kb.achievements && pressed && !state.inventory_open {
+                    state.mouse_left_down = false;
+                    state.break_progress = 0.0;
+                    state.breaking_voxel = None;
+                    state.cracking_buffer = None;
+                    state.skills_open = false;
+                    state.achievements_open = !state.achievements_open;
+                    if state.achievements_open {
+                        state.achievements_scroll = 0;
+                        state.moving_forward = false;
+                        state.moving_backward = false;
+                        state.moving_left = false;
+                        state.moving_right = false;
+                        state.jumping = false;
+                        state.sprinting = false;
+                        state.mouse_captured = false;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                        state.window.set_cursor_visible(true);
+                    } else {
+                        state.mouse_captured = true;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                        state.window.set_cursor_visible(false);
+                    }
+                } else if key == kb.inventory && pressed && !state.skills_open && !state.achievements_open {
                     state.mouse_left_down = false;
                     state.break_progress = 0.0;
                     state.breaking_voxel = None;
@@ -5047,7 +5423,14 @@ impl ApplicationHandler for BlockGameApp {
                             state.active_storage_terminal_pos = None;
                             state.storage_search_focused = false;
                             state.active_backpack_id = None;
-                            if state.skills_open {
+                            if state.achievements_open {
+                                state.achievements_open = false;
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            } else if state.skills_open {
                                 state.skills_open = false;
                                 state.mouse_captured = true;
                                 let _ = state
@@ -5277,6 +5660,7 @@ impl ApplicationHandler for BlockGameApp {
 
                     // 0. Poll Multiplayer Network Packets & Sync Player State
                     let mut kick_reason: Option<String> = None;
+                    let mut mp_ach_events: Vec<blockgame_core::AchievementEvent> = Vec::new();
                     if let Some(client) = &mut state.mp_client {
                         for entry in &mut client.chat_history {
                             entry.age += dt;
@@ -5436,7 +5820,12 @@ impl ApplicationHandler for BlockGameApp {
                                 } => {
                                     state.day_night.time = day_night_time;
                                     if !blockgame_core::net::is_night_ticks(day_night_time) {
-                                        state.is_sleeping = false;
+                                        if state.is_sleeping {
+                                            state.is_sleeping = false;
+                                            mp_ach_events.push(
+                                                blockgame_core::AchievementEvent::SleptInBed,
+                                            );
+                                        }
                                     }
                                     let local_id = client.player_id;
                                     client.remote_players.clear();
@@ -5480,6 +5869,11 @@ impl ApplicationHandler for BlockGameApp {
                                 }
 
                                 blockgame_core::net::ServerPacket::ReceiveItem { item } => {
+                                    let obtained_id = if !item.is_empty() {
+                                        Some(item.item_id.0)
+                                    } else {
+                                        None
+                                    };
                                     if !item.is_empty() {
                                         let overflow = state
                                             .inventory
@@ -5519,6 +5913,13 @@ impl ApplicationHandler for BlockGameApp {
                                             },
                                         );
                                     }
+                                    if let Some(item_id) = obtained_id {
+                                        mp_ach_events.push(
+                                            blockgame_core::AchievementEvent::ItemObtained {
+                                                item_id,
+                                            },
+                                        );
+                                    }
                                 }
                                 blockgame_core::net::ServerPacket::GameModeUpdate { game_mode } => {
                                     state.player_stats.game_mode = game_mode;
@@ -5542,6 +5943,15 @@ impl ApplicationHandler for BlockGameApp {
                                 blockgame_core::net::ServerPacket::SkillsUpdate { skills } => {
                                     state.player_skills = skills;
                                     state.skills_dirty = false;
+                                }
+                                blockgame_core::net::ServerPacket::AchievementEligibility {
+                                    enabled,
+                                    ..
+                                } => {
+                                    state.achievements.set_eligible(enabled);
+                                }
+                                blockgame_core::net::ServerPacket::AchievementEvent { event } => {
+                                    mp_ach_events.push(event);
                                 }
                                 blockgame_core::net::ServerPacket::TempleMonstersSync { monsters } => {
                                     state.world_manager.apply_mp_temple_monsters(&monsters);
@@ -5654,6 +6064,9 @@ impl ApplicationHandler for BlockGameApp {
                         let _ = state.voice_capture.poll_encoded_frames(false, 0);
                         state.voice_transmitting = false;
                     }
+                    for ev in mp_ach_events {
+                        state.record_achievement_event(ev);
+                    }
 
                     state.speaking_players.retain(|_, t| {
                         *t -= dt;
@@ -5665,6 +6078,21 @@ impl ApplicationHandler for BlockGameApp {
                     }
                     if state.skill_toast.as_ref().map(|(_, _, t)| *t <= 0.0).unwrap_or(false) {
                         state.skill_toast = None;
+                    }
+                    if state.achievement_toasts.tick(dt) {
+                        state.audio.play_achievement_unlock();
+                    }
+                    state.biome_check_timer += dt;
+                    if state.biome_check_timer >= 0.5 {
+                        state.biome_check_timer = 0.0;
+                        let px = state.player.position.x.floor() as i32;
+                        let py = state.player.position.y.floor() as i32;
+                        let pz = state.player.position.z.floor() as i32;
+                        let biome = state.world_manager.generator.get_biome(px, pz, py);
+                        let biome_key = format!("{:?}", biome).to_ascii_lowercase();
+                        state.record_achievement_event(
+                            blockgame_core::AchievementEvent::BiomeVisited { biome_key },
+                        );
                     }
 
                     if let Some(reason) = kick_reason {
@@ -6003,7 +6431,13 @@ impl ApplicationHandler for BlockGameApp {
                             .world_manager
                             .update_item_drops(dt, state.player.position);
                         for item in collected {
+                            let obtained_id = item.item_id.0;
                             let overflow = state.inventory.add_item(item, &state.item_registry);
+                            state.record_achievement_event(
+                                blockgame_core::AchievementEvent::ItemObtained {
+                                    item_id: obtained_id,
+                                },
+                            );
                             if let Some(remaining) = overflow {
                                 state
                                     .world_manager
@@ -6056,10 +6490,25 @@ impl ApplicationHandler for BlockGameApp {
                                 let food_mult = state.player_skills.farming_food_multiplier();
                                 let rng_roll =
                                     blockgame_core::fishing::next_f32(&mut state.fishing_rng);
+                                let had_poison = state.player_stats.status_effects.iter().any(|e| {
+                                    matches!(
+                                        e.kind,
+                                        blockgame_core::item::FoodEffectKind::FoodPoisoning
+                                            | blockgame_core::item::FoodEffectKind::Poison
+                                    )
+                                });
+                                let is_herbal_tea =
+                                    state.inventory.get(state.active_hotbar_slot).item_id
+                                        == ItemId::HERBAL_TEA;
                                 if state.player_stats.consume_food(&food, food_mult, rng_roll) {
                                     state.inventory.slots[state.active_hotbar_slot].take(1);
                                     state.audio.play_eat_crunch();
                                     state.punch_timer = 0.2;
+                                    if had_poison && is_herbal_tea && food.cures_negative_effects {
+                                        state.record_achievement_event(
+                                            blockgame_core::AchievementEvent::CuredPoisonWithHerbalTea,
+                                        );
+                                    }
                                 }
                                 state.eating = None;
                             }
@@ -6069,11 +6518,23 @@ impl ApplicationHandler for BlockGameApp {
                     // 3b. Update Animals, Monsters, Arrows & Planted Crops (ADR-0004: gated in MP)
                     if state.mp_client.is_none() {
                         let held_id = state.inventory.get(state.active_hotbar_slot).item_id;
+                        let prev_animal_count = state.world_manager.animals.len();
                         let animal_drops = state.world_manager.update_animals_with_lure(
                             dt,
                             state.player.position,
                             held_id,
                         );
+                        if state.world_manager.animals.len() > prev_animal_count {
+                            let newborns = state.world_manager.animals[prev_animal_count..]
+                                .iter()
+                                .filter(|a| a.baby_timer > 0.0)
+                                .count();
+                            for _ in 0..newborns {
+                                state.record_achievement_event(
+                                    blockgame_core::AchievementEvent::AnimalBred,
+                                );
+                            }
+                        }
                         for (pos, drop_slot) in animal_drops {
                             state.spawn_drop_synced(pos, Vec3::new(0.0, 2.0, 0.0), drop_slot);
                         }
@@ -6354,6 +6815,12 @@ impl ApplicationHandler for BlockGameApp {
                                         state.fishing_state = FishingSession::Idle;
                                         if status == blockgame_core::MinigameStatus::Caught {
                                             state.audio.play_fishing_catch();
+                                            state.record_achievement_event(
+                                                blockgame_core::AchievementEvent::FishCaught {
+                                                    species_key: format!("{:?}", species)
+                                                        .to_ascii_lowercase(),
+                                                },
+                                            );
 
                                             // Damage rod, line, and lure by 1 durability
                                             let mut rslot = state.inventory.get(rod_slot);
@@ -6760,6 +7227,39 @@ impl ApplicationHandler for BlockGameApp {
                                                 state.camera.yaw,
                                             );
                                             if !is_creative {
+                                                state.record_achievement_event(
+                                                    blockgame_core::AchievementEvent::BlockMined {
+                                                        block_id: broken.0,
+                                                    },
+                                                );
+                                                if blockgame_core::is_stem_fruit_block(broken) {
+                                                    let has_stem = {
+                                                        let wg = state
+                                                            .world_manager
+                                                            .world()
+                                                            .lock()
+                                                            .unwrap();
+                                                        [
+                                                            IVec3::X,
+                                                            IVec3::NEG_X,
+                                                            IVec3::Z,
+                                                            IVec3::NEG_Z,
+                                                        ]
+                                                        .iter()
+                                                        .any(|&d| {
+                                                            let nb = wg.get_block(target_voxel + d);
+                                                            (broken == BlockId::MELON
+                                                                && nb == BlockId::MELON_STEM_3)
+                                                                || (broken == BlockId::PUMPKIN
+                                                                    && nb == BlockId::PUMPKIN_STEM_3)
+                                                        })
+                                                    };
+                                                    if has_stem {
+                                                        state.record_achievement_event(
+                                                            blockgame_core::AchievementEvent::StemFruitHarvested,
+                                                        );
+                                                    }
+                                                }
                                                 state.player_stats.add_exhaustion(0.025);
                                                 if let Some((sk, xp)) =
                                                     skill_xp_for_broken_block(broken)
@@ -7192,7 +7692,19 @@ impl ApplicationHandler for BlockGameApp {
 
                     // 7. Build 2D UI Overlay (HUD, Skills Screen, or Inventory/Crafting Screen)
                     if state.screen == AppScreen::InGame {
-                        if state.skills_open {
+                        if state.achievements_open {
+                            UiBuilder::build_achievements_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &state.achievements,
+                                &state.item_registry,
+                                state.achievements_category,
+                                state.achievements_scroll,
+                                Some(state.achievements.is_eligible()),
+                                ui_cursor,
+                            );
+                        } else if state.skills_open {
                             UiBuilder::build_skills_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
@@ -7780,6 +8292,16 @@ impl ApplicationHandler for BlockGameApp {
                                 alpha,
                             );
                         }
+                        if let Some(toast) = state.achievement_toasts.active() {
+                            UiBuilder::draw_achievement_toast(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                &toast.title,
+                                &toast.description,
+                                toast.icon_tile,
+                                toast.alpha(),
+                            );
+                        }
                     }
                 } else if let AppScreen::Paused { ref status_message } = state.screen {
                         // In multiplayer pause menu: draw floating player nametags in 3D world
@@ -7948,6 +8470,23 @@ impl ApplicationHandler for BlockGameApp {
                                 screen_w,
                                 screen_h,
                                 *page,
+                                ui_cursor,
+                            );
+                        }
+                        AppScreen::Achievements { return_to_pause } => {
+                            UiBuilder::build_achievements_screen(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &state.achievements,
+                                &state.item_registry,
+                                state.achievements_category,
+                                state.achievements_scroll,
+                                if *return_to_pause {
+                                    Some(state.achievements.is_eligible())
+                                } else {
+                                    None
+                                },
                                 ui_cursor,
                             );
                         }
@@ -8241,6 +8780,7 @@ impl ApplicationHandler for BlockGameApp {
                             | AppScreen::CreateWorld { .. }
                             | AppScreen::MultiplayerLobby { .. }
                             | AppScreen::Settings { return_to_pause: false }
+                            | AppScreen::Achievements { return_to_pause: false }
                     );
                 if render_local_model {
                     players_to_render.push(state.current_local_player_model());
@@ -8647,7 +9187,13 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
                             state.backpacks.ensure_slot_id(&mut crafted);
                         }
                     }
+                    let crafted_id = crafted.item_id.0;
                     if let Some(rem) = state.inventory.add_item(crafted, &state.item_registry) {
+                        state.record_achievement_event(
+                            blockgame_core::AchievementEvent::ItemCrafted {
+                                item_id: crafted_id,
+                            },
+                        );
                         state.spawn_drop_synced(
                             state.player.position,
                             Vec3::new(0.0, 2.0, 0.0),
@@ -8655,6 +9201,11 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
                         );
                         break;
                     }
+                    state.record_achievement_event(
+                        blockgame_core::AchievementEvent::ItemCrafted {
+                            item_id: crafted_id,
+                        },
+                    );
                     if state
                         .crafting_manager
                         .find_match(&state.crafting_grid)
@@ -8685,6 +9236,11 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
                         None
                     };
                     if let Some(mut crafted) = state.crafting_manager.craft(&mut state.crafting_grid) {
+                        state.record_achievement_event(
+                            blockgame_core::AchievementEvent::ItemCrafted {
+                                item_id: crafted.item_id.0,
+                            },
+                        );
                         let new_bp_tier =
                             blockgame_core::storage::BackpackState::tier_for_item(crafted.item_id);
                         if new_bp_tier > 0 {
@@ -9450,33 +10006,51 @@ fn handle_electric_furnace_click(state: &mut AppState, is_right_click: bool) {
 
     // Output slot (take only)
     if cx >= output_x && cx < output_x + slot_size && cy >= slot_y && cy < slot_y + slot_size {
-        let mut world_guard = state.world_manager.world().lock().unwrap();
-        let ef = world_guard.get_or_create_electric_furnace(ef_pos);
-        let out = ef.output;
-        if !out.is_empty() {
-            if state.shift_down {
-                if let Some(rem) = state.inventory.add_item(out, &state.item_registry) {
-                    ef.output = rem;
-                } else {
+        let taken_id = {
+            let mut world_guard = state.world_manager.world().lock().unwrap();
+            let ef = world_guard.get_or_create_electric_furnace(ef_pos);
+            let out = ef.output;
+            let mut took = None;
+            if !out.is_empty() {
+                if state.shift_down {
+                    if let Some(rem) = state.inventory.add_item(out, &state.item_registry) {
+                        if rem.count < out.count {
+                            took = Some(out.item_id.0);
+                        }
+                        ef.output = rem;
+                    } else {
+                        took = Some(out.item_id.0);
+                        ef.output = ItemSlot::EMPTY;
+                    }
+                } else if state.cursor_held.is_empty() {
+                    took = Some(out.item_id.0);
+                    state.cursor_held = out;
                     ef.output = ItemSlot::EMPTY;
-                }
-            } else if state.cursor_held.is_empty() {
-                state.cursor_held = out;
-                ef.output = ItemSlot::EMPTY;
-            } else if state.cursor_held.item_id == out.item_id {
-                let max_s = state
-                    .item_registry
-                    .get(out.item_id)
-                    .map(|d| d.max_stack)
-                    .unwrap_or(64);
-                let space = max_s.saturating_sub(state.cursor_held.count);
-                let take = out.count.min(space);
-                state.cursor_held.count += take;
-                ef.output.count -= take;
-                if ef.output.count == 0 {
-                    ef.output = ItemSlot::EMPTY;
+                } else if state.cursor_held.item_id == out.item_id {
+                    let max_s = state
+                        .item_registry
+                        .get(out.item_id)
+                        .map(|d| d.max_stack)
+                        .unwrap_or(64);
+                    let space = max_s.saturating_sub(state.cursor_held.count);
+                    let take = out.count.min(space);
+                    if take > 0 {
+                        took = Some(out.item_id.0);
+                    }
+                    state.cursor_held.count += take;
+                    ef.output.count -= take;
+                    if ef.output.count == 0 {
+                        ef.output = ItemSlot::EMPTY;
+                    }
                 }
             }
+            took
+        };
+        if let Some(item_id) = taken_id {
+            state.record_achievement_event(blockgame_core::AchievementEvent::ItemSmelted {
+                item_id,
+                electric: true,
+            });
         }
         return;
     }
@@ -9558,32 +10132,50 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
 
     // 3. Furnace Output Slot
     if cx >= out_x && cx < out_x + out_size && cy >= out_y && cy < out_y + out_size {
-        let mut world_guard = state.world_manager.world().lock().unwrap();
-        let furnace = world_guard.get_or_create_furnace(furnace_pos);
-        if state.shift_down {
-            let item = furnace.output;
-            if !item.is_empty() {
-                if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
-                    furnace.output = rem;
-                } else {
+        let taken_id = {
+            let mut world_guard = state.world_manager.world().lock().unwrap();
+            let furnace = world_guard.get_or_create_furnace(furnace_pos);
+            let mut took = None;
+            if state.shift_down {
+                let item = furnace.output;
+                if !item.is_empty() {
+                    if let Some(rem) = state.inventory.add_item(item, &state.item_registry) {
+                        if rem.count < item.count {
+                            took = Some(item.item_id.0);
+                        }
+                        furnace.output = rem;
+                    } else {
+                        took = Some(item.item_id.0);
+                        furnace.output = ItemSlot::EMPTY;
+                    }
+                }
+            } else if !furnace.output.is_empty() {
+                // Can only TAKE from output slot, cannot place items into it
+                if state.cursor_held.is_empty() {
+                    took = Some(furnace.output.item_id.0);
+                    state.cursor_held = furnace.output;
                     furnace.output = ItemSlot::EMPTY;
+                } else if state.cursor_held.can_stack_with(&furnace.output) {
+                    let max_stack = state.item_registry.max_stack_size(furnace.output.item_id);
+                    let space = max_stack - state.cursor_held.count;
+                    let take = space.min(furnace.output.count);
+                    if take > 0 {
+                        took = Some(furnace.output.item_id.0);
+                    }
+                    state.cursor_held.count += take;
+                    furnace.output.count -= take;
+                    if furnace.output.count == 0 {
+                        furnace.output = ItemSlot::EMPTY;
+                    }
                 }
             }
-        } else {
-            // Can only TAKE from output slot, cannot place items into it
-            if state.cursor_held.is_empty() {
-                state.cursor_held = furnace.output;
-                furnace.output = ItemSlot::EMPTY;
-            } else if state.cursor_held.can_stack_with(&furnace.output) {
-                let max_stack = state.item_registry.max_stack_size(furnace.output.item_id);
-                let space = max_stack - state.cursor_held.count;
-                let take = space.min(furnace.output.count);
-                state.cursor_held.count += take;
-                furnace.output.count -= take;
-                if furnace.output.count == 0 {
-                    furnace.output = ItemSlot::EMPTY;
-                }
-            }
+            took
+        };
+        if let Some(item_id) = taken_id {
+            state.record_achievement_event(blockgame_core::AchievementEvent::ItemSmelted {
+                item_id,
+                electric: false,
+            });
         }
         return;
     }
@@ -10315,10 +10907,12 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
         return;
     };
 
+    let mut cooked_meal_taken: Option<u16> = None;
     let mut swap_slot = |slot: &mut ItemSlot, output_only: bool| {
         if output_only {
             if !slot.is_empty() {
                 if state.cursor_held.is_empty() {
+                    cooked_meal_taken = Some(slot.item_id.0);
                     state.cursor_held = *slot;
                     *slot = ItemSlot::EMPTY;
                 } else if state.cursor_held.item_id == slot.item_id {
@@ -10329,6 +10923,9 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
                         .unwrap_or(16);
                     let space = max_s.saturating_sub(state.cursor_held.count);
                     let moved = slot.count.min(space);
+                    if moved > 0 {
+                        cooked_meal_taken = Some(slot.item_id.0);
+                    }
                     state.cursor_held.count += moved;
                     slot.count -= moved;
                     if slot.count == 0 {
@@ -10421,6 +11018,10 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
             }
         }
         _ => {}
+    }
+    drop(swap_slot);
+    if let Some(item_id) = cooked_meal_taken {
+        state.record_achievement_event(blockgame_core::AchievementEvent::MealCooked { item_id });
     }
 }
 

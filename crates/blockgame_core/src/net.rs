@@ -209,6 +209,9 @@ pub enum ClientPacket {
         shops: Vec<(crate::village::ShopkeeperProfession, Vec3, Vec3)>,
         guard_positions: Vec<Vec3>,
     },
+    AchievementUnlocked {
+        achievement_id: String,
+    },
 }
 
 /// Compact network representation of a server-authoritative Village NPC (Shopkeeper or Village Guard).
@@ -406,6 +409,13 @@ pub enum ServerPacket {
     },
     InventorySync {
         slots: Vec<ItemSlot>,
+    },
+    AchievementEligibility {
+        enabled: bool,
+        reason: Option<String>,
+    },
+    AchievementEvent {
+        event: crate::achievement::AchievementEvent,
     },
 }
 
@@ -653,6 +663,10 @@ impl ClientPacket {
                 for &gp in guard_positions {
                     write_vec3(&mut payload, gp)?;
                 }
+            }
+            Self::AchievementUnlocked { achievement_id } => {
+                write_u8(&mut payload, 26)?;
+                write_string(&mut payload, achievement_id)?;
             }
         }
         wrap_frame(&payload)
@@ -910,6 +924,10 @@ impl ClientPacket {
                     shops,
                     guard_positions,
                 })
+            }
+            26 => {
+                let achievement_id = read_string(&mut r)?;
+                Ok(Self::AchievementUnlocked { achievement_id })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1282,6 +1300,21 @@ impl ServerPacket {
                 for s in slots {
                     write_slot(&mut payload, *s)?;
                 }
+            }
+            Self::AchievementEligibility { enabled, reason } => {
+                write_u8(&mut payload, 28)?;
+                write_bool(&mut payload, *enabled)?;
+                match reason {
+                    Some(msg) => {
+                        write_bool(&mut payload, true)?;
+                        write_string(&mut payload, msg)?;
+                    }
+                    None => write_bool(&mut payload, false)?,
+                }
+            }
+            Self::AchievementEvent { event } => {
+                write_u8(&mut payload, 29)?;
+                event.encode(&mut payload)?;
             }
         }
 
@@ -1810,6 +1843,20 @@ impl ServerPacket {
                 }
                 Ok(Self::InventorySync { slots })
             }
+            28 => {
+                let enabled = read_bool(&mut r)?;
+                let has_reason = read_bool(&mut r)?;
+                let reason = if has_reason {
+                    Some(read_string(&mut r)?)
+                } else {
+                    None
+                };
+                Ok(Self::AchievementEligibility { enabled, reason })
+            }
+            29 => {
+                let event = crate::achievement::AchievementEvent::decode(&mut r)?;
+                Ok(Self::AchievementEvent { event })
+            }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ServerPacket tag {}", other),
@@ -1898,6 +1945,8 @@ struct ConnectedClient {
     is_sleeping: bool,
     last_activity: Instant,
     is_dead: bool,
+    achievements_eligible: bool,
+    announced_achievements: std::collections::HashSet<String>,
 }
 
 /// Authoritative Multiplayer Server managing authentication, persistent user accounts,
@@ -1908,6 +1957,7 @@ pub struct MultiplayerServer {
     join_handle: Option<JoinHandle<()>>,
     online_count: Arc<Mutex<usize>>,
     command_tx: Sender<String>,
+    broadcast_achievements: Arc<AtomicBool>,
 }
 
 impl MultiplayerServer {
@@ -1933,6 +1983,8 @@ impl MultiplayerServer {
         let stop_clone = stop_flag.clone();
         let online_count = Arc::new(Mutex::new(0usize));
         let online_clone = online_count.clone();
+        let broadcast_achievements = Arc::new(AtomicBool::new(true));
+        let broadcast_ach_clone = broadcast_achievements.clone();
         let (command_tx, command_rx) = mpsc::channel();
         let gen_arc: Arc<dyn Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync> =
             Arc::new(chunk_generator);
@@ -1950,6 +2002,7 @@ impl MultiplayerServer {
                     gen_arc,
                     stop_clone,
                     online_clone,
+                    broadcast_ach_clone,
                     command_rx,
                 );
             })?;
@@ -1962,7 +2015,13 @@ impl MultiplayerServer {
             join_handle: Some(handle),
             online_count,
             command_tx,
+            broadcast_achievements,
         })
+    }
+
+    /// Configures whether player Achievement unlocks are broadcast in multiplayer chat.
+    pub fn set_broadcast_achievements(&self, enabled: bool) {
+        self.broadcast_achievements.store(enabled, Ordering::Relaxed);
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -2282,6 +2341,34 @@ fn apply_command_output(
         }
     }
 
+    // Per-player cheat tainting: admin/cheat commands forfeit Achievement Eligibility
+    // only for the targeted player's session (not other Survival players on the server).
+    for target_pid in output.cheat_taint_players {
+        if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+            if c.achievements_eligible {
+                c.achievements_eligible = false;
+                let reason = "Achievements disabled for this session (admin/cheat command used)."
+                    .to_string();
+                direct_sends.push((
+                    target_pid,
+                    ServerPacket::AchievementEligibility {
+                        enabled: false,
+                        reason: Some(reason.clone()),
+                    },
+                ));
+                direct_sends.push((
+                    target_pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: format!("[Achievements] {}", reason),
+                        is_system: true,
+                    },
+                ));
+            }
+        }
+    }
+
     for (target_name, new_rank) in output.rank_updates {
         // Update permissions manager
         let _ = perms_manager.add_player_group(&target_name, &new_rank);
@@ -2438,6 +2525,7 @@ fn run_server_loop(
     chunk_generator: Arc<dyn Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync>,
     stop_flag: Arc<AtomicBool>,
     online_count: Arc<Mutex<usize>>,
+    broadcast_achievements: Arc<AtomicBool>,
     command_rx: Receiver<String>,
 ) {
     let world_dir = saves_root.join(&folder_name);
@@ -2529,6 +2617,8 @@ fn run_server_loop(
                 is_sleeping: false,
                 last_activity: Instant::now(),
                 is_dead: false,
+                achievements_eligible: true,
+                announced_achievements: std::collections::HashSet::new(),
             });
         }
 
@@ -2837,6 +2927,28 @@ fn run_server_loop(
                                         day_night_time: save_data.metadata.day_night_time,
                                         player_state: account.player_state.clone(),
                                         appearance: account.appearance,
+                                    },
+                                ));
+
+                                let world_eligible = save_data.metadata.achievements_enabled
+                                    && save_data.metadata.game_mode
+                                        == crate::player::GameMode::Survival;
+                                let player_eligible = world_eligible
+                                    && account.player_state.stats.game_mode
+                                        == crate::player::GameMode::Survival;
+                                clients[idx].achievements_eligible = player_eligible;
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::AchievementEligibility {
+                                        enabled: player_eligible,
+                                        reason: if player_eligible {
+                                            None
+                                        } else {
+                                            Some(
+                                                "Achievements are disabled on this server/mode."
+                                                    .to_string(),
+                                            )
+                                        },
                                     },
                                 ));
 
@@ -3256,7 +3368,37 @@ fn run_server_loop(
                                         },
                                     ));
                                 }
-                                if m.kind.is_boss() {
+                                    let is_boss = m.kind.is_boss();
+                                    let boss_key = crate::achievement::boss_achievement_key(m.kind)
+                                        .map(str::to_string);
+                                    let kill_pos = m.position;
+                                    let kill_event = crate::achievement::AchievementEvent::MonsterKilled {
+                                        is_boss,
+                                        boss_key,
+                                    };
+                                    if is_boss {
+                                        for c in &clients {
+                                            if c.authenticated
+                                                && c.achievements_eligible
+                                                && (c.player_id == pid
+                                                    || c.model.position.distance(kill_pos)
+                                                        <= crate::temple::BOSS_HUD_MAX_DISTANCE)
+                                            {
+                                                direct_sends.push((
+                                                    c.player_id,
+                                                    ServerPacket::AchievementEvent {
+                                                        event: kill_event.clone(),
+                                                    },
+                                                ));
+                                            }
+                                        }
+                                    } else if clients[idx].achievements_eligible {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::AchievementEvent { event: kill_event },
+                                        ));
+                                    }
+                                    if is_boss {
                                     if let Some(tid) = m.temple_id {
                                         if let Some(tkind) = save_data.temples.mark_boss_defeated(tid) {
                                             if let Some(state_snapshot) =
@@ -3364,6 +3506,14 @@ fn run_server_loop(
                                         item: ItemSlot::new(ItemId::MILK_BUCKET, 1),
                                     },
                                 ));
+                                if clients[idx].achievements_eligible {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::AchievementEvent {
+                                            event: crate::achievement::AchievementEvent::CowMilked,
+                                        },
+                                    ));
+                                }
                             } else {
                                 let _ = animal.try_feed(held_item);
                             }
@@ -3435,15 +3585,16 @@ fn run_server_loop(
                             &item_registry,
                             world_ticks,
                         );
-                        let status = match res {
+                        let (status, trade_spent) = match res {
                             Ok(s) => {
-                                if let Some(tier) = s.leveled_up_to {
+                                let msg = if let Some(tier) = s.leveled_up_to {
                                     format!("Purchased! Shop Tier increased to Tier {}!", tier)
                                 } else {
                                     "Purchase complete!".to_string()
-                                }
+                                };
+                                (msg, Some(s.coins_delta.unsigned_abs() as u64))
                             }
-                            Err(e) => e.message(),
+                            Err(e) => (e.message(), None),
                         };
                         direct_sends.push((
                             pid,
@@ -3456,6 +3607,7 @@ fn run_server_loop(
                                 .villages
                                 .build_shop_snapshot(npc_id, &uname, world_ticks)
                         {
+                            let new_tier = snapshot.shop_tier;
                             direct_sends.push((
                                 pid,
                                 ServerPacket::ShopUiSync {
@@ -3463,6 +3615,19 @@ fn run_server_loop(
                                     status_message: status,
                                 },
                             ));
+                            if let Some(coins_spent) = trade_spent {
+                                if clients[idx].achievements_eligible {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::AchievementEvent {
+                                            event: crate::achievement::AchievementEvent::ShopTradeCompleted {
+                                                coins_spent,
+                                                new_shop_tier: new_tier,
+                                            },
+                                        },
+                                    ));
+                                }
+                            }
                         }
                     }
                     ClientPacket::ShopSell { npc_id, offer_idx } if clients[idx].authenticated => {
@@ -3476,9 +3641,9 @@ fn run_server_loop(
                             &item_registry,
                             world_ticks,
                         );
-                        let status = match res {
-                            Ok(s) => format!("Sold for +{} Gold Coins!", s.coins_delta),
-                            Err(e) => e.message(),
+                        let (status, sold_ok) = match res {
+                            Ok(s) => (format!("Sold for +{} Gold Coins!", s.coins_delta), true),
+                            Err(e) => (e.message(), false),
                         };
                         direct_sends.push((
                             pid,
@@ -3491,6 +3656,7 @@ fn run_server_loop(
                                 .villages
                                 .build_shop_snapshot(npc_id, &uname, world_ticks)
                         {
+                            let new_tier = snapshot.shop_tier;
                             direct_sends.push((
                                 pid,
                                 ServerPacket::ShopUiSync {
@@ -3498,6 +3664,17 @@ fn run_server_loop(
                                     status_message: status,
                                 },
                             ));
+                            if sold_ok && clients[idx].achievements_eligible {
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::AchievementEvent {
+                                        event: crate::achievement::AchievementEvent::ShopTradeCompleted {
+                                            coins_spent: 0,
+                                            new_shop_tier: new_tier,
+                                        },
+                                    },
+                                ));
+                            }
                         }
                     }
                     ClientPacket::ShopEnhance {
@@ -3516,15 +3693,16 @@ fn run_server_loop(
                             &item_registry,
                             world_ticks,
                         );
-                        let status = match res {
+                        let (status, enhance_spent) = match res {
                             Ok(s) => {
-                                if let Some(tier) = s.leveled_up_to {
+                                let msg = if let Some(tier) = s.leveled_up_to {
                                     format!("Item enhanced! Shop Tier increased to Tier {}!", tier)
                                 } else {
                                     "Item enhanced and restored to full durability!".to_string()
-                                }
+                                };
+                                (msg, Some(s.coins_delta.unsigned_abs() as u64))
                             }
-                            Err(e) => e.message(),
+                            Err(e) => (e.message(), None),
                         };
                         direct_sends.push((
                             pid,
@@ -3537,6 +3715,7 @@ fn run_server_loop(
                                 .villages
                                 .build_shop_snapshot(npc_id, &uname, world_ticks)
                         {
+                            let new_tier = snapshot.shop_tier;
                             direct_sends.push((
                                 pid,
                                 ServerPacket::ShopUiSync {
@@ -3544,6 +3723,25 @@ fn run_server_loop(
                                     status_message: status,
                                 },
                             ));
+                            if let Some(coins_spent) = enhance_spent {
+                                if clients[idx].achievements_eligible {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::AchievementEvent {
+                                            event: crate::achievement::AchievementEvent::ShopTradeCompleted {
+                                                coins_spent,
+                                                new_shop_tier: new_tier,
+                                            },
+                                        },
+                                    ));
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::AchievementEvent {
+                                            event: crate::achievement::AchievementEvent::EnhancementApplied,
+                                        },
+                                    ));
+                                }
+                            }
                         }
                     }
                     ClientPacket::AttackVillageNpc {
@@ -3553,13 +3751,50 @@ fn run_server_loop(
                     } if clients[idx].authenticated => {
                         let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
                         let uname = clients[idx].username.clone();
-                        let _ = save_data.villages.damage_npc(
+                        let hit = save_data.villages.damage_npc(
                             npc_id,
                             damage.clamp(0.0, 50.0),
                             knockback,
                             Some(&uname),
                             world_ticks,
                         );
+                        if hit.is_some() && clients[idx].achievements_eligible {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::AchievementEvent {
+                                    event: crate::achievement::AchievementEvent::VillageGuardProvoked,
+                                },
+                            ));
+                        }
+                    }
+                    ClientPacket::AchievementUnlocked { achievement_id }
+                        if clients[idx].authenticated =>
+                    {
+                        if clients[idx].achievements_eligible
+                            && broadcast_achievements.load(Ordering::Relaxed)
+                        {
+                            if let Some(def) =
+                                crate::achievement::achievement_by_id(&achievement_id)
+                            {
+                                if clients[idx]
+                                    .announced_achievements
+                                    .insert(def.id.to_string())
+                                {
+                                    outgoing_broadcasts.push((
+                                        None,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: String::new(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "{} unlocked [{}]!",
+                                                clients[idx].username, def.title
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
                     }
                     ClientPacket::RegisterVillageBlueprint {
                         village_id,
@@ -4370,6 +4605,7 @@ fn run_server_loop(
                 }
 
                 // B. Passive Animals (herding, breeding, egg laying, physics, death drops)
+                let prev_animal_count = save_data.animals.len();
                 let animal_drops = crate::animal::tick_animals(
                     &mut save_data.animals,
                     &mut save_data.next_animal_id,
@@ -4378,6 +4614,37 @@ fn run_server_loop(
                     &world,
                     &block_registry,
                 );
+                if save_data.animals.len() > prev_animal_count {
+                    for newborn in &save_data.animals[prev_animal_count..] {
+                        if newborn.baby_timer > 0.0 {
+                            let nearest_idx = clients
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, c)| c.authenticated && c.achievements_eligible)
+                                .min_by(|(_, a), (_, b)| {
+                                    let da = a.model.position.distance_squared(newborn.position);
+                                    let db = b.model.position.distance_squared(newborn.position);
+                                    da.total_cmp(&db)
+                                })
+                                .and_then(|(i, c)| {
+                                    if c.model.position.distance(newborn.position) <= 24.0 {
+                                        Some(i)
+                                    } else {
+                                        None
+                                    }
+                                });
+                            if let Some(ci) = nearest_idx {
+                                if let Ok(bytes) = (ServerPacket::AchievementEvent {
+                                    event: crate::achievement::AchievementEvent::AnimalBred,
+                                })
+                                .encode()
+                                {
+                                    let _ = clients[ci].stream.write_all(&bytes);
+                                }
+                            }
+                        }
+                    }
+                }
                 for (drop_pos, item) in animal_drops {
                     let drop_id = next_local_drop_id();
                     let mut drop = ItemDrop::new(drop_pos, item);
@@ -5894,6 +6161,145 @@ mod tests {
         };
         let bytes = s4.encode().unwrap();
         assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s4);
+    }
+
+    #[test]
+    fn test_achievement_packets_roundtrip() {
+        let c = ClientPacket::AchievementUnlocked {
+            achievement_id: "boss_sun_pharaoh".to_string(),
+        };
+        let bytes = c.encode().unwrap();
+        assert_eq!(ClientPacket::decode(&bytes[8..]).unwrap(), c);
+
+        let s1 = ServerPacket::AchievementEligibility {
+            enabled: false,
+            reason: Some("Creative world".to_string()),
+        };
+        let bytes = s1.encode().unwrap();
+        assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s1);
+
+        let s2 = ServerPacket::AchievementEvent {
+            event: crate::achievement::AchievementEvent::MonsterKilled {
+                is_boss: true,
+                boss_key: Some("frost_titan".to_string()),
+            },
+        };
+        let bytes = s2.encode().unwrap();
+        assert_eq!(ServerPacket::decode(&bytes[8..]).unwrap(), s2);
+    }
+
+    #[test]
+    fn test_multiplayer_achievement_broadcast_dedup_toggle_and_per_player_taint() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "blockgame_mp_ach_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).unwrap();
+
+        let server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "mp_ach_world".to_string(),
+            "MP Ach World".to_string(),
+            42,
+            None,
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("start server");
+        let addr = server.local_addr().to_string();
+
+        let (mut alice, _) = MultiplayerClient::connect_and_authenticate(
+            &addr,
+            "Alice",
+            "pass1234",
+            CharacterAppearance::default(),
+        )
+        .expect("alice connect");
+        let (mut bob, _) = MultiplayerClient::connect_and_authenticate(
+            &addr,
+            "Bob",
+            "pass1234",
+            CharacterAppearance::default(),
+        )
+        .expect("bob connect");
+
+        // Drain initial join packets and confirm Alice receives eligible=true
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let alice_pkts = alice.poll_packets();
+        assert!(
+            alice_pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::AchievementEligibility { enabled: true, .. }
+            )),
+            "Expected initial AchievementEligibility(true) on join"
+        );
+        let _ = bob.poll_packets();
+
+        // 1. Alice unlocks first_timber -> broadcast once, duplicate suppressed
+        alice.send(&ClientPacket::AchievementUnlocked {
+            achievement_id: "first_timber".to_string(),
+        });
+        alice.send(&ClientPacket::AchievementUnlocked {
+            achievement_id: "first_timber".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let bob_pkts = bob.poll_packets();
+        let timber_msgs: Vec<_> = bob_pkts
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    ServerPacket::ChatBroadcast { message, is_system: true, .. }
+                        if message.contains("Alice unlocked [Timber!]!")
+                )
+            })
+            .collect();
+        assert_eq!(timber_msgs.len(), 1, "Expected exactly 1 deduplicated broadcast");
+
+        // 2. Disable broadcast_achievements -> no chat broadcast for craft_table
+        server.set_broadcast_achievements(false);
+        alice.send(&ClientPacket::AchievementUnlocked {
+            achievement_id: "craft_table".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let bob_pkts = bob.poll_packets();
+        assert!(
+            !bob_pkts.iter().any(|p| {
+                matches!(
+                    p,
+                    ServerPacket::ChatBroadcast { message, .. }
+                        if message.contains("Getting to Work")
+                )
+            }),
+            "Expected broadcast to be suppressed when broadcast_achievements=false"
+        );
+
+        // 3. Per-player cheat tainting: /give Alice diamond 1 taints Alice, not Bob
+        server.set_broadcast_achievements(true);
+        server.execute_command("give Alice diamond 1");
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let alice_pkts = alice.poll_packets();
+        let bob_pkts = bob.poll_packets();
+        assert!(
+            alice_pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::AchievementEligibility { enabled: false, .. }
+            )),
+            "Alice should be tainted after /give"
+        );
+        assert!(
+            !bob_pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::AchievementEligibility { enabled: false, .. }
+            )),
+            "Bob must remain eligible when only Alice was targeted"
+        );
+
+        drop(alice);
+        drop(bob);
+        drop(server);
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }
 

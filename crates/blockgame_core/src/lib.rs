@@ -1,3 +1,4 @@
+pub mod achievement;
 pub mod animal;
 pub mod auth;
 pub mod block;
@@ -29,6 +30,14 @@ pub mod village;
 pub mod voice;
 pub mod world;
 
+pub use achievement::{
+    achievement_by_id, achievements_in_category, boss_achievement_key, boss_trophy_core_key,
+    cooking_pot_dish_key, is_eu_generator_block, is_full_diamond_armor, is_log_block,
+    is_mature_crop_block, is_smelted_ingot_item, is_stem_fruit_block, AchievementBackend,
+    AchievementCategory, AchievementDef, AchievementEngine, AchievementEvent, AchievementProfile,
+    AchievementProgressView, AchievementRequirement, LocalAchievementBackend, ACHIEVEMENTS,
+    ACHIEVEMENT_PROFILE_SCHEMA_VERSION, DEFAULT_ACHIEVEMENTS_PATH,
+};
 pub use animal::{AnimalEntity, AnimalKind};
 pub use auth::{
     derive_client_password_token, hash_server_password, sha256, validate_username, AuthDatabase,

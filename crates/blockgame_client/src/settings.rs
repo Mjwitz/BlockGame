@@ -18,6 +18,7 @@ pub struct KeyBinds {
     pub debug_hud: KeyCode,
     pub push_to_talk: KeyCode,
     pub skills: KeyCode,
+    pub achievements: KeyCode,
 }
 
 impl Default for KeyBinds {
@@ -37,12 +38,13 @@ impl Default for KeyBinds {
             debug_hud: KeyCode::F3,
             push_to_talk: KeyCode::KeyV,
             skills: KeyCode::KeyK,
+            achievements: KeyCode::KeyJ,
         }
     }
 }
 
 impl KeyBinds {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
 
     pub fn labels_and_keys(&self) -> [(&'static str, String); Self::COUNT] {
         [
@@ -60,6 +62,7 @@ impl KeyBinds {
             ("Debug HUD", key_display_name(self.debug_hud)),
             ("Push to Talk", key_display_name(self.push_to_talk)),
             ("Skills Menu", key_display_name(self.skills)),
+            ("Achievements", key_display_name(self.achievements)),
         ]
     }
 
@@ -79,6 +82,7 @@ impl KeyBinds {
             11 => self.debug_hud = key,
             12 => self.push_to_talk = key,
             13 => self.skills = key,
+            14 => self.achievements = key,
             _ => {}
         }
     }
@@ -454,6 +458,11 @@ impl GameSettings {
                         settings.keybinds.skills = k;
                     }
                 }
+                "key_achievements" => {
+                    if let Some(k) = str_to_key_code(val) {
+                        settings.keybinds.achievements = k;
+                    }
+                }
                 "voice_mode" => {
                     if let Ok(v) = val.parse::<u8>() {
                         settings.voice_mode = v;
@@ -519,7 +528,8 @@ impl GameSettings {
              key_third_person={}\n\
              key_debug_hud={}\n\
              key_push_to_talk={}\n\
-             key_skills={}\n",
+             key_skills={}\n\
+             key_achievements={}\n",
             self.render_distance,
             self.fov_degrees,
             self.mouse_sensitivity,
@@ -551,6 +561,7 @@ impl GameSettings {
             key_code_to_string(self.keybinds.debug_hud),
             key_code_to_string(self.keybinds.push_to_talk),
             key_code_to_string(self.keybinds.skills),
+            key_code_to_string(self.keybinds.achievements),
         );
         if let Err(e) = std::fs::write(path, content) {
             log::warn!("Failed to save settings to {:?}: {}", path, e);
@@ -569,6 +580,7 @@ mod tests {
         keybinds.jump = KeyCode::Period;
         keybinds.inventory = KeyCode::NumpadDecimal;
         keybinds.skills = KeyCode::KeyM;
+        keybinds.achievements = KeyCode::KeyL;
 
         let mut s = GameSettings {
             render_distance: 99,
@@ -620,5 +632,6 @@ mod tests {
         assert_eq!(loaded.keybinds.jump, KeyCode::Period);
         assert_eq!(loaded.keybinds.inventory, KeyCode::NumpadDecimal);
         assert_eq!(loaded.keybinds.skills, KeyCode::KeyM);
+        assert_eq!(loaded.keybinds.achievements, KeyCode::KeyL);
     }
 }

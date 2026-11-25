@@ -1218,6 +1218,37 @@ pub mod sound_generator {
         }
         samples
     }
+
+    /// Synthesizes a bright celebratory chime when an Achievement is unlocked.
+    pub fn generate_achievement_unlock() -> Vec<f32> {
+        let duration = 0.75;
+        let num_samples = (duration * SAMPLE_RATE) as usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        // Rising golden triad + high shimmer: G5 -> B5 -> D6 -> G6
+        let notes = [
+            (0.00, 783.99_f32),
+            (0.09, 987.77),
+            (0.18, 1174.66),
+            (0.28, 1567.98),
+        ];
+
+        for i in 0..num_samples {
+            let t = i as f32 / SAMPLE_RATE;
+            let mut sum = 0.0;
+            for &(start, freq) in &notes {
+                if t >= start {
+                    let dt = t - start;
+                    let env = (1.0 - (-dt * 80.0).exp()) * (-dt * 6.5).exp();
+                    let tone = (2.0 * PI * freq * dt).sin() * 0.65
+                        + (2.0 * PI * freq * 2.0 * dt).sin() * 0.22
+                        + (2.0 * PI * freq * 3.0 * dt).sin() * 0.08;
+                    sum += tone * env;
+                }
+            }
+            samples.push((sum * 0.50).clamp(-1.0, 1.0));
+        }
+        samples
+    }
 }
 
 /// Global audio manager orchestrating 3D spatial playback, materials, and mixer device.
@@ -1237,6 +1268,7 @@ pub struct AudioManager {
     fishing_splash: Arc<Vec<f32>>,
     fishing_bite: Arc<Vec<f32>>,
     fishing_catch: Arc<Vec<f32>>,
+    achievement_unlock: Arc<Vec<f32>>,
     animal_ambient: HashMap<(blockgame_core::animal::AnimalKind, usize), Arc<Vec<f32>>>,
     animal_hurt: HashMap<(blockgame_core::animal::AnimalKind, usize), Arc<Vec<f32>>>,
     monster_ambient: HashMap<(blockgame_core::monster::MonsterKind, usize), Arc<Vec<f32>>>,
@@ -1346,6 +1378,7 @@ impl AudioManager {
             fishing_splash: Arc::new(sound_generator::generate_fishing_splash()),
             fishing_bite: Arc::new(sound_generator::generate_fishing_bite()),
             fishing_catch: Arc::new(sound_generator::generate_fishing_catch()),
+            achievement_unlock: Arc::new(sound_generator::generate_achievement_unlock()),
             animal_ambient: HashMap::new(),
             animal_hurt: HashMap::new(),
             monster_ambient: HashMap::new(),
@@ -1972,6 +2005,14 @@ impl AudioManager {
         let samples = self.fishing_catch.clone();
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.play_voice(samples, 1.0, 0.55, 0.55, SoundCategory::Sfx, 0.0);
+        }
+    }
+
+    /// Plays the celebratory chime when unlocking an Achievement.
+    pub fn play_achievement_unlock(&mut self) {
+        let samples = self.achievement_unlock.clone();
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.play_voice(samples, 1.0, 0.60, 0.60, SoundCategory::Sfx, 0.0);
         }
     }
 
