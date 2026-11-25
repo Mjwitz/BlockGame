@@ -172,6 +172,7 @@ pub struct AppState {
     pub controller_ptt_held: bool,
     pub controller_player_list_held: bool,
     pub ui_scroll_cooldown: f32,
+    pub last_rumble_health: f32,
     pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
@@ -1575,6 +1576,7 @@ impl ApplicationHandler for BlockGameApp {
             controller_ptt_held: false,
             controller_player_list_held: false,
             ui_scroll_cooldown: 0.0,
+            last_rumble_health: 20.0,
             registry: self.registry.clone(),
             inventory,
             armor: blockgame_core::item::ArmorEquipment::new(),
@@ -1760,9 +1762,11 @@ impl ApplicationHandler for BlockGameApp {
         } else if let Some(state) = &mut self.state {
             match &event {
                 WindowEvent::CursorMoved { position, .. } => {
-                    state
-                        .input_router
-                        .on_keyboard_mouse_activity(Some([position.x as f32, position.y as f32]));
+                    let scale = state.settings.ui_scale.clamp(0.75, 1.5);
+                    state.input_router.on_keyboard_mouse_activity(Some([
+                        position.x as f32 / scale,
+                        position.y as f32 / scale,
+                    ]));
                     if !state.mouse_captured || state.screen != AppScreen::InGame {
                         state.window.set_cursor_visible(true);
                     }
@@ -6556,13 +6560,6 @@ impl BlockGameApp {
                         .update(dt, state.player.position.y, is_head_submerged);
 
                     if state.player_stats.health < prev_health && !state.player_stats.is_dead {
-                        let dmg = prev_health - state.player_stats.health;
-                        let effect = if dmg >= 6.0 {
-                            crate::controller::RumbleEffect::Explosion
-                        } else {
-                            crate::controller::RumbleEffect::Damage
-                        };
-                        state.trigger_controller_rumble(effect);
                         state.audio.play_hurt();
                     }
 
@@ -9494,6 +9491,18 @@ impl BlockGameApp {
                 return;
             };
             let dt = state.last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
+            // Unified all-source damage rumble (environmental, monsters, bosses, arrows, guards, PvP)
+            let cur_hp = state.player_stats.health;
+            if state.screen == AppScreen::InGame && cur_hp < state.last_rumble_health {
+                let dmg = state.last_rumble_health - cur_hp;
+                let effect = if dmg >= 6.0 {
+                    crate::controller::RumbleEffect::Explosion
+                } else {
+                    crate::controller::RumbleEffect::Damage
+                };
+                state.trigger_controller_rumble(effect);
+            }
+            state.last_rumble_health = cur_hp;
             // Decay non-blocking HUD toast timer
             if let Some((_, timer)) = &mut state.hud_toast {
                 *timer -= dt;
@@ -10032,6 +10041,12 @@ impl BlockGameApp {
             AppScreen::Guide { .. } => {
                 rects.extend_from_slice(&UiBuilder::guide_screen_button_rects(screen_w, screen_h));
             }
+            AppScreen::Achievements { .. } => {
+                let (cat_rects, _list_rect, close_rect) =
+                    UiBuilder::achievements_screen_rects(screen_w, screen_h);
+                rects.extend_from_slice(&cat_rects);
+                rects.push(close_rect);
+            }
             AppScreen::Paused { .. } => {
                 rects.extend_from_slice(&UiBuilder::pause_menu_button_rects(screen_w, screen_h));
             }
@@ -10089,6 +10104,23 @@ impl BlockGameApp {
                     }
                 }
             }
+            AppScreen::InGame if state.player_stats.is_dead => {
+                let btn_w = 240.0;
+                let btn_h = 46.0;
+                rects.push([(screen_w - btn_w) * 0.5, screen_h * 0.5 + 30.0, btn_w, btn_h]);
+            }
+            AppScreen::InGame if state.skills_open => {
+                let (skill_rects, _detail, close_rect) =
+                    UiBuilder::skills_screen_rects(screen_w, screen_h);
+                rects.extend_from_slice(&skill_rects);
+                rects.push(close_rect);
+            }
+            AppScreen::InGame if state.achievements_open => {
+                let (cat_rects, _list_rect, close_rect) =
+                    UiBuilder::achievements_screen_rects(screen_w, screen_h);
+                rects.extend_from_slice(&cat_rects);
+                rects.push(close_rect);
+            }
             AppScreen::InGame if state.quick_menu_open => {
                 for i in 0..4 {
                     rects.push(UiBuilder::quick_menu_item_rect(screen_w, screen_h, i));
@@ -10103,6 +10135,15 @@ impl BlockGameApp {
                     let y = base_y
                         + (row as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP)
                         + if row == 3 { 10.0 } else { 0.0 };
+                    for col in 0..9 {
+                        let x = inv_x + (col as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
+                        rects.push([x, y, UiBuilder::SLOT_SIZE, UiBuilder::SLOT_SIZE]);
+                    }
+                }
+                // Upper container / crafting / armor / shop slots above player inventory
+                let upper_y = base_y - 3.0 * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP) - 24.0;
+                for row in 0..3 {
+                    let y = upper_y + (row as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
                     for col in 0..9 {
                         let x = inv_x + (col as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
                         rects.push([x, y, UiBuilder::SLOT_SIZE, UiBuilder::SLOT_SIZE]);

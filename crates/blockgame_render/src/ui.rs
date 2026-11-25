@@ -10369,18 +10369,45 @@ impl UiBuilder {
                     },
                 );
 
-                let hint = "Hold CLICK/SPACE";
-                let hw = Self::string_width(hint, 6.0, 1.0);
-                Self::draw_string(
-                    mesh,
-                    px + (panel_w - hw) * 0.5,
-                    py + panel_h - 24.0,
-                    hint,
-                    6.0,
-                    9.0,
-                    1.0,
-                    [0.85, 0.92, 0.80, 0.95],
-                );
+                if input_mode == InputMode::Controller {
+                    let hint = "Hold";
+                    let hw = Self::string_width(hint, 6.5, 1.0);
+                    let total_w = 14.0 + 4.0 + hw;
+                    let sx = px + (panel_w - total_w) * 0.5;
+                    let sy = py + panel_h - 26.0;
+                    Self::draw_gamepad_glyph(
+                        mesh,
+                        sx,
+                        sy - 2.0,
+                        14.0,
+                        glyph_family,
+                        use_button,
+                        [1.0; 4],
+                    );
+                    Self::draw_string(
+                        mesh,
+                        sx + 18.0,
+                        sy + 1.0,
+                        hint,
+                        6.5,
+                        9.5,
+                        1.0,
+                        [0.85, 0.92, 0.80, 0.95],
+                    );
+                } else {
+                    let hint = "Hold CLICK/SPACE";
+                    let hw = Self::string_width(hint, 6.0, 1.0);
+                    Self::draw_string(
+                        mesh,
+                        px + (panel_w - hw) * 0.5,
+                        py + panel_h - 24.0,
+                        hint,
+                        6.0,
+                        9.0,
+                        1.0,
+                        [0.85, 0.92, 0.80, 0.95],
+                    );
+                }
             }
         }
     }
