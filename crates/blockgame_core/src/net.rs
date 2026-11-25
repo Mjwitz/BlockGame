@@ -2180,6 +2180,34 @@ fn apply_command_output(
         ));
     }
 
+    // Per-player cheat tainting MUST be queued before `gives` / `gamemode_updates` / `skill_actions`
+    // so the client receives AchievementEligibility(false) before any cheat-granted item or XP arrives.
+    for target_pid in output.cheat_taint_players {
+        if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
+            if c.achievements_eligible {
+                c.achievements_eligible = false;
+                let reason = "Achievements disabled for this session (admin/cheat command used)."
+                    .to_string();
+                direct_sends.push((
+                    target_pid,
+                    ServerPacket::AchievementEligibility {
+                        enabled: false,
+                        reason: Some(reason.clone()),
+                    },
+                ));
+                direct_sends.push((
+                    target_pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: format!("[Achievements] {}", reason),
+                        is_system: true,
+                    },
+                ));
+            }
+        }
+    }
+
     for (target_pid, slot) in output.gives {
         direct_sends.push((target_pid, ServerPacket::ReceiveItem { item: slot }));
     }
@@ -2337,34 +2365,6 @@ fn apply_command_output(
                         },
                     ));
                 }
-            }
-        }
-    }
-
-    // Per-player cheat tainting: admin/cheat commands forfeit Achievement Eligibility
-    // only for the targeted player's session (not other Survival players on the server).
-    for target_pid in output.cheat_taint_players {
-        if let Some(c) = clients.iter_mut().find(|c| c.player_id == target_pid) {
-            if c.achievements_eligible {
-                c.achievements_eligible = false;
-                let reason = "Achievements disabled for this session (admin/cheat command used)."
-                    .to_string();
-                direct_sends.push((
-                    target_pid,
-                    ServerPacket::AchievementEligibility {
-                        enabled: false,
-                        reason: Some(reason.clone()),
-                    },
-                ));
-                direct_sends.push((
-                    target_pid,
-                    ServerPacket::ChatBroadcast {
-                        sender: "Server".to_string(),
-                        prefix: String::new(),
-                        message: format!("[Achievements] {}", reason),
-                        is_system: true,
-                    },
-                ));
             }
         }
     }
@@ -3608,6 +3608,11 @@ fn run_server_loop(
                                 .build_shop_snapshot(npc_id, &uname, world_ticks)
                         {
                             let new_tier = snapshot.shop_tier;
+                            let bought_item_id = snapshot
+                                .buy_offers
+                                .iter()
+                                .find(|o| o.offer_idx == offer_idx)
+                                .map(|o| o.item_id.0);
                             direct_sends.push((
                                 pid,
                                 ServerPacket::ShopUiSync {
@@ -3626,6 +3631,16 @@ fn run_server_loop(
                                             },
                                         },
                                     ));
+                                    if let Some(item_id) = bought_item_id {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::AchievementEvent {
+                                                event: crate::achievement::AchievementEvent::ItemObtained {
+                                                    item_id,
+                                                },
+                                            },
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -6281,12 +6296,17 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(80));
         let alice_pkts = alice.poll_packets();
         let bob_pkts = bob.poll_packets();
+        let taint_pos = alice_pkts
+            .iter()
+            .position(|p| matches!(p, ServerPacket::AchievementEligibility { enabled: false, .. }))
+            .expect("Alice should be tainted after /give");
+        let recv_pos = alice_pkts
+            .iter()
+            .position(|p| matches!(p, ServerPacket::ReceiveItem { .. }))
+            .expect("Alice should receive the /give item");
         assert!(
-            alice_pkts.iter().any(|p| matches!(
-                p,
-                ServerPacket::AchievementEligibility { enabled: false, .. }
-            )),
-            "Alice should be tainted after /give"
+            taint_pos < recv_pos,
+            "AchievementEligibility(false) must arrive before ReceiveItem"
         );
         assert!(
             !bob_pkts.iter().any(|p| matches!(

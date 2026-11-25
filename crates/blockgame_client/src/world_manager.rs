@@ -279,6 +279,7 @@ pub struct WorldManager {
     announced_mp_villages: HashSet<u64>,
     pub pending_village_blueprints: Vec<blockgame_core::VillageSpawnBlueprint>,
     pub pending_mp_npc_arrow_hits: Vec<(u32, f32, Vec3)>,
+    pub pending_arrow_killed_monsters: Vec<blockgame_core::MonsterKind>,
 }
 
 impl WorldManager {
@@ -336,6 +337,7 @@ impl WorldManager {
             announced_mp_villages: HashSet::new(),
             pending_village_blueprints: Vec::new(),
             pending_mp_npc_arrow_hits: Vec::new(),
+            pending_arrow_killed_monsters: Vec::new(),
         }
     }
 
@@ -2592,6 +2594,7 @@ impl WorldManager {
                             monster_hits += 1;
                             if monster.dead {
                                 monster_kills += 1;
+                                self.pending_arrow_killed_monsters.push(monster.kind);
                             }
                         }
                         arrow.dead = true;

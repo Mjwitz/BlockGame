@@ -784,30 +784,6 @@ impl AppState {
         }
     }
 
-    /// Permanently disables Achievement Eligibility for the active singleplayer world.
-    pub fn taint_singleplayer_achievements(&mut self, reason: &str) {
-        if self.mp_client.is_some() {
-            return;
-        }
-        let was_eligible = self.achievements.is_eligible();
-        self.achievements.set_eligible(false);
-        if let Some(meta) = &mut self.active_world_metadata {
-            meta.achievements_enabled = false;
-        }
-        if was_eligible {
-            self.local_chat_messages.push(blockgame_core::net::ChatEntry {
-                sender: "Achievements".to_string(),
-                prefix: String::new(),
-                message: format!("[Achievements] Disabled for this world ({reason})."),
-                is_system: true,
-                age: 0.0,
-            });
-            if self.local_chat_messages.len() > 100 {
-                self.local_chat_messages.remove(0);
-            }
-        }
-    }
-
     pub fn disconnect_multiplayer(&mut self) {
         self.save_achievements_if_dirty();
         self.achievements_open = false;
@@ -1692,6 +1668,9 @@ impl ApplicationHandler for BlockGameApp {
                     AppScreen::InGame
                         | AppScreen::Paused { .. }
                         | AppScreen::Settings {
+                            return_to_pause: true
+                        }
+                        | AppScreen::Achievements {
                             return_to_pause: true
                         }
                 ) {
@@ -2933,12 +2912,28 @@ impl ApplicationHandler for BlockGameApp {
                                                         .active_shop_snapshot
                                                         .as_ref()
                                                         .map_or(1, |sn| sn.shop_tier);
+                                                    let bought_item_id = state
+                                                        .active_shop_snapshot
+                                                        .as_ref()
+                                                        .and_then(|sn| {
+                                                            sn.buy_offers
+                                                                .iter()
+                                                                .find(|o| o.offer_idx == offer_idx)
+                                                                .map(|o| o.item_id.0)
+                                                        });
                                                     state.record_achievement_event(
                                                         blockgame_core::AchievementEvent::ShopTradeCompleted {
                                                             coins_spent,
                                                             new_shop_tier: tier,
                                                         },
                                                     );
+                                                    if let Some(item_id) = bought_item_id {
+                                                        state.record_achievement_event(
+                                                            blockgame_core::AchievementEvent::ItemObtained {
+                                                                item_id,
+                                                            },
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -5033,51 +5028,6 @@ impl ApplicationHandler for BlockGameApp {
                                             );
                                         }
                                     }
-                                } else if msg.to_ascii_lowercase().starts_with("/gamemode ")
-                                    || msg.to_ascii_lowercase().starts_with("/gm ")
-                                {
-                                    let parts: Vec<&str> = msg.split_whitespace().collect();
-                                    if let Some(mode) =
-                                        parts.get(1).and_then(|s| blockgame_core::GameMode::parse(s))
-                                    {
-                                        state.player_stats.game_mode = mode;
-                                        if let Some(meta) = &mut state.active_world_metadata {
-                                            meta.game_mode = mode;
-                                        }
-                                        if !mode.is_creative() && state.player.flying {
-                                            state.player.flying = false;
-                                        }
-                                        state.taint_singleplayer_achievements(
-                                            "admin/cheat command /gamemode used",
-                                        );
-                                        state.local_chat_messages.push(
-                                            blockgame_core::net::ChatEntry {
-                                                sender: "System".to_string(),
-                                                prefix: String::new(),
-                                                message: format!(
-                                                    "Game mode changed to {:?}.",
-                                                    mode
-                                                ),
-                                                is_system: true,
-                                                age: 0.0,
-                                            },
-                                        );
-                                    } else {
-                                        state.local_chat_messages.push(
-                                            blockgame_core::net::ChatEntry {
-                                                sender: "System".to_string(),
-                                                prefix: String::new(),
-                                                message:
-                                                    "Usage: /gamemode <survival|creative|0|1>"
-                                                        .to_string(),
-                                                is_system: true,
-                                                age: 0.0,
-                                            },
-                                        );
-                                    }
-                                    if state.local_chat_messages.len() > 100 {
-                                        state.local_chat_messages.remove(0);
-                                    }
                                 } else {
                                     let sender = if state.local_username.is_empty() {
                                         "Player".to_string()
@@ -6623,6 +6573,22 @@ impl ApplicationHandler for BlockGameApp {
                                     },
                                 );
                             }
+                        }
+                    }
+                    if !state.world_manager.pending_arrow_killed_monsters.is_empty() {
+                        let killed_kinds: Vec<_> = state
+                            .world_manager
+                            .pending_arrow_killed_monsters
+                            .drain(..)
+                            .collect();
+                        for mkind in killed_kinds {
+                            state.record_achievement_event(
+                                blockgame_core::AchievementEvent::MonsterKilled {
+                                    is_boss: mkind.is_boss(),
+                                    boss_key: blockgame_core::boss_achievement_key(mkind)
+                                        .map(str::to_string),
+                                },
+                            );
                         }
                     }
                     if arrow_hits > 0 {
