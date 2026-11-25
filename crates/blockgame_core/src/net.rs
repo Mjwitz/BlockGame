@@ -181,6 +181,53 @@ pub enum ClientPacket {
         max_burn_time: f32,
         cook_progress: f32,
     },
+    InteractShopkeeper {
+        npc_id: u32,
+    },
+    ShopBuy {
+        npc_id: u32,
+        offer_idx: u16,
+    },
+    ShopSell {
+        npc_id: u32,
+        offer_idx: u16,
+    },
+    ShopEnhance {
+        npc_id: u32,
+        inv_slot_idx: u16,
+        offer_idx: u16,
+    },
+    AttackVillageNpc {
+        npc_id: u32,
+        damage: f32,
+        knockback: Vec3,
+    },
+    RegisterVillageBlueprint {
+        village_id: u64,
+        theme: crate::village::VillageTheme,
+        origin: IVec3,
+        shops: Vec<(crate::village::ShopkeeperProfession, Vec3, Vec3)>,
+        guard_positions: Vec<Vec3>,
+    },
+}
+
+/// Compact network representation of a server-authoritative Village NPC (Shopkeeper or Village Guard).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncedVillageNpcState {
+    pub id: u32,
+    pub village_id: u64,
+    pub is_guard: bool,
+    pub profession: Option<crate::village::ShopkeeperProfession>,
+    pub name: String,
+    pub appearance: CharacterAppearance,
+    pub position: Vec3,
+    pub yaw: f32,
+    pub walk_anim: f32,
+    pub swing_anim: f32,
+    pub hurt_timer: f32,
+    pub health: f32,
+    pub max_health: f32,
+    pub held_item: ItemId,
 }
 
 /// Compact network representation of a server-authoritative passive animal (ADR-0004).
@@ -349,6 +396,16 @@ pub enum ServerPacket {
         burn_time: f32,
         max_burn_time: f32,
         cook_progress: f32,
+    },
+    VillageNpcsSync {
+        npcs: Vec<SyncedVillageNpcState>,
+    },
+    ShopUiSync {
+        snapshot: crate::village::ShopUiSnapshot,
+        status_message: String,
+    },
+    InventorySync {
+        slots: Vec<ItemSlot>,
     },
 }
 
@@ -540,6 +597,62 @@ impl ClientPacket {
                 write_f32(&mut payload, *burn_time)?;
                 write_f32(&mut payload, *max_burn_time)?;
                 write_f32(&mut payload, *cook_progress)?;
+            }
+            Self::InteractShopkeeper { npc_id } => {
+                write_u8(&mut payload, 20)?;
+                write_u32(&mut payload, *npc_id)?;
+            }
+            Self::ShopBuy { npc_id, offer_idx } => {
+                write_u8(&mut payload, 21)?;
+                write_u32(&mut payload, *npc_id)?;
+                write_u16(&mut payload, *offer_idx)?;
+            }
+            Self::ShopSell { npc_id, offer_idx } => {
+                write_u8(&mut payload, 22)?;
+                write_u32(&mut payload, *npc_id)?;
+                write_u16(&mut payload, *offer_idx)?;
+            }
+            Self::ShopEnhance {
+                npc_id,
+                inv_slot_idx,
+                offer_idx,
+            } => {
+                write_u8(&mut payload, 23)?;
+                write_u32(&mut payload, *npc_id)?;
+                write_u16(&mut payload, *inv_slot_idx)?;
+                write_u16(&mut payload, *offer_idx)?;
+            }
+            Self::AttackVillageNpc {
+                npc_id,
+                damage,
+                knockback,
+            } => {
+                write_u8(&mut payload, 24)?;
+                write_u32(&mut payload, *npc_id)?;
+                write_f32(&mut payload, *damage)?;
+                write_vec3(&mut payload, *knockback)?;
+            }
+            Self::RegisterVillageBlueprint {
+                village_id,
+                theme,
+                origin,
+                shops,
+                guard_positions,
+            } => {
+                write_u8(&mut payload, 25)?;
+                write_u64(&mut payload, *village_id)?;
+                write_u8(&mut payload, theme.to_u8())?;
+                write_ivec3(&mut payload, *origin)?;
+                write_u32(&mut payload, shops.len() as u32)?;
+                for &(prof, home, court) in shops {
+                    write_u8(&mut payload, prof.to_u8())?;
+                    write_vec3(&mut payload, home)?;
+                    write_vec3(&mut payload, court)?;
+                }
+                write_u32(&mut payload, guard_positions.len() as u32)?;
+                for &gp in guard_positions {
+                    write_vec3(&mut payload, gp)?;
+                }
             }
         }
         wrap_frame(&payload)
@@ -746,6 +859,56 @@ impl ClientPacket {
                     burn_time,
                     max_burn_time,
                     cook_progress,
+                })
+            }
+            20 => Ok(Self::InteractShopkeeper {
+                npc_id: read_u32(&mut r)?,
+            }),
+            21 => Ok(Self::ShopBuy {
+                npc_id: read_u32(&mut r)?,
+                offer_idx: read_u16(&mut r)?,
+            }),
+            22 => Ok(Self::ShopSell {
+                npc_id: read_u32(&mut r)?,
+                offer_idx: read_u16(&mut r)?,
+            }),
+            23 => Ok(Self::ShopEnhance {
+                npc_id: read_u32(&mut r)?,
+                inv_slot_idx: read_u16(&mut r)?,
+                offer_idx: read_u16(&mut r)?,
+            }),
+            24 => Ok(Self::AttackVillageNpc {
+                npc_id: read_u32(&mut r)?,
+                damage: read_f32(&mut r)?,
+                knockback: read_vec3(&mut r)?,
+            }),
+            25 => {
+                let village_id = read_u64(&mut r)?;
+                let theme = crate::village::VillageTheme::from_u8(read_u8(&mut r)?)
+                    .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid VillageTheme"))?;
+                let origin = read_ivec3(&mut r)?;
+                let scount = (read_u32(&mut r)? as usize).min(16);
+                let mut shops = Vec::with_capacity(scount);
+                for _ in 0..scount {
+                    let prof = crate::village::ShopkeeperProfession::from_u8(read_u8(&mut r)?)
+                        .ok_or_else(|| {
+                            io::Error::new(ErrorKind::InvalidData, "Invalid ShopkeeperProfession")
+                        })?;
+                    let home = read_vec3(&mut r)?;
+                    let court = read_vec3(&mut r)?;
+                    shops.push((prof, home, court));
+                }
+                let gcount = (read_u32(&mut r)? as usize).min(16);
+                let mut guard_positions = Vec::with_capacity(gcount);
+                for _ in 0..gcount {
+                    guard_positions.push(read_vec3(&mut r)?);
+                }
+                Ok(Self::RegisterVillageBlueprint {
+                    village_id,
+                    theme,
+                    origin,
+                    shops,
+                    guard_positions,
                 })
             }
             other => Err(io::Error::new(
@@ -1044,6 +1207,81 @@ impl ServerPacket {
                 write_f32(&mut payload, *burn_time)?;
                 write_f32(&mut payload, *max_burn_time)?;
                 write_f32(&mut payload, *cook_progress)?;
+            }
+            Self::VillageNpcsSync { npcs } => {
+                write_u8(&mut payload, 25)?;
+                write_u32(&mut payload, npcs.len() as u32)?;
+                for n in npcs {
+                    write_u32(&mut payload, n.id)?;
+                    write_u64(&mut payload, n.village_id)?;
+                    write_bool(&mut payload, n.is_guard)?;
+                    write_u8(&mut payload, n.profession.map_or(255, |p| p.to_u8()))?;
+                    write_string(&mut payload, &n.name)?;
+                    n.appearance.write_binary(&mut payload)?;
+                    write_vec3(&mut payload, n.position)?;
+                    write_f32(&mut payload, n.yaw)?;
+                    write_f32(&mut payload, n.walk_anim)?;
+                    write_f32(&mut payload, n.swing_anim)?;
+                    write_f32(&mut payload, n.hurt_timer)?;
+                    write_f32(&mut payload, n.health)?;
+                    write_f32(&mut payload, n.max_health)?;
+                    write_u16(&mut payload, n.held_item.0)?;
+                }
+            }
+            Self::ShopUiSync {
+                snapshot,
+                status_message,
+            } => {
+                write_u8(&mut payload, 26)?;
+                write_u32(&mut payload, snapshot.npc_id)?;
+                write_string(&mut payload, &snapshot.name)?;
+                write_u8(&mut payload, snapshot.profession.to_u8())?;
+                write_u8(&mut payload, snapshot.shop_tier)?;
+                write_u32(&mut payload, snapshot.coins_spent)?;
+                write_bool(&mut payload, snapshot.next_tier_coins.is_some())?;
+                if let Some(nt) = snapshot.next_tier_coins {
+                    write_u32(&mut payload, nt)?;
+                }
+                write_u64(&mut payload, snapshot.ticks_until_restock)?;
+                write_u32(&mut payload, snapshot.daily_sell_remaining)?;
+                write_u32(&mut payload, snapshot.daily_sell_limit)?;
+                write_u32(&mut payload, snapshot.buy_offers.len() as u32)?;
+                for b in &snapshot.buy_offers {
+                    write_u16(&mut payload, b.offer_idx)?;
+                    write_u8(&mut payload, b.tier)?;
+                    write_u16(&mut payload, b.item_id.0)?;
+                    write_u16(&mut payload, b.count)?;
+                    write_u32(&mut payload, b.price_coins)?;
+                    write_u16(&mut payload, b.stock_remaining)?;
+                    write_u16(&mut payload, b.max_stock)?;
+                    write_bool(&mut payload, b.is_shared)?;
+                    write_bool(&mut payload, b.unlocked)?;
+                }
+                write_u32(&mut payload, snapshot.sell_offers.len() as u32)?;
+                for s in &snapshot.sell_offers {
+                    write_u16(&mut payload, s.offer_idx)?;
+                    write_u16(&mut payload, s.item_id.0)?;
+                    write_u16(&mut payload, s.count)?;
+                    write_u32(&mut payload, s.payout_coins)?;
+                }
+                write_u32(&mut payload, snapshot.enhance_offers.len() as u32)?;
+                for e in &snapshot.enhance_offers {
+                    write_u16(&mut payload, e.offer_idx)?;
+                    write_u8(&mut payload, e.tier)?;
+                    write_u8(&mut payload, e.enhancement.to_u8())?;
+                    write_u32(&mut payload, e.base_price_coins)?;
+                    write_u16(&mut payload, e.stock_remaining)?;
+                    write_u16(&mut payload, e.max_stock)?;
+                    write_bool(&mut payload, e.unlocked)?;
+                }
+                write_string(&mut payload, status_message)?;
+            }
+            Self::InventorySync { slots } => {
+                write_u8(&mut payload, 27)?;
+                write_u32(&mut payload, slots.len() as u32)?;
+                for s in slots {
+                    write_slot(&mut payload, *s)?;
+                }
             }
         }
 
@@ -1432,6 +1670,145 @@ impl ServerPacket {
                     max_burn_time,
                     cook_progress,
                 })
+            }
+            25 => {
+                let count = (read_u32(&mut r)? as usize).min(2048);
+                let mut npcs = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let id = read_u32(&mut r)?;
+                    let village_id = read_u64(&mut r)?;
+                    let is_guard = read_bool(&mut r)?;
+                    let prof_raw = read_u8(&mut r)?;
+                    let profession = if prof_raw == 255 {
+                        None
+                    } else {
+                        crate::village::ShopkeeperProfession::from_u8(prof_raw)
+                    };
+                    let name = read_string(&mut r)?;
+                    let appearance = CharacterAppearance::read_binary(&mut r)?;
+                    let position = read_vec3(&mut r)?;
+                    let yaw = read_f32(&mut r)?;
+                    let walk_anim = read_f32(&mut r)?;
+                    let swing_anim = read_f32(&mut r)?;
+                    let hurt_timer = read_f32(&mut r)?;
+                    let health = read_f32(&mut r)?;
+                    let max_health = read_f32(&mut r)?;
+                    let held_item = ItemId(read_u16(&mut r)?);
+                    npcs.push(SyncedVillageNpcState {
+                        id,
+                        village_id,
+                        is_guard,
+                        profession,
+                        name,
+                        appearance,
+                        position,
+                        yaw,
+                        walk_anim,
+                        swing_anim,
+                        hurt_timer,
+                        health,
+                        max_health,
+                        held_item,
+                    });
+                }
+                Ok(Self::VillageNpcsSync { npcs })
+            }
+            26 => {
+                let npc_id = read_u32(&mut r)?;
+                let name = read_string(&mut r)?;
+                let profession = crate::village::ShopkeeperProfession::from_u8(read_u8(&mut r)?)
+                    .ok_or_else(|| {
+                        io::Error::new(ErrorKind::InvalidData, "Invalid ShopkeeperProfession")
+                    })?;
+                let shop_tier = read_u8(&mut r)?;
+                let coins_spent = read_u32(&mut r)?;
+                let has_next = read_bool(&mut r)?;
+                let next_tier_coins = if has_next {
+                    Some(read_u32(&mut r)?)
+                } else {
+                    None
+                };
+                let ticks_until_restock = read_u64(&mut r)?;
+                let daily_sell_remaining = read_u32(&mut r)?;
+                let daily_sell_limit = read_u32(&mut r)?;
+
+                let bcount = (read_u32(&mut r)? as usize).min(256);
+                let mut buy_offers = Vec::with_capacity(bcount);
+                for _ in 0..bcount {
+                    buy_offers.push(crate::village::ShopBuyEntry {
+                        offer_idx: read_u16(&mut r)?,
+                        tier: read_u8(&mut r)?,
+                        item_id: ItemId(read_u16(&mut r)?),
+                        count: read_u16(&mut r)?,
+                        price_coins: read_u32(&mut r)?,
+                        stock_remaining: read_u16(&mut r)?,
+                        max_stock: read_u16(&mut r)?,
+                        is_shared: read_bool(&mut r)?,
+                        unlocked: read_bool(&mut r)?,
+                    });
+                }
+
+                let scount = (read_u32(&mut r)? as usize).min(256);
+                let mut sell_offers = Vec::with_capacity(scount);
+                for _ in 0..scount {
+                    sell_offers.push(crate::village::ShopSellEntry {
+                        offer_idx: read_u16(&mut r)?,
+                        item_id: ItemId(read_u16(&mut r)?),
+                        count: read_u16(&mut r)?,
+                        payout_coins: read_u32(&mut r)?,
+                    });
+                }
+
+                let ecount = (read_u32(&mut r)? as usize).min(64);
+                let mut enhance_offers = Vec::with_capacity(ecount);
+                for _ in 0..ecount {
+                    let offer_idx = read_u16(&mut r)?;
+                    let tier = read_u8(&mut r)?;
+                    let enhancement = crate::item::Enhancement::from_u8(read_u8(&mut r)?)
+                        .ok_or_else(|| {
+                            io::Error::new(ErrorKind::InvalidData, "Invalid Enhancement")
+                        })?;
+                    let base_price_coins = read_u32(&mut r)?;
+                    let stock_remaining = read_u16(&mut r)?;
+                    let max_stock = read_u16(&mut r)?;
+                    let unlocked = read_bool(&mut r)?;
+                    enhance_offers.push(crate::village::ShopEnhanceEntry {
+                        offer_idx,
+                        tier,
+                        enhancement,
+                        base_price_coins,
+                        stock_remaining,
+                        max_stock,
+                        unlocked,
+                    });
+                }
+                let status_message = read_string(&mut r)?;
+
+                Ok(Self::ShopUiSync {
+                    snapshot: crate::village::ShopUiSnapshot {
+                        npc_id,
+                        name,
+                        profession,
+                        shop_tier,
+                        coins_spent,
+                        next_tier_coins,
+                        ticks_until_restock,
+                        daily_sell_remaining,
+                        daily_sell_limit,
+                        buy_offers,
+                        sell_offers,
+                        enhance_offers,
+                    },
+                    status_message,
+                })
+            }
+            27 => {
+                let count = (read_u32(&mut r)? as usize).min(128);
+                let mut slots = Vec::with_capacity(count);
+                for _ in 0..count {
+                    slots.push(read_slot(&mut r)?);
+                }
+                Ok(Self::InventorySync { slots })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -2086,6 +2463,7 @@ fn run_server_loop(
     let mut farming_sim = crate::farming::FarmingSimulation::from_save_data(&save_data);
     let mut station_sync_accum: f32 = 0.0;
     let mut animal_sync_accum: f32 = 0.0;
+    let mut village_sync_accum: f32 = 0.0;
     let mut animal_spawn_accum: f32 = 0.0;
     let mut had_animals = !save_data.animals.is_empty();
     let mut temple_monsters: Vec<crate::monster::MonsterEntity> = Vec::new();
@@ -2533,6 +2911,13 @@ fn run_server_loop(
                                         animals: join_animals,
                                     },
                                 ));
+                                let join_npcs = collect_synced_village_npcs(&save_data.villages);
+                                if !join_npcs.is_empty() {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::VillageNpcsSync { npcs: join_npcs },
+                                    ));
+                                }
 
                                 // Broadcast join event & system chat message
                                 log::info!("Player '{}' (id {}) joined the game", clients[idx].username, pid);
@@ -3022,6 +3407,198 @@ fn run_server_loop(
                             },
                         ));
                     }
+                    ClientPacket::InteractShopkeeper { npc_id } if clients[idx].authenticated => {
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                        let uname = clients[idx].username.clone();
+                        if let Some(snapshot) =
+                            save_data
+                                .villages
+                                .build_shop_snapshot(npc_id, &uname, world_ticks)
+                        {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ShopUiSync {
+                                    snapshot,
+                                    status_message: String::new(),
+                                },
+                            ));
+                        }
+                    }
+                    ClientPacket::ShopBuy { npc_id, offer_idx } if clients[idx].authenticated => {
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                        let uname = clients[idx].username.clone();
+                        let res = save_data.villages.buy_item(
+                            npc_id,
+                            &uname,
+                            offer_idx,
+                            &mut clients[idx].saved_state.inventory,
+                            &item_registry,
+                            world_ticks,
+                        );
+                        let status = match res {
+                            Ok(s) => {
+                                if let Some(tier) = s.leveled_up_to {
+                                    format!("Purchased! Shop Tier increased to Tier {}!", tier)
+                                } else {
+                                    "Purchase complete!".to_string()
+                                }
+                            }
+                            Err(e) => e.message(),
+                        };
+                        direct_sends.push((
+                            pid,
+                            ServerPacket::InventorySync {
+                                slots: clients[idx].saved_state.inventory.slots.clone(),
+                            },
+                        ));
+                        if let Some(snapshot) =
+                            save_data
+                                .villages
+                                .build_shop_snapshot(npc_id, &uname, world_ticks)
+                        {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ShopUiSync {
+                                    snapshot,
+                                    status_message: status,
+                                },
+                            ));
+                        }
+                    }
+                    ClientPacket::ShopSell { npc_id, offer_idx } if clients[idx].authenticated => {
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                        let uname = clients[idx].username.clone();
+                        let res = save_data.villages.sell_item(
+                            npc_id,
+                            &uname,
+                            offer_idx,
+                            &mut clients[idx].saved_state.inventory,
+                            &item_registry,
+                            world_ticks,
+                        );
+                        let status = match res {
+                            Ok(s) => format!("Sold for +{} Gold Coins!", s.coins_delta),
+                            Err(e) => e.message(),
+                        };
+                        direct_sends.push((
+                            pid,
+                            ServerPacket::InventorySync {
+                                slots: clients[idx].saved_state.inventory.slots.clone(),
+                            },
+                        ));
+                        if let Some(snapshot) =
+                            save_data
+                                .villages
+                                .build_shop_snapshot(npc_id, &uname, world_ticks)
+                        {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ShopUiSync {
+                                    snapshot,
+                                    status_message: status,
+                                },
+                            ));
+                        }
+                    }
+                    ClientPacket::ShopEnhance {
+                        npc_id,
+                        inv_slot_idx,
+                        offer_idx,
+                    } if clients[idx].authenticated => {
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                        let uname = clients[idx].username.clone();
+                        let res = save_data.villages.enhance_item(
+                            npc_id,
+                            &uname,
+                            inv_slot_idx as usize,
+                            offer_idx,
+                            &mut clients[idx].saved_state.inventory,
+                            &item_registry,
+                            world_ticks,
+                        );
+                        let status = match res {
+                            Ok(s) => {
+                                if let Some(tier) = s.leveled_up_to {
+                                    format!("Item enhanced! Shop Tier increased to Tier {}!", tier)
+                                } else {
+                                    "Item enhanced and restored to full durability!".to_string()
+                                }
+                            }
+                            Err(e) => e.message(),
+                        };
+                        direct_sends.push((
+                            pid,
+                            ServerPacket::InventorySync {
+                                slots: clients[idx].saved_state.inventory.slots.clone(),
+                            },
+                        ));
+                        if let Some(snapshot) =
+                            save_data
+                                .villages
+                                .build_shop_snapshot(npc_id, &uname, world_ticks)
+                        {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ShopUiSync {
+                                    snapshot,
+                                    status_message: status,
+                                },
+                            ));
+                        }
+                    }
+                    ClientPacket::AttackVillageNpc {
+                        npc_id,
+                        damage,
+                        knockback,
+                    } if clients[idx].authenticated => {
+                        let world_ticks = save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                        let uname = clients[idx].username.clone();
+                        let _ = save_data.villages.damage_npc(
+                            npc_id,
+                            damage.clamp(0.0, 50.0),
+                            knockback,
+                            Some(&uname),
+                            world_ticks,
+                        );
+                    }
+                    ClientPacket::RegisterVillageBlueprint {
+                        village_id,
+                        theme,
+                        origin,
+                        shops,
+                        guard_positions,
+                    } if clients[idx].authenticated => {
+                        let dist_sq = (origin.x as i64) * (origin.x as i64)
+                            + (origin.z as i64) * (origin.z as i64);
+                        let min_d = crate::village::VILLAGE_MIN_ORIGIN_DIST as i64;
+                        let valid_origin = dist_sq >= min_d * min_d
+                            && origin.x < crate::temple::ARENA_BAND_START_X
+                            && (3..=5).contains(&shops.len())
+                            && (2..=3).contains(&guard_positions.len())
+                            && shops.iter().all(|(_, h, c)| {
+                                h.distance(origin.as_vec3()) <= 28.0
+                                    && c.distance(origin.as_vec3()) <= 28.0
+                            })
+                            && guard_positions
+                                .iter()
+                                .all(|gp| gp.distance(origin.as_vec3()) <= 24.0);
+                        if valid_origin {
+                            let world_ticks =
+                                save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                            let bp = crate::village::VillageSpawnBlueprint {
+                                village_id,
+                                theme,
+                                origin,
+                                shops,
+                                guard_positions,
+                            };
+                            if save_data.villages.ensure_village_spawned(&bp, world_ticks) {
+                                let npcs = collect_synced_village_npcs(&save_data.villages);
+                                outgoing_broadcasts
+                                    .push((None, ServerPacket::VillageNpcsSync { npcs }));
+                            }
+                        }
+                    }
                     ClientPacket::SpawnItemDrop {
                         drop_id,
                         position,
@@ -3442,11 +4019,13 @@ fn run_server_loop(
 
             // Tick temple re-challenge cooldowns and active server-authoritative boss encounters
             save_data.temples.tick_cooldowns(dt);
+            let mut server_npc_damage: Vec<(u32, f32, Vec3)> = Vec::new();
             if (!temple_monsters.is_empty() || had_temple_monsters) && !all_players.is_empty() {
                 had_temple_monsters = !temple_monsters.is_empty();
                 let mut newly_summoned = Vec::new();
                 let mut tick_damage_events: Vec<(u32, f32)> = Vec::new();
                 let mut tick_announcements: Vec<String> = Vec::new();
+                let server_npc_targets = save_data.villages.living_npc_targets();
 
                 for m in temple_monsters.iter_mut() {
                     if m.dead {
@@ -3461,10 +4040,20 @@ fn run_server_loop(
                             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
                         });
                     let Some(target) = nearest else { continue; };
-                    let outcome = m.update(dt, target.position, 0.0, &world, &block_registry);
+                    let outcome = m.update_with_npc_targets(
+                        dt,
+                        target.position,
+                        &server_npc_targets,
+                        0.0,
+                        &world,
+                        &block_registry,
+                    );
 
                     if outcome.damage_to_player > 0.0 {
                         tick_damage_events.push((target.player_id, outcome.damage_to_player));
+                    }
+                    if let Some(ev) = outcome.damage_to_npc {
+                        server_npc_damage.push(ev);
                     }
                     if let Some((origin, vel)) = outcome.spawned_arrow {
                         let aid = next_temple_arrow_id;
@@ -3834,6 +4423,69 @@ fn run_server_loop(
                             animals: synced_animals,
                         },
                     );
+                }
+
+                // B2. Authoritative NPC Villages (Shopkeepers & Village Guards)
+                {
+                    let world_ticks =
+                        save_data.villages.advance_clock(save_data.metadata.day_night_time);
+                    for (npc_id, dmg, kb) in server_npc_damage {
+                        let _ = save_data
+                            .villages
+                            .damage_npc(npc_id, dmg, kb, None, world_ticks);
+                    }
+                    let mut village_players: Vec<(String, Vec3)> = Vec::new();
+                    for c in &clients {
+                        if c.authenticated && !c.is_dead && c.model.health > 0.0 {
+                            village_players.push((c.username.clone(), c.model.position));
+                        } else if c.authenticated && (c.is_dead || c.model.health <= 0.0) {
+                            save_data
+                                .villages
+                                .clear_guard_hostility_on_player_death(&c.username);
+                        }
+                    }
+                    let v_out = save_data.villages.tick(
+                        dt,
+                        world_ticks,
+                        &village_players,
+                        &mut temple_monsters,
+                        &world,
+                        &block_registry,
+                    );
+                    for (target_user, dmg, _kb) in v_out.guard_damage_to_players {
+                        if let Some(c) = clients.iter_mut().find(|c| {
+                            c.authenticated
+                                && !c.is_dead
+                                && c.username.eq_ignore_ascii_case(&target_user)
+                        }) {
+                            if c.model.hurt_timer <= 0.0 && c.model.health > 0.0 {
+                                c.model.health = (c.model.health - dmg).max(0.0);
+                                c.model.hurt_timer = 0.45;
+                                c.saved_state.stats.health = c.model.health;
+                                let pkt = ServerPacket::PlayerDamaged {
+                                    target_player_id: c.player_id,
+                                    attacker_id: 0,
+                                    damage: dmg,
+                                    new_health: c.model.health,
+                                };
+                                if let Ok(bytes) = pkt.encode() {
+                                    let _ = c.stream.write_all(&bytes);
+                                }
+                            }
+                        }
+                    }
+                    village_sync_accum += dt;
+                    if village_sync_accum >= 0.15
+                        && (!save_data.villages.shopkeepers.is_empty()
+                            || !save_data.villages.guards.is_empty())
+                    {
+                        village_sync_accum = 0.0;
+                        let synced_npcs = collect_synced_village_npcs(&save_data.villages);
+                        broadcast_pkt(
+                            &mut clients,
+                            &ServerPacket::VillageNpcsSync { npcs: synced_npcs },
+                        );
+                    }
                 }
 
                 // C. Authoritative Furnaces & Cooking Pots
@@ -4295,20 +4947,71 @@ fn read_string<R: Read>(r: &mut R) -> io::Result<String> {
     String::from_utf8(buf).map_err(|e| io::Error::new(ErrorKind::InvalidData, e))
 }
 
+fn collect_synced_village_npcs(
+    villages: &crate::village::VillageManager,
+) -> Vec<SyncedVillageNpcState> {
+    let mut out = Vec::with_capacity(villages.shopkeepers.len() + villages.guards.len());
+    for sk in &villages.shopkeepers {
+        if sk.dead {
+            continue;
+        }
+        out.push(SyncedVillageNpcState {
+            id: sk.id,
+            village_id: sk.village_id,
+            is_guard: false,
+            profession: Some(sk.profession),
+            name: sk.name.clone(),
+            appearance: sk.appearance,
+            position: sk.position,
+            yaw: sk.yaw,
+            walk_anim: sk.walk_anim,
+            swing_anim: 0.0,
+            hurt_timer: sk.hurt_timer,
+            health: sk.health,
+            max_health: sk.max_health,
+            held_item: sk.profession.held_item(),
+        });
+    }
+    for g in &villages.guards {
+        if g.dead {
+            continue;
+        }
+        out.push(SyncedVillageNpcState {
+            id: g.id,
+            village_id: g.village_id,
+            is_guard: true,
+            profession: None,
+            name: g.name.clone(),
+            appearance: g.appearance,
+            position: g.position,
+            yaw: g.yaw,
+            walk_anim: g.walk_anim,
+            swing_anim: g.swing_anim,
+            hurt_timer: g.hurt_timer,
+            health: g.health,
+            max_health: g.max_health,
+            held_item: ItemId::IRON_SWORD,
+        });
+    }
+    out
+}
+
 fn write_slot<W: Write>(w: &mut W, slot: ItemSlot) -> io::Result<()> {
     write_u16(w, slot.item_id.0)?;
     write_u16(w, slot.count)?;
-    write_u16(w, slot.durability)
+    write_u16(w, slot.durability)?;
+    write_u8(w, slot.enhancement.map_or(0, |e| e.to_u8()))
 }
 
 fn read_slot<R: Read>(r: &mut R) -> io::Result<ItemSlot> {
     let id = ItemId(read_u16(r)?);
     let count = read_u16(r)?;
     let durability = read_u16(r)?;
+    let enh = crate::item::Enhancement::from_u8(read_u8(r)?);
     if id == ItemId::EMPTY || count == 0 {
         Ok(ItemSlot::EMPTY)
     } else {
-        Ok(ItemSlot::with_durability(id, count, durability))
+        Ok(ItemSlot::with_enhancement(id, count, durability, enh))
     }
 }
 

@@ -273,6 +273,12 @@ pub struct WorldManager {
     pub mp_boss_hud: Option<blockgame_core::temple::BossHudState>,
     pub pending_temple_messages: Vec<String>,
     spawned_overworld_temples: HashSet<u64>,
+    // NPC Villages & Trading (Issue #11)
+    pub villages: blockgame_core::village::VillageManager,
+    pub mp_village_npcs: Vec<blockgame_core::SyncedVillageNpcState>,
+    announced_mp_villages: HashSet<u64>,
+    pub pending_village_blueprints: Vec<blockgame_core::VillageSpawnBlueprint>,
+    pub pending_mp_npc_arrow_hits: Vec<(u32, f32, Vec3)>,
 }
 
 impl WorldManager {
@@ -325,6 +331,11 @@ impl WorldManager {
             mp_boss_hud: None,
             pending_temple_messages: Vec::new(),
             spawned_overworld_temples: HashSet::new(),
+            villages: blockgame_core::village::VillageManager::new(),
+            mp_village_npcs: Vec::new(),
+            announced_mp_villages: HashSet::new(),
+            pending_village_blueprints: Vec::new(),
+            pending_mp_npc_arrow_hits: Vec::new(),
         }
     }
 
@@ -476,6 +487,7 @@ impl WorldManager {
         self.decaying_leaves = data.decaying_leaves.clone();
         self.animal_spawned_columns = data.animal_spawned_columns.clone();
         self.temples = data.temples.clone();
+        self.villages = data.villages.clone();
     }
 
     /// Captures all modified chunks, containers, entities, and simulation timers from this `WorldManager`
@@ -500,6 +512,7 @@ impl WorldManager {
         data.decaying_leaves = self.decaying_leaves.clone();
         data.animal_spawned_columns = self.animal_spawned_columns.clone();
         data.temples = self.temples.clone();
+        data.villages = self.villages.clone();
         data
     }
 
@@ -1897,12 +1910,27 @@ impl WorldManager {
 
         let mut spawned_arrows: Vec<(Vec3, Vec3, f32)> = Vec::new();
         let mut newly_summoned: Vec<(MonsterKind, Vec3, u64)> = Vec::new();
+        let npc_targets = if !is_multiplayer {
+            self.villages.living_npc_targets()
+        } else {
+            Vec::new()
+        };
+        let mut npc_damage_events: Vec<(u32, f32, Vec3)> = Vec::new();
         {
             let world_guard = self.world.lock().unwrap();
             for monster in self.monsters.iter_mut() {
-                let outcome =
-                    monster.update(dt, player_pos, sun_intensity, &world_guard, &self.registry);
+                let outcome = monster.update_with_npc_targets(
+                    dt,
+                    player_pos,
+                    &npc_targets,
+                    sun_intensity,
+                    &world_guard,
+                    &self.registry,
+                );
                 total_damage += outcome.damage_to_player;
+                if let Some(ev) = outcome.damage_to_npc {
+                    npc_damage_events.push(ev);
+                }
                 if let Some((apos, avel)) = outcome.spawned_arrow {
                     spawned_arrows.push((apos, avel, MonsterKind::Skeleton.attack_damage()));
                 }
@@ -1933,6 +1961,10 @@ impl WorldManager {
                     }
                 }
             }
+        }
+
+        for (npc_id, dmg, kb) in npc_damage_events {
+            let _ = self.villages.damage_npc(npc_id, dmg, kb, None, 0);
         }
 
         for (apos, avel, dmg) in spawned_arrows {
@@ -2051,6 +2083,186 @@ impl WorldManager {
         }
 
         (total_damage, drops)
+    }
+
+    /// Discovers nearby deterministic Villages, ticks Village Shopkeepers & Guards in singleplayer,
+    /// and queues `VillageSpawnBlueprint`s for server registration in multiplayer.
+    /// Returns any retaliation damage dealt by Village Guards to the local player in singleplayer.
+    pub fn update_villages(
+        &mut self,
+        dt: f32,
+        player_pos: Vec3,
+        day_night_time: f32,
+        is_multiplayer: bool,
+    ) -> f32 {
+        let world_ticks = self.villages.advance_clock(day_night_time);
+        let p_cpos = ChunkPos::new(
+            (player_pos.x.floor() as i32).div_euclid(16),
+            (player_pos.y.floor() as i32).div_euclid(16),
+            (player_pos.z.floor() as i32).div_euclid(16),
+        );
+        for dcx in -2..=2 {
+            for dcz in -2..=2 {
+                let cpos = ChunkPos::new(p_cpos.0.x + dcx, p_cpos.0.y, p_cpos.0.z + dcz);
+                for placement in self.generator.find_villages_for_chunk(cpos) {
+                    if is_multiplayer {
+                        if self.announced_mp_villages.insert(placement.village_id) {
+                            self.pending_village_blueprints
+                                .push(placement.to_spawn_blueprint());
+                        }
+                    } else {
+                        self.villages
+                            .ensure_village_spawned(&placement.to_spawn_blueprint(), world_ticks);
+                    }
+                }
+            }
+        }
+
+        if is_multiplayer {
+            return 0.0;
+        }
+
+        let world_guard = self.world.lock().unwrap();
+        let players = vec![("singleplayer".to_string(), player_pos)];
+        let out = self.villages.tick(
+            dt,
+            world_ticks,
+            &players,
+            &mut self.monsters,
+            &world_guard,
+            &self.registry,
+        );
+        out.guard_damage_to_players
+            .into_iter()
+            .map(|(_, dmg, _)| dmg)
+            .sum()
+    }
+
+    /// Raycasts against living Village NPCs (both SP and MP).
+    /// Returns `Some((npc_id, is_guard, display_label, dist))`.
+    pub fn raycast_village_npc(
+        &self,
+        eye_pos: Vec3,
+        look_dir: Vec3,
+        max_dist: f32,
+    ) -> Option<(u32, bool, String, f32)> {
+        let dir = look_dir.normalize_or_zero();
+        if dir.length_squared() < 0.001 {
+            return None;
+        }
+        let mut best: Option<(u32, bool, String, f32)> = None;
+
+        let mut test_npc = |id: u32, is_guard: bool, name: &str, pos: Vec3, half_w: f32, h: f32| {
+            let min = Vec3::new(pos.x - half_w, pos.y, pos.z - half_w);
+            let max = Vec3::new(pos.x + half_w, pos.y + h, pos.z + half_w);
+            let inv = Vec3::new(
+                if dir.x.abs() > 1e-6 { 1.0 / dir.x } else { f32::INFINITY },
+                if dir.y.abs() > 1e-6 { 1.0 / dir.y } else { f32::INFINITY },
+                if dir.z.abs() > 1e-6 { 1.0 / dir.z } else { f32::INFINITY },
+            );
+            let t1 = (min - eye_pos) * inv;
+            let t2 = (max - eye_pos) * inv;
+            let tmin = t1.min(t2).max_element();
+            let tmax = t1.max(t2).min_element();
+            if tmax >= 0.0 && tmin <= tmax && tmin <= max_dist {
+                let d = tmin.max(0.0);
+                if best.as_ref().map_or(true, |b| d < b.3) {
+                    best = Some((id, is_guard, name.to_string(), d));
+                }
+            }
+        };
+
+        if self.is_multiplayer {
+            for n in &self.mp_village_npcs {
+                test_npc(n.id, n.is_guard, &n.name, n.position, 0.38, 1.85);
+            }
+        } else {
+            for sk in &self.villages.shopkeepers {
+                if !sk.dead {
+                    test_npc(sk.id, false, &sk.name, sk.position, 0.38, 1.85);
+                }
+            }
+            for g in &self.villages.guards {
+                if !g.dead {
+                    test_npc(g.id, true, &g.name, g.position, 0.40, 1.90);
+                }
+            }
+        }
+
+        best
+    }
+
+    /// Projects all living Village Shopkeepers & Village Guards into `PlayerModelState`
+    /// so they render seamlessly through the existing `CharacterPipeline`.
+    pub fn collect_village_npc_render_models(&self) -> Vec<blockgame_core::PlayerModelState> {
+        let mut out = Vec::new();
+        if self.is_multiplayer {
+            for n in &self.mp_village_npcs {
+                out.push(blockgame_core::PlayerModelState {
+                    player_id: 0x8000_0000 | n.id,
+                    username: n.name.clone(),
+                    prefix: String::new(),
+                    position: n.position,
+                    velocity: Vec3::ZERO,
+                    yaw: n.yaw,
+                    pitch: 0.0,
+                    held_item: n.held_item,
+                    walk_anim: n.walk_anim,
+                    swing_anim: n.swing_anim,
+                    hurt_timer: n.hurt_timer,
+                    is_sneaking: false,
+                    appearance: n.appearance,
+                    health: n.health,
+                    max_health: n.max_health,
+                });
+            }
+        } else {
+            for sk in &self.villages.shopkeepers {
+                if sk.dead {
+                    continue;
+                }
+                out.push(blockgame_core::PlayerModelState {
+                    player_id: 0x8000_0000 | sk.id,
+                    username: sk.name.clone(),
+                    prefix: String::new(),
+                    position: sk.position,
+                    velocity: sk.velocity,
+                    yaw: sk.yaw,
+                    pitch: 0.0,
+                    held_item: sk.profession.held_item(),
+                    walk_anim: sk.walk_anim,
+                    swing_anim: 0.0,
+                    hurt_timer: sk.hurt_timer,
+                    is_sneaking: false,
+                    appearance: sk.appearance,
+                    health: sk.health,
+                    max_health: sk.max_health,
+                });
+            }
+            for g in &self.villages.guards {
+                if g.dead {
+                    continue;
+                }
+                out.push(blockgame_core::PlayerModelState {
+                    player_id: 0x8000_0000 | g.id,
+                    username: g.name.clone(),
+                    prefix: String::new(),
+                    position: g.position,
+                    velocity: g.velocity,
+                    yaw: g.yaw,
+                    pitch: 0.0,
+                    held_item: ItemId::IRON_SWORD,
+                    walk_anim: g.walk_anim,
+                    swing_anim: g.swing_anim,
+                    hurt_timer: g.hurt_timer,
+                    is_sneaking: false,
+                    appearance: g.appearance,
+                    health: g.health,
+                    max_health: g.max_health,
+                });
+            }
+        }
+        out
     }
 
     /// Returns `true` if opening a chest at `pos` is forbidden because the temple's boss is still alive.
@@ -2429,7 +2641,52 @@ impl WorldManager {
                         {
                             animal.take_damage(arrow.damage, arrow.velocity.normalize_or_zero());
                             arrow.dead = true;
+                            hit = true;
                             break;
+                        }
+                    }
+                }
+                if !hit {
+                    let kb = arrow.velocity.normalize_or_zero();
+                    if self.is_multiplayer {
+                        for n in &self.mp_village_npcs {
+                            let pos = n.position;
+                            if p.x >= pos.x - 0.5
+                                && p.x <= pos.x + 0.5
+                                && p.y >= pos.y - 0.1
+                                && p.y <= pos.y + 1.95
+                                && p.z >= pos.z - 0.5
+                                && p.z <= pos.z + 0.5
+                            {
+                                self.pending_mp_npc_arrow_hits.push((n.id, arrow.damage, kb));
+                                arrow.dead = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        let hit_npc_id = self
+                            .villages
+                            .living_npc_targets()
+                            .into_iter()
+                            .find(|(_, pos)| {
+                                p.x >= pos.x - 0.5
+                                    && p.x <= pos.x + 0.5
+                                    && p.y >= pos.y - 0.1
+                                    && p.y <= pos.y + 1.95
+                                    && p.z >= pos.z - 0.5
+                                    && p.z <= pos.z + 0.5
+                            })
+                            .map(|(id, _)| id);
+                        if let Some(npc_id) = hit_npc_id {
+                            let wt = self.villages.total_world_ticks;
+                            let _ = self.villages.damage_npc(
+                                npc_id,
+                                arrow.damage,
+                                kb,
+                                Some("singleplayer"),
+                                wt,
+                            );
+                            arrow.dead = true;
                         }
                     }
                 }
@@ -2444,6 +2701,31 @@ impl WorldManager {
                 {
                     total_player_damage += arrow.damage;
                     arrow.dead = true;
+                } else if !self.is_multiplayer {
+                    let hit_npc_id = self
+                        .villages
+                        .living_npc_targets()
+                        .into_iter()
+                        .find(|(_, pos)| {
+                            p.x >= pos.x - 0.5
+                                && p.x <= pos.x + 0.5
+                                && p.y >= pos.y - 0.1
+                                && p.y <= pos.y + 1.95
+                                && p.z >= pos.z - 0.5
+                                && p.z <= pos.z + 0.5
+                        })
+                        .map(|(id, _)| id);
+                    if let Some(npc_id) = hit_npc_id {
+                        let wt = self.villages.total_world_ticks;
+                        let _ = self.villages.damage_npc(
+                            npc_id,
+                            arrow.damage,
+                            arrow.velocity.normalize_or_zero(),
+                            None,
+                            wt,
+                        );
+                        arrow.dead = true;
+                    }
                 }
             }
         }

@@ -1,7 +1,10 @@
 use blockgame_core::{
     block::BlockId,
     chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z},
-    temple::{temple_id_from_grid, TempleKind, ARENA_BAND_START_X, TEMPLE_GRID_SIZE},
+    temple::{
+        temple_id_from_grid, TempleKind, ARENA_BAND_START_X, TEMPLE_GRID_SIZE,
+        TEMPLE_SPAWN_CHANCE_PERCENT,
+    },
 };
 use glam::IVec3;
 
@@ -51,6 +54,9 @@ impl TerrainGenerator {
         let base_z = gz * TEMPLE_GRID_SIZE;
 
         let h = hash_grid(self.seed, gx, gz);
+        if ((h >> 48) % 100) >= TEMPLE_SPAWN_CHANCE_PERCENT {
+            return None;
+        }
         // Keep a 48-block margin from grid edges so adjacent temples never overlap
         let margin = 48;
         let span = (TEMPLE_GRID_SIZE - margin * 2) as u64;

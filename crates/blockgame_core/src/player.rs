@@ -206,9 +206,27 @@ impl PlayerStats {
         }
     }
 
-    /// Clears all negative food status effects (Food Poisoning & Poison).
+    /// Clears all negative food status effects (Food Poisoning & Poison) while preserving positive buffs.
     pub fn clear_negative_effects(&mut self) {
-        self.status_effects.clear();
+        self.status_effects.retain(|e| !e.kind.is_negative());
+    }
+
+    #[inline]
+    pub fn speed_buff_multiplier(&self) -> f32 {
+        if self.has_status_effect(FoodEffectKind::Speed) {
+            1.25
+        } else {
+            1.0
+        }
+    }
+
+    #[inline]
+    pub fn mining_haste_multiplier(&self) -> f32 {
+        if self.has_status_effect(FoodEffectKind::MiningHaste) {
+            1.35
+        } else {
+            1.0
+        }
     }
 
     #[inline]
@@ -268,9 +286,10 @@ impl PlayerStats {
             return;
         }
 
-        // 0. Status Effects (Food Poisoning & Poison)
+        // 0. Status Effects (Food Poisoning, Poison, Regeneration, Speed, MiningHaste)
         let mut extra_exhaustion = 0.0_f32;
         let mut poison_ticks = 0_u32;
+        let mut regen_heal = 0.0_f32;
         for effect in &mut self.status_effects {
             effect.remaining_secs -= dt;
             match effect.kind {
@@ -284,10 +303,17 @@ impl PlayerStats {
                         poison_ticks += 1;
                     }
                 }
+                FoodEffectKind::Regeneration => {
+                    regen_heal += 1.0 * dt;
+                }
+                FoodEffectKind::Speed | FoodEffectKind::MiningHaste => {}
             }
         }
         self.status_effects.retain(|e| e.remaining_secs > 0.0);
 
+        if regen_heal > 0.0 && self.health < self.max_health {
+            self.health = (self.health + regen_heal).min(self.max_health);
+        }
         if extra_exhaustion > 0.0 {
             self.add_exhaustion(extra_exhaustion);
         }

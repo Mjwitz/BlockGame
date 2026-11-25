@@ -425,8 +425,13 @@ impl UiBuilder {
             return;
         }
         let text = count.to_string();
-        let char_w = 10.0;
-        let char_h = 14.0;
+        let (char_w, char_h) = if count >= 1000 {
+            (7.2, 10.5)
+        } else if count >= 100 {
+            (8.5, 12.0)
+        } else {
+            (10.0, 14.0)
+        };
         let spacing = 0.5;
         let total_w = Self::string_width(&text, char_w, spacing);
         let x = slot_x + slot_size - total_w - 4.0;
@@ -443,7 +448,8 @@ impl UiBuilder {
         );
     }
 
-    /// Draws a Minecraft-style durability bar beneath damaged tools in inventory/hotbar slots.
+    /// Draws a Minecraft-style durability bar beneath damaged tools in inventory/hotbar slots,
+    /// plus a cyan-gold shimmer badge in the top-right corner for shop-enhanced items.
     pub fn draw_durability_bar(
         mesh: &mut UiMesh,
         slot_x: f32,
@@ -454,6 +460,21 @@ impl UiBuilder {
     ) {
         if item_slot.is_empty() {
             return;
+        }
+        if item_slot.is_enhanced() {
+            let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+            let badge_s = 9.0;
+            let bx = slot_x + slot_size - badge_s - 3.0;
+            let by = slot_y + 3.0;
+            mesh.add_quad(bx, by, badge_s, badge_s, white_uv, [0.22, 0.82, 0.96, 0.95]);
+            mesh.add_quad(
+                bx + 2.0,
+                by + 2.0,
+                badge_s - 4.0,
+                badge_s - 4.0,
+                white_uv,
+                [1.0, 0.90, 0.35, 1.0],
+            );
         }
         let Some(def) = registry.get(item_slot.item_id) else {
             return;
@@ -3422,6 +3443,18 @@ impl UiBuilder {
                             format!("POISON {:.0}s", eff.remaining_secs.ceil()),
                             [0.42, 0.96, 0.46, 0.98],
                         ),
+                        blockgame_core::item::FoodEffectKind::Speed => (
+                            format!("SPEED {:.0}s", eff.remaining_secs.ceil()),
+                            [0.45, 0.88, 1.00, 0.98],
+                        ),
+                        blockgame_core::item::FoodEffectKind::Regeneration => (
+                            format!("REGENERATION {:.0}s", eff.remaining_secs.ceil()),
+                            [1.00, 0.56, 0.72, 0.98],
+                        ),
+                        blockgame_core::item::FoodEffectKind::MiningHaste => (
+                            format!("HASTE {:.0}s", eff.remaining_secs.ceil()),
+                            [1.00, 0.86, 0.36, 0.98],
+                        ),
                     };
                     let tw = Self::string_width(&text, 7.5, 0.5);
                     let bx = (screen_w - tw) * 0.5;
@@ -3627,7 +3660,7 @@ impl UiBuilder {
     ) {
         mesh.clear();
 
-        let mut hovered_item_name: Option<&str> = None;
+        let mut hovered_item_name: Option<String> = None;
 
         // 1. Semi-transparent backdrop overlay
         let backdrop_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
@@ -3696,7 +3729,7 @@ impl UiBuilder {
                             && cursor_pos[1] >= sy
                             && cursor_pos[1] <= sy + slot_size
                         {
-                            hovered_item_name = Some(def.display_name);
+                            hovered_item_name = slot.tooltip_label(registry);
                         }
                     }
                 }
@@ -3735,7 +3768,7 @@ impl UiBuilder {
                     && cursor_pos[1] >= result_y
                     && cursor_pos[1] <= result_y + r_size
                 {
-                    hovered_item_name = Some(def.display_name);
+                    hovered_item_name = res.tooltip_label(registry);
                 }
             }
         }
@@ -3774,7 +3807,7 @@ impl UiBuilder {
                             && cursor_pos[1] >= sy
                             && cursor_pos[1] <= sy + slot_size
                         {
-                            hovered_item_name = Some(def.display_name);
+                            hovered_item_name = item_slot.tooltip_label(registry);
                         }
                     }
                 }
@@ -3821,7 +3854,7 @@ impl UiBuilder {
                         && cursor_pos[1] >= sy
                         && cursor_pos[1] <= sy + slot_size
                     {
-                        hovered_item_name = Some(def.display_name);
+                        hovered_item_name = item_slot.tooltip_label(registry);
                     }
                 }
             }
@@ -3853,7 +3886,7 @@ impl UiBuilder {
                         && cursor_pos[1] >= ay
                         && cursor_pos[1] <= ay + slot_size
                     {
-                        hovered_item_name = Some(def.display_name);
+                        hovered_item_name = item_slot.tooltip_label(registry);
                     }
                 }
             } else {
@@ -3871,6 +3904,7 @@ impl UiBuilder {
         }
 
         // 5. JEI Catalog Panel on right side
+        let mut jei_hover: Option<&str> = None;
         if let Some(jei) = jei_params {
             Self::draw_jei_panel(
                 mesh,
@@ -3879,7 +3913,7 @@ impl UiBuilder {
                 jei,
                 cursor_pos,
                 registry,
-                &mut hovered_item_name,
+                &mut jei_hover,
             );
         }
 
@@ -3892,8 +3926,11 @@ impl UiBuilder {
                 modal,
                 cursor_pos,
                 registry,
-                &mut hovered_item_name,
+                &mut jei_hover,
             );
+        }
+        if let Some(j) = jei_hover {
+            hovered_item_name = Some(j.to_string());
         }
 
         // 7. Cursor Held Item Stack (follows mouse position)
@@ -3911,7 +3948,7 @@ impl UiBuilder {
 
         // 6. Hover Tooltip (drawn on top of all slots and cursor items)
         if let Some(name) = hovered_item_name {
-            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], name);
+            Self::draw_tooltip(mesh, screen_w, screen_h, cursor_pos[0], cursor_pos[1], &name);
         }
     }
 
@@ -11102,6 +11139,475 @@ impl UiBuilder {
             Self::draw_string(mesh, tr[0] + tr[2] + 8.0, tr[1] + 2.0, &num, 7.5, 10.5, 0.8, [0.88, 0.90, 0.95, 1.0]);
         }
     }
+
+    /// Builds the 3-tab Village Shopkeeper UI (`Buy`, `Sell`, `Enhance`).
+    pub fn build_shop_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        snapshot: &blockgame_core::ShopUiSnapshot,
+        active_tab: ShopUiTab,
+        selected_enhance_slot: Option<usize>,
+        status_message: &str,
+        inventory: &Inventory,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+    ) {
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.0, 0.0, 0.0, 0.68]);
+
+        let panel_w = 680.0f32.min(screen_w - 40.0);
+        let panel_h = 520.0f32.min(screen_h - 40.0);
+        let px = (screen_w - panel_w) * 0.5;
+        let py = (screen_h - panel_h) * 0.5;
+
+        // Main panel frame
+        mesh.add_quad(px - 2.0, py - 2.0, panel_w + 4.0, panel_h + 4.0, white_uv, [0.82, 0.68, 0.30, 0.95]);
+        mesh.add_quad(px, py, panel_w, panel_h, white_uv, [0.10, 0.12, 0.17, 0.96]);
+
+        // Header: Shopkeeper name, Tier, Coins, Restock timer
+        Self::draw_string(mesh, px + 18.0, py + 14.0, &snapshot.name, 10.0, 14.0, 1.0, [1.0, 0.90, 0.54, 1.0]);
+        let tier_str = format!("Tier {}/{}", snapshot.shop_tier, blockgame_core::MAX_SHOP_TIER);
+        Self::draw_string(mesh, px + 18.0, py + 34.0, &tier_str, 8.0, 11.0, 0.8, [0.55, 0.92, 1.0, 1.0]);
+
+        // XP progress bar
+        let bar_x = px + 110.0;
+        let bar_y = py + 36.0;
+        let bar_w = 180.0;
+        let bar_h = 9.0;
+        mesh.add_quad(bar_x, bar_y, bar_w, bar_h, white_uv, [0.18, 0.22, 0.30, 1.0]);
+        let frac = if let Some(next_req) = snapshot.next_tier_coins {
+            (snapshot.coins_spent as f32 / next_req.max(1) as f32).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        mesh.add_quad(bar_x, bar_y, bar_w * frac, bar_h, white_uv, [0.28, 0.86, 0.54, 1.0]);
+
+        let player_coins = inventory.count_item(blockgame_core::ItemId::GOLD_COIN);
+        let coins_str = format!("Coins: {}", player_coins);
+        Self::draw_string(mesh, px + panel_w - 200.0, py + 14.0, &coins_str, 9.0, 12.5, 0.9, [1.0, 0.86, 0.28, 1.0]);
+
+        let days_left = (snapshot.ticks_until_restock as f32) / (blockgame_core::TICKS_PER_DAY as f32);
+        let restock_str = format!("Restock: {:.1}d", days_left);
+        Self::draw_string(mesh, px + panel_w - 200.0, py + 34.0, &restock_str, 7.5, 10.5, 0.8, [0.75, 0.80, 0.90, 1.0]);
+
+        // Close button [X]
+        let close_rect = [px + panel_w - 34.0, py + 10.0, 24.0, 24.0];
+        let close_hov = point_in_rect(cursor_pos, close_rect);
+        mesh.add_quad(close_rect[0], close_rect[1], close_rect[2], close_rect[3], white_uv, if close_hov { [0.78, 0.22, 0.22, 1.0] } else { [0.46, 0.18, 0.20, 0.95] });
+        Self::draw_string(mesh, close_rect[0] + 7.0, close_rect[1] + 5.0, "X", 9.0, 13.0, 0.5, [1.0, 1.0, 1.0, 1.0]);
+
+        // 3 Tabs: Buy / Sell / Enhance (Enhance is greyed & locked until Tier 4 or if profession has no enhancements)
+        let enhance_unlocked = snapshot.profession.has_enhancements()
+            && snapshot.shop_tier >= blockgame_core::ENHANCE_UNLOCK_TIER;
+        let tabs: [(ShopUiTab, &str, bool); 3] = [
+            (ShopUiTab::Buy, "Buy", true),
+            (ShopUiTab::Sell, "Sell", true),
+            (
+                ShopUiTab::Enhance,
+                if !snapshot.profession.has_enhancements() {
+                    "Enhance (N/A)"
+                } else if enhance_unlocked {
+                    "Enhance"
+                } else {
+                    "Enhance (Tier 4)"
+                },
+                enhance_unlocked,
+            ),
+        ];
+        let tab_y = py + 58.0;
+        let tab_h = 28.0;
+        let tab_w = (panel_w - 48.0) / 3.0;
+        for (i, &(tab, label, enabled)) in tabs.iter().enumerate() {
+            let tx = px + 18.0 + (i as f32) * (tab_w + 6.0);
+            let rect = [tx, tab_y, tab_w, tab_h];
+            let is_active = active_tab == tab;
+            let bg = if !enabled {
+                [0.16, 0.17, 0.20, 0.85]
+            } else if is_active {
+                [0.24, 0.44, 0.68, 0.98]
+            } else if point_in_rect(cursor_pos, rect) {
+                [0.20, 0.28, 0.40, 0.95]
+            } else {
+                [0.15, 0.18, 0.25, 0.92]
+            };
+            let fg = if !enabled {
+                [0.48, 0.50, 0.56, 1.0]
+            } else if is_active {
+                [1.0, 0.96, 0.80, 1.0]
+            } else {
+                [0.84, 0.88, 0.94, 1.0]
+            };
+            mesh.add_quad(tx, tab_y, tab_w, tab_h, white_uv, bg);
+            Self::draw_string(mesh, tx + 12.0, tab_y + 8.0, label, 8.0, 11.5, 0.8, fg);
+        }
+
+        let content_y = tab_y + tab_h + 12.0;
+        let content_h = panel_h - (content_y - py) - 34.0;
+
+        match active_tab {
+            ShopUiTab::Buy => {
+                let row_h = 34.0;
+                let max_rows = (content_h / (row_h + 4.0)).floor() as usize;
+                for (i, offer) in snapshot.buy_offers.iter().take(max_rows).enumerate() {
+                    let ry = content_y + (i as f32) * (row_h + 4.0);
+                    let row_rect = [px + 18.0, ry, panel_w - 36.0, row_h];
+                    let can_buy = offer.unlocked
+                        && offer.stock_remaining > 0
+                        && player_coins >= offer.price_coins;
+                    let hov = can_buy && point_in_rect(cursor_pos, row_rect);
+                    let bg = if !offer.unlocked {
+                        [0.13, 0.14, 0.17, 0.80]
+                    } else if hov {
+                        [0.20, 0.30, 0.42, 0.96]
+                    } else {
+                        [0.15, 0.18, 0.24, 0.92]
+                    };
+                    mesh.add_quad(row_rect[0], row_rect[1], row_rect[2], row_rect[3], white_uv, bg);
+
+                    if let Some(def) = registry.get(offer.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        mesh.add_quad(row_rect[0] + 6.0, ry + 4.0, 26.0, 26.0, icon_uv, [1.0, 1.0, 1.0, if offer.unlocked { 1.0 } else { 0.45 }]);
+                        let name = format!("{} x{}", def.display_name, offer.count);
+                        let color = if offer.unlocked { [0.95, 0.96, 0.98, 1.0] } else { [0.50, 0.52, 0.58, 1.0] };
+                        Self::draw_string(mesh, row_rect[0] + 40.0, ry + 10.0, &name, 8.0, 11.0, 0.8, color);
+                    }
+
+                    let tier_tag = if offer.is_shared {
+                        format!("T{} SHARED", offer.tier)
+                    } else {
+                        format!("T{}", offer.tier)
+                    };
+                    Self::draw_string(
+                        mesh,
+                        row_rect[0] + 290.0,
+                        ry + 11.0,
+                        &tier_tag,
+                        7.0,
+                        10.0,
+                        0.7,
+                        if offer.is_shared { [0.98, 0.72, 0.30, 1.0] } else { [0.64, 0.72, 0.84, 1.0] },
+                    );
+
+                    let stock_txt = format!("Stock {}/{}", offer.stock_remaining, offer.max_stock);
+                    Self::draw_string(
+                        mesh,
+                        row_rect[0] + 385.0,
+                        ry + 11.0,
+                        &stock_txt,
+                        7.2,
+                        10.0,
+                        0.7,
+                        if offer.stock_remaining > 0 { [0.72, 0.92, 0.76, 1.0] } else { [0.85, 0.38, 0.38, 1.0] },
+                    );
+
+                    let price_txt = if !offer.unlocked {
+                        format!("Tier {}", offer.tier)
+                    } else {
+                        format!("{}g", offer.price_coins)
+                    };
+                    Self::draw_string(
+                        mesh,
+                        row_rect[0] + row_rect[2] - 88.0,
+                        ry + 10.0,
+                        &price_txt,
+                        8.2,
+                        11.5,
+                        0.8,
+                        if can_buy { [1.0, 0.88, 0.32, 1.0] } else { [0.62, 0.54, 0.44, 1.0] },
+                    );
+                }
+            }
+            ShopUiTab::Sell => {
+                let budget_txt = format!(
+                    "Daily Buyback Budget: {} / {} Gold Coins",
+                    snapshot.daily_sell_remaining, snapshot.daily_sell_limit
+                );
+                Self::draw_string(mesh, px + 18.0, content_y, &budget_txt, 8.0, 11.0, 0.8, [1.0, 0.86, 0.42, 1.0]);
+                let list_y = content_y + 22.0;
+                let row_h = 38.0;
+                for (i, offer) in snapshot.sell_offers.iter().enumerate() {
+                    let ry = list_y + (i as f32) * (row_h + 6.0);
+                    let row_rect = [px + 18.0, ry, panel_w - 36.0, row_h];
+                    let have = inventory.count_item(offer.item_id);
+                    let can_sell = have >= offer.count as u32
+                        && snapshot.daily_sell_remaining >= offer.payout_coins;
+                    let hov = can_sell && point_in_rect(cursor_pos, row_rect);
+                    let bg = if hov {
+                        [0.20, 0.34, 0.26, 0.96]
+                    } else {
+                        [0.15, 0.18, 0.24, 0.92]
+                    };
+                    mesh.add_quad(row_rect[0], row_rect[1], row_rect[2], row_rect[3], white_uv, bg);
+
+                    if let Some(def) = registry.get(offer.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        mesh.add_quad(row_rect[0] + 6.0, ry + 6.0, 26.0, 26.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                        let label = format!("Sell {} x{} (Have: {})", def.display_name, offer.count, have);
+                        Self::draw_string(mesh, row_rect[0] + 40.0, ry + 12.0, &label, 8.0, 11.0, 0.8, [0.94, 0.95, 0.98, 1.0]);
+                    }
+                    let pay_txt = format!("+{}g", offer.payout_coins);
+                    Self::draw_string(
+                        mesh,
+                        row_rect[0] + row_rect[2] - 88.0,
+                        ry + 12.0,
+                        &pay_txt,
+                        8.5,
+                        12.0,
+                        0.8,
+                        if can_sell { [0.46, 0.95, 0.56, 1.0] } else { [0.56, 0.56, 0.60, 1.0] },
+                    );
+                }
+            }
+            ShopUiTab::Enhance => {
+                // Left column: eligible unenhanced inventory items; Right column: Enhancement offers
+                let left_x = px + 18.0;
+                let left_w = 270.0;
+                let right_x = left_x + left_w + 14.0;
+                let right_w = panel_w - 36.0 - left_w - 14.0;
+
+                Self::draw_string(mesh, left_x, content_y, "1. Select Unenhanced Item:", 7.8, 10.8, 0.8, [0.80, 0.88, 0.98, 1.0]);
+                Self::draw_string(mesh, right_x, content_y, "2. Apply Enhancement:", 7.8, 10.8, 0.8, [0.80, 0.88, 0.98, 1.0]);
+
+                let list_y = content_y + 20.0;
+                let eligible = eligible_enhance_inventory_slots(snapshot, inventory, registry);
+                for (row_i, &inv_idx) in eligible.iter().take(9).enumerate() {
+                    let ry = list_y + (row_i as f32) * 36.0;
+                    let rect = [left_x, ry, left_w, 32.0];
+                    let is_sel = selected_enhance_slot == Some(inv_idx);
+                    let bg = if is_sel {
+                        [0.24, 0.44, 0.64, 0.98]
+                    } else if point_in_rect(cursor_pos, rect) {
+                        [0.19, 0.25, 0.34, 0.95]
+                    } else {
+                        [0.14, 0.17, 0.22, 0.92]
+                    };
+                    mesh.add_quad(rect[0], rect[1], rect[2], rect[3], white_uv, bg);
+                    let slot = inventory.get(inv_idx);
+                    if let Some(def) = registry.get(slot.item_id) {
+                        let icon_uv = TextureAtlas::get_uv_bounds(def.icon_tile as u16);
+                        mesh.add_quad(rect[0] + 4.0, ry + 4.0, 24.0, 24.0, icon_uv, [1.0, 1.0, 1.0, 1.0]);
+                        Self::draw_string(mesh, rect[0] + 34.0, ry + 10.0, def.display_name, 7.6, 10.5, 0.7, [0.95, 0.96, 1.0, 1.0]);
+                    }
+                }
+
+                let selected_item = selected_enhance_slot
+                    .map(|i| inventory.get(i))
+                    .filter(|s| !s.is_empty());
+
+                for (i, offer) in snapshot.enhance_offers.iter().enumerate() {
+                    let ry = list_y + (i as f32) * 62.0;
+                    let rect = [right_x, ry, right_w, 56.0];
+                    let compat = selected_item.map_or(false, |s| {
+                        !s.is_enhanced() && offer.enhancement.is_compatible_with(s.item_id, registry)
+                    });
+                    let dyn_price = selected_item.map_or(offer.base_price_coins, |s| {
+                        offer.price_for_item(s.item_id, registry)
+                    });
+                    let can_apply = offer.unlocked
+                        && offer.stock_remaining > 0
+                        && compat
+                        && player_coins >= dyn_price;
+                    let hov = can_apply && point_in_rect(cursor_pos, rect);
+                    let bg = if !offer.unlocked {
+                        [0.13, 0.14, 0.17, 0.80]
+                    } else if hov {
+                        [0.22, 0.38, 0.52, 0.98]
+                    } else {
+                        [0.15, 0.19, 0.26, 0.92]
+                    };
+                    mesh.add_quad(rect[0], rect[1], rect[2], rect[3], white_uv, bg);
+
+                    let title = format!(
+                        "{} (T{} SHARED {}/{})",
+                        offer.enhancement.display_name(),
+                        offer.tier,
+                        offer.stock_remaining,
+                        offer.max_stock
+                    );
+                    Self::draw_string(
+                        mesh,
+                        rect[0] + 10.0,
+                        ry + 8.0,
+                        &title,
+                        7.8,
+                        11.0,
+                        0.75,
+                        if offer.unlocked { [0.58, 0.92, 1.0, 1.0] } else { [0.50, 0.52, 0.56, 1.0] },
+                    );
+                    Self::draw_string(
+                        mesh,
+                        rect[0] + 10.0,
+                        ry + 24.0,
+                        offer.enhancement.description(),
+                        7.0,
+                        10.0,
+                        0.7,
+                        [0.82, 0.86, 0.92, 1.0],
+                    );
+                    let price_str = format!("Cost: {}g + Item", dyn_price);
+                    Self::draw_string(
+                        mesh,
+                        rect[0] + 10.0,
+                        ry + 39.0,
+                        &price_str,
+                        7.4,
+                        10.2,
+                        0.75,
+                        if can_apply { [1.0, 0.88, 0.34, 1.0] } else { [0.65, 0.55, 0.45, 1.0] },
+                    );
+                }
+            }
+        }
+
+        // Bottom status bar
+        if !status_message.is_empty() {
+            Self::draw_string(
+                mesh,
+                px + 18.0,
+                py + panel_h - 24.0,
+                status_message,
+                7.8,
+                11.0,
+                0.8,
+                [0.98, 0.88, 0.52, 1.0],
+            );
+        }
+    }
+
+    /// Hit-tests a left click on the 3-tab Shop UI.
+    pub fn hit_test_shop_screen(
+        screen_w: f32,
+        screen_h: f32,
+        snapshot: &blockgame_core::ShopUiSnapshot,
+        active_tab: ShopUiTab,
+        inventory: &Inventory,
+        cursor_pos: [f32; 2],
+        registry: &ItemRegistry,
+    ) -> Option<ShopUiAction> {
+        let panel_w = 680.0f32.min(screen_w - 40.0);
+        let panel_h = 520.0f32.min(screen_h - 40.0);
+        let px = (screen_w - panel_w) * 0.5;
+        let py = (screen_h - panel_h) * 0.5;
+
+        let close_rect = [px + panel_w - 34.0, py + 10.0, 24.0, 24.0];
+        if point_in_rect(cursor_pos, close_rect) {
+            return Some(ShopUiAction::Close);
+        }
+
+        let enhance_unlocked = snapshot.profession.has_enhancements()
+            && snapshot.shop_tier >= blockgame_core::ENHANCE_UNLOCK_TIER;
+        let tab_y = py + 58.0;
+        let tab_h = 28.0;
+        let tab_w = (panel_w - 48.0) / 3.0;
+        let tabs = [
+            (ShopUiTab::Buy, true),
+            (ShopUiTab::Sell, true),
+            (ShopUiTab::Enhance, enhance_unlocked),
+        ];
+        for (i, &(tab, enabled)) in tabs.iter().enumerate() {
+            let tx = px + 18.0 + (i as f32) * (tab_w + 6.0);
+            if point_in_rect(cursor_pos, [tx, tab_y, tab_w, tab_h]) {
+                if enabled {
+                    return Some(ShopUiAction::SwitchTab(tab));
+                }
+                return None;
+            }
+        }
+
+        let content_y = tab_y + tab_h + 12.0;
+        let content_h = panel_h - (content_y - py) - 34.0;
+
+        match active_tab {
+            ShopUiTab::Buy => {
+                let row_h = 34.0;
+                let max_rows = (content_h / (row_h + 4.0)).floor() as usize;
+                for (i, offer) in snapshot.buy_offers.iter().take(max_rows).enumerate() {
+                    let ry = content_y + (i as f32) * (row_h + 4.0);
+                    if point_in_rect(cursor_pos, [px + 18.0, ry, panel_w - 36.0, row_h]) {
+                        return Some(ShopUiAction::Buy(offer.offer_idx));
+                    }
+                }
+            }
+            ShopUiTab::Sell => {
+                let list_y = content_y + 22.0;
+                let row_h = 38.0;
+                for (i, offer) in snapshot.sell_offers.iter().enumerate() {
+                    let ry = list_y + (i as f32) * (row_h + 6.0);
+                    if point_in_rect(cursor_pos, [px + 18.0, ry, panel_w - 36.0, row_h]) {
+                        return Some(ShopUiAction::Sell(offer.offer_idx));
+                    }
+                }
+            }
+            ShopUiTab::Enhance => {
+                let left_x = px + 18.0;
+                let left_w = 270.0;
+                let right_x = left_x + left_w + 14.0;
+                let right_w = panel_w - 36.0 - left_w - 14.0;
+                let list_y = content_y + 20.0;
+
+                let eligible = eligible_enhance_inventory_slots(snapshot, inventory, registry);
+                for (row_i, &inv_idx) in eligible.iter().take(9).enumerate() {
+                    let ry = list_y + (row_i as f32) * 36.0;
+                    if point_in_rect(cursor_pos, [left_x, ry, left_w, 32.0]) {
+                        return Some(ShopUiAction::SelectEnhanceSlot(inv_idx));
+                    }
+                }
+                for (i, offer) in snapshot.enhance_offers.iter().enumerate() {
+                    let ry = list_y + (i as f32) * 62.0;
+                    if point_in_rect(cursor_pos, [right_x, ry, right_w, 56.0]) {
+                        return Some(ShopUiAction::ApplyEnhance(offer.offer_idx));
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopUiTab {
+    Buy,
+    Sell,
+    Enhance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopUiAction {
+    SwitchTab(ShopUiTab),
+    Buy(u16),
+    Sell(u16),
+    SelectEnhanceSlot(usize),
+    ApplyEnhance(u16),
+    Close,
+}
+
+fn eligible_enhance_inventory_slots(
+    snapshot: &blockgame_core::ShopUiSnapshot,
+    inventory: &Inventory,
+    registry: &ItemRegistry,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    for idx in 0..inventory.len() {
+        let slot = inventory.get(idx);
+        if slot.is_empty() || slot.is_enhanced() {
+            continue;
+        }
+        if snapshot
+            .enhance_offers
+            .iter()
+            .any(|o| o.enhancement.is_compatible_with(slot.item_id, registry))
+        {
+            out.push(idx);
+        }
+    }
+    out
+}
+
+#[inline]
+fn point_in_rect(p: [f32; 2], r: [f32; 4]) -> bool {
+    p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
 }
 
 #[cfg(test)]

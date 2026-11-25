@@ -96,6 +96,7 @@ impl TextureAtlas {
         paint_power_tiles(&mut atlas);
         paint_temple_and_boss_tiles(&mut atlas);
         paint_farming_and_cooking_tiles(&mut atlas);
+        paint_village_item_tiles(&mut atlas);
 
         atlas
     }
@@ -3008,6 +3009,160 @@ fn paint_farming_and_cooking_tiles(atlas: &mut TextureAtlas) {
     fill_rect(atlas, 566, 3, 12, 3, 4, [148, 104, 58, 255]); // wooden left handle
     fill_rect(atlas, 566, 26, 12, 3, 4, [148, 104, 58, 255]); // wooden right handle
     fill_rect(atlas, 566, 9, 25, 14, 3, [232, 112, 28, 255]); // ember glow
+}
+
+/// Paints procedural 32x32 item icons for Issue #11 (NPC Villages & Trading):
+/// 567: Gold Coin, 568: Miner's Lantern, 569: Vanguard Blade, 570: Master Angler's Lure,
+/// 571: Golden Apple Pie, 572: Royal Feast, 573: Spiced Elixir.
+fn paint_village_item_tiles(atlas: &mut TextureAtlas) {
+    // 567: Gold Coin
+    atlas.paint_tile(567, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = py as f32 - 15.5;
+        let r = (dx * dx + dy * dy).sqrt();
+        if r > 11.5 {
+            return Rgba([0, 0, 0, 0]);
+        }
+        if r > 10.2 {
+            return Rgba([92, 62, 12, 255]);
+        }
+        if r > 8.2 {
+            return Rgba([226, 174, 34, 255]);
+        }
+        // Embossed inner coin face with diagonal highlight & center emblem
+        let in_emblem = dx.abs() <= 2.2 && dy.abs() <= 4.5 && (dx.abs() >= 1.0 || dy.abs() <= 1.2);
+        if in_emblem {
+            Rgba([255, 246, 168, 255])
+        } else if dx + dy < -4.0 {
+            Rgba([255, 232, 92, 255])
+        } else {
+            Rgba([242, 198, 46, 255])
+        }
+    });
+
+    // 568: Miner's Lantern
+    atlas.paint_tile(568, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Top ring
+        if (6..=9).contains(&y) && (13..=18).contains(&x) && (y == 6 || x == 13 || x == 18) {
+            return Rgba([120, 128, 140, 255]);
+        }
+        // Cap & base
+        if ((10..=12).contains(&y) || (24..=26).contains(&y)) && (9..=22).contains(&x) {
+            return Rgba([76, 84, 96, 255]);
+        }
+        // Lantern body + bright glowing core
+        if (13..=23).contains(&y) && (10..=21).contains(&x) {
+            if x == 10 || x == 21 {
+                return Rgba([68, 74, 86, 255]);
+            }
+            let dist = ((x - 15) * (x - 15) + (y - 18) * (y - 18)) as f32;
+            if dist < 12.0 {
+                return Rgba([255, 252, 200, 255]);
+            }
+            return Rgba([140, 238, 245, 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 569: Vanguard Blade
+    paint_sword_sprite(
+        atlas,
+        569,
+        [235, 246, 255],
+        [156, 205, 245],
+        [72, 120, 182],
+        [242, 196, 52],
+    );
+
+    // 570: Master Angler's Lure
+    atlas.paint_tile(570, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = py as f32 - 14.0;
+        let r = (dx * dx * 1.4 + dy * dy * 0.8).sqrt();
+        if r < 7.5 {
+            if r > 6.2 {
+                return Rgba([72, 50, 18, 255]);
+            }
+            if dy < 0.0 {
+                return Rgba([250, 212, 64, 255]);
+            }
+            return Rgba([48, 210, 198, 255]);
+        }
+        // Hook at bottom
+        if py >= 21 && py <= 27 && ((px == 15) || (py == 27 && (15..=20).contains(&px)) || (px == 20 && (24..=27).contains(&py))) {
+            return Rgba([210, 218, 228, 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
+
+    // 571: Golden Apple Pie
+    atlas.paint_tile(571, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = (py as f32 - 17.5) * 1.45;
+        let r = (dx * dx + dy * dy).sqrt();
+        if r > 11.5 {
+            return Rgba([0, 0, 0, 0]);
+        }
+        if r > 9.5 {
+            return Rgba([192, 134, 48, 255]);
+        }
+        if ((px + py) % 5 == 0) || ((px as i32 - py as i32).abs() % 5 == 0) {
+            Rgba([255, 224, 92, 255])
+        } else {
+            Rgba([218, 158, 42, 255])
+        }
+    });
+
+    // 572: Royal Feast
+    atlas.paint_tile(572, |px, py| {
+        let dx = px as f32 - 15.5;
+        let dy = (py as f32 - 18.0) * 1.5;
+        let r = (dx * dx + dy * dy).sqrt();
+        if r > 12.5 {
+            return Rgba([0, 0, 0, 0]);
+        }
+        if r > 10.5 {
+            return Rgba([235, 196, 62, 255]); // Gold platter rim
+        }
+        let roast = ((px as f32 - 15.5).powi(2) + (py as f32 - 15.5).powi(2)).sqrt();
+        if roast < 6.5 {
+            Rgba([176, 86, 42, 255])
+        } else {
+            Rgba([88, 172, 74, 255]) // Herb garnish
+        }
+    });
+
+    // 573: Spiced Elixir
+    atlas.paint_tile(573, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Cork & neck
+        if (6..=8).contains(&y) && (13..=18).contains(&x) {
+            return Rgba([156, 108, 62, 255]);
+        }
+        if (9..=13).contains(&y) && (12..=19).contains(&x) {
+            return Rgba([200, 225, 238, 255]);
+        }
+        // Round flask filled with glowing crimson-gold elixir
+        let dx = px as f32 - 15.5;
+        let dy = py as f32 - 20.0;
+        let r = (dx * dx + dy * dy).sqrt();
+        if r <= 8.5 {
+            if r > 7.2 {
+                return Rgba([185, 212, 228, 255]);
+            }
+            if py < 17 {
+                return Rgba([230, 240, 248, 180]);
+            }
+            if dx < -1.0 {
+                return Rgba([255, 132, 68, 255]);
+            }
+            return Rgba([212, 46, 58, 255]);
+        }
+        Rgba([0, 0, 0, 0])
+    });
 }
 
 #[cfg(test)]

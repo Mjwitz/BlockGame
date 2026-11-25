@@ -153,6 +153,7 @@ pub enum FishingLureKind {
     Spinner,
     BarbedHook,
     TreasureMagnet,
+    MasterAngler,
 }
 
 impl FishingLureKind {
@@ -162,6 +163,7 @@ impl FishingLureKind {
             ItemId::SPINNER_LURE => Some(Self::Spinner),
             ItemId::BARBED_HOOK => Some(Self::BarbedHook),
             ItemId::TREASURE_LURE => Some(Self::TreasureMagnet),
+            ItemId::MASTER_ANGLER_LURE => Some(Self::MasterAngler),
             _ => None,
         }
     }
@@ -172,6 +174,7 @@ impl FishingLureKind {
             Self::Spinner => "Copper Spinner",
             Self::BarbedHook => "Barbed Hook",
             Self::TreasureMagnet => "Treasure Magnet",
+            Self::MasterAngler => "Master Angler's Lure",
         }
     }
 
@@ -181,6 +184,7 @@ impl FishingLureKind {
             Self::Spinner => 45,
             Self::BarbedHook => 50,
             Self::TreasureMagnet => 40,
+            Self::MasterAngler => 120,
         }
     }
 
@@ -190,6 +194,7 @@ impl FishingLureKind {
             Self::Spinner => 0.0,
             Self::BarbedHook => 0.02,
             Self::TreasureMagnet => 0.0,
+            Self::MasterAngler => 0.10,
         }
     }
 
@@ -199,6 +204,7 @@ impl FishingLureKind {
             Self::Spinner => 1.40,
             Self::BarbedHook => 1.05,
             Self::TreasureMagnet => 1.10,
+            Self::MasterAngler => 1.45,
         }
     }
 
@@ -208,6 +214,7 @@ impl FishingLureKind {
             Self::Spinner => 1.0,
             Self::BarbedHook => 0.65,
             Self::TreasureMagnet => 1.0,
+            Self::MasterAngler => 0.70,
         }
     }
 
@@ -217,6 +224,7 @@ impl FishingLureKind {
             Self::Spinner => 1.0,
             Self::BarbedHook => 0.50,
             Self::TreasureMagnet => 1.0,
+            Self::MasterAngler => 0.60,
         }
     }
 
@@ -226,6 +234,7 @@ impl FishingLureKind {
             Self::Spinner => 0.05,
             Self::BarbedHook => 0.0,
             Self::TreasureMagnet => 0.30,
+            Self::MasterAngler => 0.40,
         }
     }
 
@@ -235,6 +244,7 @@ impl FishingLureKind {
             Self::Spinner => 0.08,
             Self::BarbedHook => 0.06,
             Self::TreasureMagnet => 0.35,
+            Self::MasterAngler => 0.40,
         }
     }
 }
@@ -457,6 +467,20 @@ impl FishingTackleStats {
             treasure_chance,
         }
     }
+
+    /// Applies shop-exclusive fishing rod Enhancements (`TreasureHunter` / `LuckyCast`) to these stats.
+    pub fn with_rod_enhancement(mut self, enhancement: Option<crate::item::Enhancement>) -> Self {
+        match enhancement {
+            Some(crate::item::Enhancement::TreasureHunter) => {
+                self.treasure_chance = (self.treasure_chance * 1.50).min(0.95);
+            }
+            Some(crate::item::Enhancement::LuckyCast) => {
+                self.rare_chance_bonus += 0.35;
+            }
+            _ => {}
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -651,17 +675,19 @@ pub fn roll_fish_species(
 
 pub fn roll_treasure_loot(rng: &mut u64) -> ItemSlot {
     let r = next_f32(rng);
-    if r < 0.20 {
+    if r < 0.16 {
         ItemSlot::new(ItemId::COAL, 2 + (next_u64(rng) % 4) as u16)
-    } else if r < 0.40 {
+    } else if r < 0.32 {
         ItemSlot::new(ItemId::IRON_INGOT, 1 + (next_u64(rng) % 3) as u16)
-    } else if r < 0.58 {
+    } else if r < 0.48 {
         ItemSlot::new(ItemId::GOLD_INGOT, 1 + (next_u64(rng) % 2) as u16)
-    } else if r < 0.72 {
+    } else if r < 0.66 {
+        ItemSlot::new(ItemId::GOLD_COIN, 3 + (next_u64(rng) % 6) as u16)
+    } else if r < 0.78 {
         ItemSlot::new(ItemId::ARROW, 4 + (next_u64(rng) % 8) as u16)
-    } else if r < 0.85 {
+    } else if r < 0.88 {
         ItemSlot::new(ItemId::FISHING_BAIT, 3 + (next_u64(rng) % 5) as u16)
-    } else if r < 0.94 {
+    } else if r < 0.95 {
         ItemSlot::new(ItemId::PRISMARINE, 1 + (next_u64(rng) % 3) as u16)
     } else {
         ItemSlot::new(ItemId::DIAMOND, 1)

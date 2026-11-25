@@ -20,7 +20,9 @@ pub const ARENA_HALF_SIZE: i32 = 18;
 pub const ARENA_HEIGHT: i32 = 18;
 
 /// Coarse overworld grid spacing (in blocks) for deterministic boss temple placement.
-pub const TEMPLE_GRID_SIZE: i32 = 320;
+pub const TEMPLE_GRID_SIZE: i32 = 480;
+/// Percentage chance (0..=100) that an eligible Boss Temple grid cell spawns a temple.
+pub const TEMPLE_SPAWN_CHANCE_PERCENT: u64 = 55;
 
 /// Maximum distance (in blocks) at which an in-combat boss health bar is displayed (Issue #9).
 pub const BOSS_HUD_MAX_DISTANCE: f32 = 500.0;

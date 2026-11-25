@@ -110,6 +110,7 @@ pub struct WorldSaveData {
     pub growing_sugar_cane: Vec<(IVec3, f32)>,
     pub animal_spawned_columns: HashSet<IVec2>,
     pub temples: crate::temple::TempleManager,
+    pub villages: crate::village::VillageManager,
 }
 
 impl WorldSaveData {
@@ -136,6 +137,7 @@ impl WorldSaveData {
             growing_sugar_cane: Vec::new(),
             animal_spawned_columns: HashSet::new(),
             temples: crate::temple::TempleManager::new(),
+            villages: crate::village::VillageManager::new(),
         }
     }
 
@@ -401,7 +403,7 @@ pub fn save_player_data(
     let mut w = BufWriter::new(file);
 
     w.write_all(PLAYER_MAGIC)?;
-    write_u32(&mut w, 2)?; // version 2 with homes
+    write_u32(&mut w, 3)?; // version 3: includes ItemSlot enhancements
     write_u64(&mut w, current_unix_timestamp())?;
     write_string(&mut w, &player.rank)?;
 
@@ -477,7 +479,7 @@ pub fn load_player_data(
     }
 
     let version = read_u32(&mut r)?;
-    if version != 1 && version != 2 {
+    if version != 1 && version != 2 && version != 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported player data version: {}", version),
@@ -504,10 +506,11 @@ pub fn load_player_data(
     stats.max_breath = read_f32(&mut r)?;
     stats.is_dead = read_bool(&mut r)?;
 
+    let slot_version = if version >= 3 { 4 } else { 2 };
     let slot_count = read_u32(&mut r)? as usize;
     let mut inventory = Inventory::default();
     for i in 0..slot_count {
-        let slot = read_item_slot(&mut r, 2)?;
+        let slot = read_item_slot(&mut r, slot_version)?;
         if i < Inventory::TOTAL_COUNT {
             inventory.slots[i] = slot;
         }
@@ -707,7 +710,7 @@ pub fn save_containers_file(
     let mut w = BufWriter::new(file);
 
     w.write_all(CONTAINER_MAGIC)?;
-    write_u32(&mut w, 2)?; // version 2: includes cooking pots
+    write_u32(&mut w, 3)?; // version 3: includes cooking pots + ItemSlot enhancements
 
     // Chests
     write_u32(&mut w, chests.len() as u32)?;
@@ -775,12 +778,13 @@ pub fn load_containers_file(
         ));
     }
     let version = read_u32(&mut r)?;
-    if version != 1 && version != 2 {
+    if version != 1 && version != 2 && version != 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported containers.bin version: {}", version),
         ));
     }
+    let slot_version = if version >= 3 { 4 } else { 2 };
 
     let chest_count = read_u32(&mut r)? as usize;
     let mut chests = HashMap::with_capacity(chest_count);
@@ -789,7 +793,7 @@ pub fn load_containers_file(
         let len = read_u32(&mut r)? as usize;
         let mut slots = Vec::with_capacity(len);
         for _ in 0..len {
-            slots.push(read_item_slot(&mut r, 2)?);
+            slots.push(read_item_slot(&mut r, slot_version)?);
         }
         chests.insert(pos, slots);
     }
@@ -798,9 +802,9 @@ pub fn load_containers_file(
     let mut furnaces = HashMap::with_capacity(furnace_count);
     for _ in 0..furnace_count {
         let pos = read_ivec3(&mut r)?;
-        let input = read_item_slot(&mut r, 2)?;
-        let fuel = read_item_slot(&mut r, 2)?;
-        let output = read_item_slot(&mut r, 2)?;
+        let input = read_item_slot(&mut r, slot_version)?;
+        let fuel = read_item_slot(&mut r, slot_version)?;
+        let output = read_item_slot(&mut r, slot_version)?;
         let burn_time_remaining = read_f32(&mut r)?;
         let max_burn_time = read_f32(&mut r)?;
         let cook_progress = read_f32(&mut r)?;
@@ -824,13 +828,13 @@ pub fn load_containers_file(
         for _ in 0..pot_count {
             let pos = read_ivec3(&mut r)?;
             let ingredients = [
-                read_item_slot(&mut r, 2)?,
-                read_item_slot(&mut r, 2)?,
-                read_item_slot(&mut r, 2)?,
-                read_item_slot(&mut r, 2)?,
+                read_item_slot(&mut r, slot_version)?,
+                read_item_slot(&mut r, slot_version)?,
+                read_item_slot(&mut r, slot_version)?,
+                read_item_slot(&mut r, slot_version)?,
             ];
-            let fuel = read_item_slot(&mut r, 2)?;
-            let output = read_item_slot(&mut r, 2)?;
+            let fuel = read_item_slot(&mut r, slot_version)?;
+            let output = read_item_slot(&mut r, slot_version)?;
             let burn_time_remaining = read_f32(&mut r)?;
             let max_burn_time = read_f32(&mut r)?;
             let cook_progress = read_f32(&mut r)?;
@@ -851,7 +855,9 @@ pub fn load_containers_file(
     Ok(Some((chests, furnaces, cooking_pots)))
 }
 
-/// Saves power machine states (coal generators, batteries, electric furnaces) to `<world_dir>/power.bin`.
+const POWER_MAGIC: &[u8; 4] = b"POWR";
+
+/// Saves power machine states (Coal Generators, Batteries, Electric Furnaces) to `<world_dir>/power.bin`.
 pub fn save_power_file(
     world_dir: &Path,
     coal_generators: &HashMap<IVec3, crate::power::CoalGeneratorState>,
@@ -860,6 +866,9 @@ pub fn save_power_file(
 ) -> io::Result<()> {
     let path = world_dir.join("power.bin");
     let mut w = BufWriter::new(File::create(&path)?);
+
+    w.write_all(POWER_MAGIC)?;
+    write_u32(&mut w, 2)?; // version 2: ItemSlot enhancements
 
     write_u32(&mut w, coal_generators.len() as u32)?;
     for (&pos, gen) in coal_generators {
@@ -903,13 +912,21 @@ pub fn load_power_file(
     if !path.exists() {
         return Ok(None);
     }
-    let mut r = BufReader::new(File::open(&path)?);
+    let bytes = std::fs::read(&path)?;
+    let (mut r, slot_version) = if bytes.len() >= 8 && &bytes[0..4] == POWER_MAGIC {
+        let mut cursor = io::Cursor::new(&bytes[4..]);
+        let version = read_u32(&mut cursor)?;
+        let sv = if version >= 2 { 4 } else { 2 };
+        (cursor, sv)
+    } else {
+        (io::Cursor::new(&bytes[..]), 2)
+    };
 
     let gen_count = read_u32(&mut r)? as usize;
     let mut coal_generators = HashMap::with_capacity(gen_count);
     for _ in 0..gen_count {
         let pos = read_ivec3(&mut r)?;
-        let fuel = read_item_slot(&mut r, 2)?;
+        let fuel = read_item_slot(&mut r, slot_version)?;
         let burn_time = read_f32(&mut r)?;
         let max_burn_time = read_f32(&mut r)?;
         coal_generators.insert(
@@ -943,8 +960,8 @@ pub fn load_power_file(
     let mut electric_furnaces = HashMap::with_capacity(ef_count);
     for _ in 0..ef_count {
         let pos = read_ivec3(&mut r)?;
-        let input = read_item_slot(&mut r, 2)?;
-        let output = read_item_slot(&mut r, 2)?;
+        let input = read_item_slot(&mut r, slot_version)?;
+        let output = read_item_slot(&mut r, slot_version)?;
         let cook_time = read_f32(&mut r)?;
         let max_cook_time = read_f32(&mut r)?;
         electric_furnaces.insert(
@@ -972,7 +989,7 @@ pub fn save_backpack_file(
     let path = world_dir.join("backpack.bin");
     let mut w = BufWriter::new(File::create(&path)?);
     w.write_all(BACKPACK_MAGIC)?;
-    write_u32(&mut w, 2)?; // version 2: per-instance BackpackRegistry
+    write_u32(&mut w, 3)?; // version 3: per-instance BackpackRegistry + ItemSlot enhancements
     write_u16(&mut w, registry.next_id)?;
     write_u32(&mut w, registry.bags.len() as u32)?;
     let mut entries: Vec<_> = registry.bags.iter().collect();
@@ -1001,7 +1018,8 @@ pub fn load_backpack_file(
     let bytes = std::fs::read(&path)?;
     if bytes.len() >= 4 && &bytes[0..4] == BACKPACK_MAGIC {
         let mut r = io::Cursor::new(&bytes[4..]);
-        let _version = read_u32(&mut r)?;
+        let version = read_u32(&mut r)?;
+        let slot_version = if version >= 3 { 4 } else { 2 };
         let next_id = read_u16(&mut r)?.max(1);
         let bag_count = read_u32(&mut r)? as usize;
         let mut reg = crate::storage::BackpackRegistry {
@@ -1014,7 +1032,7 @@ pub fn load_backpack_file(
             let slot_count = read_u32(&mut r)? as usize;
             let mut slots = Vec::with_capacity(slot_count);
             for _ in 0..slot_count {
-                slots.push(read_item_slot(&mut r, 2)?);
+                slots.push(read_item_slot(&mut r, slot_version)?);
             }
             let mut bp = crate::storage::BackpackState { tier, slots };
             bp.ensure_tier(tier);
@@ -1058,7 +1076,7 @@ pub fn save_entities_file(
     let mut w = BufWriter::new(file);
 
     w.write_all(ENTITY_MAGIC)?;
-    write_u32(&mut w, 2)?; // version 2: includes animal breeding, baby, and egg timers
+    write_u32(&mut w, 3)?; // version 3: includes animal timers + ItemSlot enhancements
 
     // Drops
     write_u32(&mut w, drops.len() as u32)?;
@@ -1108,7 +1126,7 @@ pub fn save_entities_file(
     Ok(path)
 }
 
-/// Loads entities from `<world_dir>/entities.bin` (supports v1 and v2).
+/// Loads entities from `<world_dir>/entities.bin` (supports v1, v2, and v3).
 pub fn load_entities_file(
     world_dir: &Path,
 ) -> io::Result<Option<(Vec<ItemDrop>, Vec<FallingBlock>, u32, Vec<AnimalEntity>, HashSet<IVec2>)>> {
@@ -1128,19 +1146,20 @@ pub fn load_entities_file(
         ));
     }
     let version = read_u32(&mut r)?;
-    if version != 1 && version != 2 {
+    if version != 1 && version != 2 && version != 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Unsupported entities.bin version: {}", version),
         ));
     }
+    let slot_version = if version >= 3 { 4 } else { 2 };
 
     let drop_count = read_u32(&mut r)? as usize;
     let mut drops = Vec::with_capacity(drop_count);
     for _ in 0..drop_count {
         let position = read_vec3(&mut r)?;
         let velocity = read_vec3(&mut r)?;
-        let item = read_item_slot(&mut r, 2)?;
+        let item = read_item_slot(&mut r, slot_version)?;
         let age = read_f32(&mut r)?;
         let despawn_time = read_f32(&mut r)?;
         let pickup_delay = read_f32(&mut r)?;
@@ -1361,7 +1380,273 @@ pub fn save_world_to_dir(saves_root: &Path, data: &mut WorldSaveData) -> io::Res
     // 7. Write temples.bin (boss temple progression & return positions)
     save_temples_file(&world_dir, &data.temples)?;
 
+    // 8. Write villages.bin (NPC Villages, Shopkeepers, Guards, economy & hostility)
+    save_villages_file(&world_dir, &data.villages)?;
+
     Ok(world_dir)
+}
+
+const VILLAGES_MAGIC: &[u8; 4] = b"BGVL";
+const VILLAGES_VERSION: u32 = 2;
+
+pub fn save_villages_file(
+    world_dir: &Path,
+    villages: &crate::village::VillageManager,
+) -> io::Result<()> {
+    let path = world_dir.join("villages.bin");
+    let mut w = BufWriter::new(File::create(path)?);
+    w.write_all(VILLAGES_MAGIC)?;
+    write_u32(&mut w, VILLAGES_VERSION)?;
+    write_u32(&mut w, villages.next_npc_id)?;
+    write_u64(&mut w, villages.total_world_ticks)?;
+
+    // Village records
+    write_u32(&mut w, villages.villages.len() as u32)?;
+    for rec in villages.villages.values() {
+        write_u64(&mut w, rec.village_id)?;
+        write_u8(&mut w, rec.theme.to_u8())?;
+        write_ivec3(&mut w, rec.origin)?;
+        write_bool(&mut w, rec.spawned)?;
+        write_u32(&mut w, rec.guard_hostility.len() as u32)?;
+        for (pkey, h) in &rec.guard_hostility {
+            write_string(&mut w, pkey)?;
+            write_u64(&mut w, h.last_near_village_tick)?;
+        }
+    }
+
+    // Shopkeepers
+    write_u32(&mut w, villages.shopkeepers.len() as u32)?;
+    for sk in &villages.shopkeepers {
+        write_u32(&mut w, sk.id)?;
+        write_u64(&mut w, sk.village_id)?;
+        write_u8(&mut w, sk.theme.to_u8())?;
+        write_u8(&mut w, sk.profession.to_u8())?;
+        write_string(&mut w, &sk.name)?;
+        sk.appearance.write_binary(&mut w)?;
+        write_vec3(&mut w, sk.position)?;
+        write_vec3(&mut w, sk.home_pos)?;
+        write_vec3(&mut w, sk.courtyard_pos)?;
+        write_f32(&mut w, sk.yaw)?;
+        write_f32(&mut w, sk.health)?;
+        write_f32(&mut w, sk.max_health)?;
+        write_bool(&mut w, sk.dead)?;
+        write_u64(&mut w, sk.last_shared_restock_cycle)?;
+        write_u32(&mut w, sk.shared_stock.len() as u32)?;
+        for (&k, &v) in &sk.shared_stock {
+            write_u16(&mut w, k)?;
+            write_u16(&mut w, v)?;
+        }
+        write_u32(&mut w, sk.player_states.len() as u32)?;
+        for (pkey, ps) in &sk.player_states {
+            write_string(&mut w, pkey)?;
+            write_u8(&mut w, ps.shop_tier)?;
+            write_u32(&mut w, ps.coins_spent)?;
+            write_u64(&mut w, ps.last_restock_cycle)?;
+            write_u32(&mut w, ps.daily_coins_paid_out)?;
+            write_u64(&mut w, ps.last_sell_day)?;
+            write_u32(&mut w, ps.personal_stock.len() as u32)?;
+            for (&k, &v) in &ps.personal_stock {
+                write_u16(&mut w, k)?;
+                write_u16(&mut w, v)?;
+            }
+        }
+    }
+
+    // Village Guards
+    write_u32(&mut w, villages.guards.len() as u32)?;
+    for g in &villages.guards {
+        write_u32(&mut w, g.id)?;
+        write_u64(&mut w, g.village_id)?;
+        write_u8(&mut w, g.theme.to_u8())?;
+        write_string(&mut w, &g.name)?;
+        g.appearance.write_binary(&mut w)?;
+        write_vec3(&mut w, g.position)?;
+        write_vec3(&mut w, g.home_pos)?;
+        write_f32(&mut w, g.yaw)?;
+        write_f32(&mut w, g.health)?;
+        write_f32(&mut w, g.max_health)?;
+        write_bool(&mut w, g.dead)?;
+    }
+
+    w.flush()?;
+    Ok(())
+}
+
+pub fn load_villages_file(world_dir: &Path) -> io::Result<Option<crate::village::VillageManager>> {
+    let path = world_dir.join("villages.bin");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut r = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != VILLAGES_MAGIC {
+        return Ok(None);
+    }
+    let version = read_u32(&mut r)?;
+    if version != 1 && version != VILLAGES_VERSION {
+        return Ok(None);
+    }
+
+    let mut mgr = crate::village::VillageManager::new();
+    mgr.next_npc_id = read_u32(&mut r)?.max(1);
+    if version >= 2 {
+        mgr.total_world_ticks = read_u64(&mut r)?;
+    }
+
+    let vcount = read_u32(&mut r)? as usize;
+    for _ in 0..vcount {
+        let village_id = read_u64(&mut r)?;
+        let theme = crate::village::VillageTheme::from_u8(read_u8(&mut r)?)
+            .unwrap_or(crate::village::VillageTheme::Plains);
+        let origin = read_ivec3(&mut r)?;
+        let spawned = read_bool(&mut r)?;
+        let hcount = read_u32(&mut r)? as usize;
+        let mut guard_hostility = HashMap::with_capacity(hcount);
+        for _ in 0..hcount {
+            let pkey = read_string(&mut r)?;
+            let last_near_village_tick = read_u64(&mut r)?;
+            guard_hostility.insert(
+                pkey,
+                crate::village::GuardHostility {
+                    last_near_village_tick,
+                },
+            );
+        }
+        mgr.villages.insert(
+            village_id,
+            crate::village::VillageRecord {
+                village_id,
+                theme,
+                origin,
+                spawned,
+                guard_hostility,
+            },
+        );
+    }
+
+    let sk_count = read_u32(&mut r)? as usize;
+    for _ in 0..sk_count {
+        let id = read_u32(&mut r)?;
+        let village_id = read_u64(&mut r)?;
+        let theme = crate::village::VillageTheme::from_u8(read_u8(&mut r)?)
+            .unwrap_or(crate::village::VillageTheme::Plains);
+        let profession = crate::village::ShopkeeperProfession::from_u8(read_u8(&mut r)?)
+            .unwrap_or(crate::village::ShopkeeperProfession::Baker);
+        let name = read_string(&mut r)?;
+        let appearance = crate::character::CharacterAppearance::read_binary(&mut r)?;
+        let position = read_vec3(&mut r)?;
+        let home_pos = read_vec3(&mut r)?;
+        let courtyard_pos = read_vec3(&mut r)?;
+        let yaw = read_f32(&mut r)?;
+        let health = read_f32(&mut r)?;
+        let max_health = read_f32(&mut r)?;
+        let dead = read_bool(&mut r)?;
+        let last_shared_restock_cycle = read_u64(&mut r)?;
+        let ss_count = read_u32(&mut r)? as usize;
+        let mut shared_stock = HashMap::with_capacity(ss_count);
+        for _ in 0..ss_count {
+            let k = read_u16(&mut r)?;
+            let v = read_u16(&mut r)?;
+            shared_stock.insert(k, v);
+        }
+        let ps_count = read_u32(&mut r)? as usize;
+        let mut player_states = HashMap::with_capacity(ps_count);
+        for _ in 0..ps_count {
+            let pkey = read_string(&mut r)?;
+            let shop_tier = read_u8(&mut r)?.clamp(1, crate::village::MAX_SHOP_TIER);
+            let coins_spent = read_u32(&mut r)?;
+            let last_restock_cycle = read_u64(&mut r)?;
+            let daily_coins_paid_out = read_u32(&mut r)?;
+            let last_sell_day = read_u64(&mut r)?;
+            let pstock_count = read_u32(&mut r)? as usize;
+            let mut personal_stock = HashMap::with_capacity(pstock_count);
+            for _ in 0..pstock_count {
+                let k = read_u16(&mut r)?;
+                let v = read_u16(&mut r)?;
+                personal_stock.insert(k, v);
+            }
+            player_states.insert(
+                pkey,
+                crate::village::PlayerShopState {
+                    shop_tier,
+                    coins_spent,
+                    personal_stock,
+                    last_restock_cycle,
+                    daily_coins_paid_out,
+                    last_sell_day,
+                },
+            );
+        }
+        mgr.shopkeepers.push(crate::village::ShopkeeperEntity {
+            id,
+            village_id,
+            theme,
+            profession,
+            name,
+            appearance,
+            position,
+            velocity: Vec3::ZERO,
+            yaw,
+            walk_anim: 0.0,
+            on_ground: true,
+            home_pos,
+            courtyard_pos,
+            health,
+            max_health,
+            hurt_timer: 0.0,
+            dead,
+            wander_target: courtyard_pos,
+            wander_timer: 2.0,
+            path: Vec::new(),
+            path_recalc_timer: 0.0,
+            shared_stock,
+            last_shared_restock_cycle,
+            player_states,
+        });
+    }
+
+    let g_count = read_u32(&mut r)? as usize;
+    for _ in 0..g_count {
+        let id = read_u32(&mut r)?;
+        let village_id = read_u64(&mut r)?;
+        let theme = crate::village::VillageTheme::from_u8(read_u8(&mut r)?)
+            .unwrap_or(crate::village::VillageTheme::Plains);
+        let name = read_string(&mut r)?;
+        let appearance = crate::character::CharacterAppearance::read_binary(&mut r)?;
+        let position = read_vec3(&mut r)?;
+        let home_pos = read_vec3(&mut r)?;
+        let yaw = read_f32(&mut r)?;
+        let health = read_f32(&mut r)?;
+        let max_health = read_f32(&mut r)?;
+        let dead = read_bool(&mut r)?;
+        mgr.guards.push(crate::village::VillageGuardEntity {
+            id,
+            village_id,
+            theme,
+            name,
+            appearance,
+            position,
+            velocity: Vec3::ZERO,
+            yaw,
+            walk_anim: 0.0,
+            swing_anim: 0.0,
+            on_ground: true,
+            home_pos,
+            patrol_target: home_pos,
+            patrol_timer: 1.5,
+            path: Vec::new(),
+            path_recalc_timer: 0.0,
+            health,
+            max_health,
+            hurt_timer: 0.0,
+            attack_cooldown: 0.0,
+            out_of_combat_timer: 0.0,
+            dead,
+        });
+    }
+
+    Ok(Some(mgr))
 }
 
 const TEMPLES_MAGIC: &[u8; 4] = b"BGTP";
@@ -1620,6 +1905,11 @@ pub fn load_world_from_dir(saves_root: &Path, folder_name: &str) -> io::Result<W
     // 6b. Load temple progression (optional for backward compatibility)
     if let Ok(Some(temples)) = load_temples_file(&world_dir) {
         data.temples = temples;
+    }
+
+    // 6c. Load NPC Villages (optional for backward compatibility)
+    if let Ok(Some(villages)) = load_villages_file(&world_dir) {
+        data.villages = villages;
     }
 
     // 7. Fallback to legacy world.bin if any modular files were missing
@@ -1917,7 +2207,8 @@ fn read_string<R: Read>(r: &mut R) -> io::Result<String> {
 fn write_item_slot<W: Write>(w: &mut W, slot: ItemSlot) -> io::Result<()> {
     write_u16(w, slot.item_id.0)?;
     write_u16(w, slot.count)?;
-    write_u16(w, slot.durability)
+    write_u16(w, slot.durability)?;
+    write_u8(w, slot.enhancement.map_or(0, |e| e.to_u8()))
 }
 
 fn read_item_slot<R: Read>(r: &mut R, version: u32) -> io::Result<ItemSlot> {
@@ -1928,10 +2219,15 @@ fn read_item_slot<R: Read>(r: &mut R, version: u32) -> io::Result<ItemSlot> {
     } else {
         0
     };
+    let enhancement = if version >= 4 {
+        crate::item::Enhancement::from_u8(read_u8(r)?)
+    } else {
+        None
+    };
     if id == ItemId::EMPTY || count == 0 {
         Ok(ItemSlot::EMPTY)
     } else {
-        Ok(ItemSlot::with_durability(id, count, durability))
+        Ok(ItemSlot::with_enhancement(id, count, durability, enhancement))
     }
 }
 
@@ -2379,6 +2675,7 @@ mod tests {
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
             temples: crate::temple::TempleManager::new(),
+            villages: crate::village::VillageManager::new(),
         };
 
         save_world_to_dir(&temp_root, &mut save).expect("save_world_to_dir should succeed");

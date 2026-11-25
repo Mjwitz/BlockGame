@@ -60,5 +60,31 @@ _Avoid_: Venom, bleed
 The visible energy reserve displayed as a bright gold fill within the Hunger gauge that drains before Hunger itself decreases.
 _Avoid_: Hidden hunger, fullness buffer
 
+### Villages & Trading
+
+**Village**:
+A rare, biome-themed settlement generated in the overworld with a central square, shops, Shopkeepers, and Village Guards.
+_Avoid_: Town, settlement, outpost
+
+**Shopkeeper**:
+A mortal, profession-themed NPC tethered to a Village shop who trades with players for Gold Coins and unlocks higher-tier offers per individual player.
+_Avoid_: Villager, merchant, vendor, trader
+
+**Village Guard**:
+A mortal combat NPC stationed in a Village who defends it against hostile monsters and retaliates against players who attack any Village NPC.
+_Avoid_: Town guard, sentry, defender
+
+**Gold Coin**:
+The physical currency item earned by selling goods to Shopkeepers and spent to purchase items or apply Enhancements.
+_Avoid_: Money, emerald, wallet
+
+**Enhancement**:
+A shop-exclusive modifier applied to an existing tool, weapon, armor piece, or fishing rod (requiring the base item and Gold Coins) that grants a permanent gameplay bonus.
+_Avoid_: Enchantment, affix, perk
+
+**Shop Tier**:
+A per-player, per-Shopkeeper progression rank (Tiers 1–5) leveled by spending Gold Coins with that Shopkeeper to unlock higher-tier goods, unique items, and Enhancements.
+_Avoid_: Merchant level, reputation, shop rank
+
 
 
