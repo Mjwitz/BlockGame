@@ -103,3 +103,27 @@ _Avoid_: Secret achievement, mystery badge, easter egg
 **Achievement Eligibility**:
 The permanent Survival-only status of a world or multiplayer session that permits earning Achievements and incrementing Career Stats, forfeited if Creative mode or admin/cheat commands are used.
 _Avoid_: Cheat flag, survival lock, ranked mode
+
+### Controller & Input
+
+**Input Mode**:
+The currently active control scheme (`Keyboard & Mouse` or `Controller`), switched automatically on the most recent input to drive cursor behavior and on-screen prompts.
+_Avoid_: Control mode, device mode, gamepad mode
+
+**Controller Family**:
+One of the five recognized controller hardware profiles (`Xbox`, `PlayStation`, `Nintendo`, `Steam Deck`, `Steam Controller`) inferred from a connected gamepad's identity to choose default glyphs and menu conventions.
+_Avoid_: Controller type, pad brand, device model
+
+**Glyph Style**:
+The button-icon set (`Auto`, `Xbox`, `PlayStation`, `Nintendo`, `Steam Deck`, or `Steam Controller`) shown in HUD prompts, tooltips, and menus, either derived from the active Controller Family or overridden in Settings.
+_Avoid_: Button icons, prompt theme, icon pack
+
+**Virtual Cursor**:
+The left-stick-driven pointer used on menus, inventory, and container screens in Controller Input Mode, paired with D-pad/bumper focus snapping and face-button shortcuts.
+_Avoid_: Fake mouse, gamepad mouse, software cursor
+
+**Active Controller**:
+The single connected gamepad currently driving Controller Input Mode, dynamically reassigned whenever another connected gamepad produces input.
+_Avoid_: Primary gamepad, slot 0, player 1 controller
+
+
