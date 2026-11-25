@@ -149,6 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             chunk
         },
     )?;
+    server.set_broadcast_achievements(config.broadcast_achievements);
 
     let actual_port = server.local_addr().port();
     log::info!(

@@ -6510,19 +6510,20 @@ impl UiBuilder {
     pub const TITLE_BTN_CHARACTER_CREATOR: usize = 3;
     pub const TITLE_BTN_SETTINGS: usize = 4;
     pub const TITLE_BTN_GUIDE: usize = 5;
-    pub const TITLE_BTN_QUIT: usize = 6;
-    pub const TITLE_BTN_QUICK_RESUME: usize = 7;
-    pub const TITLE_BUTTON_COUNT: usize = 8;
+    pub const TITLE_BTN_ACHIEVEMENTS: usize = 6;
+    pub const TITLE_BTN_QUIT: usize = 7;
+    pub const TITLE_BTN_QUICK_RESUME: usize = 8;
+    pub const TITLE_BUTTON_COUNT: usize = 9;
 
-    /// Returns the 8 interactive button rectangles on the Roots & Ridges Title Screen:
-    /// `[0: Singleplayer, 1: New Expedition, 2: Multiplayer, 3: Character Creator, 4: Settings, 5: Guide, 6: Quit, 7: Quick Resume]`.
+    /// Returns the 9 interactive button rectangles on the Roots & Ridges Title Screen:
+    /// `[0: Singleplayer, 1: New Expedition, 2: Multiplayer, 3: Character Creator, 4: Settings, 5: Guide, 6: Achievements, 7: Quit, 8: Quick Resume]`.
     pub fn title_screen_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; Self::TITLE_BUTTON_COUNT] {
         let dock_w = 340.0_f32.min(screen_w * 0.35);
         let pad_x = 28.0;
         let btn_w = dock_w - pad_x * 2.0;
-        let btn_h = 39.0;
-        let gap = 8.0;
-        let start_y = 142.0_f32.min(screen_h * 0.21);
+        let btn_h = 36.0;
+        let gap = 7.0;
+        let start_y = 136.0_f32.min(screen_h * 0.19);
 
         let card_w = 340.0_f32.min(screen_w * 0.34);
         let card_h = 160.0;
@@ -6540,8 +6541,9 @@ impl UiBuilder {
             [pad_x, start_y + (btn_h + gap) * 3.0, btn_w, btn_h],        // 3: Character Creator
             [pad_x, start_y + (btn_h + gap) * 4.0, btn_w, btn_h],        // 4: Game Settings
             [pad_x, start_y + (btn_h + gap) * 5.0, btn_w, btn_h],        // 5: How to Play & Guide
-            [pad_x, start_y + (btn_h + gap) * 6.0 + 8.0, btn_w, btn_h],  // 6: Exit to Desktop
-            [res_btn_x, res_btn_y, res_btn_w, res_btn_h],                // 7: Quick Resume / First World
+            [pad_x, start_y + (btn_h + gap) * 6.0, btn_w, btn_h],        // 6: Achievements
+            [pad_x, start_y + (btn_h + gap) * 7.0 + 6.0, btn_w, btn_h],  // 7: Exit to Desktop
+            [res_btn_x, res_btn_y, res_btn_w, res_btn_h],                // 8: Quick Resume / First World
         ]
     }
 
@@ -6943,6 +6945,7 @@ impl UiBuilder {
             ("&", "Character Creator"),
             ("*", "Game Settings"),
             ("?", "How to Play & Guide"),
+            ("!", "Achievements"),
             ("X", "Exit to Desktop"),
         ];
 
@@ -7690,22 +7693,23 @@ impl UiBuilder {
         );
     }
 
-    /// Returns the 4 Pause Menu button rectangles:
-    /// `[Resume Journey, Save Expedition, Expedition Settings, Save & Quit to Title]`.
-    pub fn pause_menu_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 4] {
+    /// Returns the 5 Pause Menu button rectangles:
+    /// `[Resume Journey, Save Expedition, Achievements, Expedition Settings, Save & Quit to Title]`.
+    pub fn pause_menu_button_rects(screen_w: f32, screen_h: f32) -> [[f32; 4]; 5] {
         let card_w = 380.0_f32.min(screen_w - 40.0);
-        let card_h = 370.0_f32.min(screen_h - 40.0);
+        let card_h = 420.0_f32.min(screen_h - 40.0);
         let card_y = (screen_h - card_h) * 0.5;
         let btn_w = 320.0_f32.min(card_w - 40.0);
-        let btn_h = 42.0;
-        let gap = 12.0;
+        let btn_h = 40.0;
+        let gap = 11.0;
         let btn_x = (screen_w - btn_w) * 0.5;
-        let start_y = card_y + 84.0;
+        let start_y = card_y + 82.0;
         [
             [btn_x, start_y, btn_w, btn_h],
             [btn_x, start_y + (btn_h + gap), btn_w, btn_h],
             [btn_x, start_y + (btn_h + gap) * 2.0, btn_w, btn_h],
-            [btn_x, start_y + (btn_h + gap) * 3.0 + 8.0, btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap) * 3.0, btn_w, btn_h],
+            [btn_x, start_y + (btn_h + gap) * 4.0 + 6.0, btn_w, btn_h],
         ]
     }
 
@@ -7731,7 +7735,7 @@ impl UiBuilder {
         );
 
         let card_w = 380.0_f32.min(screen_w - 40.0);
-        let card_h = 370.0_f32.min(screen_h - 40.0);
+        let card_h = 420.0_f32.min(screen_h - 40.0);
         let card_x = (screen_w - card_w) * 0.5;
         let card_y = (screen_h - card_h) * 0.5;
 
@@ -7834,6 +7838,7 @@ impl UiBuilder {
         let labels = [
             "> Resume Journey",
             "* Save Expedition",
+            "! Achievements",
             "# Expedition Settings",
             "< Save & Quit to Title",
         ];
@@ -10157,6 +10162,446 @@ impl UiBuilder {
         }
     }
 
+    /// Returns `(title, description)` for UI display, obscuring locked Hidden Achievements.
+    pub fn achievement_display_text(
+        def: &blockgame_core::achievement::AchievementDef,
+        unlocked: bool,
+    ) -> (&'static str, &'static str) {
+        if def.hidden && !unlocked {
+            ("???", "Hidden Achievement - keep exploring to unlock!")
+        } else {
+            (def.title, def.description)
+        }
+    }
+
+    /// Draws a top-right HUD toast banner when an Achievement is unlocked.
+    pub fn draw_achievement_toast(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        title: &str,
+        description: &str,
+        icon_tile: u16,
+        alpha: f32,
+    ) {
+        let a = alpha.clamp(0.0, 1.0);
+        if a <= 0.01 {
+            return;
+        }
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let icon_uv = TextureAtlas::get_uv_bounds(icon_tile);
+        let header = "ACHIEVEMENT UNLOCKED!";
+        let hw = Self::string_width(header, 6.8, 0.8);
+        let tw = Self::string_width(title, 9.2, 1.0);
+        let dw = Self::string_width(description, 6.6, 0.7);
+        let text_w = hw.max(tw).max(dw).min(300.0);
+        let box_w = (text_w + 76.0).max(270.0).min(screen_w - 32.0);
+        let box_h = 66.0;
+        let bx = (screen_w - box_w - 18.0).max(16.0);
+        let by = 18.0;
+
+        // Gold border & dark slate plate
+        mesh.add_quad(bx, by, box_w, box_h, white_uv, [0.95, 0.78, 0.25, 0.95 * a]);
+        mesh.add_quad(
+            bx + 2.0,
+            by + 2.0,
+            box_w - 4.0,
+            box_h - 4.0,
+            white_uv,
+            [0.07, 0.10, 0.14, 0.93 * a],
+        );
+
+        // Icon frame + TextureAtlas item icon
+        let ix = bx + 12.0;
+        let iy = by + 13.0;
+        mesh.add_quad(ix - 2.0, iy - 2.0, 40.0, 40.0, white_uv, [0.85, 0.68, 0.24, 0.80 * a]);
+        mesh.add_quad(ix, iy, 36.0, 36.0, white_uv, [0.12, 0.15, 0.21, 0.95 * a]);
+        mesh.add_quad(ix + 4.0, iy + 4.0, 28.0, 28.0, icon_uv, [1.0, 1.0, 1.0, a]);
+
+        let tx = bx + 60.0;
+        Self::draw_string(mesh, tx, by + 9.0, header, 6.8, 9.5, 0.8, [0.98, 0.82, 0.28, a]);
+        Self::draw_string(mesh, tx, by + 24.0, title, 9.2, 13.0, 1.0, [0.98, 0.98, 0.95, a]);
+        Self::draw_string(
+            mesh,
+            tx,
+            by + 43.0,
+            description,
+            6.6,
+            9.5,
+            0.7,
+            [0.72, 0.82, 0.90, a],
+        );
+    }
+
+    /// Computes interactive rects for the categorized Achievements screen:
+    /// `(category_tab_rects, close_button_rect, panel_rect)`.
+    pub fn achievements_screen_rects(
+        screen_w: f32,
+        screen_h: f32,
+    ) -> ([[f32; 4]; 9], [f32; 4], [f32; 4]) {
+        let pw = 820.0_f32.min(screen_w - 48.0).max(460.0);
+        let ph = 540.0_f32.min(screen_h - 48.0).max(340.0);
+        let px = (screen_w - pw) * 0.5;
+        let py = (screen_h - ph) * 0.5;
+        let close_rect = [px + pw - 86.0, py + 9.0, 74.0, 26.0];
+
+        let tab_gap = 4.0;
+        let tab_area_w = pw - 28.0;
+        let tab_w = (tab_area_w - tab_gap * 8.0) / 9.0;
+        let tab_y = py + 52.0;
+        let tab_h = 28.0;
+        let mut tabs = [[0.0; 4]; 9];
+        for (i, slot) in tabs.iter_mut().enumerate() {
+            *slot = [px + 14.0 + (tab_w + tab_gap) * i as f32, tab_y, tab_w, tab_h];
+        }
+        (tabs, close_rect, [px, py, pw, ph])
+    }
+
+    /// Builds the categorized Achievements screen (accessible from Main Menu, Pause Menu, and `J` hotkey).
+    pub fn build_achievements_screen(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        engine: &blockgame_core::achievement::AchievementEngine,
+        item_registry: &blockgame_core::item::ItemRegistry,
+        selected_category: usize,
+        scroll_offset: usize,
+        in_game_eligibility: Option<bool>,
+        cursor_pos: [f32; 2],
+    ) {
+        use blockgame_core::achievement::{
+            achievements_in_category, AchievementCategory, AchievementRequirement,
+        };
+        mesh.clear();
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Backdrop
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.04, 0.05, 0.08, 0.82]);
+
+        let (tab_rects, close_rect, panel) = Self::achievements_screen_rects(screen_w, screen_h);
+        let [px, py, pw, ph] = panel;
+        let cat_idx = selected_category.min(AchievementCategory::ALL.len() - 1);
+        let active_cat = AchievementCategory::ALL[cat_idx];
+
+        // Main panel frame
+        mesh.add_quad(px, py, pw, ph, white_uv, [0.46, 0.52, 0.62, 0.95]);
+        mesh.add_quad(
+            px + 2.0,
+            py + 2.0,
+            pw - 4.0,
+            ph - 4.0,
+            white_uv,
+            [0.08, 0.10, 0.14, 0.97],
+        );
+        // Header bar
+        mesh.add_quad(
+            px + 2.0,
+            py + 2.0,
+            pw - 4.0,
+            44.0,
+            white_uv,
+            [0.13, 0.16, 0.22, 0.98],
+        );
+
+        Self::draw_string(
+            mesh,
+            px + 16.0,
+            py + 13.0,
+            "ACHIEVEMENTS",
+            12.0,
+            17.0,
+            1.2,
+            [1.0, 0.88, 0.35, 1.0],
+        );
+
+        let (unlocked_total, total_count) = engine.completion_counts();
+        let pct = if total_count > 0 {
+            (unlocked_total * 100) / total_count
+        } else {
+            0
+        };
+        let summary = format!("{unlocked_total} / {total_count} ({pct}%)");
+        let sw = Self::string_width(&summary, 8.5, 1.0);
+        Self::draw_string(
+            mesh,
+            close_rect[0] - sw - 18.0,
+            py + 17.0,
+            &summary,
+            8.5,
+            12.0,
+            1.0,
+            [0.85, 0.92, 0.98, 1.0],
+        );
+
+        if let Some(false) = in_game_eligibility {
+            let warn = "ELIGIBILITY DISABLED";
+            let ww = Self::string_width(warn, 7.0, 0.8);
+            Self::draw_string(
+                mesh,
+                close_rect[0] - sw - ww - 36.0,
+                py + 18.0,
+                warn,
+                7.0,
+                10.0,
+                0.8,
+                [0.98, 0.45, 0.42, 1.0],
+            );
+        }
+
+        // Close button
+        let close_hover = Self::point_in_rect(cursor_pos, close_rect);
+        mesh.add_quad(
+            close_rect[0],
+            close_rect[1],
+            close_rect[2],
+            close_rect[3],
+            white_uv,
+            if close_hover {
+                [0.70, 0.25, 0.25, 0.95]
+            } else {
+                [0.35, 0.20, 0.22, 0.90]
+            },
+        );
+        let cw = Self::string_width("Close", 7.8, 0.8);
+        Self::draw_string(
+            mesh,
+            close_rect[0] + (close_rect[2] - cw) * 0.5,
+            close_rect[1] + 7.0,
+            "Close",
+            7.8,
+            11.0,
+            0.8,
+            [0.98, 0.96, 0.96, 1.0],
+        );
+
+        // Category tabs
+        for (i, cat) in AchievementCategory::ALL.iter().enumerate() {
+            let r = tab_rects[i];
+            let active = i == cat_idx;
+            let hovered = Self::point_in_rect(cursor_pos, r);
+            let bg = if active {
+                [0.24, 0.34, 0.48, 0.98]
+            } else if hovered {
+                [0.18, 0.23, 0.31, 0.95]
+            } else {
+                [0.12, 0.15, 0.20, 0.92]
+            };
+            let border = if active {
+                [0.95, 0.78, 0.28, 0.98]
+            } else {
+                [0.30, 0.35, 0.44, 0.85]
+            };
+            mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+            mesh.add_quad(r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, white_uv, bg);
+            let lbl = cat.label();
+            let lw = Self::string_width(lbl, 6.8, 0.6);
+            Self::draw_string(
+                mesh,
+                r[0] + (r[2] - lw) * 0.5,
+                r[1] + 9.0,
+                lbl,
+                6.8,
+                10.0,
+                0.6,
+                if active {
+                    [1.0, 0.94, 0.55, 1.0]
+                } else {
+                    [0.80, 0.86, 0.92, 0.95]
+                },
+            );
+        }
+
+        // Category title & overall progress bar
+        let list_x = px + 16.0;
+        let list_w = pw - 32.0;
+        let sub_y = py + 88.0;
+        Self::draw_string(
+            mesh,
+            list_x,
+            sub_y,
+            active_cat.full_label(),
+            9.0,
+            13.0,
+            0.9,
+            [0.90, 0.94, 0.98, 1.0],
+        );
+
+        let bar_w = 200.0;
+        let bar_x = px + pw - 16.0 - bar_w;
+        let bar_y = sub_y + 2.0;
+        mesh.add_quad(bar_x, bar_y, bar_w, 10.0, white_uv, [0.16, 0.20, 0.26, 0.95]);
+        let fill = if total_count > 0 {
+            bar_w * (unlocked_total as f32 / total_count as f32)
+        } else {
+            0.0
+        };
+        if fill > 0.5 {
+            mesh.add_quad(bar_x, bar_y, fill, 10.0, white_uv, [0.92, 0.76, 0.24, 0.95]);
+        }
+
+        // Achievement cards for selected category
+        let items = achievements_in_category(active_cat);
+        let cards_top = py + 110.0;
+        let card_h = 64.0;
+        let card_gap = 8.0;
+        let avail_h = (py + ph - 26.0) - cards_top;
+        let visible_rows = ((avail_h + card_gap) / (card_h + card_gap)).floor().max(1.0) as usize;
+        let max_scroll = items.len().saturating_sub(visible_rows);
+        let start = scroll_offset.min(max_scroll);
+
+        for (row, def) in items.iter().skip(start).take(visible_rows).enumerate() {
+            let cy = cards_top + row as f32 * (card_h + card_gap);
+            let prog = engine.progress_for(def);
+            let (title, desc) = Self::achievement_display_text(def, prog.unlocked);
+
+            let border = if prog.unlocked {
+                [0.92, 0.76, 0.26, 0.92]
+            } else {
+                [0.28, 0.33, 0.42, 0.85]
+            };
+            let bg = if prog.unlocked {
+                [0.12, 0.16, 0.20, 0.96]
+            } else {
+                [0.09, 0.11, 0.15, 0.94]
+            };
+            mesh.add_quad(list_x, cy, list_w, card_h, white_uv, border);
+            mesh.add_quad(list_x + 1.5, cy + 1.5, list_w - 3.0, card_h - 3.0, white_uv, bg);
+
+            // Icon box
+            let ix = list_x + 12.0;
+            let iy = cy + 12.0;
+            mesh.add_quad(ix, iy, 40.0, 40.0, white_uv, [0.15, 0.18, 0.24, 0.95]);
+            if def.hidden && !prog.unlocked {
+                let qw = Self::string_width("?", 14.0, 1.0);
+                Self::draw_string(
+                    mesh,
+                    ix + (40.0 - qw) * 0.5,
+                    iy + 10.0,
+                    "?",
+                    14.0,
+                    20.0,
+                    1.0,
+                    [0.65, 0.70, 0.80, 0.95],
+                );
+            } else {
+                let tile = item_registry
+                    .get(def.icon)
+                    .map_or(Self::WHITE_TILE, |d| d.icon_tile as u16);
+                let icon_uv = TextureAtlas::get_uv_bounds(tile);
+                let tint = if prog.unlocked {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.45, 0.48, 0.54, 0.85]
+                };
+                mesh.add_quad(ix + 6.0, iy + 6.0, 28.0, 28.0, icon_uv, tint);
+            }
+
+            // Title & Description
+            let tx = list_x + 64.0;
+            Self::draw_string(
+                mesh,
+                tx,
+                cy + 10.0,
+                title,
+                9.2,
+                13.0,
+                0.9,
+                if prog.unlocked {
+                    [1.0, 0.92, 0.45, 1.0]
+                } else {
+                    [0.84, 0.88, 0.94, 0.95]
+                },
+            );
+            Self::draw_string(
+                mesh,
+                tx,
+                cy + 28.0,
+                desc,
+                7.0,
+                10.0,
+                0.7,
+                [0.68, 0.75, 0.84, 0.95],
+            );
+
+            // Status badge / progress bar
+            let status_x = list_x + list_w - 154.0;
+            if prog.unlocked {
+                let badge = "UNLOCKED";
+                let bw = Self::string_width(badge, 7.5, 0.8);
+                Self::draw_string(
+                    mesh,
+                    list_x + list_w - bw - 14.0,
+                    cy + 24.0,
+                    badge,
+                    7.5,
+                    11.0,
+                    0.8,
+                    [0.45, 0.94, 0.58, 1.0],
+                );
+            } else if !matches!(def.requirement, AchievementRequirement::OneShot)
+                && !(def.hidden && !prog.unlocked)
+            {
+                let ptext = format!("{} / {}", prog.current, prog.target);
+                let pw_t = Self::string_width(&ptext, 7.0, 0.7);
+                Self::draw_string(
+                    mesh,
+                    list_x + list_w - pw_t - 14.0,
+                    cy + 14.0,
+                    &ptext,
+                    7.0,
+                    10.0,
+                    0.7,
+                    [0.78, 0.86, 0.94, 0.95],
+                );
+                let pbx = status_x;
+                let pby = cy + 34.0;
+                let pbw = 140.0;
+                mesh.add_quad(pbx, pby, pbw, 9.0, white_uv, [0.16, 0.20, 0.26, 0.95]);
+                let frac = if prog.target > 0 {
+                    (prog.current as f32 / prog.target as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                if frac > 0.0 {
+                    mesh.add_quad(pbx, pby, pbw * frac, 9.0, white_uv, [0.38, 0.74, 0.96, 0.95]);
+                }
+            } else {
+                let badge = "LOCKED";
+                let bw = Self::string_width(badge, 7.2, 0.8);
+                Self::draw_string(
+                    mesh,
+                    list_x + list_w - bw - 14.0,
+                    cy + 24.0,
+                    badge,
+                    7.2,
+                    10.5,
+                    0.8,
+                    [0.52, 0.58, 0.68, 0.90],
+                );
+            }
+        }
+
+        // Scroll hint footer
+        if items.len() > visible_rows {
+            let hint = format!(
+                "Scroll to view more ({}-{} of {})",
+                start + 1,
+                (start + visible_rows).min(items.len()),
+                items.len()
+            );
+            let hw = Self::string_width(&hint, 6.8, 0.7);
+            Self::draw_string(
+                mesh,
+                px + (pw - hw) * 0.5,
+                py + ph - 18.0,
+                &hint,
+                6.8,
+                9.5,
+                0.7,
+                [0.64, 0.72, 0.82, 0.88],
+            );
+        }
+    }
+
     /// Draws the top-of-screen Boss Health Bar when a boss is in combat and within 500 blocks (Issue #9).
     pub fn draw_boss_hud(
         mesh: &mut UiMesh,
@@ -12253,5 +12698,58 @@ mod tests {
             &profile.active_appearance,
         );
         assert!(!portrait_mesh.indices.is_empty());
+    }
+
+    #[test]
+    fn test_achievement_ui_hidden_masking_and_rendering() {
+        let hidden_def = blockgame_core::achievement::achievement_by_id("hidden_cure_poison")
+            .expect("hidden_cure_poison exists");
+        assert_eq!(
+            UiBuilder::achievement_display_text(hidden_def, false),
+            ("???", "Hidden Achievement - keep exploring to unlock!")
+        );
+        assert_eq!(
+            UiBuilder::achievement_display_text(hidden_def, true),
+            (hidden_def.title, hidden_def.description)
+        );
+
+        let mut engine = blockgame_core::achievement::AchievementEngine::default();
+        engine.record_event(&blockgame_core::achievement::AchievementEvent::BlockMined {
+            block_id: blockgame_core::block::BlockId::WOOD_LOG.0,
+        });
+        let item_registry = blockgame_core::item::ItemRegistry::new();
+
+        for cat_idx in 0..blockgame_core::achievement::AchievementCategory::ALL.len() {
+            let mut mesh = UiMesh::new();
+            UiBuilder::build_achievements_screen(
+                &mut mesh,
+                1280.0,
+                720.0,
+                &engine,
+                &item_registry,
+                cat_idx,
+                0,
+                Some(true),
+                [640.0, 360.0],
+            );
+            assert!(!mesh.vertices.is_empty());
+            assert!(!mesh.indices.is_empty());
+        }
+
+        let mut toast_mesh = UiMesh::new();
+        let tile = item_registry
+            .get(blockgame_core::item::ItemId::WOOD_LOG)
+            .unwrap()
+            .icon_tile as u16;
+        UiBuilder::draw_achievement_toast(
+            &mut toast_mesh,
+            1280.0,
+            "Timber!",
+            "Chop your first log.",
+            tile,
+            1.0,
+        );
+        assert!(!toast_mesh.vertices.is_empty());
+        assert!(!toast_mesh.indices.is_empty());
     }
 }

@@ -112,6 +112,8 @@ pub struct CommandOutput {
     pub gamemode_updates: Vec<(u32, crate::player::GameMode)>,
     /// Skill inspection or modification actions: handled by the server loop.
     pub skill_actions: Vec<SkillCommandAction>,
+    /// Player IDs whose Achievement Eligibility is forfeited by this admin/cheat command.
+    pub cheat_taint_players: Vec<u32>,
 }
 
 /// Skill inspection or administrative adjustment produced by `/skills`.
@@ -1029,6 +1031,7 @@ pub fn execute_command(
 
             let mut out = CommandOutput::default();
             out.gamemode_updates.push((target.player_id, mode));
+            out.cheat_taint_players.push(target.player_id);
             let msg = format!(
                 "Set {}'s game mode to {}.",
                 target.username,
@@ -1512,6 +1515,60 @@ pub fn execute_command(
                 other
             ));
         }
+    }
+
+    // Mark players whose Achievement Eligibility is forfeited by admin/cheat commands.
+    // Standard utility commands (/spawn, /sethome, /home, /tpa, /skills view) preserve eligibility.
+    match cmd.as_str() {
+        "tp" | "tphere" => {
+            for &(pid, _, _, _) in &out.teleports {
+                if !out.cheat_taint_players.contains(&pid) {
+                    out.cheat_taint_players.push(pid);
+                }
+            }
+        }
+        "give" => {
+            for &(pid, _) in &out.gives {
+                if !out.cheat_taint_players.contains(&pid) {
+                    out.cheat_taint_players.push(pid);
+                }
+            }
+        }
+        "gamemode" | "gm" => {
+            for &(pid, _) in &out.gamemode_updates {
+                if !out.cheat_taint_players.contains(&pid) {
+                    out.cheat_taint_players.push(pid);
+                }
+            }
+        }
+        "skills" | "skill" => {
+            for action in &out.skill_actions {
+                let target_pid = match action {
+                    SkillCommandAction::Set { target_pid, .. }
+                    | SkillCommandAction::AddXp { target_pid, .. }
+                    | SkillCommandAction::Reset { target_pid } => Some(*target_pid),
+                    SkillCommandAction::View { .. } => None,
+                };
+                if let Some(pid) = target_pid {
+                    if !out.cheat_taint_players.contains(&pid) {
+                        out.cheat_taint_players.push(pid);
+                    }
+                }
+            }
+        }
+        "resetplayer" => {
+            for uname in &out.reset_players {
+                if let Some(p) = online_players
+                    .iter()
+                    .find(|p| p.username.eq_ignore_ascii_case(uname))
+                {
+                    if !out.cheat_taint_players.contains(&p.player_id) {
+                        out.cheat_taint_players.push(p.player_id);
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 
     out
@@ -2246,5 +2303,68 @@ mod tests {
             res.skill_actions,
             vec![SkillCommandAction::Reset { target_pid: 2 }]
         );
+    }
+
+    #[test]
+    fn test_achievement_cheat_taint_command_boundaries() {
+        let mut perms = PermissionsManager::new();
+        let _ = perms.add_player_group("Admin", "admin");
+        let mut bans = BanManager::new();
+        let registry = ItemRegistry::new();
+        let spawn = Vec3::new(0.0, 20.0, 0.0);
+        let mut tpa = HashMap::new();
+        let online = vec![
+            OnlinePlayerInfo::new(1, "Admin", Vec3::new(10.0, 20.0, 10.0), 0.0, 0.0),
+            OnlinePlayerInfo::new(2, "Bob", Vec3::new(50.0, 20.0, 50.0), 0.0, 0.0),
+        ];
+        let admin_src = CommandSource::Player {
+            player_id: 1,
+            username: "Admin".to_string(),
+        };
+
+        // Utility commands preserve Achievement Eligibility
+        for cmd in ["/spawn", "/sethome base", "/tpa Bob", "/skills"] {
+            let res = execute_command(
+                &admin_src,
+                cmd,
+                &online,
+                &mut perms,
+                &mut bans,
+                &registry,
+                spawn,
+                &mut tpa,
+            );
+            assert!(
+                res.cheat_taint_players.is_empty(),
+                "Utility command '{cmd}' must not taint eligibility"
+            );
+        }
+
+        // Admin/cheat commands taint only the targeted player
+        for (cmd, expected_pid) in [
+            ("/give Bob diamond 1", 2),
+            ("/gamemode creative Bob", 2),
+            ("/tp Bob 0 20 0", 2),
+            ("/tphere Bob", 2),
+            ("/skills set Bob mining 50", 2),
+            ("/skills addxp Bob mining 100", 2),
+            ("/skills reset Bob", 2),
+        ] {
+            let res = execute_command(
+                &admin_src,
+                cmd,
+                &online,
+                &mut perms,
+                &mut bans,
+                &registry,
+                spawn,
+                &mut tpa,
+            );
+            assert_eq!(
+                res.cheat_taint_players,
+                vec![expected_pid],
+                "Cheat command '{cmd}' must taint target player {expected_pid}"
+            );
+        }
     }
 }

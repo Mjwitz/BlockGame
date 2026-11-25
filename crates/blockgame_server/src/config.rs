@@ -31,6 +31,8 @@ pub struct ServerConfig {
     pub public_host: String,
     /// Maximum reported player slots.
     pub max_players: usize,
+    /// Whether to broadcast player achievement unlocks in multiplayer chat.
+    pub broadcast_achievements: bool,
 }
 
 impl Default for ServerConfig {
@@ -46,6 +48,7 @@ impl Default for ServerConfig {
             directory_url: DEFAULT_DIRECTORY_URL.to_string(),
             public_host: "auto".to_string(),
             max_players: 20,
+            broadcast_achievements: true,
         }
     }
 }
@@ -140,6 +143,10 @@ impl ServerConfig {
                         cfg.max_players = mp.max(1);
                     }
                 }
+                "broadcast_achievements" => {
+                    cfg.broadcast_achievements =
+                        parse_bool(val).unwrap_or(cfg.broadcast_achievements);
+                }
                 _ => {}
             }
         }
@@ -171,7 +178,11 @@ impl ServerConfig {
              motd={}\n\
              directory-url={}\n\
              public-host={}\n\
-             max-players={}\n",
+             max-players={}\n\
+             \n\
+             # --- Gameplay Settings ---\n\
+             # Broadcast player Achievement unlocks in multiplayer chat (default: true).\n\
+             broadcast-achievements={}\n",
             self.port,
             self.bind_host,
             self.world_name,
@@ -181,7 +192,8 @@ impl ServerConfig {
             self.motd,
             self.directory_url,
             self.public_host,
-            self.max_players
+            self.max_players,
+            self.broadcast_achievements
         )
     }
 
@@ -222,6 +234,7 @@ mod tests {
             discoverable = true
             motd = &bWelcome!
             max-players = 50
+            broadcast-achievements = false
         "#;
         let cfg = ServerConfig::parse(text);
         assert_eq!(cfg.port, 25570);
@@ -232,6 +245,7 @@ mod tests {
         assert!(cfg.discoverable);
         assert_eq!(cfg.motd, "&bWelcome!");
         assert_eq!(cfg.max_players, 50);
+        assert!(!cfg.broadcast_achievements);
     }
 
     #[test]
@@ -251,6 +265,7 @@ mod tests {
         assert_eq!(cfg.server_name, "Epic Adventure Server");
         assert!(cfg.discoverable);
         assert_eq!(cfg.max_players, 12);
+        assert!(cfg.broadcast_achievements);
     }
 
     #[test]
@@ -260,6 +275,7 @@ mod tests {
         cfg.world_name = "CustomWorld".to_string();
         cfg.discoverable = true;
         cfg.motd = "Test MOTD".to_string();
+        cfg.broadcast_achievements = false;
 
         let serialized = cfg.serialize();
         let parsed = ServerConfig::parse(&serialized);

@@ -86,5 +86,20 @@ _Avoid_: Enchantment, affix, perk
 A per-player, per-Shopkeeper progression rank (Tiers 1–5) leveled by spending Gold Coins with that Shopkeeper to unlock higher-tier goods, unique items, and Enhancements.
 _Avoid_: Merchant level, reputation, shop rank
 
+### Achievements
 
+**Achievement**:
+A profile-wide milestone earned during eligible Survival play, tracked globally across all singleplayer worlds and multiplayer servers and mapped 1:1 to a Steam achievement.
+_Avoid_: Advancement, trophy, badge, quest
 
+**Career Stat**:
+A lifetime cumulative counter in a player's profile that aggregates eligible gameplay activity across worlds and servers to drive progress-based Achievements and Steam stats.
+_Avoid_: Player stat, world stat, counter, metric
+
+**Hidden Achievement**:
+An Achievement whose title and unlock criteria remain obscured in the Achievements screen until the player earns it.
+_Avoid_: Secret achievement, mystery badge, easter egg
+
+**Achievement Eligibility**:
+The permanent Survival-only status of a world or multiplayer session that permits earning Achievements and incrementing Career Stats, forfeited if Creative mode or admin/cheat commands are used.
+_Avoid_: Cheat flag, survival lock, ranked mode
