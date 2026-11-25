@@ -7365,6 +7365,113 @@ impl UiBuilder {
         Self::draw_menu_button(mesh, btns[2][0], btns[2][1], btns[2][2], btns[2][3], "Back to Title", cursor_pos, true);
     }
 
+    /// Builds the Expedition Guide with controller pixel-art button glyphs on page 0 when in Controller Input Mode.
+    pub fn build_guide_screen_with_input_mode(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        page: usize,
+        cursor_pos: [f32; 2],
+        input_mode: InputMode,
+        glyph_family: ControllerFamily,
+    ) {
+        Self::build_guide_screen(mesh, screen_w, screen_h, page, cursor_pos);
+        if input_mode != InputMode::Controller || page % 3 != 0 {
+            return;
+        }
+        // Overdraw Page 0 content area with controller glyph controls table
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let modal_w = 720.0_f32.min(screen_w - 40.0);
+        let modal_h = 460.0_f32.min(screen_h - 100.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5 - 24.0).max(20.0);
+        let content_y = modal_y + 70.0;
+        let pad = 24.0;
+        mesh.add_quad(
+            modal_x + 4.0,
+            content_y - 4.0,
+            modal_w - 8.0,
+            modal_h - 74.0,
+            white_uv,
+            [0.06, 0.08, 0.12, 0.96],
+        );
+
+        let pad_controls: [(Option<GamepadButton>, &str, &str); 11] = [
+            (None, "L-Stick / R-Stick", "Analog Movement & Camera Look"),
+            (Some(GamepadButton::South), "Jump / Fly Up", "Jump, Swim Up, Double-Tap to Fly"),
+            (Some(GamepadButton::East), "Sneak / Fly Down", "Sneak (Toggle/Hold) & Descend in Flight"),
+            (Some(GamepadButton::LeftStick), "Sprint", "Toggle Sprint (Clears when stopped)"),
+            (Some(GamepadButton::RightTrigger), "Mine / Attack", "Break Blocks & Attack Entities"),
+            (Some(GamepadButton::LeftTrigger), "Place / Use", "Place Block, Use Item, Eat, Fish"),
+            (Some(GamepadButton::RightBumper), "Hotbar Cycle", "Cycle Hotbar Slots / Switch UI Tabs"),
+            (Some(GamepadButton::North), "Inventory", "Open Inventory & Quick-Transfer in UI"),
+            (Some(GamepadButton::West), "Backpack", "Open Portable Backpack / Half-Stack in UI"),
+            (Some(GamepadButton::DPadUp), "Quick Menu", "Skills, Achievements, Guide & Debug HUD"),
+            (Some(GamepadButton::Start), "Pause Menu", "Pause Game / Close Overlay"),
+        ];
+        for (i, (glyph_opt, label, desc)) in pad_controls.iter().enumerate() {
+            let y = content_y + (i as f32) * 29.0;
+            if y + 25.0 > modal_y + modal_h - 10.0 {
+                break;
+            }
+            mesh.add_quad(modal_x + pad, y, 162.0, 22.0, white_uv, [0.12, 0.15, 0.20, 0.88]);
+            let text_x = if let Some(btn) = glyph_opt {
+                Self::draw_gamepad_glyph(
+                    mesh,
+                    modal_x + pad + 4.0,
+                    y + 2.0,
+                    18.0,
+                    glyph_family,
+                    *btn,
+                    [1.0; 4],
+                );
+                modal_x + pad + 26.0
+            } else {
+                modal_x + pad + 8.0
+            };
+            Self::draw_string(mesh, text_x, y + 5.0, label, 8.0, 11.5, 0.8, [1.0, 0.82, 0.35, 1.0]);
+            Self::draw_string(
+                mesh,
+                modal_x + pad + 174.0,
+                y + 5.0,
+                desc,
+                8.5,
+                12.0,
+                0.8,
+                [0.90, 0.92, 0.96, 0.95],
+            );
+        }
+    }
+
+    /// Draws a compact controller glyph legend bar for JEI Recipe (`LT`) / Usage (`RT`) and Quick-Transfer (`North`) in inventory screens.
+    pub fn draw_jei_controller_footer(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        glyph_family: ControllerFamily,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let bar_w = 340.0;
+        let bar_h = 26.0;
+        let bx = (screen_w - bar_w) * 0.5;
+        let by = screen_h - bar_h - 8.0;
+        mesh.add_quad(bx, by, bar_w, bar_h, white_uv, [0.06, 0.08, 0.13, 0.86]);
+
+        let items = [
+            (GamepadButton::LeftTrigger, "Recipe"),
+            (GamepadButton::RightTrigger, "Uses"),
+            (GamepadButton::North, "Quick Move"),
+            (GamepadButton::West, "Half"),
+        ];
+        let mut x = bx + 10.0;
+        for (btn, label) in items {
+            Self::draw_gamepad_glyph(mesh, x, by + 4.0, 18.0, glyph_family, btn, [1.0; 4]);
+            x += 21.0;
+            Self::draw_string(mesh, x, by + 7.5, label, 7.5, 10.5, 0.7, [0.86, 0.90, 0.96, 0.95]);
+            x += Self::string_width(label, 7.5, 0.7) + 12.0;
+        }
+    }
+
     /// Returns the world list row rectangles (up to 5 visible slots) and the 4 bottom action buttons
     /// `[Play Selected World, Create New World, Delete World, Back]` for the World Select screen.
     pub fn world_select_layout(
@@ -8876,13 +8983,18 @@ impl UiBuilder {
         }
 
         let reset_r = Self::settings_reset_button_rect(screen_w, screen_h);
+        let reset_label = if settings_tab == 2 {
+            "* Reset Controller Defaults"
+        } else {
+            "* Reset to Defaults"
+        };
         Self::draw_menu_button(
             mesh,
             reset_r[0],
             reset_r[1],
             reset_r[2],
             reset_r[3],
-            "* Reset to Defaults",
+            reset_label,
             cursor_pos,
             true,
         );

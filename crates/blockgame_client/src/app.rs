@@ -171,6 +171,7 @@ pub struct AppState {
     pub controller_use_held: bool,
     pub controller_ptt_held: bool,
     pub controller_player_list_held: bool,
+    pub ui_scroll_cooldown: f32,
     pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
@@ -1573,6 +1574,7 @@ impl ApplicationHandler for BlockGameApp {
             controller_use_held: false,
             controller_ptt_held: false,
             controller_player_list_held: false,
+            ui_scroll_cooldown: 0.0,
             registry: self.registry.clone(),
             inventory,
             armor: blockgame_core::item::ArmorEquipment::new(),
@@ -2541,7 +2543,28 @@ impl BlockGameApp {
                                     if UiBuilder::is_rect_hovered(
                                         cpos, reset_r[0], reset_r[1], reset_r[2], reset_r[3],
                                     ) {
-                                        state.settings = crate::settings::GameSettings::default();
+                                        if state.settings_tab == 2 {
+                                            let defaults = crate::settings::GameSettings::default();
+                                            state.settings.controller_sensitivity =
+                                                defaults.controller_sensitivity;
+                                            state.settings.controller_invert_y =
+                                                defaults.controller_invert_y;
+                                            state.settings.controller_deadzone =
+                                                defaults.controller_deadzone;
+                                            state.settings.controller_rumble_intensity =
+                                                defaults.controller_rumble_intensity;
+                                            state.settings.controller_glyph_style =
+                                                defaults.controller_glyph_style;
+                                            state.settings.controller_swap_confirm_cancel =
+                                                defaults.controller_swap_confirm_cancel;
+                                            state.settings.controller_sneak_toggle =
+                                                defaults.controller_sneak_toggle;
+                                            state.settings.controller_binds =
+                                                defaults.controller_binds;
+                                        } else {
+                                            state.settings =
+                                                crate::settings::GameSettings::default();
+                                        }
                                         state.listening_keybind = None;
                                         state.listening_controller_bind = None;
                                         state.apply_settings();
@@ -4361,6 +4384,9 @@ impl BlockGameApp {
                                     bow_damage,
                                 );
                                 state.punch_timer = 0.15;
+                                state.trigger_controller_rumble(
+                                    crate::controller::RumbleEffect::BowRelease,
+                                );
                             } else if let Some(idx) = arrow_slot_idx {
                                 let mut arrow_slot = state.inventory.get(idx);
                                 arrow_slot.take(1);
@@ -4384,6 +4410,9 @@ impl BlockGameApp {
                                     bow_damage,
                                 );
                                 state.punch_timer = 0.15;
+                                state.trigger_controller_rumble(
+                                    crate::controller::RumbleEffect::BowRelease,
+                                );
                             }
                             return;
                         }
@@ -8774,12 +8803,18 @@ impl BlockGameApp {
                             );
                         }
                         AppScreen::Guide { page } => {
-                            UiBuilder::build_guide_screen(
+                            let input_mode = state.input_router.input_mode();
+                            let glyph_family = state
+                                .input_router
+                                .resolved_glyph_family(state.settings.controller_glyph_style);
+                            UiBuilder::build_guide_screen_with_input_mode(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
                                 *page,
                                 ui_cursor,
+                                input_mode,
+                                glyph_family,
                             );
                         }
                         AppScreen::Achievements { return_to_pause } => {
@@ -8913,6 +8948,22 @@ impl BlockGameApp {
                 // Render non-blocking HUD toast (e.g., multiplayer controller disconnect)
                 if let Some((ref msg, _)) = state.hud_toast {
                     UiBuilder::draw_hud_toast(&mut state.ui_mesh, screen_w, msg);
+                }
+
+                // Render JEI / Inventory controller glyph legend bar when in Controller Input Mode
+                if state.screen == AppScreen::InGame
+                    && state.inventory_open
+                    && state.input_router.input_mode() == blockgame_render::InputMode::Controller
+                {
+                    let glyph_family = state
+                        .input_router
+                        .resolved_glyph_family(state.settings.controller_glyph_style);
+                    UiBuilder::draw_jei_controller_footer(
+                        &mut state.ui_mesh,
+                        screen_w,
+                        screen_h,
+                        glyph_family,
+                    );
                 }
 
                 // Render Virtual Cursor in Controller Input Mode whenever a menu/overlay is active
@@ -9579,12 +9630,30 @@ impl BlockGameApp {
                     },
                 );
             }
+            if out.mine_released {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Left,
+                        state: ElementState::Released,
+                    },
+                );
+            }
             if out.use_pressed {
                 self.dispatch_event(
                     event_loop,
                     InternalEvent::SyntheticMouse {
                         button: MouseButton::Right,
                         state: ElementState::Pressed,
+                    },
+                );
+            }
+            if out.use_released {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Right,
+                        state: ElementState::Released,
                     },
                 );
             }
@@ -9651,6 +9720,26 @@ impl BlockGameApp {
             return;
         }
 
+        // Release any latched mouse buttons if we exited gameplay while holding RT/LT
+        if out.mine_released {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Left,
+                    state: ElementState::Released,
+                },
+            );
+        }
+        if out.use_released {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Right,
+                    state: ElementState::Released,
+                },
+            );
+        }
+
         // Clear held gameplay states while in menus/UI
         let in_controller_mode = {
             let Some(state) = self.state.as_mut() else {
@@ -9692,23 +9781,51 @@ impl BlockGameApp {
                     }
                 }
 
-                // Right stick: scroll lists & rotate 3D Character Creator preview
-                if out.ui_right_stick[0].abs() > 0.05 || out.ui_right_stick[1].abs() > 0.05 {
-                    if let AppScreen::CharacterCreator { preview_yaw, .. } = &mut state.screen {
+                // Right stick: rotate 3D Character Creator preview + rate-limited list scrolling
+                if let AppScreen::CharacterCreator { preview_yaw, .. } = &mut state.screen {
+                    if out.ui_right_stick[0].abs() > 0.05 {
                         *preview_yaw += out.ui_right_stick[0] * 2.6 * dt;
-                    } else if matches!(state.screen, AppScreen::Achievements { .. })
-                        || (state.screen == AppScreen::InGame && state.achievements_open)
-                    {
-                        if out.ui_right_stick[1] > 0.45 {
-                            state.achievements_scroll = state.achievements_scroll.saturating_sub(1);
-                        } else if out.ui_right_stick[1] < -0.45 {
-                            state.achievements_scroll = (state.achievements_scroll + 1).min(16);
-                        }
-                    } else if state.screen == AppScreen::InGame && state.chat_open {
-                        if out.ui_right_stick[1] > 0.45 {
-                            state.chat_scroll = (state.chat_scroll + 1).min(100);
-                        } else if out.ui_right_stick[1] < -0.45 {
-                            state.chat_scroll = state.chat_scroll.saturating_sub(1);
+                    }
+                }
+                if out.ui_right_stick[1].abs() <= 0.35 {
+                    state.ui_scroll_cooldown = 0.0;
+                } else {
+                    state.ui_scroll_cooldown = (state.ui_scroll_cooldown - dt).max(0.0);
+                    if state.ui_scroll_cooldown <= 0.0 {
+                        state.ui_scroll_cooldown = 0.12;
+                        let up = out.ui_right_stick[1] > 0.0;
+                        if matches!(state.screen, AppScreen::Achievements { .. })
+                            || (state.screen == AppScreen::InGame && state.achievements_open)
+                        {
+                            if up {
+                                state.achievements_scroll =
+                                    state.achievements_scroll.saturating_sub(1);
+                            } else {
+                                state.achievements_scroll = (state.achievements_scroll + 1).min(16);
+                            }
+                        } else if matches!(state.screen, AppScreen::MultiplayerLobby { .. }) {
+                            let len = state.directory_servers.len();
+                            if len > 0 {
+                                let cur = state.selected_directory_idx.unwrap_or(0);
+                                let next = if up {
+                                    cur.saturating_sub(1)
+                                } else {
+                                    (cur + 1).min(len - 1)
+                                };
+                                state.selected_directory_idx = Some(next);
+                            }
+                        } else if state.screen == AppScreen::InGame && state.chat_open {
+                            if up {
+                                state.chat_scroll = (state.chat_scroll + 1).min(100);
+                            } else {
+                                state.chat_scroll = state.chat_scroll.saturating_sub(1);
+                            }
+                        } else if state.screen == AppScreen::InGame && state.inventory_open {
+                            if up {
+                                state.jei_page = state.jei_page.saturating_sub(1);
+                            } else {
+                                state.jei_page = state.jei_page.saturating_add(1);
+                            }
                         }
                     }
                 }
@@ -9883,6 +10000,38 @@ impl BlockGameApp {
             AppScreen::Title => {
                 rects.extend_from_slice(&UiBuilder::title_screen_button_rects(screen_w, screen_h));
             }
+            AppScreen::WorldSelect { .. } => {
+                let (rows, btns) = UiBuilder::world_select_layout(
+                    screen_w,
+                    screen_h,
+                    state.saved_worlds.len(),
+                );
+                rects.extend(rows);
+                rects.extend_from_slice(&btns);
+            }
+            AppScreen::CreateWorld { .. } => {
+                let (name_r, seed_r, create_r, cancel_r) =
+                    UiBuilder::create_world_layout(screen_w, screen_h);
+                rects.push(name_r);
+                rects.push(seed_r);
+                rects.push(create_r);
+                rects.push(cancel_r);
+            }
+            AppScreen::MultiplayerLobby { .. } => {
+                let (user_r, pass_r, addr_r, btns) =
+                    UiBuilder::multiplayer_lobby_layout(screen_w, screen_h);
+                rects.push(user_r);
+                rects.push(pass_r);
+                rects.push(addr_r);
+                rects.extend_from_slice(&btns);
+                let (_panel, refresh_r, rows) =
+                    UiBuilder::multiplayer_browser_layout(screen_w, screen_h);
+                rects.push(refresh_r);
+                rects.extend_from_slice(&rows);
+            }
+            AppScreen::Guide { .. } => {
+                rects.extend_from_slice(&UiBuilder::guide_screen_button_rects(screen_w, screen_h));
+            }
             AppScreen::Paused { .. } => {
                 rects.extend_from_slice(&UiBuilder::pause_menu_button_rects(screen_w, screen_h));
             }
@@ -9919,6 +10068,27 @@ impl BlockGameApp {
                 rects.push(UiBuilder::settings_reset_button_rect(screen_w, screen_h));
                 rects.push(UiBuilder::settings_done_button_rect(screen_w, screen_h));
             }
+            AppScreen::CharacterCreator { .. } => {
+                if let Some(creator_ui) = state.build_creator_ui_state() {
+                    let layout =
+                        UiBuilder::character_creator_layout(screen_w, screen_h, &creator_ui);
+                    rects.extend_from_slice(&layout.tab_rects);
+                    rects.push(layout.btn_zoom);
+                    rects.push(layout.btn_walk);
+                    rects.push(layout.btn_randomize);
+                    rects.push(layout.btn_revert);
+                    rects.push(layout.btn_done);
+                    for (r, _, _) in &layout.option_buttons {
+                        rects.push(*r);
+                    }
+                    for (r, _) in &layout.preset_rows {
+                        rects.push(*r);
+                    }
+                    for (r, _) in &layout.swatch_rects {
+                        rects.push(*r);
+                    }
+                }
+            }
             AppScreen::InGame if state.quick_menu_open => {
                 for i in 0..4 {
                     rects.push(UiBuilder::quick_menu_item_rect(screen_w, screen_h, i));
@@ -9936,6 +10106,20 @@ impl BlockGameApp {
                     for col in 0..9 {
                         let x = inv_x + (col as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
                         rects.push([x, y, UiBuilder::SLOT_SIZE, UiBuilder::SLOT_SIZE]);
+                    }
+                }
+                // JEI sidebar slots on the right edge
+                let jei_w = (UiBuilder::JEI_COLS as f32) * UiBuilder::JEI_SLOT_SIZE
+                    + ((UiBuilder::JEI_COLS - 1) as f32) * UiBuilder::JEI_SLOT_GAP;
+                let jei_x = screen_w - jei_w - 20.0;
+                let jei_y = 92.0;
+                for row in 0..UiBuilder::JEI_ROWS {
+                    for col in 0..UiBuilder::JEI_COLS {
+                        let x = jei_x
+                            + (col as f32) * (UiBuilder::JEI_SLOT_SIZE + UiBuilder::JEI_SLOT_GAP);
+                        let y = jei_y
+                            + (row as f32) * (UiBuilder::JEI_SLOT_SIZE + UiBuilder::JEI_SLOT_GAP);
+                        rects.push([x, y, UiBuilder::JEI_SLOT_SIZE, UiBuilder::JEI_SLOT_SIZE]);
                     }
                 }
             }

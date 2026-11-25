@@ -499,9 +499,11 @@ pub struct RouterOutput {
     pub sprint_held: bool,
     pub player_list_held: bool,
     pub ptt_held: bool,
-    /// Edge-triggered gameplay presses.
+    /// Edge-triggered gameplay presses & releases.
     pub mine_pressed: bool,
+    pub mine_released: bool,
     pub use_pressed: bool,
+    pub use_released: bool,
     pub jump_pressed: bool,
     pub jump_double_tapped: bool,
     pub hotbar_next_pressed: bool,
@@ -556,6 +558,8 @@ pub struct InputRouter {
     last_jump_time: f32,
     elapsed_time: f32,
     prev_ui_confirm_held: bool,
+    prev_mine_held: bool,
+    prev_use_held: bool,
 }
 
 impl Default for InputRouter {
@@ -583,6 +587,8 @@ impl InputRouter {
             last_jump_time: -10.0,
             elapsed_time: 0.0,
             prev_ui_confirm_held: false,
+            prev_mine_held: false,
+            prev_use_held: false,
         }
     }
 
@@ -860,7 +866,11 @@ impl InputRouter {
             out.ptt_held = is_down(b.push_to_talk);
 
             out.mine_pressed = was_pressed(b.mine);
+            out.mine_released = self.prev_mine_held && !out.mine_held;
             out.use_pressed = was_pressed(b.use_item);
+            out.use_released = self.prev_use_held && !out.use_held;
+            self.prev_mine_held = out.mine_held;
+            self.prev_use_held = out.use_held;
             out.jump_pressed = was_pressed(b.jump);
             out.hotbar_next_pressed = was_pressed(b.hotbar_next);
             out.hotbar_prev_pressed = was_pressed(b.hotbar_prev);
@@ -902,6 +912,10 @@ impl InputRouter {
             }
             self.prev_ui_confirm_held = false;
         } else {
+            out.mine_released = self.prev_mine_held;
+            out.use_released = self.prev_use_held;
+            self.prev_mine_held = false;
+            self.prev_use_held = false;
             // UI / Menu Hybrid Virtual Cursor navigation
             if self.input_mode == InputMode::Controller {
                 let speed = Self::BASE_VIRTUAL_CURSOR_PX_PER_SEC * ui_scale.clamp(0.75, 1.5);
@@ -1281,5 +1295,43 @@ mod tests {
         ];
         let snapped = find_dpad_snap_target([125.0, 125.0], DpadDirection::Down, &rects);
         assert_eq!(snapped, Some([125.0, 225.0]));
+    }
+
+    #[test]
+    fn trigger_press_and_release_edges_do_not_latch() {
+        let mut backend = MockGamepadBackend::default();
+        let mut router = InputRouter::new();
+        let cfg = ControllerConfig::default();
+
+        backend.push(GamepadEvent::Connected(make_info(0, Some(0x045e), None, "Xbox")));
+        // Press RT (mine) and LT (use) via analog axes
+        backend.push(GamepadEvent::AxisChanged {
+            id: GamepadId(0),
+            axis: GamepadAxis::RightTrigger,
+            value: 0.9,
+        });
+        backend.push(GamepadEvent::AxisChanged {
+            id: GamepadId(0),
+            axis: GamepadAxis::LeftTrigger,
+            value: 0.9,
+        });
+        let out = router.update(&mut backend, 0.016, &cfg, true, false, false, [1280.0, 720.0], 1.0);
+        assert!(out.mine_pressed && out.mine_held && !out.mine_released);
+        assert!(out.use_pressed && out.use_held && !out.use_released);
+
+        // Release both triggers below threshold
+        backend.push(GamepadEvent::AxisChanged {
+            id: GamepadId(0),
+            axis: GamepadAxis::RightTrigger,
+            value: 0.0,
+        });
+        backend.push(GamepadEvent::AxisChanged {
+            id: GamepadId(0),
+            axis: GamepadAxis::LeftTrigger,
+            value: 0.0,
+        });
+        let out = router.update(&mut backend, 0.016, &cfg, true, false, false, [1280.0, 720.0], 1.0);
+        assert!(!out.mine_pressed && !out.mine_held && out.mine_released);
+        assert!(!out.use_pressed && !out.use_held && out.use_released);
     }
 }
