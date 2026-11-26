@@ -319,7 +319,7 @@ impl WorldManager {
             arrows: Vec::new(),
             next_monster_id: 1,
             next_arrow_id: 1,
-            monster_spawn_timer: 2.0,
+            monster_spawn_timer: 4.0,
             monster_rng_state,
             farming_sim: blockgame_core::FarmingSimulation::new(seed as u64 ^ 0xFA4A_1234),
             is_multiplayer: false,
@@ -1863,14 +1863,18 @@ impl WorldManager {
 
         self.temples.tick_cooldowns(dt);
 
+        const MAX_AMBIENT_MONSTERS: usize = 10;
+        const MONSTER_SPAWN_INTERVAL_SECS: f32 = 5.0;
+        const MONSTER_SPAWN_ATTEMPTS_PER_WAVE: usize = 2;
+
         // Suppress normal night-monster spawning inside instanced boss arenas
         let in_arena_band = blockgame_core::temple::is_in_arena_band(player_pos);
         self.monster_spawn_timer -= dt;
         if !in_arena_band && self.monster_spawn_timer <= 0.0 {
-            self.monster_spawn_timer = 2.5;
-            if self.monsters.len() < 20 {
+            self.monster_spawn_timer = MONSTER_SPAWN_INTERVAL_SECS;
+            if self.monsters.len() < MAX_AMBIENT_MONSTERS {
                 let mut candidates = Vec::new();
-                for _ in 0..4 {
+                for _ in 0..MONSTER_SPAWN_ATTEMPTS_PER_WAVE {
                     let angle = self.next_monster_rng_f32() * std::f32::consts::TAU;
                     let dist = 16.0 + self.next_monster_rng_f32() * 22.0;
                     let wx = (player_pos.x + angle.cos() * dist).floor() as i32;
@@ -1890,7 +1894,7 @@ impl WorldManager {
                 let min_y = (player_pos.y as i32 - 18).max(2);
                 let max_y = (player_pos.y as i32 + 16).min(120);
                 for (wx, wz, kind) in candidates {
-                    if self.monsters.len() >= 20 {
+                    if self.monsters.len() >= MAX_AMBIENT_MONSTERS {
                         break;
                     }
                     for wy in (min_y..=max_y).rev() {
