@@ -158,6 +158,21 @@ pub struct AppState {
     pub active_settings_slider: Option<usize>,
     pub settings_tab: usize,
     pub listening_keybind: Option<usize>,
+    pub listening_controller_bind: Option<usize>,
+    pub gamepad_backend: crate::controller::GilrsBackend,
+    pub input_router: crate::controller::InputRouter,
+    pub quick_menu_open: bool,
+    pub hud_toast: Option<(String, f32)>,
+    pub controller_move_axes: [f32; 2],
+    pub controller_sneaking: bool,
+    pub controller_jumping: bool,
+    pub controller_sprinting: bool,
+    pub controller_mine_held: bool,
+    pub controller_use_held: bool,
+    pub controller_ptt_held: bool,
+    pub controller_player_list_held: bool,
+    pub ui_scroll_cooldown: f32,
+    pub last_rumble_health: f32,
     pub registry: Arc<BlockRegistry>,
     // Milestone 5: Inventory, Crafting, and UI
     pub inventory: Inventory,
@@ -456,6 +471,13 @@ impl AppState {
 
     /// Builds a `SettingsUiState` snapshot for `UiBuilder::build_settings_screen`.
     pub fn settings_ui_state(&self) -> blockgame_render::ui::SettingsUiState {
+        let active_controller_label = match self.input_router.active_controller_info() {
+            Some(info) => format!("{} ({})", info.name, info.family.display_name()),
+            None => "No Controller Connected".to_string(),
+        };
+        let active_glyph_family = self
+            .input_router
+            .resolved_glyph_family(self.settings.controller_glyph_style);
         blockgame_render::ui::SettingsUiState {
             render_distance: self.settings.render_distance,
             fov_degrees: self.settings.fov_degrees,
@@ -473,10 +495,28 @@ impl AppState {
             voice_volume: self.settings.voice_volume,
             creature_volume: self.settings.creature_volume,
             voice_input_device: self.settings.voice_input_device.clone(),
+            controller_sensitivity: self.settings.controller_sensitivity,
+            controller_invert_y: self.settings.controller_invert_y,
+            controller_deadzone: self.settings.controller_deadzone,
+            controller_rumble_intensity: self.settings.controller_rumble_intensity,
+            controller_glyph_style: self.settings.controller_glyph_style,
+            controller_swap_confirm_cancel: self.settings.controller_swap_confirm_cancel,
+            controller_sneak_toggle: self.settings.controller_sneak_toggle,
+            active_controller_label,
+            active_glyph_family,
         }
     }
 
-    /// Updates a specific settings slider (`0..7`) from horizontal cursor position and applies it live.
+    /// Dispatches a scaled controller rumble effect if in Controller Input Mode.
+    pub fn trigger_controller_rumble(&mut self, effect: crate::controller::RumbleEffect) {
+        self.input_router.trigger_rumble(
+            &mut self.gamepad_backend,
+            effect,
+            self.settings.controller_rumble_intensity,
+        );
+    }
+
+    /// Updates a specific settings slider (`0..7` General, `100..=102` Controller) from horizontal cursor position and applies it live.
     pub fn update_settings_slider(
         &mut self,
         slider_idx: usize,
@@ -484,7 +524,11 @@ impl AppState {
         screen_w: f32,
         screen_h: f32,
     ) {
-        let r = UiBuilder::settings_slider_rect(screen_w, screen_h, slider_idx);
+        let r = if slider_idx >= 100 {
+            UiBuilder::settings_controller_slider_rect(screen_w, screen_h, slider_idx - 100)
+        } else {
+            UiBuilder::settings_slider_rect(screen_w, screen_h, slider_idx)
+        };
         let t = ((cursor_x - (r[0] + 2.0)) / (r[2] - 4.0).max(1.0)).clamp(0.0, 1.0);
         match slider_idx {
             0 => {
@@ -510,6 +554,15 @@ impl AppState {
             }
             7 => {
                 self.settings.creature_volume = t;
+            }
+            100 => {
+                self.settings.controller_sensitivity = 0.2 + t * 2.3;
+            }
+            101 => {
+                self.settings.controller_deadzone = 0.05 + t * 0.40;
+            }
+            102 => {
+                self.settings.controller_rumble_intensity = t;
             }
             _ => {}
         }
@@ -1509,6 +1562,21 @@ impl ApplicationHandler for BlockGameApp {
             active_settings_slider: None,
             settings_tab: 0,
             listening_keybind: None,
+            listening_controller_bind: None,
+            gamepad_backend: crate::controller::GilrsBackend::new(),
+            input_router: crate::controller::InputRouter::new(),
+            quick_menu_open: false,
+            hud_toast: None,
+            controller_move_axes: [0.0, 0.0],
+            controller_sneaking: false,
+            controller_jumping: false,
+            controller_sprinting: false,
+            controller_mine_held: false,
+            controller_use_held: false,
+            controller_ptt_held: false,
+            controller_player_list_held: false,
+            ui_scroll_cooldown: 0.0,
+            last_rumble_health: 20.0,
             registry: self.registry.clone(),
             inventory,
             armor: blockgame_core::item::ArmorEquipment::new(),
@@ -1652,17 +1720,94 @@ impl ApplicationHandler for BlockGameApp {
         });
         if let Some(s) = self.state.as_mut() {
             s.apply_settings();
+            s.input_router.sync_initial_gamepads(&s.gamepad_backend);
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let Some(state) = &mut self.state {
+            if state.screen == AppScreen::InGame
+                && state.mouse_captured
+                && !state.player_stats.is_dead
+            {
+                if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+                    if dx.abs() > 0.1 || dy.abs() > 0.1 {
+                        state.input_router.on_keyboard_mouse_activity(None);
+                    }
+                    let sensitivity = 0.003 * state.settings.mouse_sensitivity;
+                    let y_sign = if state.settings.invert_y { -1.0 } else { 1.0 };
+                    state.camera.yaw += (dx as f32) * sensitivity;
+                    state.camera.pitch -= (dy as f32) * sensitivity * y_sign;
+                    let max_pitch = 89.0_f32.to_radians();
+                    state.camera.pitch = state.camera.pitch.clamp(-max_pitch, max_pitch);
+                }
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(state) = &self.state {
+            state.window.request_redraw();
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if matches!(event, WindowEvent::RedrawRequested) {
+            self.poll_controller_frame(event_loop);
+        } else if let Some(state) = &mut self.state {
+            match &event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    let scale = state.settings.ui_scale.clamp(0.75, 1.5);
+                    state.input_router.on_keyboard_mouse_activity(Some([
+                        position.x as f32 / scale,
+                        position.y as f32 / scale,
+                    ]));
+                    if !state.mouse_captured || state.screen != AppScreen::InGame {
+                        state.window.set_cursor_visible(true);
+                    }
+                }
+                WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::KeyboardInput { .. } => {
+                    state.input_router.on_keyboard_mouse_activity(None);
+                    if !state.mouse_captured || state.screen != AppScreen::InGame {
+                        state.window.set_cursor_visible(true);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.dispatch_event(event_loop, InternalEvent::Window(event));
+    }
+}
+
+enum InternalEvent {
+    Window(WindowEvent),
+    SyntheticMouse {
+        button: MouseButton,
+        state: ElementState,
+    },
+    SyntheticKey {
+        key: KeyCode,
+        state: ElementState,
+        text: Option<winit::keyboard::SmolStr>,
+    },
+}
+
+impl BlockGameApp {
+    fn dispatch_event(&mut self, event_loop: &ActiveEventLoop, event: InternalEvent) {
         let state = match &mut self.state {
             Some(s) => s,
             None => return,
         };
 
         match event {
-            WindowEvent::CloseRequested => {
+            InternalEvent::Window(WindowEvent::CloseRequested) => {
                 if matches!(
                     state.screen,
                     AppScreen::InGame
@@ -1679,7 +1824,7 @@ impl ApplicationHandler for BlockGameApp {
                 state.disconnect_multiplayer();
                 event_loop.exit();
             }
-            WindowEvent::Resized(new_size) => {
+            InternalEvent::Window(WindowEvent::Resized(new_size)) => {
                 if new_size.width > 0 && new_size.height > 0 {
                     state.surface_config.width = new_size.width;
                     state.surface_config.height = new_size.height;
@@ -1691,7 +1836,7 @@ impl ApplicationHandler for BlockGameApp {
                     state.depth_view = depth_view;
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            InternalEvent::Window(WindowEvent::CursorMoved { position, .. }) => {
                 state.cursor_pos = [position.x as f32, position.y as f32];
                 if matches!(state.screen, AppScreen::Settings { .. }) {
                     if let Some(slider_idx) = state.active_settings_slider {
@@ -1716,7 +1861,7 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
+            InternalEvent::Window(WindowEvent::MouseWheel { delta, .. }) => {
                 let scroll = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
@@ -1753,10 +1898,14 @@ impl ApplicationHandler for BlockGameApp {
                     state.hotbar_activity_timer = 4.0;
                 }
             }
-            WindowEvent::MouseInput {
+            InternalEvent::Window(WindowEvent::MouseInput {
                 button,
                 state: mouse_btn_state,
                 ..
+            })
+            | InternalEvent::SyntheticMouse {
+                button,
+                state: mouse_btn_state,
             } => {
                 let pressed = mouse_btn_state == ElementState::Pressed;
                 if !pressed && button == MouseButton::Left {
@@ -1765,6 +1914,46 @@ impl ApplicationHandler for BlockGameApp {
                     }
                     state.creator_dragging_preview = false;
                     state.creator_active_rgb_slider = None;
+                }
+
+                // Handle Quick-Menu clicks when open in-game
+                if state.screen == AppScreen::InGame && state.quick_menu_open {
+                    if pressed && button == MouseButton::Left {
+                        let (screen_w, screen_h, cpos) = state.ui_metrics();
+                        for idx in 0..4 {
+                            let r = UiBuilder::quick_menu_item_rect(screen_w, screen_h, idx);
+                            if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
+                                state.quick_menu_open = false;
+                                match idx {
+                                    0 => {
+                                        state.skills_open = true;
+                                        state.mouse_captured = false;
+                                    }
+                                    1 => {
+                                        state.achievements_open = true;
+                                        state.mouse_captured = false;
+                                    }
+                                    2 => {
+                                        state.mouse_captured = false;
+                                        state.screen = AppScreen::Guide { page: 0 };
+                                    }
+                                    3 => {
+                                        state.settings.show_debug_hud =
+                                            !state.settings.show_debug_hud;
+                                        state.settings.save(std::path::Path::new("settings.cfg"));
+                                        state.mouse_captured = true;
+                                        let _ = state.window.set_cursor_grab(
+                                            winit::window::CursorGrabMode::Locked,
+                                        );
+                                        state.window.set_cursor_visible(false);
+                                    }
+                                    _ => {}
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    return;
                 }
 
                 // Handle Title Screen, World Select, Create World, Settings, Multiplayer Lobby, and Pause Menu clicks
@@ -2188,12 +2377,13 @@ impl ApplicationHandler for BlockGameApp {
                             }
                             AppScreen::Settings { return_to_pause } => {
                                 let mut handled = false;
-                                for tab_idx in 0..2 {
+                                for tab_idx in 0..3 {
                                     let r = UiBuilder::settings_tab_rect(screen_w, screen_h, tab_idx);
                                     if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3]) {
                                         state.settings_tab = tab_idx;
                                         state.active_settings_slider = None;
                                         state.listening_keybind = None;
+                                        state.listening_controller_bind = None;
                                         handled = true;
                                         break;
                                     }
@@ -2276,8 +2466,77 @@ impl ApplicationHandler for BlockGameApp {
                                         if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
                                         {
                                             state.listening_keybind = Some(idx);
+                                            state.listening_controller_bind = None;
                                             handled = true;
                                             break;
+                                        }
+                                    }
+                                } else if !handled && state.settings_tab == 2 {
+                                    for idx in 0..3 {
+                                        let r = UiBuilder::settings_controller_slider_rect(
+                                            screen_w, screen_h, idx,
+                                        );
+                                        if UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
+                                        {
+                                            let slider_id = 100 + idx;
+                                            state.active_settings_slider = Some(slider_id);
+                                            state.update_settings_slider(
+                                                slider_id, cpos[0], screen_w, screen_h,
+                                            );
+                                            handled = true;
+                                            break;
+                                        }
+                                    }
+                                    if !handled {
+                                        for idx in 0..4 {
+                                            let r = UiBuilder::settings_controller_toggle_rect(
+                                                screen_w, screen_h, idx,
+                                            );
+                                            if UiBuilder::is_rect_hovered(
+                                                cpos, r[0], r[1], r[2], r[3],
+                                            ) {
+                                                match idx {
+                                                    0 => {
+                                                        state.settings.controller_invert_y =
+                                                            !state.settings.controller_invert_y;
+                                                    }
+                                                    1 => {
+                                                        state.settings.controller_glyph_style = state
+                                                            .settings
+                                                            .controller_glyph_style
+                                                            .cycle_next();
+                                                    }
+                                                    2 => {
+                                                        state.settings.controller_swap_confirm_cancel =
+                                                            !state.settings.controller_swap_confirm_cancel;
+                                                    }
+                                                    3 => {
+                                                        state.settings.controller_sneak_toggle =
+                                                            !state.settings.controller_sneak_toggle;
+                                                    }
+                                                    _ => {}
+                                                }
+                                                state
+                                                    .settings
+                                                    .save(std::path::Path::new("settings.cfg"));
+                                                handled = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if !handled {
+                                        for idx in 0..crate::controller::ControllerBindings::COUNT {
+                                            let r = UiBuilder::settings_controller_bind_rect(
+                                                screen_w, screen_h, idx,
+                                            );
+                                            if UiBuilder::is_rect_hovered(
+                                                cpos, r[0], r[1], r[2], r[3],
+                                            ) {
+                                                state.listening_controller_bind = Some(idx);
+                                                state.listening_keybind = None;
+                                                handled = true;
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -2288,8 +2547,30 @@ impl ApplicationHandler for BlockGameApp {
                                     if UiBuilder::is_rect_hovered(
                                         cpos, reset_r[0], reset_r[1], reset_r[2], reset_r[3],
                                     ) {
-                                        state.settings = crate::settings::GameSettings::default();
+                                        if state.settings_tab == 2 {
+                                            let defaults = crate::settings::GameSettings::default();
+                                            state.settings.controller_sensitivity =
+                                                defaults.controller_sensitivity;
+                                            state.settings.controller_invert_y =
+                                                defaults.controller_invert_y;
+                                            state.settings.controller_deadzone =
+                                                defaults.controller_deadzone;
+                                            state.settings.controller_rumble_intensity =
+                                                defaults.controller_rumble_intensity;
+                                            state.settings.controller_glyph_style =
+                                                defaults.controller_glyph_style;
+                                            state.settings.controller_swap_confirm_cancel =
+                                                defaults.controller_swap_confirm_cancel;
+                                            state.settings.controller_sneak_toggle =
+                                                defaults.controller_sneak_toggle;
+                                            state.settings.controller_binds =
+                                                defaults.controller_binds;
+                                        } else {
+                                            state.settings =
+                                                crate::settings::GameSettings::default();
+                                        }
                                         state.listening_keybind = None;
+                                        state.listening_controller_bind = None;
                                         state.apply_settings();
                                         state.settings.save(std::path::Path::new("settings.cfg"));
                                         handled = true;
@@ -2303,6 +2584,7 @@ impl ApplicationHandler for BlockGameApp {
                                         cpos, done_r[0], done_r[1], done_r[2], done_r[3],
                                     ) {
                                         state.listening_keybind = None;
+                                        state.listening_controller_bind = None;
                                         state.settings.save(std::path::Path::new("settings.cfg"));
                                         state.screen = if return_to_pause {
                                             AppScreen::Paused {
@@ -4106,6 +4388,9 @@ impl ApplicationHandler for BlockGameApp {
                                     bow_damage,
                                 );
                                 state.punch_timer = 0.15;
+                                state.trigger_controller_rumble(
+                                    crate::controller::RumbleEffect::BowRelease,
+                                );
                             } else if let Some(idx) = arrow_slot_idx {
                                 let mut arrow_slot = state.inventory.get(idx);
                                 arrow_slot.take(1);
@@ -4129,6 +4414,9 @@ impl ApplicationHandler for BlockGameApp {
                                     bow_damage,
                                 );
                                 state.punch_timer = 0.15;
+                                state.trigger_controller_rumble(
+                                    crate::controller::RumbleEffect::BowRelease,
+                                );
                             }
                             return;
                         }
@@ -4641,7 +4929,7 @@ impl ApplicationHandler for BlockGameApp {
                     _ => {}
                 }
             }
-            WindowEvent::KeyboardInput {
+            InternalEvent::Window(WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
                         physical_key: PhysicalKey::Code(key),
@@ -4650,8 +4938,24 @@ impl ApplicationHandler for BlockGameApp {
                         ..
                     },
                 ..
+            })
+            | InternalEvent::SyntheticKey {
+                key,
+                state: key_state,
+                text,
             } => {
                 let pressed = key_state == ElementState::Pressed;
+                if pressed && key == KeyCode::Escape && state.quick_menu_open {
+                    state.quick_menu_open = false;
+                    if state.screen == AppScreen::InGame {
+                        state.mouse_captured = true;
+                        let _ = state
+                            .window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Locked);
+                        state.window.set_cursor_visible(false);
+                    }
+                    return;
+                }
 
                 // Handle keyboard input on non-gameplay screens (CreateWorld, MultiplayerLobby, etc.)
                 if state.screen != AppScreen::InGame {
@@ -5535,7 +5839,7 @@ impl ApplicationHandler for BlockGameApp {
                     }
                 }
             }
-            WindowEvent::RedrawRequested => {
+            InternalEvent::Window(WindowEvent::RedrawRequested) => {
                 let now = Instant::now();
                 let dt = now
                     .duration_since(state.last_frame_time)
@@ -6001,7 +6305,10 @@ impl ApplicationHandler for BlockGameApp {
                         // Capture & transmit local proximity voice frames
                         let frames = state
                             .voice_capture
-                            .poll_encoded_frames(state.ptt_down, state.settings.voice_mode);
+                            .poll_encoded_frames(
+                                state.ptt_down || state.controller_ptt_held,
+                                state.settings.voice_mode,
+                            );
                         state.voice_transmitting = !frames.is_empty();
                         for (seq, data) in frames {
                             client.send(&blockgame_core::net::ClientPacket::VoiceFrame { seq, data });
@@ -6088,20 +6395,33 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         if wish_dir.length_squared() > 0.0 {
                             wish_dir = wish_dir.normalize();
-                            if state.is_sleeping {
-                                state.is_sleeping = false;
-                                if let Some(client) = &mut state.mp_client {
-                                    client.send(&blockgame_core::net::ClientPacket::SetSleeping {
-                                        sleeping: false,
-                                    });
-                                }
+                        } else if state.controller_move_axes[0].abs() > 0.0
+                            || state.controller_move_axes[1].abs() > 0.0
+                        {
+                            // Preserve analog stick magnitude (0.0..=1.0) for variable walk speed
+                            wish_dir = forward * state.controller_move_axes[1]
+                                + right * state.controller_move_axes[0];
+                            let len = wish_dir.length();
+                            if len > 1.0 {
+                                wish_dir /= len;
+                            }
+                        }
+                        if wish_dir.length_squared() > 0.0 && state.is_sleeping {
+                            state.is_sleeping = false;
+                            if let Some(client) = &mut state.mp_client {
+                                client.send(&blockgame_core::net::ClientPacket::SetSleeping {
+                                    sleeping: false,
+                                });
                             }
                         }
 
-                        // If flying, vertical movement with Space / Shift
+                        // If flying, vertical movement with Jump (ascend) / Sneak (descend)
                         if state.player.flying {
-                            if state.jumping {
+                            if state.jumping || state.controller_jumping {
                                 wish_dir.y += 1.0;
+                            }
+                            if state.shift_down || state.controller_sneaking {
+                                wish_dir.y -= 1.0;
                             }
                         }
                     }
@@ -6115,8 +6435,8 @@ impl ApplicationHandler for BlockGameApp {
                         state.player.update_with_modifiers(
                             dt,
                             wish_dir,
-                            state.sprinting,
-                            state.jumping,
+                            state.sprinting || state.controller_sprinting,
+                            state.jumping || state.controller_jumping,
                             &world_guard,
                             &self.registry,
                             agi_speed,
@@ -6405,7 +6725,7 @@ impl ApplicationHandler for BlockGameApp {
                         let slot_changed = eat_slot != state.active_hotbar_slot;
                         let held = state.inventory.get(state.active_hotbar_slot);
                         let food_opt = state.item_registry.get_food(held.item_id);
-                        let still_valid = state.mouse_right_down
+                        let still_valid = (state.mouse_right_down || state.controller_use_held)
                             && !slot_changed
                             && !state.inventory_open
                             && !state.skills_open
@@ -6740,6 +7060,9 @@ impl ApplicationHandler for BlockGameApp {
                                                 &tackle,
                                             );
                                             state.audio.play_fishing_bite();
+                                            state.trigger_controller_rumble(
+                                                crate::controller::RumbleEffect::FishingBite,
+                                            );
                                             state.fishing_state = FishingSession::Biting {
                                                 bobber_pos: bpos,
                                                 bite_timer: 1.85,
@@ -6761,7 +7084,10 @@ impl ApplicationHandler for BlockGameApp {
                             FishingSession::Minigame { .. } => {
                                 let holding = state.mouse_left_down
                                     || state.mouse_right_down
-                                    || state.jumping;
+                                    || state.controller_mine_held
+                                    || state.controller_use_held
+                                    || state.jumping
+                                    || state.controller_jumping;
                                 let mut outcome = None;
                                 if let FishingSession::Minigame { game, .. } =
                                     &mut state.fishing_state
@@ -6949,7 +7275,7 @@ impl ApplicationHandler for BlockGameApp {
 
                     // 4. Update Camera position (First-Person or F5 Third-Person) and atmosphere uniform
                     let eye_pos = state.player.eye_position()
-                        - if state.shift_down
+                        - if (state.shift_down || state.controller_sneaking)
                             && !state.inventory_open
                             && !state.skills_open
                             && !state.player.flying
@@ -7052,10 +7378,11 @@ impl ApplicationHandler for BlockGameApp {
                     // 5b. Process hold-to-break mining mechanics
                     state.creative_break_cooldown = (state.creative_break_cooldown - dt).max(0.0);
                     let is_creative = state.player_stats.game_mode.is_creative();
-                    if !state.mouse_left_down {
+                    let mining_held = state.mouse_left_down || state.controller_mine_held;
+                    if !mining_held {
                         state.creative_break_cooldown = 0.0;
                     }
-                    if state.mouse_left_down
+                    if mining_held
                         && state.mouse_captured
                         && !state.inventory_open
                         && !state.skills_open
@@ -7186,6 +7513,9 @@ impl ApplicationHandler for BlockGameApp {
                                                     );
                                                 }
                                             }
+                                            state.trigger_controller_rumble(
+                                                crate::controller::RumbleEffect::BlockBreak,
+                                            );
                                             state.audio.play_block_break(
                                                 broken,
                                                 target_voxel.as_vec3() + Vec3::splat(0.5),
@@ -8069,7 +8399,12 @@ impl ApplicationHandler for BlockGameApp {
                                 if tackle.bait_count > 0 {
                                     summary.push_str(&format!(" | Bait: {}", tackle.bait_count));
                                 }
-                                UiBuilder::build_fishing_hud(
+                                let input_mode = state.input_router.input_mode();
+                                let glyph_family = state
+                                    .input_router
+                                    .resolved_glyph_family(state.settings.controller_glyph_style);
+                                let use_btn = state.settings.controller_binds.use_item;
+                                UiBuilder::build_fishing_hud_with_input_mode(
                                     &mut state.ui_mesh,
                                     screen_w,
                                     screen_h,
@@ -8077,10 +8412,18 @@ impl ApplicationHandler for BlockGameApp {
                                         phase: blockgame_render::FishingHudPhase::Waiting,
                                         tackle_summary: summary,
                                     },
+                                    input_mode,
+                                    glyph_family,
+                                    use_btn,
                                 );
                             }
                             FishingSession::Biting { .. } => {
-                                UiBuilder::build_fishing_hud(
+                                let input_mode = state.input_router.input_mode();
+                                let glyph_family = state
+                                    .input_router
+                                    .resolved_glyph_family(state.settings.controller_glyph_style);
+                                let use_btn = state.settings.controller_binds.use_item;
+                                UiBuilder::build_fishing_hud_with_input_mode(
                                     &mut state.ui_mesh,
                                     screen_w,
                                     screen_h,
@@ -8088,6 +8431,9 @@ impl ApplicationHandler for BlockGameApp {
                                         phase: blockgame_render::FishingHudPhase::Biting,
                                         tackle_summary: String::new(),
                                     },
+                                    input_mode,
+                                    glyph_family,
+                                    use_btn,
                                 );
                             }
                             FishingSession::Minigame { game, .. } => {
@@ -8096,7 +8442,12 @@ impl ApplicationHandler for BlockGameApp {
                                     .get(game.species.item_id)
                                     .map(|d| d.icon_tile as u16)
                                     .unwrap_or(396);
-                                UiBuilder::build_fishing_hud(
+                                let input_mode = state.input_router.input_mode();
+                                let glyph_family = state
+                                    .input_router
+                                    .resolved_glyph_family(state.settings.controller_glyph_style);
+                                let use_btn = state.settings.controller_binds.use_item;
+                                UiBuilder::build_fishing_hud_with_input_mode(
                                     &mut state.ui_mesh,
                                     screen_w,
                                     screen_h,
@@ -8113,6 +8464,9 @@ impl ApplicationHandler for BlockGameApp {
                                         },
                                         tackle_summary: String::new(),
                                     },
+                                    input_mode,
+                                    glyph_family,
+                                    use_btn,
                                 );
                             }
                         }
@@ -8224,7 +8578,7 @@ impl ApplicationHandler for BlockGameApp {
                             &state.chat_input,
                             state.chat_scroll,
                             ui_cursor,
-                            state.tab_held,
+                            state.tab_held || state.controller_player_list_held,
                             &online_models,
                             &local_name,
                             state.mp_hosted_server.is_some(),
@@ -8289,12 +8643,18 @@ impl ApplicationHandler for BlockGameApp {
                                 &nametag_models,
                             );
                         }
-                        UiBuilder::build_pause_menu(
+                        let input_mode = state.input_router.input_mode();
+                        let glyph_family = state
+                            .input_router
+                            .resolved_glyph_family(state.settings.controller_glyph_style);
+                        UiBuilder::build_pause_menu_with_input_mode(
                             &mut state.ui_mesh,
                             screen_w,
                             screen_h,
                             ui_cursor,
                             status_message.as_deref(),
+                            input_mode,
+                            glyph_family,
                         );
                     } else if let AppScreen::Settings { .. } = state.screen {
                         let ui_settings = state.settings_ui_state();
@@ -8303,6 +8663,7 @@ impl ApplicationHandler for BlockGameApp {
                             .iter()
                             .map(|(a, k)| (*a, k.as_str()))
                             .collect();
+                        let pad_binds = state.settings.controller_binds.labels_and_buttons();
                         UiBuilder::build_settings_screen(
                             &mut state.ui_mesh,
                             screen_w,
@@ -8312,6 +8673,8 @@ impl ApplicationHandler for BlockGameApp {
                             state.active_settings_slider,
                             state.listening_keybind,
                             &keybind_refs,
+                            state.listening_controller_bind,
+                            &pad_binds,
                             ui_cursor,
                         );
                     }
@@ -8347,12 +8710,18 @@ impl ApplicationHandler for BlockGameApp {
                         .pipeline
                         .update_camera(&state.queue, &state.camera_uniform);
 
-                    UiBuilder::build_pause_menu(
+                    let input_mode = state.input_router.input_mode();
+                    let glyph_family = state
+                        .input_router
+                        .resolved_glyph_family(state.settings.controller_glyph_style);
+                    UiBuilder::build_pause_menu_with_input_mode(
                         &mut state.ui_mesh,
                         screen_w,
                         screen_h,
                         ui_cursor,
                         status_message.as_deref(),
+                        input_mode,
+                        glyph_family,
                     );
                 } else {
                     // Menu screens (Title, WorldSelect, CreateWorld, Settings, MultiplayerLobby):
@@ -8431,12 +8800,18 @@ impl ApplicationHandler for BlockGameApp {
                             );
                         }
                         AppScreen::Guide { page } => {
-                            UiBuilder::build_guide_screen(
+                            let input_mode = state.input_router.input_mode();
+                            let glyph_family = state
+                                .input_router
+                                .resolved_glyph_family(state.settings.controller_glyph_style);
+                            UiBuilder::build_guide_screen_with_input_mode(
                                 &mut state.ui_mesh,
                                 screen_w,
                                 screen_h,
                                 *page,
                                 ui_cursor,
+                                input_mode,
+                                glyph_family,
                             );
                         }
                         AppScreen::Achievements { return_to_pause } => {
@@ -8490,6 +8865,7 @@ impl ApplicationHandler for BlockGameApp {
                                 .iter()
                                 .map(|(a, k)| (*a, k.as_str()))
                                 .collect();
+                            let pad_binds = state.settings.controller_binds.labels_and_buttons();
                             UiBuilder::build_settings_screen(
                                 &mut state.ui_mesh,
                                 screen_w,
@@ -8499,6 +8875,8 @@ impl ApplicationHandler for BlockGameApp {
                                 state.active_settings_slider,
                                 state.listening_keybind,
                                 &keybind_refs,
+                                state.listening_controller_bind,
+                                &pad_binds,
                                 ui_cursor,
                             );
                         }
@@ -8542,6 +8920,59 @@ impl ApplicationHandler for BlockGameApp {
                         }
                         AppScreen::InGame | AppScreen::Paused { .. } => {}
                     }
+                }
+
+                // Render Quick-Menu overlay when open in gameplay
+                if state.screen == AppScreen::InGame && state.quick_menu_open {
+                    let cfg = state.settings.controller_config();
+                    let (confirm_btn, cancel_btn) =
+                        state.input_router.menu_confirm_cancel_buttons(&cfg);
+                    let glyph_family = state
+                        .input_router
+                        .resolved_glyph_family(state.settings.controller_glyph_style);
+                    UiBuilder::build_quick_menu(
+                        &mut state.ui_mesh,
+                        screen_w,
+                        screen_h,
+                        state.settings.show_debug_hud,
+                        glyph_family,
+                        confirm_btn,
+                        cancel_btn,
+                        ui_cursor,
+                    );
+                }
+
+                // Render non-blocking HUD toast (e.g., multiplayer controller disconnect)
+                if let Some((ref msg, _)) = state.hud_toast {
+                    UiBuilder::draw_hud_toast(&mut state.ui_mesh, screen_w, msg);
+                }
+
+                // Render JEI / Inventory controller glyph legend bar when in Controller Input Mode
+                if state.screen == AppScreen::InGame
+                    && state.inventory_open
+                    && state.input_router.input_mode() == blockgame_render::InputMode::Controller
+                {
+                    let glyph_family = state
+                        .input_router
+                        .resolved_glyph_family(state.settings.controller_glyph_style);
+                    UiBuilder::draw_jei_controller_footer(
+                        &mut state.ui_mesh,
+                        screen_w,
+                        screen_h,
+                        glyph_family,
+                    );
+                }
+
+                // Render Virtual Cursor in Controller Input Mode whenever a menu/overlay is active
+                if state.input_router.input_mode() == blockgame_render::InputMode::Controller
+                    && (!state.mouse_captured || state.screen != AppScreen::InGame)
+                {
+                    UiBuilder::draw_virtual_cursor(
+                        &mut state.ui_mesh,
+                        ui_cursor[0],
+                        ui_cursor[1],
+                        1.0,
+                    );
                 }
 
                 state.ui_dynamic_mesh.update(
@@ -9052,33 +9483,690 @@ impl ApplicationHandler for BlockGameApp {
         }
     }
 
-    fn device_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _device_id: DeviceId,
-        event: DeviceEvent,
-    ) {
-        if let Some(state) = &mut self.state {
-            if state.screen == AppScreen::InGame
+    /// Polls the `GamepadBackend` through `InputRouter` once per frame and dispatches
+    /// gameplay actions, hybrid Virtual Cursor UI navigation, D-pad snapping, and disconnect handling.
+    fn poll_controller_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let (dt, in_gameplay, is_mp, listening_rebind, screen_size, ui_scale, cfg) = {
+            let Some(state) = self.state.as_mut() else {
+                return;
+            };
+            let dt = state.last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
+            // Unified all-source damage rumble (environmental, monsters, bosses, arrows, guards, PvP)
+            let cur_hp = state.player_stats.health;
+            if state.screen == AppScreen::InGame && cur_hp < state.last_rumble_health {
+                let dmg = state.last_rumble_health - cur_hp;
+                let effect = if dmg >= 6.0 {
+                    crate::controller::RumbleEffect::Explosion
+                } else {
+                    crate::controller::RumbleEffect::Damage
+                };
+                state.trigger_controller_rumble(effect);
+            }
+            state.last_rumble_health = cur_hp;
+            // Decay non-blocking HUD toast timer
+            if let Some((_, timer)) = &mut state.hud_toast {
+                *timer -= dt;
+                if *timer <= 0.0 {
+                    state.hud_toast = None;
+                }
+            }
+            let in_gameplay = state.screen == AppScreen::InGame
                 && state.mouse_captured
-                && !state.player_stats.is_dead
-            {
-                if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-                    let sensitivity = 0.003 * state.settings.mouse_sensitivity;
-                    let y_sign = if state.settings.invert_y { -1.0 } else { 1.0 };
-                    state.camera.yaw += (dx as f32) * sensitivity;
-                    state.camera.pitch -= (dy as f32) * sensitivity * y_sign;
+                && !state.inventory_open
+                && !state.skills_open
+                && !state.achievements_open
+                && !state.chat_open
+                && !state.quick_menu_open
+                && !state.player_stats.is_dead;
+            let is_mp = state.mp_client.is_some();
+            let listening_rebind = state.listening_controller_bind.is_some();
+            let (sw, sh, _) = state.ui_metrics();
+            let ui_scale = state.settings.ui_scale;
+            let cfg = state.settings.controller_config();
+            (dt, in_gameplay, is_mp, listening_rebind, [sw, sh], ui_scale, cfg)
+        };
+
+        let out = {
+            let Some(state) = self.state.as_mut() else {
+                return;
+            };
+            state.input_router.update(
+                &mut state.gamepad_backend,
+                dt,
+                &cfg,
+                in_gameplay,
+                is_mp,
+                listening_rebind,
+                screen_size,
+                ui_scale,
+            )
+        };
+
+        // Handle controller button remapping capture in Settings Tab 2
+        if let Some(captured_btn) = out.captured_rebind_button {
+            if let Some(state) = self.state.as_mut() {
+                if let Some(idx) = state.listening_controller_bind.take() {
+                    state.settings.controller_binds.set_by_index(idx, captured_btn);
+                    state.settings.save(std::path::Path::new("settings.cfg"));
+                }
+            }
+            return;
+        }
+
+        // Handle Active Controller disconnect mid-gameplay
+        match out.disconnect_action {
+            crate::controller::DisconnectAction::PauseSingleplayer => {
+                if let Some(state) = self.state.as_mut() {
+                    state.mouse_captured = false;
+                    let _ = state
+                        .window
+                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                    state.window.set_cursor_visible(true);
+                    state.screen = AppScreen::Paused {
+                        status_message: Some("Controller disconnected".to_string()),
+                    };
+                }
+                return;
+            }
+            crate::controller::DisconnectAction::ShowMultiplayerToast => {
+                if let Some(state) = self.state.as_mut() {
+                    state.hud_toast = Some(("Controller disconnected".to_string(), 4.5));
+                }
+            }
+            crate::controller::DisconnectAction::None => {}
+        }
+
+        // Update continuous controller state & camera look in gameplay
+        if in_gameplay {
+            let mut kb_inventory = KeyCode::KeyE;
+            let mut kb_third_person = KeyCode::F5;
+            let mut kb_flight = KeyCode::KeyF;
+            let mut kb_chat = KeyCode::KeyT;
+
+            if let Some(state) = self.state.as_mut() {
+                state.controller_move_axes = out.move_axes;
+                state.controller_jumping = out.jump_held;
+                state.controller_sneaking = out.sneak_held;
+                state.controller_sprinting = out.sprint_held;
+                state.controller_mine_held = out.mine_held;
+                state.controller_use_held = out.use_held;
+                state.controller_ptt_held = out.ptt_held;
+                state.controller_player_list_held = out.player_list_held;
+
+                if out.look_delta[0].abs() > 0.0 || out.look_delta[1].abs() > 0.0 {
+                    state.camera.yaw += out.look_delta[0];
+                    state.camera.pitch += out.look_delta[1];
                     let max_pitch = 89.0_f32.to_radians();
                     state.camera.pitch = state.camera.pitch.clamp(-max_pitch, max_pitch);
                 }
+
+                if out.hotbar_next_pressed {
+                    state.active_hotbar_slot = (state.active_hotbar_slot + 1) % 9;
+                    state.hotbar_activity_timer = 4.0;
+                }
+                if out.hotbar_prev_pressed {
+                    state.active_hotbar_slot = (state.active_hotbar_slot + 8) % 9;
+                    state.hotbar_activity_timer = 4.0;
+                }
+                if out.jump_double_tapped && state.player_stats.game_mode.is_creative() {
+                    state.player.flying = !state.player.flying;
+                    state.player.velocity.y = 0.0;
+                }
+                if out.quick_menu_pressed {
+                    state.quick_menu_open = true;
+                    state.mouse_captured = false;
+                    let _ = state
+                        .window
+                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                    state.window.set_cursor_visible(false);
+                    state
+                        .input_router
+                        .set_virtual_cursor([screen_size[0] * 0.5, screen_size[1] * 0.5]);
+                }
+
+                kb_inventory = state.settings.keybinds.inventory;
+                kb_third_person = state.settings.keybinds.third_person;
+                kb_flight = state.settings.keybinds.flight;
+                kb_chat = state.settings.keybinds.chat;
             }
+
+            if out.mine_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Left,
+                        state: ElementState::Pressed,
+                    },
+                );
+            }
+            if out.mine_released {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Left,
+                        state: ElementState::Released,
+                    },
+                );
+            }
+            if out.use_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Right,
+                        state: ElementState::Pressed,
+                    },
+                );
+            }
+            if out.use_released {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Right,
+                        state: ElementState::Released,
+                    },
+                );
+            }
+            if out.inventory_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticKey {
+                        key: kb_inventory,
+                        state: ElementState::Pressed,
+                        text: None,
+                    },
+                );
+            }
+            if out.backpack_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticKey {
+                        key: KeyCode::KeyB,
+                        state: ElementState::Pressed,
+                        text: None,
+                    },
+                );
+            }
+            if out.third_person_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticKey {
+                        key: kb_third_person,
+                        state: ElementState::Pressed,
+                        text: None,
+                    },
+                );
+            }
+            if out.flight_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticKey {
+                        key: kb_flight,
+                        state: ElementState::Pressed,
+                        text: None,
+                    },
+                );
+            }
+            if out.chat_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticKey {
+                        key: kb_chat,
+                        state: ElementState::Pressed,
+                        text: None,
+                    },
+                );
+            }
+            if out.pause_pressed {
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticKey {
+                        key: KeyCode::Escape,
+                        state: ElementState::Pressed,
+                        text: None,
+                    },
+                );
+            }
+            return;
+        }
+
+        // Release any latched mouse buttons if we exited gameplay while holding RT/LT
+        if out.mine_released {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Left,
+                    state: ElementState::Released,
+                },
+            );
+        }
+        if out.use_released {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Right,
+                    state: ElementState::Released,
+                },
+            );
+        }
+
+        // Clear held gameplay states while in menus/UI
+        let in_controller_mode = {
+            let Some(state) = self.state.as_mut() else {
+                return;
+            };
+            state.controller_move_axes = [0.0, 0.0];
+            state.controller_jumping = false;
+            state.controller_sneaking = false;
+            state.controller_sprinting = false;
+            state.controller_mine_held = false;
+            state.controller_use_held = false;
+            state.controller_ptt_held = false;
+            state.controller_player_list_held = false;
+
+            let is_ctrl =
+                state.input_router.input_mode() == blockgame_render::InputMode::Controller;
+            if is_ctrl {
+                state.window.set_cursor_visible(false);
+                // D-pad directional focus snapping
+                if let Some(dir) = out.ui_dpad_snap {
+                    let rects = Self::collect_dpad_snap_rects(state, screen_size[0], screen_size[1]);
+                    if let Some(target) = crate::controller::find_dpad_snap_target(
+                        state.input_router.virtual_cursor(),
+                        dir,
+                        &rects,
+                    ) {
+                        state.input_router.set_virtual_cursor(target);
+                    }
+                }
+                let vc = state.input_router.virtual_cursor();
+                state.cursor_pos = [vc[0] * ui_scale, vc[1] * ui_scale];
+
+                // Active slider dragging via Virtual Cursor
+                if out.ui_confirm_held {
+                    if let Some(slider_idx) = state.active_settings_slider {
+                        state.update_settings_slider(slider_idx, vc[0], screen_size[0], screen_size[1]);
+                    } else if let Some(ch) = state.creator_active_rgb_slider {
+                        state.apply_creator_rgb_slider(ch, vc[0], screen_size[0], screen_size[1]);
+                    }
+                }
+
+                // Right stick: rotate 3D Character Creator preview + rate-limited list scrolling
+                if let AppScreen::CharacterCreator { preview_yaw, .. } = &mut state.screen {
+                    if out.ui_right_stick[0].abs() > 0.05 {
+                        *preview_yaw += out.ui_right_stick[0] * 2.6 * dt;
+                    }
+                }
+                if out.ui_right_stick[1].abs() <= 0.35 {
+                    state.ui_scroll_cooldown = 0.0;
+                } else {
+                    state.ui_scroll_cooldown = (state.ui_scroll_cooldown - dt).max(0.0);
+                    if state.ui_scroll_cooldown <= 0.0 {
+                        state.ui_scroll_cooldown = 0.12;
+                        let up = out.ui_right_stick[1] > 0.0;
+                        if matches!(state.screen, AppScreen::Achievements { .. })
+                            || (state.screen == AppScreen::InGame && state.achievements_open)
+                        {
+                            if up {
+                                state.achievements_scroll =
+                                    state.achievements_scroll.saturating_sub(1);
+                            } else {
+                                state.achievements_scroll = (state.achievements_scroll + 1).min(16);
+                            }
+                        } else if matches!(state.screen, AppScreen::MultiplayerLobby { .. }) {
+                            let len = state.directory_servers.len();
+                            if len > 0 {
+                                let cur = state.selected_directory_idx.unwrap_or(0);
+                                let next = if up {
+                                    cur.saturating_sub(1)
+                                } else {
+                                    (cur + 1).min(len - 1)
+                                };
+                                state.selected_directory_idx = Some(next);
+                            }
+                        } else if state.screen == AppScreen::InGame && state.chat_open {
+                            if up {
+                                state.chat_scroll = (state.chat_scroll + 1).min(100);
+                            } else {
+                                state.chat_scroll = state.chat_scroll.saturating_sub(1);
+                            }
+                        } else if state.screen == AppScreen::InGame && state.inventory_open {
+                            if up {
+                                state.jei_page = state.jei_page.saturating_sub(1);
+                            } else {
+                                state.jei_page = state.jei_page.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+
+                // LB / RB: switch tabs and pages across screens
+                if out.ui_lb_pressed || out.ui_rb_pressed {
+                    let forward = out.ui_rb_pressed;
+                    match &mut state.screen {
+                        AppScreen::Settings { .. } => {
+                            state.settings_tab = if forward {
+                                (state.settings_tab + 1) % 3
+                            } else {
+                                (state.settings_tab + 2) % 3
+                            };
+                            state.listening_keybind = None;
+                            state.listening_controller_bind = None;
+                        }
+                        AppScreen::Guide { page, .. } => {
+                            *page = if forward { (*page + 1) % 3 } else { (*page + 2) % 3 };
+                        }
+                        AppScreen::Achievements { .. } => {
+                            let count = blockgame_core::achievement::AchievementCategory::ALL.len();
+                            state.achievements_category = if forward {
+                                (state.achievements_category + 1) % count
+                            } else {
+                                (state.achievements_category + count - 1) % count
+                            };
+                            state.achievements_scroll = 0;
+                        }
+                        AppScreen::CharacterCreator { tab, .. } => {
+                            use blockgame_render::CharacterCreatorTab;
+                            let tabs = [
+                                CharacterCreatorTab::Presets,
+                                CharacterCreatorTab::Body,
+                                CharacterCreatorTab::FaceHair,
+                                CharacterCreatorTab::Clothing,
+                            ];
+                            let idx = tabs.iter().position(|t| t == tab).unwrap_or(0);
+                            *tab = tabs[if forward {
+                                (idx + 1) % tabs.len()
+                            } else {
+                                (idx + tabs.len() - 1) % tabs.len()
+                            }];
+                        }
+                        AppScreen::InGame => {
+                            if state.achievements_open {
+                                let count =
+                                    blockgame_core::achievement::AchievementCategory::ALL.len();
+                                state.achievements_category = if forward {
+                                    (state.achievements_category + 1) % count
+                                } else {
+                                    (state.achievements_category + count - 1) % count
+                                };
+                                state.achievements_scroll = 0;
+                            } else if state.active_chest_pos.is_some() {
+                                state.chest_page = if forward {
+                                    state.chest_page + 1
+                                } else {
+                                    state.chest_page.saturating_sub(1)
+                                };
+                            } else if state.active_backpack_id.is_some() {
+                                state.backpack_page = if forward {
+                                    state.backpack_page + 1
+                                } else {
+                                    state.backpack_page.saturating_sub(1)
+                                };
+                            } else if state.active_storage_terminal_pos.is_some() {
+                                state.storage_page = if forward {
+                                    state.storage_page + 1
+                                } else {
+                                    state.storage_page.saturating_sub(1)
+                                };
+                            } else if state.inventory_open {
+                                state.jei_page = if forward {
+                                    state.jei_page + 1
+                                } else {
+                                    state.jei_page.saturating_sub(1)
+                                };
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            is_ctrl
+        };
+
+        if !in_controller_mode {
+            return;
+        }
+
+        // Dispatch UI face/trigger button shortcuts via existing MouseInput & KeyboardInput handlers
+        if out.ui_confirm_pressed {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Left,
+                    state: ElementState::Pressed,
+                },
+            );
+        }
+        if out.ui_confirm_released {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Left,
+                    state: ElementState::Released,
+                },
+            );
+        }
+        if out.ui_west_pressed {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticMouse {
+                    button: MouseButton::Right,
+                    state: ElementState::Pressed,
+                },
+            );
+        }
+        if out.ui_north_pressed {
+            if let Some(state) = self.state.as_mut() {
+                let prev = state.shift_down;
+                state.shift_down = true;
+                self.dispatch_event(
+                    event_loop,
+                    InternalEvent::SyntheticMouse {
+                        button: MouseButton::Left,
+                        state: ElementState::Pressed,
+                    },
+                );
+                if let Some(s) = self.state.as_mut() {
+                    s.shift_down = prev;
+                }
+            }
+        }
+        if out.ui_lt_pressed {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticKey {
+                    key: KeyCode::KeyR,
+                    state: ElementState::Pressed,
+                    text: None,
+                },
+            );
+        }
+        if out.ui_rt_pressed {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticKey {
+                    key: KeyCode::KeyU,
+                    state: ElementState::Pressed,
+                    text: None,
+                },
+            );
+        }
+        if out.ui_cancel_pressed {
+            self.dispatch_event(
+                event_loop,
+                InternalEvent::SyntheticKey {
+                    key: KeyCode::Escape,
+                    state: ElementState::Pressed,
+                    text: None,
+                },
+            );
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(state) = &self.state {
-            state.window.request_redraw();
+    /// Collects interactive widget/slot rectangles for D-pad Virtual Cursor snapping on the active screen.
+    fn collect_dpad_snap_rects(state: &AppState, screen_w: f32, screen_h: f32) -> Vec<[f32; 4]> {
+        let mut rects = Vec::new();
+        match &state.screen {
+            AppScreen::Title => {
+                rects.extend_from_slice(&UiBuilder::title_screen_button_rects(screen_w, screen_h));
+            }
+            AppScreen::WorldSelect { .. } => {
+                let (rows, btns) = UiBuilder::world_select_layout(
+                    screen_w,
+                    screen_h,
+                    state.saved_worlds.len(),
+                );
+                rects.extend(rows);
+                rects.extend_from_slice(&btns);
+            }
+            AppScreen::CreateWorld { .. } => {
+                let (name_r, seed_r, create_r, cancel_r) =
+                    UiBuilder::create_world_layout(screen_w, screen_h);
+                rects.push(name_r);
+                rects.push(seed_r);
+                rects.push(create_r);
+                rects.push(cancel_r);
+            }
+            AppScreen::MultiplayerLobby { .. } => {
+                let (user_r, pass_r, addr_r, btns) =
+                    UiBuilder::multiplayer_lobby_layout(screen_w, screen_h);
+                rects.push(user_r);
+                rects.push(pass_r);
+                rects.push(addr_r);
+                rects.extend_from_slice(&btns);
+                let (_panel, refresh_r, rows) =
+                    UiBuilder::multiplayer_browser_layout(screen_w, screen_h);
+                rects.push(refresh_r);
+                rects.extend_from_slice(&rows);
+            }
+            AppScreen::Guide { .. } => {
+                rects.extend_from_slice(&UiBuilder::guide_screen_button_rects(screen_w, screen_h));
+            }
+            AppScreen::Achievements { .. } => {
+                let (cat_rects, _list_rect, close_rect) =
+                    UiBuilder::achievements_screen_rects(screen_w, screen_h);
+                rects.extend_from_slice(&cat_rects);
+                rects.push(close_rect);
+            }
+            AppScreen::Paused { .. } => {
+                rects.extend_from_slice(&UiBuilder::pause_menu_button_rects(screen_w, screen_h));
+            }
+            AppScreen::Settings { .. } => {
+                for t in 0..3 {
+                    rects.push(UiBuilder::settings_tab_rect(screen_w, screen_h, t));
+                }
+                if state.settings_tab == 0 {
+                    for i in 0..8 {
+                        rects.push(UiBuilder::settings_slider_rect(screen_w, screen_h, i));
+                        rects.push(UiBuilder::settings_toggle_rect(screen_w, screen_h, i));
+                    }
+                } else if state.settings_tab == 1 {
+                    for i in 0..crate::settings::KeyBinds::COUNT {
+                        rects.push(UiBuilder::settings_keybind_rect(screen_w, screen_h, i));
+                    }
+                } else {
+                    for i in 0..3 {
+                        rects.push(UiBuilder::settings_controller_slider_rect(
+                            screen_w, screen_h, i,
+                        ));
+                    }
+                    for i in 0..4 {
+                        rects.push(UiBuilder::settings_controller_toggle_rect(
+                            screen_w, screen_h, i,
+                        ));
+                    }
+                    for i in 0..crate::controller::ControllerBindings::COUNT {
+                        rects.push(UiBuilder::settings_controller_bind_rect(
+                            screen_w, screen_h, i,
+                        ));
+                    }
+                }
+                rects.push(UiBuilder::settings_reset_button_rect(screen_w, screen_h));
+                rects.push(UiBuilder::settings_done_button_rect(screen_w, screen_h));
+            }
+            AppScreen::CharacterCreator { .. } => {
+                if let Some(creator_ui) = state.build_creator_ui_state() {
+                    let layout =
+                        UiBuilder::character_creator_layout(screen_w, screen_h, &creator_ui);
+                    rects.extend_from_slice(&layout.tab_rects);
+                    rects.push(layout.btn_zoom);
+                    rects.push(layout.btn_walk);
+                    rects.push(layout.btn_randomize);
+                    rects.push(layout.btn_revert);
+                    rects.push(layout.btn_done);
+                    for (r, _, _) in &layout.option_buttons {
+                        rects.push(*r);
+                    }
+                    for (r, _) in &layout.preset_rows {
+                        rects.push(*r);
+                    }
+                    for (r, _) in &layout.swatch_rects {
+                        rects.push(*r);
+                    }
+                }
+            }
+            AppScreen::InGame if state.player_stats.is_dead => {
+                let btn_w = 240.0;
+                let btn_h = 46.0;
+                rects.push([(screen_w - btn_w) * 0.5, screen_h * 0.5 + 30.0, btn_w, btn_h]);
+            }
+            AppScreen::InGame if state.skills_open => {
+                let (skill_rects, _detail, close_rect) =
+                    UiBuilder::skills_screen_rects(screen_w, screen_h);
+                rects.extend_from_slice(&skill_rects);
+                rects.push(close_rect);
+            }
+            AppScreen::InGame if state.achievements_open => {
+                let (cat_rects, _list_rect, close_rect) =
+                    UiBuilder::achievements_screen_rects(screen_w, screen_h);
+                rects.extend_from_slice(&cat_rects);
+                rects.push(close_rect);
+            }
+            AppScreen::InGame if state.quick_menu_open => {
+                for i in 0..4 {
+                    rects.push(UiBuilder::quick_menu_item_rect(screen_w, screen_h, i));
+                }
+            }
+            AppScreen::InGame if state.inventory_open => {
+                // Main 36-slot player inventory + hotbar grid
+                let inv_w = 9.0 * UiBuilder::SLOT_SIZE + 8.0 * UiBuilder::SLOT_GAP;
+                let inv_x = (screen_w - inv_w) * 0.5;
+                let base_y = screen_h * 0.5 + 10.0;
+                for row in 0..4 {
+                    let y = base_y
+                        + (row as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP)
+                        + if row == 3 { 10.0 } else { 0.0 };
+                    for col in 0..9 {
+                        let x = inv_x + (col as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
+                        rects.push([x, y, UiBuilder::SLOT_SIZE, UiBuilder::SLOT_SIZE]);
+                    }
+                }
+                // Upper container / crafting / armor / shop slots above player inventory
+                let upper_y = base_y - 3.0 * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP) - 24.0;
+                for row in 0..3 {
+                    let y = upper_y + (row as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
+                    for col in 0..9 {
+                        let x = inv_x + (col as f32) * (UiBuilder::SLOT_SIZE + UiBuilder::SLOT_GAP);
+                        rects.push([x, y, UiBuilder::SLOT_SIZE, UiBuilder::SLOT_SIZE]);
+                    }
+                }
+                // JEI sidebar slots on the right edge
+                let jei_w = (UiBuilder::JEI_COLS as f32) * UiBuilder::JEI_SLOT_SIZE
+                    + ((UiBuilder::JEI_COLS - 1) as f32) * UiBuilder::JEI_SLOT_GAP;
+                let jei_x = screen_w - jei_w - 20.0;
+                let jei_y = 92.0;
+                for row in 0..UiBuilder::JEI_ROWS {
+                    for col in 0..UiBuilder::JEI_COLS {
+                        let x = jei_x
+                            + (col as f32) * (UiBuilder::JEI_SLOT_SIZE + UiBuilder::JEI_SLOT_GAP);
+                        let y = jei_y
+                            + (row as f32) * (UiBuilder::JEI_SLOT_SIZE + UiBuilder::JEI_SLOT_GAP);
+                        rects.push([x, y, UiBuilder::JEI_SLOT_SIZE, UiBuilder::JEI_SLOT_SIZE]);
+                    }
+                }
+            }
+            _ => {}
         }
+        rects
     }
 }
 

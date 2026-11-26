@@ -2,6 +2,9 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::atlas::TextureAtlas;
+use crate::controller_glyphs::{
+    glyph_tile_id, ControllerFamily, GamepadButton, GlyphStyle, InputMode,
+};
 use blockgame_core::{
     crafting::CraftingGrid,
     item::{Inventory, ItemId, ItemRegistry, ItemSlot},
@@ -301,6 +304,15 @@ pub struct SettingsUiState {
     pub voice_mode: u8,
     pub voice_volume: f32,
     pub voice_input_device: String,
+    pub controller_sensitivity: f32,
+    pub controller_invert_y: bool,
+    pub controller_deadzone: f32,
+    pub controller_rumble_intensity: f32,
+    pub controller_glyph_style: GlyphStyle,
+    pub controller_swap_confirm_cancel: bool,
+    pub controller_sneak_toggle: bool,
+    pub active_controller_label: String,
+    pub active_glyph_family: ControllerFamily,
 }
 
 pub struct UiBuilder;
@@ -411,6 +423,219 @@ impl UiBuilder {
             Self::draw_string(mesh, x, y, &span.text, char_w, char_h, spacing, span.color);
             x += Self::string_width(&span.text, char_w, spacing);
         }
+    }
+
+    /// Draws a pixel-art controller button glyph from the UI texture atlas.
+    pub fn draw_gamepad_glyph(
+        mesh: &mut UiMesh,
+        x: f32,
+        y: f32,
+        size: f32,
+        family: ControllerFamily,
+        button: GamepadButton,
+        tint: [f32; 4],
+    ) {
+        let uv = TextureAtlas::get_uv_bounds(glyph_tile_id(family, button));
+        mesh.add_quad(x, y, size, size, uv, tint);
+    }
+
+    /// Draws the controller-driven Virtual Cursor pointer centered at `(x, y)`.
+    pub fn draw_virtual_cursor(mesh: &mut UiMesh, x: f32, y: f32, scale: f32) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let s = scale.clamp(0.75, 1.5);
+        let outer = 16.0 * s;
+        let inner = 10.0 * s;
+        let dot = 4.0 * s;
+        // Drop shadow
+        mesh.add_quad(
+            x - outer * 0.5 + 1.5,
+            y - outer * 0.5 + 1.5,
+            outer,
+            outer,
+            white_uv,
+            [0.02, 0.03, 0.05, 0.72],
+        );
+        // Gold outer frame
+        mesh.add_quad(
+            x - outer * 0.5,
+            y - outer * 0.5,
+            outer,
+            outer,
+            white_uv,
+            [0.98, 0.82, 0.30, 0.96],
+        );
+        // Dark interior cutout
+        mesh.add_quad(
+            x - inner * 0.5,
+            y - inner * 0.5,
+            inner,
+            inner,
+            white_uv,
+            [0.08, 0.10, 0.15, 0.92],
+        );
+        // Bright center precision dot
+        mesh.add_quad(
+            x - dot * 0.5,
+            y - dot * 0.5,
+            dot,
+            dot,
+            white_uv,
+            [1.0, 1.0, 1.0, 1.0],
+        );
+    }
+
+    /// Draws a non-blocking top-center HUD toast (e.g. multiplayer controller disconnect notice).
+    pub fn draw_hud_toast(mesh: &mut UiMesh, screen_w: f32, message: &str) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let tw = Self::string_width(message, 9.5, 1.0);
+        let box_w = (tw + 32.0).max(220.0);
+        let box_h = 32.0;
+        let bx = (screen_w - box_w) * 0.5;
+        let by = 18.0;
+        mesh.add_quad(bx, by, box_w, box_h, white_uv, [0.95, 0.72, 0.25, 0.95]);
+        mesh.add_quad(
+            bx + 1.5,
+            by + 1.5,
+            box_w - 3.0,
+            box_h - 3.0,
+            white_uv,
+            [0.10, 0.08, 0.06, 0.92],
+        );
+        Self::draw_string(
+            mesh,
+            bx + (box_w - tw) * 0.5,
+            by + (box_h - 13.0) * 0.5,
+            message,
+            9.5,
+            13.0,
+            1.0,
+            [1.0, 0.90, 0.55, 1.0],
+        );
+    }
+
+    /// Returns `[x, y, w, h]` for Quick-Menu button `idx` (`0..4`: Skills, Achievements, Guide, Debug HUD).
+    pub fn quick_menu_item_rect(screen_w: f32, screen_h: f32, idx: usize) -> [f32; 4] {
+        let card_w = 320.0_f32.min(screen_w - 40.0);
+        let card_h = 256.0;
+        let card_x = (screen_w - card_w) * 0.5;
+        let card_y = (screen_h - card_h) * 0.5;
+        let btn_w = card_w - 36.0;
+        let btn_h = 36.0;
+        let gap = 8.0;
+        [
+            card_x + 18.0,
+            card_y + 52.0 + (idx as f32) * (btn_h + gap),
+            btn_w,
+            btn_h,
+        ]
+    }
+
+    /// Builds the lightweight in-game Quick-Menu overlay (Skills, Achievements, Guide, Debug HUD).
+    pub fn build_quick_menu(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        debug_hud_on: bool,
+        glyph_family: ControllerFamily,
+        confirm_btn: GamepadButton,
+        cancel_btn: GamepadButton,
+        cursor_pos: [f32; 2],
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let card_w = 320.0_f32.min(screen_w - 40.0);
+        let card_h = 256.0;
+        let card_x = (screen_w - card_w) * 0.5;
+        let card_y = (screen_h - card_h) * 0.5;
+
+        mesh.add_quad(
+            0.0,
+            0.0,
+            screen_w,
+            screen_h,
+            white_uv,
+            [0.02, 0.03, 0.06, 0.42],
+        );
+        mesh.add_quad(
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            white_uv,
+            [0.92, 0.76, 0.30, 0.92],
+        );
+        mesh.add_quad(
+            card_x + 1.5,
+            card_y + 1.5,
+            card_w - 3.0,
+            card_h - 3.0,
+            white_uv,
+            [0.07, 0.09, 0.14, 0.95],
+        );
+
+        let title = "QUICK MENU";
+        let tw = Self::string_width(title, 12.0, 1.2);
+        Self::draw_string(
+            mesh,
+            card_x + (card_w - tw) * 0.5,
+            card_y + 18.0,
+            title,
+            12.0,
+            15.0,
+            1.2,
+            [1.0, 0.90, 0.45, 1.0],
+        );
+
+        let labels = [
+            "Skills & Milestones".to_string(),
+            "Achievements".to_string(),
+            "Expedition Guide".to_string(),
+            format!("Debug HUD: {}", if debug_hud_on { "ON" } else { "OFF" }),
+        ];
+        for (idx, label) in labels.iter().enumerate() {
+            let r = Self::quick_menu_item_rect(screen_w, screen_h, idx);
+            Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
+        }
+
+        // Footer glyph legend
+        let fy = card_y + card_h - 26.0;
+        Self::draw_gamepad_glyph(
+            mesh,
+            card_x + 28.0,
+            fy - 2.0,
+            16.0,
+            glyph_family,
+            confirm_btn,
+            [1.0; 4],
+        );
+        Self::draw_string(
+            mesh,
+            card_x + 48.0,
+            fy + 1.0,
+            "Select",
+            8.0,
+            11.0,
+            0.8,
+            [0.82, 0.86, 0.94, 0.95],
+        );
+        Self::draw_gamepad_glyph(
+            mesh,
+            card_x + card_w - 102.0,
+            fy - 2.0,
+            16.0,
+            glyph_family,
+            cancel_btn,
+            [1.0; 4],
+        );
+        Self::draw_string(
+            mesh,
+            card_x + card_w - 82.0,
+            fy + 1.0,
+            "Close",
+            8.0,
+            11.0,
+            0.8,
+            [0.82, 0.86, 0.94, 0.95],
+        );
     }
 
     /// Draws a stack count number in the bottom-right corner of an item slot.
@@ -7140,6 +7365,113 @@ impl UiBuilder {
         Self::draw_menu_button(mesh, btns[2][0], btns[2][1], btns[2][2], btns[2][3], "Back to Title", cursor_pos, true);
     }
 
+    /// Builds the Expedition Guide with controller pixel-art button glyphs on page 0 when in Controller Input Mode.
+    pub fn build_guide_screen_with_input_mode(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        page: usize,
+        cursor_pos: [f32; 2],
+        input_mode: InputMode,
+        glyph_family: ControllerFamily,
+    ) {
+        Self::build_guide_screen(mesh, screen_w, screen_h, page, cursor_pos);
+        if input_mode != InputMode::Controller || page % 3 != 0 {
+            return;
+        }
+        // Overdraw Page 0 content area with controller glyph controls table
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let modal_w = 720.0_f32.min(screen_w - 40.0);
+        let modal_h = 460.0_f32.min(screen_h - 100.0);
+        let modal_x = (screen_w - modal_w) * 0.5;
+        let modal_y = ((screen_h - modal_h) * 0.5 - 24.0).max(20.0);
+        let content_y = modal_y + 70.0;
+        let pad = 24.0;
+        mesh.add_quad(
+            modal_x + 4.0,
+            content_y - 4.0,
+            modal_w - 8.0,
+            modal_h - 74.0,
+            white_uv,
+            [0.06, 0.08, 0.12, 0.96],
+        );
+
+        let pad_controls: [(Option<GamepadButton>, &str, &str); 11] = [
+            (None, "L-Stick / R-Stick", "Analog Movement & Camera Look"),
+            (Some(GamepadButton::South), "Jump / Fly Up", "Jump, Swim Up, Double-Tap to Fly"),
+            (Some(GamepadButton::East), "Sneak / Fly Down", "Sneak (Toggle/Hold) & Descend in Flight"),
+            (Some(GamepadButton::LeftStick), "Sprint", "Toggle Sprint (Clears when stopped)"),
+            (Some(GamepadButton::RightTrigger), "Mine / Attack", "Break Blocks & Attack Entities"),
+            (Some(GamepadButton::LeftTrigger), "Place / Use", "Place Block, Use Item, Eat, Fish"),
+            (Some(GamepadButton::RightBumper), "Hotbar Cycle", "Cycle Hotbar Slots / Switch UI Tabs"),
+            (Some(GamepadButton::North), "Inventory", "Open Inventory & Quick-Transfer in UI"),
+            (Some(GamepadButton::West), "Backpack", "Open Portable Backpack / Half-Stack in UI"),
+            (Some(GamepadButton::DPadUp), "Quick Menu", "Skills, Achievements, Guide & Debug HUD"),
+            (Some(GamepadButton::Start), "Pause Menu", "Pause Game / Close Overlay"),
+        ];
+        for (i, (glyph_opt, label, desc)) in pad_controls.iter().enumerate() {
+            let y = content_y + (i as f32) * 29.0;
+            if y + 25.0 > modal_y + modal_h - 10.0 {
+                break;
+            }
+            mesh.add_quad(modal_x + pad, y, 162.0, 22.0, white_uv, [0.12, 0.15, 0.20, 0.88]);
+            let text_x = if let Some(btn) = glyph_opt {
+                Self::draw_gamepad_glyph(
+                    mesh,
+                    modal_x + pad + 4.0,
+                    y + 2.0,
+                    18.0,
+                    glyph_family,
+                    *btn,
+                    [1.0; 4],
+                );
+                modal_x + pad + 26.0
+            } else {
+                modal_x + pad + 8.0
+            };
+            Self::draw_string(mesh, text_x, y + 5.0, label, 8.0, 11.5, 0.8, [1.0, 0.82, 0.35, 1.0]);
+            Self::draw_string(
+                mesh,
+                modal_x + pad + 174.0,
+                y + 5.0,
+                desc,
+                8.5,
+                12.0,
+                0.8,
+                [0.90, 0.92, 0.96, 0.95],
+            );
+        }
+    }
+
+    /// Draws a compact controller glyph legend bar for JEI Recipe (`LT`) / Usage (`RT`) and Quick-Transfer (`North`) in inventory screens.
+    pub fn draw_jei_controller_footer(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        glyph_family: ControllerFamily,
+    ) {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let bar_w = 340.0;
+        let bar_h = 26.0;
+        let bx = (screen_w - bar_w) * 0.5;
+        let by = screen_h - bar_h - 8.0;
+        mesh.add_quad(bx, by, bar_w, bar_h, white_uv, [0.06, 0.08, 0.13, 0.86]);
+
+        let items = [
+            (GamepadButton::LeftTrigger, "Recipe"),
+            (GamepadButton::RightTrigger, "Uses"),
+            (GamepadButton::North, "Quick Move"),
+            (GamepadButton::West, "Half"),
+        ];
+        let mut x = bx + 10.0;
+        for (btn, label) in items {
+            Self::draw_gamepad_glyph(mesh, x, by + 4.0, 18.0, glyph_family, btn, [1.0; 4]);
+            x += 21.0;
+            Self::draw_string(mesh, x, by + 7.5, label, 7.5, 10.5, 0.7, [0.86, 0.90, 0.96, 0.95]);
+            x += Self::string_width(label, 7.5, 0.7) + 12.0;
+        }
+    }
+
     /// Returns the world list row rectangles (up to 5 visible slots) and the 4 bottom action buttons
     /// `[Play Selected World, Create New World, Delete World, Back]` for the World Select screen.
     pub fn world_select_layout(
@@ -7906,6 +8238,61 @@ impl UiBuilder {
         }
     }
 
+    /// Builds the Pause Menu with controller-aware footer prompt (renders pixel-art button glyph in Controller Input Mode).
+    pub fn build_pause_menu_with_input_mode(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        cursor_pos: [f32; 2],
+        status_toast: Option<&str>,
+        input_mode: InputMode,
+        glyph_family: ControllerFamily,
+    ) {
+        if input_mode == InputMode::KeyboardMouse || status_toast.is_some() {
+            Self::build_pause_menu(mesh, screen_w, screen_h, cursor_pos, status_toast);
+            return;
+        }
+        Self::build_pause_menu(mesh, screen_w, screen_h, cursor_pos, Some(" "));
+        // Overdraw the bottom strip with a clean controller glyph hint
+        let card_w = 340.0_f32.min(screen_w - 40.0);
+        let card_h = 440.0_f32.min(screen_h - 40.0);
+        let card_x = (screen_w - card_w) * 0.5;
+        let card_y = (screen_h - card_h) * 0.5;
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        mesh.add_quad(
+            card_x + 12.0,
+            card_y + card_h - 48.0,
+            card_w - 24.0,
+            34.0,
+            white_uv,
+            [0.06, 0.08, 0.12, 0.96],
+        );
+        let tip = "to return to expedition";
+        let tw = Self::string_width(tip, 7.5, 0.8);
+        let total_w = 16.0 + 6.0 + tw;
+        let start_x = card_x + (card_w - total_w) * 0.5;
+        let fy = card_y + card_h - 35.0;
+        Self::draw_gamepad_glyph(
+            mesh,
+            start_x,
+            fy - 2.0,
+            15.0,
+            glyph_family,
+            GamepadButton::Start,
+            [1.0; 4],
+        );
+        Self::draw_string(
+            mesh,
+            start_x + 21.0,
+            fy + 1.0,
+            tip,
+            7.5,
+            10.0,
+            0.8,
+            [0.65, 0.72, 0.85, 0.90],
+        );
+    }
+
     /// Returns the Back button rectangle for modal/notice/settings screens.
     pub fn notice_back_button_rect(screen_w: f32, screen_h: f32) -> [f32; 4] {
         let btn_w = 240.0;
@@ -7983,14 +8370,53 @@ impl UiBuilder {
         [modal_x, modal_y, modal_w, modal_h]
     }
 
-    /// Returns the tab button rectangle `[x, y, w, h]` for tab `0` (General) or `1` (Controls).
+    /// Returns the tab button rectangle `[x, y, w, h]` for tab `0` (General), `1` (Controls), or `2` (Controller).
     pub fn settings_tab_rect(screen_w: f32, screen_h: f32, tab_idx: usize) -> [f32; 4] {
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let gap_x = 12.0;
+        let tab_w = (m[2] - 48.0 - gap_x * 2.0) / 3.0;
+        let start_x = m[0] + 24.0;
+        let y = m[1] + 68.0;
+        [start_x + (tab_idx as f32) * (tab_w + gap_x), y, tab_w, 34.0]
+    }
+
+    /// Returns `[x, y, w, h]` for Controller tab slider `index` (`0` = Sensitivity, `1` = Deadzone, `2` = Rumble).
+    pub fn settings_controller_slider_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let gap_x = 12.0;
+        let col_w = (m[2] - 48.0 - gap_x * 2.0) / 3.0;
+        let start_x = m[0] + 24.0;
+        let y = m[1] + 132.0;
+        [start_x + (index as f32) * (col_w + gap_x), y, col_w, 26.0]
+    }
+
+    /// Returns `[x, y, w, h]` for Controller tab toggle `index` (`0` = Invert Y, `1` = Glyph Style, `2` = Swap Confirm/Cancel, `3` = Sneak Mode).
+    pub fn settings_controller_toggle_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
+        let m = Self::settings_modal_rect(screen_w, screen_h);
+        let gap_x = 10.0;
+        let col_w = (m[2] - 48.0 - gap_x * 3.0) / 4.0;
+        let start_x = m[0] + 24.0;
+        let y = m[1] + 164.0;
+        [start_x + (index as f32) * (col_w + gap_x), y, col_w, 26.0]
+    }
+
+    /// Returns `[x, y, w, h]` for Controller tab button binding `index` (`0..16`, 2 columns × 8 rows).
+    pub fn settings_controller_bind_rect(screen_w: f32, screen_h: f32, index: usize) -> [f32; 4] {
         let m = Self::settings_modal_rect(screen_w, screen_h);
         let col_w = (m[2] - 64.0) * 0.5;
         let gap_x = 16.0;
         let start_x = m[0] + 24.0;
-        let y = m[1] + 68.0;
-        [start_x + (tab_idx as f32) * (col_w + gap_x), y, col_w, 36.0]
+        let start_y = m[1] + 198.0;
+        let row_h = 26.0;
+        let gap_y = 4.0;
+        let col = (index / 8) as f32;
+        let row = (index % 8) as f32;
+        [
+            start_x + col * (col_w + gap_x),
+            start_y + row * (row_h + gap_y),
+            col_w,
+            row_h,
+        ]
     }
 
     /// Returns the slider rectangle `[x, y, w, h]` for slider index `0..7`.
@@ -8068,7 +8494,8 @@ impl UiBuilder {
         [start_x + col_w + gap_x, m[1] + m[3] - 52.0, col_w, 40.0]
     }
 
-    /// Builds the interactive Settings screen with General and Controls tabs.
+    /// Builds the interactive Settings screen with General, Controls, and Controller tabs.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_settings_screen(
         mesh: &mut UiMesh,
         screen_w: f32,
@@ -8078,6 +8505,8 @@ impl UiBuilder {
         active_slider: Option<usize>,
         listening_keybind: Option<usize>,
         keybinds: &[(&str, &str)],
+        listening_controller_bind: Option<usize>,
+        controller_binds: &[(&str, GamepadButton)],
         cursor_pos: [f32; 2],
     ) {
         mesh.clear();
@@ -8163,7 +8592,10 @@ impl UiBuilder {
             [0.95, 0.78, 0.30, 0.95],
         );
 
-        for (tab_idx, tab_label) in ["General & Audio", "Controls & Keybinds"].iter().enumerate() {
+        for (tab_idx, tab_label) in ["General & Audio", "Controls & Keybinds", "Controller"]
+            .iter()
+            .enumerate()
+        {
             let r = Self::settings_tab_rect(screen_w, screen_h, tab_idx);
             let is_active = settings_tab == tab_idx;
             let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
@@ -8351,7 +8783,7 @@ impl UiBuilder {
                 let r = Self::settings_toggle_rect(screen_w, screen_h, idx);
                 Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
             }
-        } else {
+        } else if settings_tab == 1 {
             for (idx, (action, key_name)) in keybinds.iter().enumerate() {
                 let r = Self::settings_keybind_rect(screen_w, screen_h, idx);
                 let is_listening = listening_keybind == Some(idx);
@@ -8394,16 +8826,175 @@ impl UiBuilder {
                     );
                 }
             }
+        } else {
+            // Tab 2: Controller tuning, Glyph Style, and per-action button remapping
+            let status_txt = format!("Active Controller: {}", settings.active_controller_label);
+            let sw = Self::string_width(&status_txt, 8.5, 0.9);
+            Self::draw_string(
+                mesh,
+                modal_x + (modal_w - sw) * 0.5,
+                modal_y + 111.0,
+                &status_txt,
+                8.5,
+                12.0,
+                0.9,
+                [0.72, 0.88, 1.0, 0.96],
+            );
+
+            let pad_sliders: [(String, f32); 3] = [
+                (
+                    format!("Look Sens: {:.0}%", settings.controller_sensitivity * 100.0),
+                    ((settings.controller_sensitivity - 0.2) / 2.3).clamp(0.0, 1.0),
+                ),
+                (
+                    format!("Deadzone: {:.0}%", settings.controller_deadzone * 100.0),
+                    ((settings.controller_deadzone - 0.05) / 0.40).clamp(0.0, 1.0),
+                ),
+                (
+                    if settings.controller_rumble_intensity <= 0.001 {
+                        "Rumble: OFF".to_string()
+                    } else {
+                        format!("Rumble: {:.0}%", settings.controller_rumble_intensity * 100.0)
+                    },
+                    settings.controller_rumble_intensity.clamp(0.0, 1.0),
+                ),
+            ];
+
+            for (idx, (label, norm)) in pad_sliders.iter().enumerate() {
+                let r = Self::settings_controller_slider_rect(screen_w, screen_h, idx);
+                let slider_id = 100 + idx;
+                let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3])
+                    || active_slider == Some(slider_id);
+                let border = if hovered {
+                    [0.95, 0.78, 0.30, 0.95]
+                } else {
+                    [0.26, 0.30, 0.40, 0.85]
+                };
+                mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+                mesh.add_quad(
+                    r[0] + 1.5,
+                    r[1] + 1.5,
+                    r[2] - 3.0,
+                    r[3] - 3.0,
+                    white_uv,
+                    [0.08, 0.10, 0.14, 0.96],
+                );
+                let fill_w = ((r[2] - 3.0) * *norm).max(0.0);
+                if fill_w > 0.0 {
+                    mesh.add_quad(
+                        r[0] + 1.5,
+                        r[1] + 1.5,
+                        fill_w,
+                        r[3] - 3.0,
+                        white_uv,
+                        if hovered {
+                            [0.45, 0.62, 0.92, 0.75]
+                        } else {
+                            [0.28, 0.42, 0.68, 0.65]
+                        },
+                    );
+                }
+                let lw = Self::string_width(label, 8.0, 0.8);
+                Self::draw_string(
+                    mesh,
+                    r[0] + (r[2] - lw) * 0.5,
+                    r[1] + (r[3] - 11.5) * 0.5,
+                    label,
+                    8.0,
+                    11.5,
+                    0.8,
+                    [0.96, 0.97, 1.0, 1.0],
+                );
+            }
+
+            let pad_toggles = [
+                format!(
+                    "Invert Y: {}",
+                    if settings.controller_invert_y { "ON" } else { "OFF" }
+                ),
+                format!("Glyphs: {}", settings.controller_glyph_style.display_name()),
+                format!(
+                    "Swap A/B: {}",
+                    if settings.controller_swap_confirm_cancel { "ON" } else { "OFF" }
+                ),
+                format!(
+                    "Sneak: {}",
+                    if settings.controller_sneak_toggle { "Toggle" } else { "Hold" }
+                ),
+            ];
+            for (idx, label) in pad_toggles.iter().enumerate() {
+                let r = Self::settings_controller_toggle_rect(screen_w, screen_h, idx);
+                Self::draw_menu_button(mesh, r[0], r[1], r[2], r[3], label, cursor_pos, true);
+            }
+
+            let glyph_family = settings.active_glyph_family;
+            for (idx, (action, button)) in controller_binds.iter().enumerate() {
+                let r = Self::settings_controller_bind_rect(screen_w, screen_h, idx);
+                let is_listening = listening_controller_bind == Some(idx);
+                let hovered = Self::is_rect_hovered(cursor_pos, r[0], r[1], r[2], r[3]);
+                let border = if is_listening {
+                    [0.95, 0.78, 0.30, 1.0]
+                } else if hovered {
+                    [0.70, 0.76, 0.90, 0.95]
+                } else {
+                    [0.24, 0.28, 0.36, 0.85]
+                };
+                let bg = if is_listening {
+                    [0.20, 0.16, 0.08, 0.96]
+                } else if hovered {
+                    [0.15, 0.19, 0.28, 0.95]
+                } else {
+                    [0.09, 0.11, 0.16, 0.94]
+                };
+                mesh.add_quad(r[0], r[1], r[2], r[3], white_uv, border);
+                mesh.add_quad(r[0] + 1.5, r[1] + 1.5, r[2] - 3.0, r[3] - 3.0, white_uv, bg);
+
+                let text = if is_listening {
+                    format!("{}: [Press Button]", action)
+                } else {
+                    format!("{}: {}", action, button.short_label(glyph_family))
+                };
+                Self::draw_string(
+                    mesh,
+                    r[0] + 10.0,
+                    r[1] + (r[3] - 11.5) * 0.5,
+                    &text,
+                    8.0,
+                    11.5,
+                    0.8,
+                    if is_listening {
+                        [1.0, 0.90, 0.40, 1.0]
+                    } else {
+                        [0.92, 0.94, 0.98, 1.0]
+                    },
+                );
+                if !is_listening {
+                    Self::draw_gamepad_glyph(
+                        mesh,
+                        r[0] + r[2] - 24.0,
+                        r[1] + (r[3] - 18.0) * 0.5,
+                        18.0,
+                        glyph_family,
+                        *button,
+                        [1.0; 4],
+                    );
+                }
+            }
         }
 
         let reset_r = Self::settings_reset_button_rect(screen_w, screen_h);
+        let reset_label = if settings_tab == 2 {
+            "* Reset Controller Defaults"
+        } else {
+            "* Reset to Defaults"
+        };
         Self::draw_menu_button(
             mesh,
             reset_r[0],
             reset_r[1],
             reset_r[2],
             reset_r[3],
-            "* Reset to Defaults",
+            reset_label,
             cursor_pos,
             true,
         );
@@ -9494,46 +10085,148 @@ impl UiBuilder {
         screen_h: f32,
         state: &FishingHudState,
     ) {
+        Self::build_fishing_hud_with_input_mode(
+            mesh,
+            screen_w,
+            screen_h,
+            state,
+            InputMode::KeyboardMouse,
+            ControllerFamily::Xbox,
+            GamepadButton::LeftTrigger,
+        );
+    }
+
+    /// Renders the fishing HUD overlay with dynamic Keyboard/Mouse or Controller button glyphs.
+    pub fn build_fishing_hud_with_input_mode(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        state: &FishingHudState,
+        input_mode: InputMode,
+        glyph_family: ControllerFamily,
+        use_button: GamepadButton,
+    ) {
         let white_uv = TextureAtlas::get_uv_bounds(241);
 
         match &state.phase {
             FishingHudPhase::Waiting => {
-                let msg = format!(
-                    "Fishing ({}) - Waiting for bite... [Right-Click to reel]",
-                    state.tackle_summary
-                );
-                let tw = Self::string_width(&msg, 8.0, 1.0) + 18.0;
-                let bx = (screen_w - tw) * 0.5;
-                let by = screen_h * 0.72;
-                mesh.add_quad(bx, by, tw, 24.0, white_uv, [0.04, 0.08, 0.14, 0.72]);
-                Self::draw_string(
-                    mesh,
-                    bx + 9.0,
-                    by + 6.0,
-                    &msg,
-                    8.0,
-                    11.5,
-                    1.0,
-                    [0.85, 0.94, 1.0, 0.95],
-                );
+                if input_mode == InputMode::Controller {
+                    let prefix = format!("Fishing ({}) - Waiting for bite... ", state.tackle_summary);
+                    let suffix = " to reel";
+                    let pw = Self::string_width(&prefix, 8.0, 1.0);
+                    let sw = Self::string_width(suffix, 8.0, 1.0);
+                    let tw = pw + 16.0 + sw + 22.0;
+                    let bx = (screen_w - tw) * 0.5;
+                    let by = screen_h * 0.72;
+                    mesh.add_quad(bx, by, tw, 24.0, white_uv, [0.04, 0.08, 0.14, 0.72]);
+                    Self::draw_string(
+                        mesh,
+                        bx + 9.0,
+                        by + 6.0,
+                        &prefix,
+                        8.0,
+                        11.5,
+                        1.0,
+                        [0.85, 0.94, 1.0, 0.95],
+                    );
+                    Self::draw_gamepad_glyph(
+                        mesh,
+                        bx + 9.0 + pw,
+                        by + 4.0,
+                        16.0,
+                        glyph_family,
+                        use_button,
+                        [1.0; 4],
+                    );
+                    Self::draw_string(
+                        mesh,
+                        bx + 9.0 + pw + 18.0,
+                        by + 6.0,
+                        suffix,
+                        8.0,
+                        11.5,
+                        1.0,
+                        [0.85, 0.94, 1.0, 0.95],
+                    );
+                } else {
+                    let msg = format!(
+                        "Fishing ({}) - Waiting for bite... [Right-Click to reel]",
+                        state.tackle_summary
+                    );
+                    let tw = Self::string_width(&msg, 8.0, 1.0) + 18.0;
+                    let bx = (screen_w - tw) * 0.5;
+                    let by = screen_h * 0.72;
+                    mesh.add_quad(bx, by, tw, 24.0, white_uv, [0.04, 0.08, 0.14, 0.72]);
+                    Self::draw_string(
+                        mesh,
+                        bx + 9.0,
+                        by + 6.0,
+                        &msg,
+                        8.0,
+                        11.5,
+                        1.0,
+                        [0.85, 0.94, 1.0, 0.95],
+                    );
+                }
             }
             FishingHudPhase::Biting => {
-                let msg = "! BITE !  Right-Click to Hook!";
-                let tw = Self::string_width(msg, 12.0, 1.0) + 28.0;
-                let bx = (screen_w - tw) * 0.5;
-                let by = screen_h * 0.36;
-                mesh.add_quad(bx - 2.0, by - 2.0, tw + 4.0, 34.0, white_uv, [0.95, 0.72, 0.12, 0.95]);
-                mesh.add_quad(bx, by, tw, 30.0, white_uv, [0.14, 0.08, 0.02, 0.90]);
-                Self::draw_string(
-                    mesh,
-                    bx + 14.0,
-                    by + 7.5,
-                    msg,
-                    12.0,
-                    15.5,
-                    1.0,
-                    [1.0, 0.92, 0.30, 1.0],
-                );
+                if input_mode == InputMode::Controller {
+                    let prefix = "! BITE !  ";
+                    let suffix = " to Hook!";
+                    let pw = Self::string_width(prefix, 12.0, 1.0);
+                    let sw = Self::string_width(suffix, 12.0, 1.0);
+                    let tw = pw + 20.0 + sw + 30.0;
+                    let bx = (screen_w - tw) * 0.5;
+                    let by = screen_h * 0.36;
+                    mesh.add_quad(bx - 2.0, by - 2.0, tw + 4.0, 34.0, white_uv, [0.95, 0.72, 0.12, 0.95]);
+                    mesh.add_quad(bx, by, tw, 30.0, white_uv, [0.14, 0.08, 0.02, 0.90]);
+                    Self::draw_string(
+                        mesh,
+                        bx + 14.0,
+                        by + 7.5,
+                        prefix,
+                        12.0,
+                        15.5,
+                        1.0,
+                        [1.0, 0.92, 0.30, 1.0],
+                    );
+                    Self::draw_gamepad_glyph(
+                        mesh,
+                        bx + 14.0 + pw,
+                        by + 5.0,
+                        20.0,
+                        glyph_family,
+                        use_button,
+                        [1.0; 4],
+                    );
+                    Self::draw_string(
+                        mesh,
+                        bx + 14.0 + pw + 22.0,
+                        by + 7.5,
+                        suffix,
+                        12.0,
+                        15.5,
+                        1.0,
+                        [1.0, 0.92, 0.30, 1.0],
+                    );
+                } else {
+                    let msg = "! BITE !  Right-Click to Hook!";
+                    let tw = Self::string_width(msg, 12.0, 1.0) + 28.0;
+                    let bx = (screen_w - tw) * 0.5;
+                    let by = screen_h * 0.36;
+                    mesh.add_quad(bx - 2.0, by - 2.0, tw + 4.0, 34.0, white_uv, [0.95, 0.72, 0.12, 0.95]);
+                    mesh.add_quad(bx, by, tw, 30.0, white_uv, [0.14, 0.08, 0.02, 0.90]);
+                    Self::draw_string(
+                        mesh,
+                        bx + 14.0,
+                        by + 7.5,
+                        msg,
+                        12.0,
+                        15.5,
+                        1.0,
+                        [1.0, 0.92, 0.30, 1.0],
+                    );
+                }
             }
             FishingHudPhase::Minigame {
                 bar_pos,
@@ -9676,18 +10369,45 @@ impl UiBuilder {
                     },
                 );
 
-                let hint = "Hold CLICK/SPACE";
-                let hw = Self::string_width(hint, 6.0, 1.0);
-                Self::draw_string(
-                    mesh,
-                    px + (panel_w - hw) * 0.5,
-                    py + panel_h - 24.0,
-                    hint,
-                    6.0,
-                    9.0,
-                    1.0,
-                    [0.85, 0.92, 0.80, 0.95],
-                );
+                if input_mode == InputMode::Controller {
+                    let hint = "Hold";
+                    let hw = Self::string_width(hint, 6.5, 1.0);
+                    let total_w = 14.0 + 4.0 + hw;
+                    let sx = px + (panel_w - total_w) * 0.5;
+                    let sy = py + panel_h - 26.0;
+                    Self::draw_gamepad_glyph(
+                        mesh,
+                        sx,
+                        sy - 2.0,
+                        14.0,
+                        glyph_family,
+                        use_button,
+                        [1.0; 4],
+                    );
+                    Self::draw_string(
+                        mesh,
+                        sx + 18.0,
+                        sy + 1.0,
+                        hint,
+                        6.5,
+                        9.5,
+                        1.0,
+                        [0.85, 0.92, 0.80, 0.95],
+                    );
+                } else {
+                    let hint = "Hold CLICK/SPACE";
+                    let hw = Self::string_width(hint, 6.0, 1.0);
+                    Self::draw_string(
+                        mesh,
+                        px + (panel_w - hw) * 0.5,
+                        py + panel_h - 24.0,
+                        hint,
+                        6.0,
+                        9.0,
+                        1.0,
+                        [0.85, 0.92, 0.80, 0.95],
+                    );
+                }
             }
         }
     }
@@ -12751,5 +13471,120 @@ mod tests {
         );
         assert!(!toast_mesh.vertices.is_empty());
         assert!(!toast_mesh.indices.is_empty());
+    }
+
+    #[test]
+    fn test_controller_glyphs_virtual_cursor_quick_menu_and_settings_tab() {
+        // Every Controller Family emits valid glyph quads
+        for family in ControllerFamily::ALL {
+            let mut mesh = UiMesh::new();
+            UiBuilder::draw_gamepad_glyph(
+                &mut mesh,
+                10.0,
+                10.0,
+                20.0,
+                family,
+                GamepadButton::South,
+                [1.0; 4],
+            );
+            assert_eq!(mesh.vertices.len(), 4);
+            assert_eq!(mesh.indices.len(), 6);
+        }
+
+        // Virtual Cursor emits 4 layered quads
+        let mut cursor_mesh = UiMesh::new();
+        UiBuilder::draw_virtual_cursor(&mut cursor_mesh, 640.0, 360.0, 1.0);
+        assert_eq!(cursor_mesh.vertices.len(), 16);
+
+        // Quick Menu renders cleanly with glyph prompts
+        let mut qm_mesh = UiMesh::new();
+        UiBuilder::build_quick_menu(
+            &mut qm_mesh,
+            1280.0,
+            720.0,
+            false,
+            ControllerFamily::PlayStation,
+            GamepadButton::South,
+            GamepadButton::East,
+            [640.0, 360.0],
+        );
+        assert!(!qm_mesh.indices.is_empty());
+
+        // Settings Tab 2 (Controller) renders with all 16 bindings & tuning sliders
+        let mut settings_mesh = UiMesh::new();
+        let settings_state = SettingsUiState {
+            render_distance: 6,
+            fov_degrees: 70.0,
+            mouse_sensitivity: 1.0,
+            master_volume: 0.8,
+            sfx_volume: 0.9,
+            music_volume: 0.65,
+            creature_volume: 0.85,
+            invert_y: false,
+            fullscreen: false,
+            vsync: true,
+            view_bobbing: true,
+            show_debug_hud: false,
+            ui_scale: 1.0,
+            voice_mode: 1,
+            voice_volume: 1.0,
+            voice_input_device: String::new(),
+            controller_sensitivity: 1.2,
+            controller_invert_y: false,
+            controller_deadzone: 0.15,
+            controller_rumble_intensity: 0.8,
+            controller_glyph_style: GlyphStyle::Auto,
+            controller_swap_confirm_cancel: false,
+            controller_sneak_toggle: true,
+            active_controller_label: "Steam Deck (Steam Deck)".to_string(),
+            active_glyph_family: ControllerFamily::SteamDeck,
+        };
+        let pad_binds = [
+            ("Mine / Attack", GamepadButton::RightTrigger),
+            ("Jump / Fly Up", GamepadButton::South),
+        ];
+        UiBuilder::build_settings_screen(
+            &mut settings_mesh,
+            1280.0,
+            720.0,
+            settings_state,
+            2,
+            None,
+            None,
+            &[],
+            Some(1),
+            &pad_binds,
+            [640.0, 360.0],
+        );
+        assert!(!settings_mesh.indices.is_empty());
+
+        // Dynamic Pause & Fishing HUD prompts in Controller InputMode
+        let mut pause_mesh = UiMesh::new();
+        UiBuilder::build_pause_menu_with_input_mode(
+            &mut pause_mesh,
+            1280.0,
+            720.0,
+            [640.0, 360.0],
+            None,
+            InputMode::Controller,
+            ControllerFamily::Nintendo,
+        );
+        assert!(!pause_mesh.indices.is_empty());
+
+        let mut fish_mesh = UiMesh::new();
+        let fish_state = FishingHudState {
+            phase: FishingHudPhase::Biting,
+            tackle_summary: "Oak Rod".to_string(),
+        };
+        UiBuilder::build_fishing_hud_with_input_mode(
+            &mut fish_mesh,
+            1280.0,
+            720.0,
+            &fish_state,
+            InputMode::Controller,
+            ControllerFamily::Xbox,
+            GamepadButton::LeftTrigger,
+        );
+        assert!(!fish_mesh.indices.is_empty());
     }
 }

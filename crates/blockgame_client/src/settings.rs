@@ -1,5 +1,8 @@
 use std::path::Path;
+use blockgame_render::{GamepadButton, GlyphStyle};
 use winit::keyboard::KeyCode;
+
+use crate::controller::{ControllerBindings, ControllerConfig};
 
 /// Remappable gameplay keybindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +204,22 @@ pub struct GameSettings {
     pub directory_url: String,
     /// Customizable gameplay keybindings.
     pub keybinds: KeyBinds,
+    /// Controller right-stick look sensitivity multiplier (`0.2..=2.5`, where `1.0` = default).
+    pub controller_sensitivity: f32,
+    /// Invert vertical controller look axis.
+    pub controller_invert_y: bool,
+    /// Radial stick deadzone (`0.05..=0.45`, default `0.15`).
+    pub controller_deadzone: f32,
+    /// Controller rumble intensity (`0.0..=1.0`, where `0.0` = Off).
+    pub controller_rumble_intensity: f32,
+    /// Preferred button glyph icon style (`Auto` or explicit Controller Family override).
+    pub controller_glyph_style: GlyphStyle,
+    /// Swap menu Confirm and Cancel buttons relative to the active Controller Family default.
+    pub controller_swap_confirm_cancel: bool,
+    /// Whether controller Sneak uses Toggle (`true`) or Hold (`false`) mode.
+    pub controller_sneak_toggle: bool,
+    /// Customizable positional controller gameplay bindings.
+    pub controller_binds: ControllerBindings,
 }
 
 impl Default for GameSettings {
@@ -224,6 +243,14 @@ impl Default for GameSettings {
             voice_input_device: String::new(),
             directory_url: blockgame_core::directory::DEFAULT_DIRECTORY_URL.to_string(),
             keybinds: KeyBinds::default(),
+            controller_sensitivity: 1.0,
+            controller_invert_y: false,
+            controller_deadzone: 0.15,
+            controller_rumble_intensity: 0.8,
+            controller_glyph_style: GlyphStyle::Auto,
+            controller_swap_confirm_cancel: false,
+            controller_sneak_toggle: true,
+            controller_binds: ControllerBindings::default(),
         }
     }
 }
@@ -235,7 +262,23 @@ impl GameSettings {
     pub const MAX_FOV: f32 = 110.0;
     pub const MIN_SENSITIVITY: f32 = 0.2;
     pub const MAX_SENSITIVITY: f32 = 2.5;
+    pub const MIN_DEADZONE: f32 = 0.05;
+    pub const MAX_DEADZONE: f32 = 0.45;
     pub const UI_SCALE_PRESETS: [f32; 4] = [0.75, 1.0, 1.25, 1.5];
+
+    /// Builds a `ControllerConfig` snapshot for `InputRouter::update`.
+    pub fn controller_config(&self) -> ControllerConfig {
+        ControllerConfig {
+            sensitivity: self.controller_sensitivity,
+            invert_y: self.controller_invert_y,
+            deadzone: self.controller_deadzone,
+            rumble_intensity: self.controller_rumble_intensity,
+            glyph_style: self.controller_glyph_style,
+            swap_confirm_cancel: self.controller_swap_confirm_cancel,
+            sneak_toggle: self.controller_sneak_toggle,
+            bindings: self.controller_binds.clone(),
+        }
+    }
 
     /// Cycles `voice_mode` through `Off (0) -> Push-to-Talk (1) -> Voice Activity (2) -> Off (0)`.
     pub fn cycle_voice_mode(&mut self) {
@@ -272,6 +315,13 @@ impl GameSettings {
         self.music_volume = self.music_volume.clamp(0.0, 1.0);
         self.creature_volume = self.creature_volume.clamp(0.0, 1.0);
         self.voice_volume = self.voice_volume.clamp(0.0, 1.0);
+        self.controller_sensitivity = self
+            .controller_sensitivity
+            .clamp(Self::MIN_SENSITIVITY, Self::MAX_SENSITIVITY);
+        self.controller_deadzone = self
+            .controller_deadzone
+            .clamp(Self::MIN_DEADZONE, Self::MAX_DEADZONE);
+        self.controller_rumble_intensity = self.controller_rumble_intensity.clamp(0.0, 1.0);
         if self.voice_mode > 2 {
             self.voice_mode = 1;
         }
@@ -484,6 +534,63 @@ impl GameSettings {
                         settings.directory_url = trimmed.to_string();
                     }
                 }
+                "controller_sensitivity" => {
+                    if let Ok(v) = val.parse::<f32>() {
+                        if v.is_finite() {
+                            settings.controller_sensitivity = v;
+                        }
+                    }
+                }
+                "controller_invert_y" => {
+                    if let Ok(v) = val.parse::<bool>() {
+                        settings.controller_invert_y = v;
+                    }
+                }
+                "controller_deadzone" => {
+                    if let Ok(v) = val.parse::<f32>() {
+                        if v.is_finite() {
+                            settings.controller_deadzone = v;
+                        }
+                    }
+                }
+                "controller_rumble_intensity" => {
+                    if let Ok(v) = val.parse::<f32>() {
+                        if v.is_finite() {
+                            settings.controller_rumble_intensity = v;
+                        }
+                    }
+                }
+                "controller_glyph_style" => {
+                    if let Some(style) = GlyphStyle::from_config_str(val) {
+                        settings.controller_glyph_style = style;
+                    }
+                }
+                "controller_swap_confirm_cancel" => {
+                    if let Ok(v) = val.parse::<bool>() {
+                        settings.controller_swap_confirm_cancel = v;
+                    }
+                }
+                "controller_sneak_toggle" => {
+                    if let Ok(v) = val.parse::<bool>() {
+                        settings.controller_sneak_toggle = v;
+                    }
+                }
+                "pad_mine" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.mine = b; },
+                "pad_use_item" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.use_item = b; },
+                "pad_hotbar_next" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.hotbar_next = b; },
+                "pad_hotbar_prev" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.hotbar_prev = b; },
+                "pad_jump" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.jump = b; },
+                "pad_sneak" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.sneak = b; },
+                "pad_sprint" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.sprint = b; },
+                "pad_inventory" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.inventory = b; },
+                "pad_backpack" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.backpack = b; },
+                "pad_third_person" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.third_person = b; },
+                "pad_pause" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.pause = b; },
+                "pad_player_list" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.player_list = b; },
+                "pad_quick_menu" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.quick_menu = b; },
+                "pad_flight" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.flight = b; },
+                "pad_chat" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.chat = b; },
+                "pad_push_to_talk" => if let Some(b) = GamepadButton::from_config_str(val) { settings.controller_binds.push_to_talk = b; },
                 _ => {}
             }
         }
@@ -496,6 +603,7 @@ impl GameSettings {
     pub fn save(&self, path: &Path) {
         let safe_mic = self.voice_input_device.replace(['\r', '\n'], " ");
         let safe_dir = self.directory_url.replace(['\r', '\n'], "");
+        let cb = &self.controller_binds;
         let content = format!(
             "# BlockGame Client Settings\n\
              render_distance={}\n\
@@ -529,7 +637,30 @@ impl GameSettings {
              key_debug_hud={}\n\
              key_push_to_talk={}\n\
              key_skills={}\n\
-             key_achievements={}\n",
+             key_achievements={}\n\
+             controller_sensitivity={:.2}\n\
+             controller_invert_y={}\n\
+             controller_deadzone={:.2}\n\
+             controller_rumble_intensity={:.2}\n\
+             controller_glyph_style={}\n\
+             controller_swap_confirm_cancel={}\n\
+             controller_sneak_toggle={}\n\
+             pad_mine={}\n\
+             pad_use_item={}\n\
+             pad_hotbar_next={}\n\
+             pad_hotbar_prev={}\n\
+             pad_jump={}\n\
+             pad_sneak={}\n\
+             pad_sprint={}\n\
+             pad_inventory={}\n\
+             pad_backpack={}\n\
+             pad_third_person={}\n\
+             pad_pause={}\n\
+             pad_player_list={}\n\
+             pad_quick_menu={}\n\
+             pad_flight={}\n\
+             pad_chat={}\n\
+             pad_push_to_talk={}\n",
             self.render_distance,
             self.fov_degrees,
             self.mouse_sensitivity,
@@ -562,6 +693,29 @@ impl GameSettings {
             key_code_to_string(self.keybinds.push_to_talk),
             key_code_to_string(self.keybinds.skills),
             key_code_to_string(self.keybinds.achievements),
+            self.controller_sensitivity,
+            self.controller_invert_y,
+            self.controller_deadzone,
+            self.controller_rumble_intensity,
+            self.controller_glyph_style.as_config_str(),
+            self.controller_swap_confirm_cancel,
+            self.controller_sneak_toggle,
+            cb.mine.as_config_str(),
+            cb.use_item.as_config_str(),
+            cb.hotbar_next.as_config_str(),
+            cb.hotbar_prev.as_config_str(),
+            cb.jump.as_config_str(),
+            cb.sneak.as_config_str(),
+            cb.sprint.as_config_str(),
+            cb.inventory.as_config_str(),
+            cb.backpack.as_config_str(),
+            cb.third_person.as_config_str(),
+            cb.pause.as_config_str(),
+            cb.player_list.as_config_str(),
+            cb.quick_menu.as_config_str(),
+            cb.flight.as_config_str(),
+            cb.chat.as_config_str(),
+            cb.push_to_talk.as_config_str(),
         );
         if let Err(e) = std::fs::write(path, content) {
             log::warn!("Failed to save settings to {:?}: {}", path, e);
@@ -582,6 +736,10 @@ mod tests {
         keybinds.skills = KeyCode::KeyM;
         keybinds.achievements = KeyCode::KeyL;
 
+        let mut controller_binds = ControllerBindings::default();
+        controller_binds.jump = GamepadButton::RightBumper;
+        controller_binds.sneak = GamepadButton::RightStick;
+
         let mut s = GameSettings {
             render_distance: 99,
             fov_degrees: 150.0,
@@ -601,6 +759,14 @@ mod tests {
             voice_input_device: "Studio USB Mic".to_string(),
             directory_url: "http://15.204.81.97:25569".to_string(),
             keybinds,
+            controller_sensitivity: 5.0,
+            controller_invert_y: true,
+            controller_deadzone: 0.01,
+            controller_rumble_intensity: 0.65,
+            controller_glyph_style: GlyphStyle::Nintendo,
+            controller_swap_confirm_cancel: true,
+            controller_sneak_toggle: false,
+            controller_binds,
         };
         s.clamp_all();
         assert_eq!(s.render_distance, GameSettings::MAX_RENDER_DISTANCE);
@@ -609,6 +775,8 @@ mod tests {
         assert_eq!(s.master_volume, 1.0);
         assert_eq!(s.sfx_volume, 0.0);
         assert_eq!(s.creature_volume, 0.85);
+        assert_eq!(s.controller_sensitivity, GameSettings::MAX_SENSITIVITY);
+        assert_eq!(s.controller_deadzone, GameSettings::MIN_DEADZONE);
 
         let temp_path = std::env::temp_dir().join("blockgame_test_settings.cfg");
         s.save(&temp_path);
@@ -633,5 +801,27 @@ mod tests {
         assert_eq!(loaded.keybinds.inventory, KeyCode::NumpadDecimal);
         assert_eq!(loaded.keybinds.skills, KeyCode::KeyM);
         assert_eq!(loaded.keybinds.achievements, KeyCode::KeyL);
+        assert!((loaded.controller_sensitivity - GameSettings::MAX_SENSITIVITY).abs() < 0.02);
+        assert!(loaded.controller_invert_y);
+        assert!((loaded.controller_deadzone - GameSettings::MIN_DEADZONE).abs() < 0.02);
+        assert!((loaded.controller_rumble_intensity - 0.65).abs() < 0.02);
+        assert_eq!(loaded.controller_glyph_style, GlyphStyle::Nintendo);
+        assert!(loaded.controller_swap_confirm_cancel);
+        assert!(!loaded.controller_sneak_toggle);
+        assert_eq!(loaded.controller_binds.jump, GamepadButton::RightBumper);
+        assert_eq!(loaded.controller_binds.sneak, GamepadButton::RightStick);
+    }
+
+    #[test]
+    fn legacy_settings_file_uses_controller_defaults() {
+        let temp_path = std::env::temp_dir().join("blockgame_test_legacy_settings.cfg");
+        std::fs::write(&temp_path, "render_distance=6\nmouse_sensitivity=1.25\n").unwrap();
+        let loaded = GameSettings::load(&temp_path);
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert_eq!(loaded.render_distance, 6);
+        assert_eq!(loaded.controller_glyph_style, GlyphStyle::Auto);
+        assert_eq!(loaded.controller_binds, ControllerBindings::default());
+        assert!(loaded.controller_sneak_toggle);
     }
 }

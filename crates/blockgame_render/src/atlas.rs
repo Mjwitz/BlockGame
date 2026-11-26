@@ -97,6 +97,7 @@ impl TextureAtlas {
         paint_temple_and_boss_tiles(&mut atlas);
         paint_farming_and_cooking_tiles(&mut atlas);
         paint_village_item_tiles(&mut atlas);
+        crate::controller_glyphs::paint_controller_glyph_tiles(&mut atlas);
 
         atlas
     }
