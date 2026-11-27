@@ -72,7 +72,7 @@ fn mesh_batch_parallel(
     world_arc: &Arc<Mutex<World>>,
     registry: &Arc<BlockRegistry>,
     batch: &[(ChunkPos, u64)],
-    tx: &Sender<(ChunkPos, u64, ChunkMesh)>,
+    tx: &Sender<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
 ) {
     let mut jobs: Vec<(ChunkPos, u64, Vec<(IVec3, u8)>)> = Vec::with_capacity(batch.len());
     let mut snapshot: HashMap<ChunkPos, Chunk> = HashMap::new();
@@ -84,7 +84,7 @@ fn mesh_batch_parallel(
                 continue;
             };
             if center.is_all_air() {
-                let _ = tx.send((pos, epoch, ChunkMesh::new()));
+                let _ = tx.send((pos, epoch, ChunkMesh::new(), Vec::new()));
                 continue;
             }
             let origin = pos.to_world_origin();
@@ -108,7 +108,7 @@ fn mesh_batch_parallel(
         }
     }
 
-    // World mutex is now dropped: mesh all non-empty chunks concurrently across all CPU cores!
+    // World mutex is now dropped: mesh and scan exposed fluids concurrently across all CPU cores!
     jobs.into_par_iter().for_each(|(pos, epoch, sources)| {
         let Some(chunk) = snapshot.get(&pos) else {
             return;
@@ -141,7 +141,16 @@ fn mesh_batch_parallel(
                 }
             },
         );
-        let _ = tx.send((pos, epoch, mesh));
+        let exposed_fluids = blockgame_core::fluid::find_exposed_fluids_in_chunk(
+            chunk,
+            snapshot.get(&ChunkPos::new(pos.0.x - 1, pos.0.y, pos.0.z)),
+            snapshot.get(&ChunkPos::new(pos.0.x + 1, pos.0.y, pos.0.z)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y, pos.0.z - 1)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y, pos.0.z + 1)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y - 1, pos.0.z)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y + 1, pos.0.z)),
+        );
+        let _ = tx.send((pos, epoch, mesh, exposed_fluids));
     });
 }
 
@@ -276,8 +285,8 @@ pub struct WorldManager {
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pending_gpu_uploads: HashMap<ChunkPos, ChunkMesh>,
-    mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh)>,
-    mesh_tx: Sender<(ChunkPos, u64, ChunkMesh)>,
+    mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
+    mesh_tx: Sender<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
     gen_done_rx: Receiver<Vec<ChunkPos>>,
     gen_done_tx: Sender<Vec<ChunkPos>>,
     last_player_chunk: ChunkPos,
@@ -841,8 +850,7 @@ impl WorldManager {
         // 3. Drain completed background mesh results without letting empty chunks consume GPU upload budget
         let unload_radius_sq = (self.render_distance + 2) * (self.render_distance + 2);
         let mut completed_surface_chunks = Vec::new();
-        let mut newly_loaded_fluid_chunks = Vec::new();
-        while let Ok((pos, epoch, mesh)) = self.mesh_rx.try_recv() {
+        while let Ok((pos, epoch, mesh, exposed_fluids)) = self.mesh_rx.try_recv() {
             let latest_epoch = self.chunk_mesh_epoch.get(&pos).copied().unwrap_or(0);
             if epoch < latest_epoch {
                 continue;
@@ -857,8 +865,8 @@ impl WorldManager {
             }
 
             self.loaded_chunks_set.insert(pos);
-            if !self.is_multiplayer && self.fluid_scanned_chunks.insert(pos) {
-                newly_loaded_fluid_chunks.push(pos);
+            if !self.is_multiplayer && self.fluid_scanned_chunks.insert(pos) && !exposed_fluids.is_empty() {
+                self.fluid_sim.enqueue_exposed(&exposed_fluids);
             }
             if pos.0.y == 0 {
                 completed_surface_chunks.push((pos.0.x, pos.0.z));
@@ -869,13 +877,6 @@ impl WorldManager {
                 self.store_mesh(pos, &mesh, device, pipeline);
             } else {
                 self.pending_gpu_uploads.insert(pos, mesh);
-            }
-        }
-
-        if !newly_loaded_fluid_chunks.is_empty() {
-            let world = self.world.lock().unwrap();
-            for pos in newly_loaded_fluid_chunks {
-                self.fluid_sim.schedule_exposed_fluids_in_chunk(pos, &world);
             }
         }
 
@@ -1908,6 +1909,7 @@ impl WorldManager {
         if self.is_multiplayer || !self.fluid_sim.has_pending() {
             return;
         }
+        let had_lava_pending = self.fluid_sim.has_pending_lava();
         let mut chunks_to_rebuild = Vec::new();
         let (modified, washed_drops) = {
             let mut world = self.world.lock().unwrap();
@@ -1918,7 +1920,7 @@ impl WorldManager {
                     || b == BlockId::OBSIDIAN
                     || b == BlockId::COBBLESTONE
                     || b == BlockId::STONE
-                    || b.is_air()
+                    || (had_lava_pending && b.is_air())
                 {
                     Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
                 } else {

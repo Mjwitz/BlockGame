@@ -155,10 +155,20 @@ impl FluidSimulation {
         }
     }
 
-    /// Scans a newly loaded/generated chunk and schedules any Water or Lava voxels that can
-    /// actively flow (exposed to air/fragile/opposite fluid in a loaded neighbor, or non-source
-    /// flowing fluid), plus any border fluid voxels in adjacent already-loaded chunks that now
-    /// face an open space inside `cpos`. Calm, enclosed pools schedule zero ticks.
+    pub fn has_pending_lava(&self) -> bool {
+        !self.lava_queue.is_empty()
+    }
+
+    /// Enqueues pre-scanned `(world_pos, is_lava)` fluid voxels discovered on a background worker thread.
+    pub fn enqueue_exposed(&mut self, exposed: &[(IVec3, bool)]) {
+        for &(pos, is_lava) in exposed {
+            self.enqueue_fluid(pos, is_lava);
+        }
+    }
+
+    /// Scans a newly loaded/generated chunk using pre-fetched neighbor chunk references
+    /// (zero per-voxel HashMap lookups) and schedules any Water or Lava voxels that can
+    /// actively flow. Calm, enclosed pools and ocean layers skip interior voxels in O(1).
     pub fn schedule_exposed_fluids_in_chunk(
         &mut self,
         cpos: crate::chunk::ChunkPos,
@@ -167,115 +177,16 @@ impl FluidSimulation {
         let Some(chunk) = world.get_chunk(cpos) else {
             return;
         };
-        let origin = cpos.to_world_origin();
-        const FLOW_DIRS: [IVec3; 5] = [
-            IVec3::NEG_Y,
-            IVec3::X,
-            IVec3::NEG_X,
-            IVec3::Z,
-            IVec3::NEG_Z,
-        ];
-
-        if !chunk.is_all_air() {
-            for y in 0..crate::chunk::CHUNK_SIZE_Y {
-                for z in 0..crate::chunk::CHUNK_SIZE_Z {
-                    for x in 0..crate::chunk::CHUNK_SIZE_X {
-                        let b = chunk.get_unchecked(x, y, z);
-                        if b != BlockId::WATER && b != BlockId::LAVA {
-                            continue;
-                        }
-                        let is_lava = b == BlockId::LAVA;
-                        let wp = origin + IVec3::new(x as i32, y as i32, z as i32);
-                        let lvl = chunk.get_facing_unchecked(x, y, z) & 0x0F;
-                        if lvl != FLUID_SOURCE {
-                            self.enqueue_fluid(wp, is_lava);
-                            continue;
-                        }
-                        for d in FLOW_DIRS {
-                            let np = wp + d;
-                            if np.y < 0 {
-                                continue;
-                            }
-                            let (ncp, _, _, _) = crate::world::world_to_chunk_coords(np);
-                            if !world.has_chunk(ncp) {
-                                continue;
-                            }
-                            let nb = world.get_block(np);
-                            let reacts = if is_lava {
-                                nb.is_water()
-                            } else {
-                                nb == BlockId::LAVA
-                            };
-                            if can_flow_into(nb) || reacts {
-                                self.enqueue_fluid(wp, is_lava);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Also wake border fluids in already-loaded adjacent chunks facing open space in `cpos`
-        let wake_if_exposed = |this: &mut Self, adj_pos: IVec3, into_pos: IVec3| {
-            let (acp, _, _, _) = crate::world::world_to_chunk_coords(adj_pos);
-            if !world.has_chunk(acp) {
-                return;
-            }
-            let ab = world.get_block(adj_pos);
-            if ab != BlockId::WATER && ab != BlockId::LAVA {
-                return;
-            }
-            let is_lava = ab == BlockId::LAVA;
-            let ib = world.get_block(into_pos);
-            let reacts = if is_lava {
-                ib.is_water()
-            } else {
-                ib == BlockId::LAVA
-            };
-            if can_flow_into(ib) || reacts {
-                this.enqueue_fluid(adj_pos, is_lava);
-            }
-        };
-
-        let sx = crate::chunk::CHUNK_SIZE_X as i32;
-        let sy = crate::chunk::CHUNK_SIZE_Y as i32;
-        let sz = crate::chunk::CHUNK_SIZE_Z as i32;
-        for y in 0..sy {
-            for z in 0..sz {
-                wake_if_exposed(
-                    self,
-                    origin + IVec3::new(-1, y, z),
-                    origin + IVec3::new(0, y, z),
-                );
-                wake_if_exposed(
-                    self,
-                    origin + IVec3::new(sx, y, z),
-                    origin + IVec3::new(sx - 1, y, z),
-                );
-            }
-            for x in 0..sx {
-                wake_if_exposed(
-                    self,
-                    origin + IVec3::new(x, y, -1),
-                    origin + IVec3::new(x, y, 0),
-                );
-                wake_if_exposed(
-                    self,
-                    origin + IVec3::new(x, y, sz),
-                    origin + IVec3::new(x, y, sz - 1),
-                );
-            }
-        }
-        for z in 0..sz {
-            for x in 0..sx {
-                wake_if_exposed(
-                    self,
-                    origin + IVec3::new(x, sy, z),
-                    origin + IVec3::new(x, sy - 1, z),
-                );
-            }
-        }
+        let exposed = find_exposed_fluids_in_chunk(
+            chunk,
+            world.get_chunk(crate::chunk::ChunkPos::new(cpos.0.x - 1, cpos.0.y, cpos.0.z)),
+            world.get_chunk(crate::chunk::ChunkPos::new(cpos.0.x + 1, cpos.0.y, cpos.0.z)),
+            world.get_chunk(crate::chunk::ChunkPos::new(cpos.0.x, cpos.0.y, cpos.0.z - 1)),
+            world.get_chunk(crate::chunk::ChunkPos::new(cpos.0.x, cpos.0.y, cpos.0.z + 1)),
+            world.get_chunk(crate::chunk::ChunkPos::new(cpos.0.x, cpos.0.y - 1, cpos.0.z)),
+            world.get_chunk(crate::chunk::ChunkPos::new(cpos.0.x, cpos.0.y + 1, cpos.0.z)),
+        );
+        self.enqueue_exposed(&exposed);
     }
 
     /// Advances scheduled Water (~4 ticks/s) and Lava (~1.33 ticks/s) waves.
@@ -292,7 +203,7 @@ impl FluidSimulation {
         self.water_accum += dt;
         if self.water_accum >= WATER_TICK_INTERVAL {
             self.water_accum = (self.water_accum - WATER_TICK_INTERVAL).min(WATER_TICK_INTERVAL);
-            let wave = self.water_queue.len().min(256);
+            let wave = self.water_queue.len().min(64);
             for _ in 0..wave {
                 if let Some(pos) = self.water_queue.pop_front() {
                     self.water_queued.remove(&pos);
@@ -304,7 +215,7 @@ impl FluidSimulation {
         self.lava_accum += dt;
         if self.lava_accum >= LAVA_TICK_INTERVAL {
             self.lava_accum = (self.lava_accum - LAVA_TICK_INTERVAL).min(LAVA_TICK_INTERVAL);
-            let wave = self.lava_queue.len().min(128);
+            let wave = self.lava_queue.len().min(32);
             for _ in 0..wave {
                 if let Some(pos) = self.lava_queue.pop_front() {
                     self.lava_queued.remove(&pos);
@@ -440,38 +351,41 @@ impl FluidSimulation {
         // 4. Downward flow
         let below_pos = pos - IVec3::Y;
         if below_pos.y >= 0 {
-            let below_b = world.get_block(below_pos);
-            if is_lava && below_b.is_water() {
-                // Lava flowing down onto Water creates Stone
-                world.set_block(below_pos, BlockId::STONE);
-                world.set_fluid_level(below_pos, 0);
-                modified.push(below_pos);
-                self.schedule_block_and_neighbors(below_pos, world);
-                return;
-            } else if !is_lava && below_b == BlockId::LAVA {
-                self.solidify_lava_at(below_pos, world, modified);
-                return;
-            } else if can_flow_into(below_b) {
-                if !is_lava && below_b.is_fragile() {
-                    if let Some(item_id) = registry.get(below_b).and_then(|def| def.drop_item) {
-                        drops.push((below_pos, ItemSlot::new(item_id, 1)));
+            let (below_cp, _, _, _) = crate::world::world_to_chunk_coords(below_pos);
+            if world.has_chunk(below_cp) {
+                let below_b = world.get_block(below_pos);
+                if is_lava && below_b.is_water() {
+                    // Lava flowing down onto Water creates Stone
+                    world.set_block(below_pos, BlockId::STONE);
+                    world.set_fluid_level(below_pos, 0);
+                    modified.push(below_pos);
+                    self.schedule_block_and_neighbors(below_pos, world);
+                    return;
+                } else if !is_lava && below_b == BlockId::LAVA {
+                    self.solidify_lava_at(below_pos, world, modified);
+                    return;
+                } else if can_flow_into(below_b) {
+                    if !is_lava && below_b.is_fragile() {
+                        if let Some(item_id) = registry.get(below_b).and_then(|def| def.drop_item) {
+                            drops.push((below_pos, ItemSlot::new(item_id, 1)));
+                        }
                     }
-                }
-                world.set_block(below_pos, fluid_id);
-                world.set_fluid_level(below_pos, FLUID_FALLING);
-                modified.push(below_pos);
-                self.enqueue_fluid(below_pos, is_lava);
-                return;
-            } else if below_b == fluid_id {
-                let below_lvl = world.get_fluid_level(below_pos);
-                if below_lvl != FLUID_SOURCE && below_lvl != FLUID_FALLING {
+                    world.set_block(below_pos, fluid_id);
                     world.set_fluid_level(below_pos, FLUID_FALLING);
                     modified.push(below_pos);
                     self.enqueue_fluid(below_pos, is_lava);
-                }
-                // Falling fluid hitting same fluid below only spreads horizontally if below is a Source Block
-                if below_lvl != FLUID_SOURCE {
                     return;
+                } else if below_b == fluid_id {
+                    let below_lvl = world.get_fluid_level(below_pos);
+                    if below_lvl != FLUID_SOURCE && below_lvl != FLUID_FALLING {
+                        world.set_fluid_level(below_pos, FLUID_FALLING);
+                        modified.push(below_pos);
+                        self.enqueue_fluid(below_pos, is_lava);
+                    }
+                    // Falling fluid hitting same fluid below only spreads horizontally if below is a Source Block
+                    if below_lvl != FLUID_SOURCE {
+                        return;
+                    }
                 }
             }
         }
@@ -488,14 +402,13 @@ impl FluidSimulation {
         let spread_dirs = find_downhill_dirs(pos, fluid_id, world, registry);
         for d in spread_dirs {
             let np = pos + d;
+            let (ncp, _, _, _) = crate::world::world_to_chunk_coords(np);
+            if !world.has_chunk(ncp) {
+                continue;
+            }
             let nb = world.get_block(np);
             if !is_lava && nb == BlockId::LAVA {
                 self.solidify_lava_at(np, world, modified);
-            } else if is_lava && nb.is_water() {
-                world.set_block(np, BlockId::COBBLESTONE);
-                world.set_fluid_level(np, 0);
-                modified.push(np);
-                self.schedule_block_and_neighbors(np, world);
             } else if can_flow_into(nb) {
                 if !is_lava && nb.is_fragile() {
                     if let Some(item_id) = registry.get(nb).and_then(|def| def.drop_item) {
@@ -520,7 +433,236 @@ impl FluidSimulation {
 
 #[inline]
 fn can_flow_into(b: BlockId) -> bool {
-    b.is_air() || b.is_fragile()
+    b.is_air() || (b.is_fragile() && b != BlockId::LILY_PAD && b != BlockId::SUGAR_CANE)
+}
+
+#[inline]
+fn is_chunk_load_open_neighbor(nb: BlockId, is_lava: bool) -> bool {
+    nb.is_air() || if is_lava { nb.is_water() } else { nb == BlockId::LAVA }
+}
+
+/// Lock-free, zero-HashMap scanner for exposed Water/Lava voxels in `chunk` (and border fluids
+/// in the 5 adjacent chunks facing open air inside `chunk`).
+///
+/// Uses uniform Y-layer fast-skip so ocean/lake chunks skip interior water blocks in O(1),
+/// and can run safely on background Rayon worker threads without locking `World`.
+pub fn find_exposed_fluids_in_chunk(
+    chunk: &crate::chunk::Chunk,
+    n_neg_x: Option<&crate::chunk::Chunk>,
+    n_pos_x: Option<&crate::chunk::Chunk>,
+    n_neg_z: Option<&crate::chunk::Chunk>,
+    n_pos_z: Option<&crate::chunk::Chunk>,
+    n_neg_y: Option<&crate::chunk::Chunk>,
+    n_pos_y: Option<&crate::chunk::Chunk>,
+) -> Vec<(IVec3, bool)> {
+    use crate::chunk::{CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z};
+
+    let mut out = Vec::new();
+    let origin = chunk.pos.to_world_origin();
+
+    if !chunk.is_all_air() {
+        for y in 0..CHUNK_SIZE_Y {
+            // Fast 256-voxel layer scan: skip layers with no fluid, and detect uniform calm water layers
+            let mut has_fluid = false;
+            let mut all_water_source = true;
+            for z in 0..CHUNK_SIZE_Z {
+                for x in 0..CHUNK_SIZE_X {
+                    let b = chunk.get_unchecked(x, y, z);
+                    if b == BlockId::WATER {
+                        has_fluid = true;
+                        if (chunk.get_facing_unchecked(x, y, z) & 0x0F) != FLUID_SOURCE {
+                            all_water_source = false;
+                        }
+                    } else if b == BlockId::LAVA {
+                        has_fluid = true;
+                        all_water_source = false;
+                    } else {
+                        all_water_source = false;
+                    }
+                }
+            }
+            if !has_fluid {
+                continue;
+            }
+
+            // If the entire 16x16 layer is calm Source Water (oceans/lakes), check if the layer below
+            // has any air/lava; if not, skip all 196 interior voxels and only inspect the 60 perimeter voxels!
+            let skip_interior = if all_water_source {
+                let mut below_has_open = false;
+                if y > 0 {
+                    'below_in: for z in 1..(CHUNK_SIZE_Z - 1) {
+                        for x in 1..(CHUNK_SIZE_X - 1) {
+                            let bb = chunk.get_unchecked(x, y - 1, z);
+                            if bb.is_air() || bb == BlockId::LAVA {
+                                below_has_open = true;
+                                break 'below_in;
+                            }
+                        }
+                    }
+                } else if let Some(ny) = n_neg_y {
+                    if ny.is_all_air() {
+                        below_has_open = true;
+                    } else {
+                        'below_out: for z in 1..(CHUNK_SIZE_Z - 1) {
+                            for x in 1..(CHUNK_SIZE_X - 1) {
+                                let bb = ny.get_unchecked(x, CHUNK_SIZE_Y - 1, z);
+                                if bb.is_air() || bb == BlockId::LAVA {
+                                    below_has_open = true;
+                                    break 'below_out;
+                                }
+                            }
+                        }
+                    }
+                }
+                !below_has_open
+            } else {
+                false
+            };
+
+            for z in 0..CHUNK_SIZE_Z {
+                for x in 0..CHUNK_SIZE_X {
+                    if skip_interior
+                        && x > 0
+                        && x + 1 < CHUNK_SIZE_X
+                        && z > 0
+                        && z + 1 < CHUNK_SIZE_Z
+                    {
+                        continue;
+                    }
+                    let b = chunk.get_unchecked(x, y, z);
+                    if b != BlockId::WATER && b != BlockId::LAVA {
+                        continue;
+                    }
+                    let is_lava = b == BlockId::LAVA;
+                    let wp = origin + IVec3::new(x as i32, y as i32, z as i32);
+                    if (chunk.get_facing_unchecked(x, y, z) & 0x0F) != FLUID_SOURCE {
+                        out.push((wp, is_lava));
+                        continue;
+                    }
+
+                    // Check the 5 flow directions using direct chunk array indexing (zero HashMap lookups)
+                    let exposed =
+                        // -Y
+                        (if y > 0 {
+                            Some(chunk.get_unchecked(x, y - 1, z))
+                        } else {
+                            n_neg_y.map(|c| c.get_unchecked(x, CHUNK_SIZE_Y - 1, z))
+                        })
+                        .map_or(false, |nb| is_chunk_load_open_neighbor(nb, is_lava))
+                        // -X
+                        || (if x > 0 {
+                            Some(chunk.get_unchecked(x - 1, y, z))
+                        } else {
+                            n_neg_x.map(|c| c.get_unchecked(CHUNK_SIZE_X - 1, y, z))
+                        })
+                        .map_or(false, |nb| is_chunk_load_open_neighbor(nb, is_lava))
+                        // +X
+                        || (if x + 1 < CHUNK_SIZE_X {
+                            Some(chunk.get_unchecked(x + 1, y, z))
+                        } else {
+                            n_pos_x.map(|c| c.get_unchecked(0, y, z))
+                        })
+                        .map_or(false, |nb| is_chunk_load_open_neighbor(nb, is_lava))
+                        // -Z
+                        || (if z > 0 {
+                            Some(chunk.get_unchecked(x, y, z - 1))
+                        } else {
+                            n_neg_z.map(|c| c.get_unchecked(x, y, CHUNK_SIZE_Z - 1))
+                        })
+                        .map_or(false, |nb| is_chunk_load_open_neighbor(nb, is_lava))
+                        // +Z
+                        || (if z + 1 < CHUNK_SIZE_Z {
+                            Some(chunk.get_unchecked(x, y, z + 1))
+                        } else {
+                            n_pos_z.map(|c| c.get_unchecked(x, y, 0))
+                        })
+                        .map_or(false, |nb| is_chunk_load_open_neighbor(nb, is_lava));
+
+                    if exposed {
+                        out.push((wp, is_lava));
+                    }
+                }
+            }
+        }
+    }
+
+    // Wake border fluids in already-loaded adjacent chunks that now face open air inside `chunk`
+    let mut check_border = |adj_b: BlockId, into_b: BlockId, adj_wp: IVec3| {
+        if adj_b == BlockId::WATER || adj_b == BlockId::LAVA {
+            let is_lava = adj_b == BlockId::LAVA;
+            if is_chunk_load_open_neighbor(into_b, is_lava) {
+                out.push((adj_wp, is_lava));
+            }
+        }
+    };
+
+    if let Some(nx) = n_neg_x {
+        if !nx.is_all_air() {
+            for y in 0..CHUNK_SIZE_Y {
+                for z in 0..CHUNK_SIZE_Z {
+                    check_border(
+                        nx.get_unchecked(CHUNK_SIZE_X - 1, y, z),
+                        chunk.get_unchecked(0, y, z),
+                        origin + IVec3::new(-1, y as i32, z as i32),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(px) = n_pos_x {
+        if !px.is_all_air() {
+            for y in 0..CHUNK_SIZE_Y {
+                for z in 0..CHUNK_SIZE_Z {
+                    check_border(
+                        px.get_unchecked(0, y, z),
+                        chunk.get_unchecked(CHUNK_SIZE_X - 1, y, z),
+                        origin + IVec3::new(CHUNK_SIZE_X as i32, y as i32, z as i32),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(nz) = n_neg_z {
+        if !nz.is_all_air() {
+            for y in 0..CHUNK_SIZE_Y {
+                for x in 0..CHUNK_SIZE_X {
+                    check_border(
+                        nz.get_unchecked(x, y, CHUNK_SIZE_Z - 1),
+                        chunk.get_unchecked(x, y, 0),
+                        origin + IVec3::new(x as i32, y as i32, -1),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(pz) = n_pos_z {
+        if !pz.is_all_air() {
+            for y in 0..CHUNK_SIZE_Y {
+                for x in 0..CHUNK_SIZE_X {
+                    check_border(
+                        pz.get_unchecked(x, y, 0),
+                        chunk.get_unchecked(x, y, CHUNK_SIZE_Z - 1),
+                        origin + IVec3::new(x as i32, y as i32, CHUNK_SIZE_Z as i32),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(py) = n_pos_y {
+        if !py.is_all_air() {
+            for z in 0..CHUNK_SIZE_Z {
+                for x in 0..CHUNK_SIZE_X {
+                    check_border(
+                        py.get_unchecked(x, 0, z),
+                        chunk.get_unchecked(x, CHUNK_SIZE_Y - 1, z),
+                        origin + IVec3::new(x as i32, CHUNK_SIZE_Y as i32, z as i32),
+                    );
+                }
+            }
+        }
+    }
+
+    out
 }
 
 fn is_loaded_drop(pos: IVec3, world: &World, registry: &BlockRegistry) -> bool {

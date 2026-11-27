@@ -3159,6 +3159,12 @@ fn run_server_loop(
                                 save_data
                                     .modified_chunks
                                     .insert(cpos, encode_chunk_rle(chunk));
+                                let facings = crate::save::encode_chunk_facings(chunk);
+                                if facings.is_empty() {
+                                    save_data.modified_chunk_facings.remove(&cpos);
+                                } else {
+                                    save_data.modified_chunk_facings.insert(cpos, facings);
+                                }
                             }
                             outgoing_broadcasts
                                 .push((Some(pid), ServerPacket::BlockUpdate { pos, block_id }));
@@ -4648,6 +4654,7 @@ fn run_server_loop(
                                     let cpos = ChunkPos::new(col.x, cy, col.y);
                                     if world.get_chunk(cpos).is_none() {
                                         world.insert_chunk(chunk_generator(cpos));
+                                        fluid_sim.schedule_exposed_fluids_in_chunk(cpos, &world);
                                     }
                                 }
                                 let col_hash = ((col.x as i64).wrapping_mul(73856093)

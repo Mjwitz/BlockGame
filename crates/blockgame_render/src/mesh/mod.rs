@@ -395,6 +395,12 @@ impl<'a> ChunkMesher<'a> {
                                     continue;
                                 }
                                 let neighbor_level = query_meta(nx, ny, nz);
+                                if !above_same
+                                    && fluid_level == blockgame_core::FLUID_SOURCE
+                                    && neighbor_level == blockgame_core::FLUID_SOURCE
+                                {
+                                    continue;
+                                }
                                 let neighbor_above_same =
                                     query_block_opt(nx, ny + 1, nz).map_or(false, |b| {
                                         is_same_fluid(b) || (is_water && b == BlockId::ICE)
