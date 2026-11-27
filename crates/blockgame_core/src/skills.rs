@@ -900,9 +900,13 @@ pub fn skill_xp_for_broken_block(block: BlockId) -> Option<(SkillKind, u64)> {
         return Some((SkillKind::Woodcutting, 3));
     }
     match block {
-        BlockId::STONE | BlockId::COBBLESTONE | BlockId::MOSSY_COBBLESTONE => {
-            Some((SkillKind::Mining, 8))
-        }
+        BlockId::STONE
+        | BlockId::COBBLESTONE
+        | BlockId::MOSSY_COBBLESTONE
+        | BlockId::DEEPSTONE
+        | BlockId::DEEPSTONE_COBBLESTONE
+        | BlockId::MOSSY_DEEPSTONE_COBBLESTONE
+        | BlockId::DRIPSTONE => Some((SkillKind::Mining, 8)),
         BlockId::SANDSTONE
         | BlockId::TERRACOTTA
         | BlockId::BRICKS
@@ -910,11 +914,12 @@ pub fn skill_xp_for_broken_block(block: BlockId) -> Option<(SkillKind, u64)> {
         | BlockId::BRICK_STAIRS
         | BlockId::FURNACE
         | BlockId::FURNACE_LIT => Some((SkillKind::Mining, 10)),
-        BlockId::COAL_ORE => Some((SkillKind::Mining, 18)),
-        BlockId::COPPER_ORE => Some((SkillKind::Mining, 24)),
-        BlockId::IRON_ORE => Some((SkillKind::Mining, 30)),
-        BlockId::GOLD_ORE => Some((SkillKind::Mining, 45)),
-        BlockId::DIAMOND_ORE => Some((SkillKind::Mining, 95)),
+        BlockId::COAL_ORE | BlockId::DEEPSTONE_COAL_ORE => Some((SkillKind::Mining, 18)),
+        BlockId::COPPER_ORE | BlockId::DEEPSTONE_COPPER_ORE => Some((SkillKind::Mining, 24)),
+        BlockId::IRON_ORE | BlockId::DEEPSTONE_IRON_ORE => Some((SkillKind::Mining, 30)),
+        BlockId::GOLD_ORE | BlockId::DEEPSTONE_GOLD_ORE => Some((SkillKind::Mining, 45)),
+        BlockId::OBSIDIAN => Some((SkillKind::Mining, 60)),
+        BlockId::DIAMOND_ORE | BlockId::DEEPSTONE_DIAMOND_ORE => Some((SkillKind::Mining, 95)),
         BlockId::DIRT
         | BlockId::GRASS
         | BlockId::PODZOL
@@ -941,6 +946,11 @@ pub fn break_speed_skill_for_block(block: BlockId) -> Option<SkillKind> {
         BlockId::STONE
         | BlockId::COBBLESTONE
         | BlockId::MOSSY_COBBLESTONE
+        | BlockId::DEEPSTONE
+        | BlockId::DEEPSTONE_COBBLESTONE
+        | BlockId::MOSSY_DEEPSTONE_COBBLESTONE
+        | BlockId::DRIPSTONE
+        | BlockId::OBSIDIAN
         | BlockId::SANDSTONE
         | BlockId::TERRACOTTA
         | BlockId::BRICKS
@@ -949,10 +959,15 @@ pub fn break_speed_skill_for_block(block: BlockId) -> Option<SkillKind> {
         | BlockId::FURNACE
         | BlockId::FURNACE_LIT
         | BlockId::COAL_ORE
+        | BlockId::DEEPSTONE_COAL_ORE
         | BlockId::COPPER_ORE
+        | BlockId::DEEPSTONE_COPPER_ORE
         | BlockId::IRON_ORE
+        | BlockId::DEEPSTONE_IRON_ORE
         | BlockId::GOLD_ORE
-        | BlockId::DIAMOND_ORE => Some(SkillKind::Mining),
+        | BlockId::DEEPSTONE_GOLD_ORE
+        | BlockId::DIAMOND_ORE
+        | BlockId::DEEPSTONE_DIAMOND_ORE => Some(SkillKind::Mining),
         BlockId::DIRT
         | BlockId::GRASS
         | BlockId::PODZOL

@@ -7,9 +7,9 @@ use std::sync::{
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{
-        apply_water_fill, break_unsupported_attached, can_block_survive,
-        find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
-        is_leaf_supported, place_water_source, try_grow_cactus, BlockId, BlockRegistry,
+        break_unsupported_attached, can_block_survive, find_decaying_leaves_around_pos,
+        get_leaf_decay_drops, is_farmland_hydrated, is_leaf_supported, try_grow_cactus, BlockId,
+        BlockRegistry,
     },
     chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, VERTICAL_CHUNKS},
     direction::Direction,
@@ -38,17 +38,32 @@ fn mesh_chunk_from_world(
     let mesher = ChunkMesher::new(registry);
     let origin = chunk.pos.to_world_origin();
     let sources = world.get_light_sources_near(origin, 15);
-    mesher.mesh_chunk_with_lighting_opt(chunk, &sources, |lx, ly, lz| {
-        let wp = origin + IVec3::new(lx, ly, lz);
-        let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
-        if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
-            Some(BlockId::AIR)
-        } else {
-            world
-                .get_chunk(ncpos)
-                .map(|c| c.get_unchecked(nlx, nly, nlz))
-        }
-    })
+    mesher.mesh_chunk_with_lighting_and_meta_opt(
+        chunk,
+        &sources,
+        |lx, ly, lz| {
+            let wp = origin + IVec3::new(lx, ly, lz);
+            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                Some(BlockId::AIR)
+            } else {
+                world
+                    .get_chunk(ncpos)
+                    .map(|c| c.get_unchecked(nlx, nly, nlz))
+            }
+        },
+        |lx, ly, lz| {
+            let wp = origin + IVec3::new(lx, ly, lz);
+            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                0
+            } else {
+                world
+                    .get_chunk(ncpos)
+                    .map_or(0, |c| c.get_facing_unchecked(nlx, nly, nlz) & 0x0F)
+            }
+        },
+    )
 }
 
 /// Meshes a batch of chunks in parallel across all Rayon worker threads without holding
@@ -57,7 +72,7 @@ fn mesh_batch_parallel(
     world_arc: &Arc<Mutex<World>>,
     registry: &Arc<BlockRegistry>,
     batch: &[(ChunkPos, u64)],
-    tx: &Sender<(ChunkPos, u64, ChunkMesh)>,
+    tx: &Sender<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
 ) {
     let mut jobs: Vec<(ChunkPos, u64, Vec<(IVec3, u8)>)> = Vec::with_capacity(batch.len());
     let mut snapshot: HashMap<ChunkPos, Chunk> = HashMap::new();
@@ -69,7 +84,7 @@ fn mesh_batch_parallel(
                 continue;
             };
             if center.is_all_air() {
-                let _ = tx.send((pos, epoch, ChunkMesh::new()));
+                let _ = tx.send((pos, epoch, ChunkMesh::new(), Vec::new()));
                 continue;
             }
             let origin = pos.to_world_origin();
@@ -93,25 +108,49 @@ fn mesh_batch_parallel(
         }
     }
 
-    // World mutex is now dropped: mesh all non-empty chunks concurrently across all CPU cores!
+    // World mutex is now dropped: mesh and scan exposed fluids concurrently across all CPU cores!
     jobs.into_par_iter().for_each(|(pos, epoch, sources)| {
         let Some(chunk) = snapshot.get(&pos) else {
             return;
         };
         let mesher = ChunkMesher::new(registry);
         let origin = pos.to_world_origin();
-        let mesh = mesher.mesh_chunk_with_lighting_opt(chunk, &sources, |lx, ly, lz| {
-            let wp = origin + IVec3::new(lx, ly, lz);
-            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
-            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
-                Some(BlockId::AIR)
-            } else {
-                snapshot
-                    .get(&ncpos)
-                    .map(|c| c.get_unchecked(nlx, nly, nlz))
-            }
-        });
-        let _ = tx.send((pos, epoch, mesh));
+        let mesh = mesher.mesh_chunk_with_lighting_and_meta_opt(
+            chunk,
+            &sources,
+            |lx, ly, lz| {
+                let wp = origin + IVec3::new(lx, ly, lz);
+                let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+                if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                    Some(BlockId::AIR)
+                } else {
+                    snapshot
+                        .get(&ncpos)
+                        .map(|c| c.get_unchecked(nlx, nly, nlz))
+                }
+            },
+            |lx, ly, lz| {
+                let wp = origin + IVec3::new(lx, ly, lz);
+                let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+                if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                    0
+                } else {
+                    snapshot
+                        .get(&ncpos)
+                        .map_or(0, |c| c.get_facing_unchecked(nlx, nly, nlz) & 0x0F)
+                }
+            },
+        );
+        let exposed_fluids = blockgame_core::fluid::find_exposed_fluids_in_chunk(
+            chunk,
+            snapshot.get(&ChunkPos::new(pos.0.x - 1, pos.0.y, pos.0.z)),
+            snapshot.get(&ChunkPos::new(pos.0.x + 1, pos.0.y, pos.0.z)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y, pos.0.z - 1)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y, pos.0.z + 1)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y - 1, pos.0.z)),
+            snapshot.get(&ChunkPos::new(pos.0.x, pos.0.y + 1, pos.0.z)),
+        );
+        let _ = tx.send((pos, epoch, mesh, exposed_fluids));
     });
 }
 
@@ -245,9 +284,10 @@ pub struct WorldManager {
     has_pending_chunks: bool,
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
+    gpu_chunks_dark_underground: HashSet<ChunkPos>,
     pending_gpu_uploads: HashMap<ChunkPos, ChunkMesh>,
-    mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh)>,
-    mesh_tx: Sender<(ChunkPos, u64, ChunkMesh)>,
+    mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
+    mesh_tx: Sender<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
     gen_done_rx: Receiver<Vec<ChunkPos>>,
     gen_done_tx: Sender<Vec<ChunkPos>>,
     last_player_chunk: ChunkPos,
@@ -262,6 +302,8 @@ pub struct WorldManager {
     monster_spawn_timer: f32,
     monster_rng_state: u64,
     pub farming_sim: blockgame_core::FarmingSimulation,
+    pub fluid_sim: blockgame_core::FluidSimulation,
+    fluid_scanned_chunks: HashSet<ChunkPos>,
     pub is_multiplayer: bool,
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
@@ -305,6 +347,7 @@ impl WorldManager {
             has_pending_chunks: true,
             gpu_chunks: HashMap::new(),
             gpu_water_chunks: HashMap::new(),
+            gpu_chunks_dark_underground: HashSet::new(),
             pending_gpu_uploads: HashMap::new(),
             mesh_rx,
             mesh_tx,
@@ -322,6 +365,8 @@ impl WorldManager {
             monster_spawn_timer: 4.0,
             monster_rng_state,
             farming_sim: blockgame_core::FarmingSimulation::new(seed as u64 ^ 0xFA4A_1234),
+            fluid_sim: blockgame_core::FluidSimulation::new(),
+            fluid_scanned_chunks: HashSet::new(),
             is_multiplayer: false,
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
@@ -350,8 +395,14 @@ impl WorldManager {
     ) {
         if let Some(gpu_mesh) = pipeline.upload_mesh(device, mesh) {
             self.gpu_chunks.insert(pos, gpu_mesh);
+            if pos.0.y <= 1 && !mesh.vertices.iter().any(|v| v.light[0] > 0.05) {
+                self.gpu_chunks_dark_underground.insert(pos);
+            } else {
+                self.gpu_chunks_dark_underground.remove(&pos);
+            }
         } else {
             self.gpu_chunks.remove(&pos);
+            self.gpu_chunks_dark_underground.remove(&pos);
         }
         if let Some(gpu_water) = pipeline.upload_water_mesh(device, mesh) {
             self.gpu_water_chunks.insert(pos, gpu_water);
@@ -435,6 +486,13 @@ impl WorldManager {
 
         // Parallel chunk meshing for all chunks in the area
         let world_guard = self.world.lock().unwrap();
+        if !self.is_multiplayer {
+            for &pos in &area_chunks {
+                if self.fluid_scanned_chunks.insert(pos) {
+                    self.fluid_sim.schedule_exposed_fluids_in_chunk(pos, &world_guard);
+                }
+            }
+        }
         let meshes: Vec<(ChunkPos, ChunkMesh)> = area_chunks
             .par_iter()
             .filter_map(|&pos| {
@@ -669,8 +727,10 @@ impl WorldManager {
         for pos in to_remove {
             self.gpu_chunks.remove(&pos);
             self.gpu_water_chunks.remove(&pos);
+            self.gpu_chunks_dark_underground.remove(&pos);
             self.pending_gpu_uploads.remove(&pos);
             self.loaded_chunks_set.remove(&pos);
+            self.fluid_scanned_chunks.remove(&pos);
             self.queued_meshing.remove(&pos);
             self.queued_generation.remove(&pos);
             self.dirty_remesh.remove(&pos);
@@ -799,7 +859,7 @@ impl WorldManager {
         // 3. Drain completed background mesh results without letting empty chunks consume GPU upload budget
         let unload_radius_sq = (self.render_distance + 2) * (self.render_distance + 2);
         let mut completed_surface_chunks = Vec::new();
-        while let Ok((pos, epoch, mesh)) = self.mesh_rx.try_recv() {
+        while let Ok((pos, epoch, mesh, exposed_fluids)) = self.mesh_rx.try_recv() {
             let latest_epoch = self.chunk_mesh_epoch.get(&pos).copied().unwrap_or(0);
             if epoch < latest_epoch {
                 continue;
@@ -814,6 +874,9 @@ impl WorldManager {
             }
 
             self.loaded_chunks_set.insert(pos);
+            if !self.is_multiplayer && self.fluid_scanned_chunks.insert(pos) && !exposed_fluids.is_empty() {
+                self.fluid_sim.enqueue_exposed(&exposed_fluids);
+            }
             if pos.0.y == 0 {
                 completed_surface_chunks.push((pos.0.x, pos.0.z));
             }
@@ -913,17 +976,41 @@ impl WorldManager {
         render_pass: &mut wgpu::RenderPass<'a>,
         frustum: Option<&blockgame_render::Frustum>,
     ) {
+        self.render_with_frustum_and_camera(render_pass, frustum, None);
+    }
+
+    /// Renders loaded GPU chunk meshes with frustum culling and surface-to-underground occlusion
+    /// culling: when the camera is on the surface (`cam.y >= 34.0`), distant sealed dark
+    /// underground cave chunks (`cy <= 1`, zero sunlight, > 48 blocks away horizontally) are
+    /// skipped so underground caverns don't triple GPU triangle counts on the surface.
+    pub fn render_with_frustum_and_camera<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+        camera_pos: Option<Vec3>,
+    ) {
+        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
         for (&pos, gpu_mesh) in &self.gpu_chunks {
             if gpu_mesh.index_count == 0 {
                 continue;
             }
 
+            let min = Vec3::new(
+                pos.0.x as f32 * 16.0,
+                pos.0.y as f32 * 16.0,
+                pos.0.z as f32 * 16.0,
+            );
+            if let Some(cam) = cull_underground {
+                if self.gpu_chunks_dark_underground.contains(&pos) {
+                    let dx = (min.x + 8.0) - cam.x;
+                    let dz = (min.z + 8.0) - cam.z;
+                    if dx * dx + dz * dz > 48.0 * 48.0 {
+                        continue;
+                    }
+                }
+            }
+
             if let Some(f) = frustum {
-                let min = Vec3::new(
-                    pos.0.x as f32 * 16.0,
-                    pos.0.y as f32 * 16.0,
-                    pos.0.z as f32 * 16.0,
-                );
                 let max = min + Vec3::splat(16.0);
                 if !f.is_box_visible(min, max) {
                     continue;
@@ -950,6 +1037,7 @@ impl WorldManager {
         frustum: Option<&blockgame_render::Frustum>,
         camera_pos: Option<Vec3>,
     ) {
+        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
         let mut visible: Vec<(f32, &'a GpuMeshBuffers)> = Vec::new();
         for (&pos, gpu_mesh) in &self.gpu_water_chunks {
             if gpu_mesh.index_count == 0 {
@@ -961,6 +1049,15 @@ impl WorldManager {
                 pos.0.y as f32 * 16.0,
                 pos.0.z as f32 * 16.0,
             );
+            if let Some(cam) = cull_underground {
+                if self.gpu_chunks_dark_underground.contains(&pos) {
+                    let dx = (min.x + 8.0) - cam.x;
+                    let dz = (min.z + 8.0) - cam.z;
+                    if dx * dx + dz * dz > 48.0 * 48.0 {
+                        continue;
+                    }
+                }
+            }
             let max = min + Vec3::splat(16.0);
             if let Some(f) = frustum {
                 if !f.is_box_visible(min, max) {
@@ -1183,14 +1280,8 @@ impl WorldManager {
                 extra_drops.push((drop_pos, drop));
             }
 
-            // If broken block was air and has adjacent water, water flows to fill exposed space
-            let (water_filled, water_drops) = apply_water_fill(pos, &mut world, &self.registry);
-            for wpos in water_filled {
-                Self::add_chunk_and_neighbors(wpos, &mut chunks_to_rebuild);
-            }
-            for (wpos, drop) in water_drops {
-                extra_drops.push((wpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
-            }
+            // Schedule nearby Water/Lava to flow dynamically into the newly opened space
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             if is_light_source {
                 let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
@@ -1485,7 +1576,7 @@ impl WorldManager {
             let current = world.get_block(pos);
             let can_place = if current.is_air() {
                 true
-            } else if current == BlockId::WATER {
+            } else if current == BlockId::WATER || current == BlockId::LAVA {
                 block_id.can_exist_in_water() || block_id.has_gravity() || self.registry.is_solid(block_id)
             } else {
                 false
@@ -1523,7 +1614,7 @@ impl WorldManager {
                 }
             }
 
-            let is_light_source = block_id.is_emissive();
+            let is_light_source = block_id.is_emissive() || world.get_block(pos).is_emissive();
             world.set_block(pos, block_id);
             world.set_block_facing(pos, facing);
             if block_id == BlockId::OAK_DOOR_CLOSED {
@@ -1558,6 +1649,7 @@ impl WorldManager {
                 }
                 spawned_falling = fall_blocks;
             }
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             if is_light_source {
                 let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
@@ -1635,11 +1727,13 @@ impl WorldManager {
         ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            if !current.is_water() {
+            if !current.is_water() || world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE {
                 return false;
             }
 
             world.set_block(pos, BlockId::AIR);
+            world.set_fluid_level(pos, 0);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             // Break any blocks above or adjacent that required support or water (e.g. lily pads, seagrass)
             let (unsupported_drops, modified_positions, spawned_falling) =
@@ -1688,7 +1782,7 @@ impl WorldManager {
         true
     }
 
-    /// Places a water block at `pos` from a water bucket, cascading downward and washing fragile blocks.
+    /// Places a Water Source Block at `pos` from a water bucket and schedules cellular fluid simulation.
     pub fn place_water(
         &mut self,
         pos: IVec3,
@@ -1705,18 +1799,25 @@ impl WorldManager {
         ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            if !current.is_air() && !current.is_fragile() {
+            let is_flowing_water =
+                current.is_water() && world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE;
+            if !current.is_air() && !current.is_fragile() && !is_flowing_water {
                 return false;
             }
 
-            let (modified_positions, water_drops) = place_water_source(pos, &mut world);
-            for mpos in modified_positions {
-                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
-            }
             let mut extra_drops = Vec::new();
-            for (p, drop) in water_drops {
-                extra_drops.push((p.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
+            if current.is_fragile() {
+                if let Some(item_id) = self.registry.get(current).and_then(|def| def.drop_item) {
+                    extra_drops.push((
+                        pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                        ItemSlot::new(item_id, 1),
+                    ));
+                }
             }
+
+            world.set_block(pos, BlockId::WATER);
+            world.set_fluid_level(pos, blockgame_core::FLUID_SOURCE);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
@@ -1748,6 +1849,144 @@ impl WorldManager {
         }
 
         true
+    }
+
+    fn add_light_neighborhood(pos: IVec3, chunks: &mut Vec<ChunkPos>) {
+        Self::add_chunk_and_neighbors(pos, chunks);
+        let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    chunks.push(ChunkPos::new(
+                        chunk_pos.0.x + dx,
+                        chunk_pos.0.y + dy,
+                        chunk_pos.0.z + dz,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn rebuild_chunks_and_store(
+        &mut self,
+        mut chunks_to_rebuild: Vec<ChunkPos>,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+        chunks_to_rebuild.dedup();
+
+        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+            let world = self.world.lock().unwrap();
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
+    /// Scoops a Lava Source Block at `pos` with an empty bucket, replacing it with AIR and scheduling neighbor draining.
+    pub fn scoop_lava(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let mut chunks_to_rebuild = Vec::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            if !world.get_block(pos).is_lava()
+                || world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE
+            {
+                return false;
+            }
+            world.set_block(pos, BlockId::AIR);
+            world.set_fluid_level(pos, 0);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
+        }
+        Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
+        self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
+        true
+    }
+
+    /// Places a Lava Source Block at `pos` from a lava bucket and schedules cellular fluid simulation.
+    pub fn place_lava(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let mut chunks_to_rebuild = Vec::new();
+        {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            let is_flowing_lava =
+                current.is_lava() && world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE;
+            if !current.is_air() && !current.is_fragile() && !is_flowing_lava {
+                return false;
+            }
+            world.set_block(pos, BlockId::LAVA);
+            world.set_fluid_level(pos, blockgame_core::FLUID_SOURCE);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
+        }
+        Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
+        self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
+        true
+    }
+
+    /// Advances cellular Water and Lava flow ticks in singleplayer, rebuilding affected chunk meshes and spawning washed drops.
+    pub fn tick_fluids(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        if self.is_multiplayer || !self.fluid_sim.has_pending() {
+            return;
+        }
+        let had_lava_pending = self.fluid_sim.has_pending_lava();
+        let mut chunks_to_rebuild = Vec::new();
+        let (modified, washed_drops) = {
+            let mut world = self.world.lock().unwrap();
+            let (modified, drops) = self.fluid_sim.tick(dt, &mut world, &self.registry);
+            for &mpos in &modified {
+                let b = world.get_block(mpos);
+                if b.is_lava()
+                    || b == BlockId::OBSIDIAN
+                    || b == BlockId::COBBLESTONE
+                    || b == BlockId::STONE
+                    || (had_lava_pending && b.is_air())
+                {
+                    Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
+                } else {
+                    Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                }
+            }
+            (modified, drops)
+        };
+        if !modified.is_empty() {
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+            for cpos in chunks_to_rebuild {
+                if self.loaded_chunks_set.contains(&cpos) {
+                    self.dirty_remesh.insert(cpos);
+                }
+            }
+        }
+        let _ = (device, pipeline);
+        for (dpos, item) in washed_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(dpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), item);
+            }
+        }
     }
 
     /// Performs raycast attack against closest animal within reach.
@@ -3360,6 +3599,53 @@ impl WorldManager {
                         }
                     }
                 }
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
+    /// Applies an authoritative `ServerPacket::FluidUpdate` (block + 4-bit fluid level) from the
+    /// multiplayer server and remeshes affected chunks.
+    pub fn apply_remote_fluid_update(
+        &mut self,
+        pos: IVec3,
+        block_id: BlockId,
+        level: u8,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let new_meshes = {
+            let mut world = self.world.lock().unwrap();
+            let old_block = world.get_block(pos);
+            let old_level = world.get_fluid_level(pos);
+            let level = level & 0x0F;
+            if old_block == block_id && old_level == level {
+                return;
+            }
+            let is_light_change = old_block.is_emissive() || block_id.is_emissive();
+            world.set_block(pos, block_id);
+            world.set_fluid_level(pos, level);
+
+            if is_light_change {
+                Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
             }
 
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));

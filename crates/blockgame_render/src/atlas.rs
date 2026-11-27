@@ -97,6 +97,7 @@ impl TextureAtlas {
         paint_temple_and_boss_tiles(&mut atlas);
         paint_farming_and_cooking_tiles(&mut atlas);
         paint_village_item_tiles(&mut atlas);
+        paint_cave_tiles(&mut atlas);
         crate::controller_glyphs::paint_controller_glyph_tiles(&mut atlas);
 
         atlas
@@ -3164,6 +3165,210 @@ fn paint_village_item_tiles(atlas: &mut TextureAtlas) {
         }
         Rgba([0, 0, 0, 0])
     });
+}
+
+fn paint_cave_tiles(atlas: &mut TextureAtlas) {
+    // 574: Deepstone (dark layered slate-basalt rock)
+    atlas.paint_tile(574, |px, py| {
+        let h = (px.wrapping_mul(37) ^ py.wrapping_mul(73) ^ (px >> 1).wrapping_mul(19)) & 31;
+        let band = ((py / 4 + (px / 8)) % 3) as i32;
+        let base = 46 + band * 5 + (h as i32 % 11) - 5;
+        let r = (base - 2).clamp(24, 90) as u8;
+        let g = base.clamp(26, 94) as u8;
+        let b = (base + 6).clamp(30, 104) as u8;
+        Rgba([r, g, b, 255])
+    });
+
+    // 575: Dripstone (stalagmite / pointed limestone spire)
+    atlas.paint_tile(575, |px, py| {
+        let x = px as f32 - 15.5;
+        let progress = py as f32 / 31.0; // 0 at top tip, 1 at wide base
+        let half_w = 1.2 + progress * 9.5;
+        if x.abs() <= half_w {
+            let shade = if x < 0.0 { 14 } else { -10 };
+            let grain = ((px * 13 + py * 29) % 15) as i32 - 7;
+            let r = (138 + shade + grain).clamp(70, 195) as u8;
+            let g = (124 + shade + grain).clamp(62, 180) as u8;
+            let b = (106 + shade + grain).clamp(54, 162) as u8;
+            Rgba([r, g, b, 255])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 576: Dripstone stalactite variant (ceiling hanging spire)
+    atlas.paint_tile(576, |px, py| {
+        let x = px as f32 - 15.5;
+        let progress = (31.0 - py as f32) / 31.0;
+        let half_w = 1.2 + progress * 9.5;
+        if x.abs() <= half_w {
+            let shade = if x < 0.0 { 14 } else { -10 };
+            let grain = ((px * 17 + py * 23) % 15) as i32 - 7;
+            let r = (138 + shade + grain).clamp(70, 195) as u8;
+            let g = (124 + shade + grain).clamp(62, 180) as u8;
+            let b = (106 + shade + grain).clamp(54, 162) as u8;
+            Rgba([r, g, b, 255])
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 577: Glow Crystal (luminous cyan-aqua crystal cluster)
+    atlas.paint_tile(577, |px, py| {
+        let x = px as i32;
+        let y = py as i32;
+        // Main center shard + two angled side shards
+        let in_center = (x - 16).abs() <= ((y - 4).max(0) / 4).min(4) && y >= 5 && y <= 30;
+        let in_left = ((x - 9) + (y - 18) / 3).abs() <= 2 && y >= 13 && y <= 30;
+        let in_right = ((x - 23) - (y - 18) / 3).abs() <= 2 && y >= 15 && y <= 30;
+        if in_center || in_left || in_right {
+            let core = (x - 16).abs() <= 1 && y >= 8 && y <= 24;
+            if core {
+                Rgba([210, 255, 252, 255])
+            } else {
+                Rgba([86, 224, 232, 255])
+            }
+        } else {
+            Rgba([0, 0, 0, 0])
+        }
+    });
+
+    // 578: Natural Obsidian (deep volcanic purple-black glass)
+    atlas.paint_tile(578, |px, py| {
+        let h = (px.wrapping_mul(53) ^ py.wrapping_mul(97) ^ (px + py).wrapping_mul(17)) % 29;
+        if h < 4 {
+            Rgba([62, 34, 92, 255]) // Purple sheen fleck
+        } else if h < 10 {
+            Rgba([38, 22, 58, 255])
+        } else {
+            Rgba([20, 14, 28, 255])
+        }
+    });
+
+    // 579: Molten Lava (bright orange-gold glowing magma)
+    atlas.paint_tile(579, |px, py| {
+        let wave = ((px as f32 * 0.35).sin() + (py as f32 * 0.35).cos()) * 0.5;
+        let crust = ((px.wrapping_mul(29) ^ py.wrapping_mul(43)) % 19) as f32 / 19.0;
+        let heat = (0.55 + wave * 0.25 + crust * 0.2).clamp(0.0, 1.0);
+        if heat > 0.78 {
+            Rgba([255, 232, 92, 255]) // Bright yellow-gold hot spots
+        } else if heat > 0.42 {
+            Rgba([248, 126, 24, 255]) // Molten orange
+        } else {
+            Rgba([196, 52, 16, 255]) // Cooler crimson-orange crust
+        }
+    });
+
+    // 580: Lava Bucket sprite (iron bucket filled with molten orange-gold lava)
+    paint_bucket_sprite(atlas, 580, false);
+    let tile_x = (580 % ATLAS_TILES_PER_ROW) * TILE_SIZE;
+    let tile_y = (580 / ATLAS_TILES_PER_ROW) * TILE_SIZE;
+    for py in 9..=14 {
+        for px in 10..=21 {
+            let existing = *atlas.image.get_pixel(tile_x + px, tile_y + py);
+            if existing[3] > 0 && existing[0] < 130 {
+                let col = if (px + py) % 3 == 0 {
+                    Rgba([255, 224, 78, 255])
+                } else {
+                    Rgba([248, 112, 22, 255])
+                };
+                atlas.image.put_pixel(tile_x + px, tile_y + py, col);
+            }
+        }
+    }
+
+    // Helper for Deepstone base pixel color
+    let deepstone_px = |px: u32, py: u32| -> [u8; 4] {
+        let h = (px.wrapping_mul(37) ^ py.wrapping_mul(73) ^ (px >> 1).wrapping_mul(19)) & 31;
+        let band = ((py / 4 + (px / 8)) % 3) as i32;
+        let base = 46 + band * 5 + (h as i32 % 11) - 5;
+        [
+            (base - 2).clamp(24, 90) as u8,
+            base.clamp(26, 94) as u8,
+            (base + 6).clamp(30, 104) as u8,
+            255,
+        ]
+    };
+
+    // 581: Deepstone Cobblestone (fractured Deepstone blocks with deep mortar grooves)
+    atlas.paint_tile(581, |px, py| {
+        let row = py / 8;
+        let shift = (row % 2) * 5;
+        let bx = (px + shift) % 10;
+        let by = py % 8;
+        let is_crack = bx == 0 || by == 0 || (bx == 1 && by == 7);
+        let mut c = deepstone_px(px, py);
+        if is_crack {
+            c[0] = c[0].saturating_sub(20);
+            c[1] = c[1].saturating_sub(20);
+            c[2] = c[2].saturating_sub(18);
+        } else if bx == 1 || by == 1 {
+            c[0] = c[0].saturating_add(12);
+            c[1] = c[1].saturating_add(12);
+            c[2] = c[2].saturating_add(14);
+        }
+        Rgba(c)
+    });
+
+    // 582: Mossy Deepstone Cobblestone (Deepstone Cobblestone with rich damp moss in seams)
+    atlas.paint_tile(582, |px, py| {
+        let row = py / 8;
+        let shift = (row % 2) * 5;
+        let bx = (px + shift) % 10;
+        let by = py % 8;
+        let is_crack = bx == 0 || by == 0 || bx == 1 || by == 1;
+        let moss_hash = (px.wrapping_mul(41) ^ py.wrapping_mul(89) ^ (px + py).wrapping_mul(13)) % 17;
+        if (is_crack && moss_hash < 11) || moss_hash < 3 {
+            let shade = ((px * 7 + py * 11) % 18) as u8;
+            Rgba([44 + shade / 2, 108 + shade, 48 + shade / 2, 255])
+        } else {
+            let mut c = deepstone_px(px, py);
+            if bx == 0 || by == 0 {
+                c[0] = c[0].saturating_sub(18);
+                c[1] = c[1].saturating_sub(18);
+                c[2] = c[2].saturating_sub(16);
+            }
+            Rgba(c)
+        }
+    });
+
+    // 583..=587: Deepstone Ores (Coal, Copper, Iron, Gold, Diamond) embedded in Deepstone rock
+    let paint_deepstone_ore =
+        |atlas: &mut TextureAtlas, tile_id: u16, salt: u32, primary: [u8; 3], highlight: [u8; 3]| {
+            // 6 deterministic ore nugget centers inside 32x32 tile
+            let centers: [(i32, i32); 6] = [
+                (7, 7),
+                (22, 8),
+                (14, 15),
+                (25, 20),
+                (8, 23),
+                (18, 26),
+            ];
+            atlas.paint_tile(tile_id, |px, py| {
+                let ix = px as i32;
+                let iy = py as i32;
+                for (i, &(cx, cy)) in centers.iter().enumerate() {
+                    let ox = ((salt.wrapping_add(i as u32 * 17)) % 5) as i32 - 2;
+                    let oy = ((salt.wrapping_add(i as u32 * 29)) % 5) as i32 - 2;
+                    let dx = ix - (cx + ox);
+                    let dy = iy - (cy + oy);
+                    let d2 = dx * dx + dy * dy;
+                    if d2 <= 6 && ((px * 13 + py * 7 + salt) % 5 != 0 || d2 <= 2) {
+                        if dx <= 0 && dy <= 0 && d2 <= 3 {
+                            return Rgba([highlight[0], highlight[1], highlight[2], 255]);
+                        }
+                        return Rgba([primary[0], primary[1], primary[2], 255]);
+                    }
+                }
+                Rgba(deepstone_px(px, py))
+            });
+        };
+
+    paint_deepstone_ore(atlas, 583, 11, [24, 24, 28], [46, 46, 52]);       // Deepstone Coal Ore
+    paint_deepstone_ore(atlas, 584, 23, [196, 108, 68], [108, 178, 146]);  // Deepstone Copper Ore
+    paint_deepstone_ore(atlas, 585, 37, [202, 174, 152], [234, 214, 196]); // Deepstone Iron Ore
+    paint_deepstone_ore(atlas, 586, 53, [232, 184, 42], [255, 238, 118]);  // Deepstone Gold Ore
+    paint_deepstone_ore(atlas, 587, 71, [68, 218, 224], [182, 255, 252]);  // Deepstone Diamond Ore
 }
 
 #[cfg(test)]

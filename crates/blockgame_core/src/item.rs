@@ -299,6 +299,15 @@ impl ItemId {
     pub const ROYAL_FEAST: Self = Self(271);
     pub const SPICED_ELIXIR: Self = Self(272);
 
+    // Underground & Caves (Issue #23)
+    pub const DEEPSTONE: Self = Self(273);
+    pub const DRIPSTONE: Self = Self(274);
+    pub const GLOW_CRYSTAL: Self = Self(275);
+    pub const OBSIDIAN: Self = Self(276);
+    pub const LAVA_BUCKET: Self = Self(277);
+    pub const DEEPSTONE_COBBLESTONE: Self = Self(278);
+    pub const MOSSY_DEEPSTONE_COBBLESTONE: Self = Self(279);
+
     #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
@@ -692,6 +701,7 @@ pub enum FoodEffectKind {
     Speed = 3,
     Regeneration = 4,
     MiningHaste = 5,
+    Burning = 6,
 }
 
 impl FoodEffectKind {
@@ -702,6 +712,7 @@ impl FoodEffectKind {
             3 => Some(Self::Speed),
             4 => Some(Self::Regeneration),
             5 => Some(Self::MiningHaste),
+            6 => Some(Self::Burning),
             _ => None,
         }
     }
@@ -2995,6 +3006,79 @@ impl ItemRegistry {
                 icon_tile,
             });
             self.register_food(id, food);
+        }
+
+        // Underground & Caves items (Issue #23)
+        let cave_items: [(ItemId, Option<BlockId>, &'static str, &'static str, u16, u32); 7] = [
+            (
+                ItemId::DEEPSTONE,
+                Some(BlockId::DEEPSTONE),
+                "blockgame:deepstone",
+                "Deepstone",
+                64,
+                574,
+            ),
+            (
+                ItemId::DRIPSTONE,
+                Some(BlockId::DRIPSTONE),
+                "blockgame:dripstone",
+                "Dripstone",
+                64,
+                575,
+            ),
+            (
+                ItemId::GLOW_CRYSTAL,
+                Some(BlockId::GLOW_CRYSTAL),
+                "blockgame:glow_crystal",
+                "Glow Crystal",
+                64,
+                577,
+            ),
+            (
+                ItemId::OBSIDIAN,
+                Some(BlockId::OBSIDIAN),
+                "blockgame:obsidian",
+                "Obsidian",
+                64,
+                578,
+            ),
+            (
+                ItemId::LAVA_BUCKET,
+                None,
+                "blockgame:lava_bucket",
+                "Lava Bucket",
+                1,
+                580,
+            ),
+            (
+                ItemId::DEEPSTONE_COBBLESTONE,
+                Some(BlockId::DEEPSTONE_COBBLESTONE),
+                "blockgame:deepstone_cobblestone",
+                "Deepstone Cobblestone",
+                64,
+                581,
+            ),
+            (
+                ItemId::MOSSY_DEEPSTONE_COBBLESTONE,
+                Some(BlockId::MOSSY_DEEPSTONE_COBBLESTONE),
+                "blockgame:mossy_deepstone_cobblestone",
+                "Mossy Deepstone Cobblestone",
+                64,
+                582,
+            ),
+        ];
+        for (id, placeable_block, name, display_name, max_stack, icon_tile) in cave_items {
+            self.register(ItemDef {
+                id,
+                name,
+                display_name,
+                max_stack,
+                placeable_block,
+                durability: None,
+                tool_type: None,
+                tool_tier: None,
+                icon_tile,
+            });
         }
     }
 }

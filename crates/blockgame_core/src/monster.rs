@@ -625,15 +625,32 @@ impl MonsterEntity {
             return outcome;
         }
 
-        // Sunlight burning for Zombies & Skeletons
-        if self.kind.burns_in_sunlight() && sun_intensity > 0.55 {
-            let bpos = IVec3::new(
-                self.position.x.floor() as i32,
-                (self.position.y + 1.0).floor() as i32,
-                self.position.z.floor() as i32,
-            );
-            let in_water = world.get_block(bpos).is_water();
-            if !in_water && has_sky_access(bpos, world, registry) {
+        // Lava hazard & lingering burning (extinguished by Water)
+        let feet_pos = IVec3::new(
+            self.position.x.floor() as i32,
+            self.position.y.floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let body_pos = IVec3::new(
+            self.position.x.floor() as i32,
+            (self.position.y + 1.0).floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let in_water = world.get_block(feet_pos).is_water() || world.get_block(body_pos).is_water();
+        let in_lava = !in_water
+            && (world.get_block(feet_pos).is_lava() || world.get_block(body_pos).is_lava());
+
+        if in_water {
+            self.burning_timer = 0.0;
+        } else if in_lava {
+            self.burning_timer = 3.0;
+            self.health = (self.health - 8.0 * dt).max(0.0);
+            if self.health <= 0.0 {
+                self.dead = true;
+                return outcome;
+            }
+        } else if self.kind.burns_in_sunlight() && sun_intensity > 0.55 {
+            if has_sky_access(body_pos, world, registry) {
                 self.burning_timer = 0.5;
                 self.health = (self.health - 2.0 * dt).max(0.0);
                 if self.health <= 0.0 {
@@ -643,6 +660,11 @@ impl MonsterEntity {
             }
         } else if self.burning_timer > 0.0 {
             self.burning_timer = (self.burning_timer - dt).max(0.0);
+            self.health = (self.health - 1.0 * dt).max(0.0);
+            if self.health <= 0.0 {
+                self.dead = true;
+                return outcome;
+            }
         }
 
         // Choose nearest target: player or (for overworld mobs) a nearby Village NPC
@@ -1075,6 +1097,9 @@ impl MonsterEntity {
             .get_block(IVec3::new(bx, (self.position.y + 0.85).floor() as i32, bz))
             .is_water();
         let in_water = feet_in_water || body_in_water;
+        if in_lava {
+            target_vel *= 0.35;
+        }
 
         // Jump over 1-block obstacles or path around walls/buildings when chasing
         if self.is_moving && (self.on_ground || in_water) && target_vel.length_squared() > 0.1 {
@@ -1522,5 +1547,42 @@ mod tests {
             zombie.position,
             dist
         );
+    }
+
+    #[test]
+    fn test_monster_lava_damage_burning_and_slowdown() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 2, z, BlockId::DEEPSTONE);
+            }
+        }
+        // Lava pool at x=4..10, z=4..10, y=3..4
+        for x in 4..=10 {
+            for z in 4..=10 {
+                chunk.set(x, 3, z, BlockId::LAVA);
+                chunk.set(x, 4, z, BlockId::LAVA);
+            }
+        }
+        // Water pool at x=12..14, z=4..6, y=3
+        for x in 12..=14 {
+            for z in 4..=6 {
+                chunk.set(x, 3, z, BlockId::WATER);
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let mut z_lava = MonsterEntity::new(10, MonsterKind::Zombie, Vec3::new(6.5, 3.1, 6.5));
+        let start_hp = z_lava.health;
+        z_lava.update(0.5, Vec3::new(14.5, 3.1, 6.5), 0.0, &world, &registry);
+        assert!(z_lava.health < start_hp, "Monster in Lava must take contact damage");
+        assert!(z_lava.burning_timer > 2.0, "Monster in Lava must catch Burning");
+
+        // Stepping into Water immediately extinguishes Burning
+        z_lava.position = Vec3::new(13.5, 3.1, 5.5);
+        z_lava.update(0.1, Vec3::new(13.5, 3.1, 5.5), 0.0, &world, &registry);
+        assert_eq!(z_lava.burning_timer, 0.0, "Water must extinguish monster Burning");
     }
 }

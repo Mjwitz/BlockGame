@@ -737,13 +737,26 @@ impl TerrainGenerator {
 
         // Precompute surface heights across the chunk plus a 1-block border for steepness/cliff painting
         let mut heights = [[0i32; 18]; 18];
+        let mut max_surface_y = i32::MIN;
         for dz in 0..18usize {
             let wz = origin.z + dz as i32 - 1;
             for dx in 0..18usize {
                 let wx = origin.x + dx as i32 - 1;
-                heights[dz][dx] = self.surface_height(wx, wz);
+                let h = self.surface_height(wx, wz);
+                heights[dz][dx] = h;
+                if dx >= 1 && dx <= 16 && dz >= 1 && dz <= 16 && h > max_surface_y {
+                    max_surface_y = h;
+                }
             }
         }
+
+        // Pure sky chunks above all terrain and water need no cave carving, ores, or voxel fill
+        if origin.y > max_surface_y.max(self.water_level) {
+            return chunk;
+        }
+
+        // Precompute deterministic region-seeded cave carvers for this chunk (ADR 0009)
+        let cave_mask = crate::caves::compute_chunk_cave_mask(self, origin.x, origin.y, origin.z);
 
         for lz in 0..CHUNK_SIZE_Z {
             let wz = origin.z + lz as i32;
@@ -761,6 +774,14 @@ impl TerrainGenerator {
 
                 let biome = self.get_biome(wx, wz, surface_y);
                 let is_underwater = surface_y <= self.water_level;
+                let is_wet_surface = is_underwater
+                    || surface_y <= self.water_level + 2
+                    || matches!(
+                        biome,
+                        Biome::Ocean | Biome::CoralReef | Biome::River | Biome::Swamp
+                    );
+                let deepstone_ceil = crate::caves::deepstone_ceiling_y(self.seed, wx, wz);
+                let lava_level = crate::caves::region_lava_level(self.seed, wx, wz);
 
                 for ly in 0..CHUNK_SIZE_Y {
                     let wy = origin.y + ly as i32;
@@ -768,17 +789,30 @@ impl TerrainGenerator {
                     let block = if wy == 0 {
                         BlockId::BEDROCK
                     } else if wy < surface_y {
-                        // Allow tunnels to occasionally carve hillside cave mouths when steep and dry
-                        let cave_carved = if wy < surface_y - 3 {
-                            self.is_cave(wx, wy, wz)
-                        } else if wy > self.water_level + 1 && is_steep_cliff {
-                            self.is_cave(wx, wy, wz)
-                        } else {
+                        let cell = cave_mask[Chunk::index(lx, ly, lz)];
+                        // Only rare designated dry-land Cave Mouths may breach the surface;
+                        // underwater beds and wet biomes always keep a 4-block rock seal.
+                        let cave_carved = if !cell.carved {
                             false
+                        } else if is_wet_surface {
+                            wy < surface_y - 4
+                        } else if cell.allows_surface_breach {
+                            true
+                        } else {
+                            wy < surface_y - 4
                         };
 
                         if cave_carved {
-                            BlockId::AIR
+                            if lava_level > 0 && wy >= 1 && wy <= lava_level {
+                                BlockId::LAVA
+                            } else if cell.pool_water_y >= 12
+                                && wy >= 12
+                                && wy <= cell.pool_water_y.min(34)
+                            {
+                                BlockId::WATER
+                            } else {
+                                BlockId::AIR
+                            }
                         } else if wy == surface_y - 1 {
                             if is_underwater || surface_y <= self.water_level + 1 {
                                 if biome == Biome::Ocean || biome == Biome::CoralReef {
@@ -1012,8 +1046,22 @@ impl TerrainGenerator {
                                     _ => BlockId::DIRT,
                                 }
                             }
+                        } else if wy < deepstone_ceil {
+                            if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23))
+                                % 23
+                                == 0
+                            {
+                                BlockId::DEEPSTONE_COBBLESTONE
+                            } else {
+                                BlockId::DEEPSTONE
+                            }
+                        } else if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23))
+                            % 23
+                            == 0
+                        {
+                            BlockId::COBBLESTONE
                         } else {
-                            self.get_subsurface_block(wx, wy, wz)
+                            BlockId::STONE
                         }
                     } else if wy <= self.water_level {
                         if matches!(biome, Biome::SnowyTundra | Biome::Glacier)
@@ -1032,6 +1080,12 @@ impl TerrainGenerator {
             }
         }
 
+        // Stamp depth-curved organic Ore Veins into Stone/Deepstone/Cobblestone
+        crate::caves::stamp_chunk_ore_veins(self.seed, &mut chunk);
+
+        // Decorate carved caves with zone materials, Dripstone, Glow Crystals, and rare springs
+        crate::caves::decorate_chunk_caves(self.seed, &mut chunk, &cave_mask);
+
         for temple in self.find_temples_for_chunk(pos) {
             crate::temple_gen::stamp_temple_exterior(&mut chunk, &temple);
         }
@@ -1048,90 +1102,12 @@ impl TerrainGenerator {
         self.sample_macro_cells(wx as f64, wz as f64).1
     }
 
-    /// Evaluates underground voxel coordinate to place ore veins (Diamond, Gold, Iron, Copper, Coal)
-    /// clustered deterministically into natural underground deposits.
+    /// Evaluates the base underground rock stratum (Deepstone below the jagged transition, else Stone/Cobblestone).
     #[inline]
     pub fn get_subsurface_block(&self, wx: i32, wy: i32, wz: i32) -> BlockId {
-        let cx = wx >> 2;
-        let cy = wy >> 2;
-        let cz = wz >> 2;
-
-        // Diamond Ore: Deep layer (y: 1..16), rare
-        if wy >= 1 && wy <= 16 {
-            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9901));
-            if h % 31 == 0 {
-                let vx = (cx << 2) + ((h & 3) as i32);
-                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
-                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq =
-                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
-                if dist_sq <= 2 {
-                    return BlockId::DIAMOND_ORE;
-                }
-            }
-        }
-
-        // Gold Ore: Mid-deep layer (y: 4..28)
-        if wy >= 4 && wy <= 28 {
-            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9907));
-            if h % 23 == 0 {
-                let vx = (cx << 2) + ((h & 3) as i32);
-                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
-                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq =
-                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
-                if dist_sq <= 3 {
-                    return BlockId::GOLD_ORE;
-                }
-            }
-        }
-
-        // Iron Ore: Broad subsurface range (y: 6..64)
-        if wy >= 6 && wy <= 64 {
-            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9923));
-            if h % 15 == 0 {
-                let vx = (cx << 2) + ((h & 3) as i32);
-                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
-                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq =
-                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
-                if dist_sq <= 4 {
-                    return BlockId::IRON_ORE;
-                }
-            }
-        }
-
-        // Copper Ore: (y: 14..70)
-        if wy >= 14 && wy <= 70 {
-            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9931));
-            if h % 13 == 0 {
-                let vx = (cx << 2) + ((h & 3) as i32);
-                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
-                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq =
-                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
-                if dist_sq <= 4 {
-                    return BlockId::COPPER_ORE;
-                }
-            }
-        }
-
-        // Coal Ore: Abundant across upper & middle underground & mountains (y: 18..96)
-        if wy >= 18 && wy <= 96 {
-            let h = hash3d(cx, cy, cz, self.seed.wrapping_add(9941));
-            if h % 9 == 0 {
-                let vx = (cx << 2) + ((h & 3) as i32);
-                let vy = (cy << 2) + (((h >> 2) & 3) as i32);
-                let vz = (cz << 2) + (((h >> 4) & 3) as i32);
-                let dist_sq =
-                    (wx - vx) * (wx - vx) + (wy - vy) * (wy - vy) + (wz - vz) * (wz - vz);
-                if dist_sq <= 5 {
-                    return BlockId::COAL_ORE;
-                }
-            }
-        }
-
-        if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23)) % 23 == 0 {
+        if wy < crate::caves::deepstone_ceiling_y(self.seed, wx, wz) {
+            BlockId::DEEPSTONE
+        } else if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23)) % 23 == 0 {
             BlockId::COBBLESTONE
         } else {
             BlockId::STONE
@@ -2141,6 +2117,7 @@ fn tree_hash(x: i32, z: i32, seed: u32) -> u32 {
     h
 }
 
+#[allow(dead_code)]
 #[inline]
 fn hash3d(x: i32, y: i32, z: i32, seed: u32) -> u32 {
     let mut h = (x as u32).wrapping_mul(374761393)
@@ -2192,19 +2169,19 @@ mod tests {
                 for cy in 0..5 {
                     let chunk = gen.generate_chunk(ChunkPos::new(cx, cy, cz));
                     for b in chunk.raw_blocks() {
-                        if *b == BlockId::COAL_ORE {
+                        if matches!(*b, BlockId::COAL_ORE | BlockId::DEEPSTONE_COAL_ORE) {
                             found_coal = true;
                         }
-                        if *b == BlockId::IRON_ORE {
+                        if matches!(*b, BlockId::IRON_ORE | BlockId::DEEPSTONE_IRON_ORE) {
                             found_iron = true;
                         }
-                        if *b == BlockId::COPPER_ORE {
+                        if matches!(*b, BlockId::COPPER_ORE | BlockId::DEEPSTONE_COPPER_ORE) {
                             found_copper = true;
                         }
-                        if *b == BlockId::GOLD_ORE {
+                        if matches!(*b, BlockId::GOLD_ORE | BlockId::DEEPSTONE_GOLD_ORE) {
                             found_gold = true;
                         }
-                        if *b == BlockId::DIAMOND_ORE {
+                        if matches!(*b, BlockId::DIAMOND_ORE | BlockId::DEEPSTONE_DIAMOND_ORE) {
                             found_diamond = true;
                         }
                     }

@@ -4790,56 +4790,73 @@ impl BlockGameApp {
                             }
                         }
 
-                        // 4b. Empty Bucket: Scoop Water
+                        // 4b. Empty Bucket: Scoop Water or Lava
                         if held_slot.item_id == ItemId::BUCKET {
                             if let Some(hit) = state.targeted_block {
-                                let is_water = {
+                                let target_block = {
                                     let world_guard = state.world_manager.world().lock().unwrap();
-                                    world_guard.get_block(hit.hit_voxel).is_water()
+                                    world_guard.get_block(hit.hit_voxel)
                                 };
-                                if is_water {
-                                    let scooped = state.world_manager.scoop_water(
-                                        hit.hit_voxel,
-                                        &state.device,
-                                        &state.pipeline,
-                                    );
-                                    if scooped {
-                                        if let Some(client) = &mut state.mp_client {
-                                            client.send(
-                                                &blockgame_core::net::ClientPacket::BlockChange {
-                                                    pos: hit.hit_voxel,
-                                                    block_id: BlockId::AIR,
-                                                },
-                                            );
-                                        }
-                                        state.punch_timer = 0.2;
-                                        if held_slot.count <= 1 {
-                                            state.inventory.set(
-                                                state.active_hotbar_slot,
-                                                ItemSlot::new(ItemId::WATER_BUCKET, 1),
-                                            );
-                                        } else {
-                                            state.inventory.slots[state.active_hotbar_slot].take(1);
-                                            let overflow = state.inventory.add_item(
-                                                ItemSlot::new(ItemId::WATER_BUCKET, 1),
-                                                &state.item_registry,
-                                            );
-                                            if let Some(left) = overflow {
-                                                state.spawn_drop_synced(
-                                                    state.player.position,
-                                                    Vec3::new(0.0, 2.0, 0.0),
-                                                    left,
-                                                );
-                                            }
-                                        }
-                                        return;
+                                let filled_bucket = if target_block.is_water() {
+                                    Some((
+                                        state.world_manager.scoop_water(
+                                            hit.hit_voxel,
+                                            &state.device,
+                                            &state.pipeline,
+                                        ),
+                                        ItemId::WATER_BUCKET,
+                                    ))
+                                } else if target_block.is_lava() {
+                                    Some((
+                                        state.world_manager.scoop_lava(
+                                            hit.hit_voxel,
+                                            &state.device,
+                                            &state.pipeline,
+                                        ),
+                                        ItemId::LAVA_BUCKET,
+                                    ))
+                                } else {
+                                    None
+                                };
+                                if let Some((true, bucket_item)) = filled_bucket {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(
+                                            &blockgame_core::net::ClientPacket::BlockChange {
+                                                pos: hit.hit_voxel,
+                                                block_id: BlockId::AIR,
+                                            },
+                                        );
                                     }
+                                    state.punch_timer = 0.2;
+                                    if held_slot.count <= 1 {
+                                        state.inventory.set(
+                                            state.active_hotbar_slot,
+                                            ItemSlot::new(bucket_item, 1),
+                                        );
+                                    } else {
+                                        state.inventory.slots[state.active_hotbar_slot].take(1);
+                                        let overflow = state.inventory.add_item(
+                                            ItemSlot::new(bucket_item, 1),
+                                            &state.item_registry,
+                                        );
+                                        if let Some(left) = overflow {
+                                            state.spawn_drop_synced(
+                                                state.player.position,
+                                                Vec3::new(0.0, 2.0, 0.0),
+                                                left,
+                                            );
+                                        }
+                                    }
+                                    return;
                                 }
                             }
                         }
 
-                        // 4c. Water Bucket: Place Water Source
-                        if held_slot.item_id == ItemId::WATER_BUCKET {
+                        // 4c. Water Bucket / Lava Bucket: Place Liquid Source
+                        if held_slot.item_id == ItemId::WATER_BUCKET
+                            || held_slot.item_id == ItemId::LAVA_BUCKET
+                        {
+                            let is_lava_bucket = held_slot.item_id == ItemId::LAVA_BUCKET;
                             if let Some(hit) = state.targeted_block {
                                 let target_pos = {
                                     let world_guard = state.world_manager.world().lock().unwrap();
@@ -4850,22 +4867,35 @@ impl BlockGameApp {
                                         hit.place_voxel
                                     }
                                 };
-                                let placed = state.world_manager.place_water(
-                                    target_pos,
-                                    &state.device,
-                                    &state.pipeline,
-                                );
+                                let placed = if is_lava_bucket {
+                                    state.world_manager.place_lava(
+                                        target_pos,
+                                        &state.device,
+                                        &state.pipeline,
+                                    )
+                                } else {
+                                    state.world_manager.place_water(
+                                        target_pos,
+                                        &state.device,
+                                        &state.pipeline,
+                                    )
+                                };
                                 if placed {
+                                    let liquid_block = if is_lava_bucket {
+                                        BlockId::LAVA
+                                    } else {
+                                        BlockId::WATER
+                                    };
                                     if let Some(client) = &mut state.mp_client {
                                         client.send(
                                             &blockgame_core::net::ClientPacket::BlockChange {
                                                 pos: target_pos,
-                                                block_id: BlockId::WATER,
+                                                block_id: liquid_block,
                                             },
                                         );
                                     }
                                     state.audio.play_block_place(
-                                        BlockId::WATER,
+                                        liquid_block,
                                         target_pos.as_vec3() + Vec3::splat(0.5),
                                         state.camera.position,
                                         state.camera.yaw,
@@ -5997,6 +6027,19 @@ impl BlockGameApp {
                                         &state.pipeline,
                                     );
                                 }
+                                blockgame_core::net::ServerPacket::FluidUpdate {
+                                    pos,
+                                    block_id,
+                                    level,
+                                } => {
+                                    state.world_manager.apply_remote_fluid_update(
+                                        pos,
+                                        block_id,
+                                        level,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                }
                                 blockgame_core::net::ServerPacket::ContainerSync {
                                     pos,
                                     is_furnace,
@@ -6494,12 +6537,13 @@ impl BlockGameApp {
                         (state.player.position.y + 1.62).floor() as i32,
                         state.player.position.z.floor() as i32,
                     );
-                    let (is_head_submerged, is_in_water, is_touching_cactus) = {
+                    let (is_head_submerged, is_in_water, is_in_lava, is_touching_cactus) = {
                         let world = state.world_manager.world().lock().unwrap();
                         let submerged = world.get_block(head_block_pos).is_water();
                         let in_water = state.player.is_in_water(&world);
+                        let in_lava = !in_water && state.player.is_in_lava(&world);
                         let touching_cactus = state.player.is_touching_cactus(&world);
-                        (submerged, in_water, touching_cactus)
+                        (submerged, in_water, in_lava, touching_cactus)
                     };
 
                     // Water splash on entry and exit
@@ -6545,6 +6589,19 @@ impl BlockGameApp {
                         {
                             state.audio.play_tool_break();
                         }
+                    }
+                    let lava_raw_dmg = state.player_stats.tick_lava_hazard(
+                        dt,
+                        is_in_lava,
+                        is_in_water,
+                        armor_mult,
+                    );
+                    if lava_raw_dmg > 0.0
+                        && state
+                            .armor
+                            .damage_armor(lava_raw_dmg, &state.item_registry)
+                    {
+                        state.audio.play_tool_break();
                     }
 
                     // Update walking distance & movement exhaustion (advances ONLY when moving)
@@ -7299,6 +7356,9 @@ impl BlockGameApp {
                         state
                             .world_manager
                             .update_cooking_pots(dt, &state.device, &state.pipeline);
+                        state
+                            .world_manager
+                            .tick_fluids(dt, &state.device, &state.pipeline);
                     }
                     state
                         .world_manager
@@ -7373,7 +7433,9 @@ impl BlockGameApp {
                             .and_then(|d| d.placeable_block)
                             .is_some();
                         let is_bucket =
-                            held_item == ItemId::BUCKET || held_item == ItemId::WATER_BUCKET;
+                            held_item == ItemId::BUCKET
+                                || held_item == ItemId::WATER_BUCKET
+                                || held_item == ItemId::LAVA_BUCKET;
                         let mut hit = raycast_voxel_with_water(
                             eye_pos,
                             state.camera.forward(),
@@ -7676,6 +7738,11 @@ impl BlockGameApp {
                                                                     | BlockId::IRON_ORE
                                                                     | BlockId::GOLD_ORE
                                                                     | BlockId::DIAMOND_ORE
+                                                                    | BlockId::DEEPSTONE_COAL_ORE
+                                                                    | BlockId::DEEPSTONE_COPPER_ORE
+                                                                    | BlockId::DEEPSTONE_IRON_ORE
+                                                                    | BlockId::DEEPSTONE_GOLD_ORE
+                                                                    | BlockId::DEEPSTONE_DIAMOND_ORE
                                                             );
                                                             if is_ore
                                                                 && blockgame_core::fishing::next_f32(&mut state.fishing_rng)
@@ -9401,7 +9468,11 @@ impl BlockGameApp {
                     let frustum = state.camera.build_frustum(aspect);
                     state
                         .world_manager
-                        .render_with_frustum(&mut render_pass, Some(&frustum));
+                        .render_with_frustum_and_camera(
+                            &mut render_pass,
+                            Some(&frustum),
+                            Some(state.camera.position),
+                        );
 
                     // Render floating 3D item drops
                     state.item_drop_dynamic_mesh.draw(&mut render_pass);

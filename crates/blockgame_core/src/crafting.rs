@@ -324,7 +324,42 @@ pub fn get_item_source_info(item_id: ItemId) -> Option<ItemSourceInfo> {
         ItemId::WATER_BUCKET => Some(ItemSourceInfo {
             location: "Filled by right-clicking water with an empty Bucket",
             tool_required: "Bucket + Water Source",
-            notes: "Places water block and cascades downward.",
+            notes: "Places water block and cascades downward. Solidifies Lava into Obsidian.",
+        }),
+        ItemId::LAVA_BUCKET => Some(ItemSourceInfo {
+            location: "Filled by right-clicking deep underground Lava Pools (y 1-7) with a Bucket",
+            tool_required: "Bucket + Lava Source",
+            notes: "Places Lava or burns as long-lasting Furnace fuel (1000s, returns empty Bucket).",
+        }),
+        ItemId::DEEPSTONE => Some(ItemSourceInfo {
+            location: "Deep underground rock stratum below y=16 (or smelted from Deepstone Cobblestone)",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Denser deep-underground stratum surrounding deep Lava Pools and Diamond Ore Veins.",
+        }),
+        ItemId::DEEPSTONE_COBBLESTONE => Some(ItemSourceInfo {
+            location: "Dropped when mining Deepstone below y=16",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Fractured deepstone building block; smelts back into smooth Deepstone.",
+        }),
+        ItemId::MOSSY_DEEPSTONE_COBBLESTONE => Some(ItemSourceInfo {
+            location: "Damp deep cave floors or crafted with Deepstone Cobblestone + Leaves",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Moss-covered Deepstone Cobblestone.",
+        }),
+        ItemId::DRIPSTONE => Some(ItemSourceInfo {
+            location: "Hanging stalactites and floor stalagmites in underground caves",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Decorative cave mineral spire that breaks if its supporting rock is mined.",
+        }),
+        ItemId::GLOW_CRYSTAL => Some(ItemSourceInfo {
+            location: "Rare luminous clusters on deep cave walls and ceilings",
+            tool_required: "Any tool or bare hands",
+            notes: "Emits faint ambient cave light (level 7) and breaks if unsupported.",
+        }),
+        ItemId::OBSIDIAN => Some(ItemSourceInfo {
+            location: "Formed when Water contacts source Lava",
+            tool_required: "Diamond Pickaxe",
+            notes: "Ultra-hard volcanic glass.",
         }),
         ItemId::CORAL_BLOCK => Some(ItemSourceInfo {
             location: "Warm coral reef ocean shallows",
@@ -1602,6 +1637,20 @@ impl CraftingManager {
             inputs: vec![ItemId::COBBLESTONE, ItemId::DARK_OAK_LEAVES],
             output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
         });
+        for leaf_id in [
+            ItemId::LEAVES,
+            ItemId::SPRUCE_LEAVES,
+            ItemId::BIRCH_LEAVES,
+            ItemId::JUNGLE_LEAVES,
+            ItemId::DARK_OAK_LEAVES,
+            ItemId::ACACIA_LEAVES,
+        ] {
+            self.register(Recipe::Shapeless {
+                name: "Mossy Deepstone Cobblestone",
+                inputs: vec![ItemId::DEEPSTONE_COBBLESTONE, leaf_id],
+                output: ItemSlot::new(ItemId::MOSSY_DEEPSTONE_COBBLESTONE, 1),
+            });
+        }
 
         // Prismarine: 4 Cobblestone + 1 Clay (Shapeless)
         self.register(Recipe::Shapeless {
@@ -2672,6 +2721,7 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
         ItemId::RAW_GOLD | ItemId::GOLD_ORE => Some(ItemId::GOLD_INGOT),
         ItemId::RAW_COPPER | ItemId::COPPER_ORE => Some(ItemId::COPPER_INGOT),
         ItemId::COBBLESTONE => Some(ItemId::STONE),
+        ItemId::DEEPSTONE_COBBLESTONE => Some(ItemId::DEEPSTONE),
         ItemId::SAND => Some(ItemId::GLASS),
         ItemId::CLAY => Some(ItemId::TERRACOTTA),
         ItemId::CACTUS => Some(ItemId::GREEN_DYE),
@@ -2691,10 +2741,33 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
     }
 }
 
+/// Consumes 1 unit of fuel from `fuel` if valid, replacing a consumed `Lava Bucket`
+/// with an empty `Bucket`, and returns the burn duration in seconds (0.0 if invalid).
+pub fn consume_fuel_slot(fuel: &mut ItemSlot) -> f32 {
+    if fuel.is_empty() || fuel.count == 0 {
+        return 0.0;
+    }
+    let burn_dur = get_fuel_burn_time(fuel.item_id);
+    if burn_dur <= 0.0 {
+        return 0.0;
+    }
+    let consumed_lava_bucket = fuel.item_id == ItemId::LAVA_BUCKET;
+    fuel.count -= 1;
+    if fuel.count == 0 {
+        *fuel = if consumed_lava_bucket {
+            ItemSlot::new(ItemId::BUCKET, 1)
+        } else {
+            ItemSlot::EMPTY
+        };
+    }
+    burn_dur
+}
+
 /// Returns the fuel burn duration (in seconds) for 1 item of the given type.
 /// Returns 0.0 if the item is not a valid furnace fuel.
 pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
     match fuel {
+        ItemId::LAVA_BUCKET => 1000.0,
         ItemId::COAL => 80.0,
         ItemId::WOOD_LOG
         | ItemId::BIRCH_LOG

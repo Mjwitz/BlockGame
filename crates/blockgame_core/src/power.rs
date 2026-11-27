@@ -3,7 +3,7 @@ use std::collections::{HashSet, VecDeque};
 use glam::IVec3;
 
 use crate::block::BlockId;
-use crate::crafting::{get_fuel_burn_time, get_smelting_output};
+use crate::crafting::get_smelting_output;
 use crate::item::ItemSlot;
 use crate::world::World;
 
@@ -442,12 +442,8 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
                 gen.current_output_eu_s = COAL_GENERATOR_OUTPUT_EU_S;
                 coal_gen_eu_s += COAL_GENERATOR_OUTPUT_EU_S;
             } else if network_needs_fuel_gen && !gen.fuel.is_empty() {
-                let burn_dur = get_fuel_burn_time(gen.fuel.item_id);
+                let burn_dur = crate::crafting::consume_fuel_slot(&mut gen.fuel);
                 if burn_dur > 0.0 {
-                    gen.fuel.count -= 1;
-                    if gen.fuel.count == 0 {
-                        gen.fuel = ItemSlot::EMPTY;
-                    }
                     gen.burn_time = (burn_dur - dt).max(0.0);
                     gen.max_burn_time = burn_dur;
                     gen.current_output_eu_s = COAL_GENERATOR_OUTPUT_EU_S;

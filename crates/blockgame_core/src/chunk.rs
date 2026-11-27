@@ -92,7 +92,7 @@ impl Chunk {
     #[inline]
     pub fn set_facing(&mut self, x: usize, y: usize, z: usize, facing: u8) -> bool {
         if x < CHUNK_SIZE_X && y < CHUNK_SIZE_Y && z < CHUNK_SIZE_Z {
-            self.facings[Self::index(x, y, z)] = facing & 0x03;
+            self.facings[Self::index(x, y, z)] = facing & 0x0F;
             true
         } else {
             false

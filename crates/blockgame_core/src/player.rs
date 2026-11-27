@@ -65,6 +65,7 @@ pub struct PlayerStats {
     pub breath: f32,
     pub max_breath: f32,
     pub drown_timer: f32,
+    pub lava_damage_timer: f32,
     pub is_submerged: bool,
     pub game_mode: GameMode,
     pub status_effects: Vec<ActiveStatusEffect>,
@@ -98,6 +99,7 @@ impl PlayerStats {
             breath: Self::MAX_BREATH,
             max_breath: Self::MAX_BREATH,
             drown_timer: 0.0,
+            lava_damage_timer: 0.0,
             is_submerged: false,
             game_mode: GameMode::Survival,
             status_effects: Vec::new(),
@@ -245,6 +247,44 @@ impl PlayerStats {
             .unwrap_or(0.0)
     }
 
+    /// Immediately extinguishes any active Burning status effect (e.g., when entering Water).
+    pub fn extinguish_burning(&mut self) {
+        self.status_effects.retain(|e| e.kind != FoodEffectKind::Burning);
+        self.lava_damage_timer = 0.0;
+    }
+
+    /// Processes Lava contact damage, refreshes lingering Burning (3s), and extinguishes Burning in Water.
+    /// Returns the raw (pre-armor) lava damage dealt this tick so callers can apply armor durability/audio.
+    pub fn tick_lava_hazard(
+        &mut self,
+        dt: f32,
+        in_lava: bool,
+        in_water: bool,
+        armor_mult: f32,
+    ) -> f32 {
+        if in_water {
+            self.extinguish_burning();
+            return 0.0;
+        }
+        if !in_lava || self.game_mode.is_creative() || self.is_dead {
+            self.lava_damage_timer = 0.0;
+            return 0.0;
+        }
+
+        // Refresh lingering Burning status effect (3 seconds after exiting Lava)
+        self.add_status_effect(FoodEffectKind::Burning, 3.0);
+
+        self.lava_damage_timer += dt;
+        if self.lava_damage_timer >= 0.5 {
+            self.lava_damage_timer -= 0.5;
+            let raw_dmg = 4.0;
+            if self.take_damage(raw_dmg * armor_mult) {
+                return raw_dmg;
+            }
+        }
+        0.0
+    }
+
     /// Adds exhaustion from movement, jumping, mining, etc.
     pub fn add_exhaustion(&mut self, amount: f32) {
         if self.is_dead || amount <= 0.0 {
@@ -286,9 +326,10 @@ impl PlayerStats {
             return;
         }
 
-        // 0. Status Effects (Food Poisoning, Poison, Regeneration, Speed, MiningHaste)
+        // 0. Status Effects (Food Poisoning, Poison, Regeneration, Speed, MiningHaste, Burning)
         let mut extra_exhaustion = 0.0_f32;
         let mut poison_ticks = 0_u32;
+        let mut burning_ticks = 0_u32;
         let mut regen_heal = 0.0_f32;
         for effect in &mut self.status_effects {
             effect.remaining_secs -= dt;
@@ -301,6 +342,13 @@ impl PlayerStats {
                     while effect.tick_accum >= 1.5 {
                         effect.tick_accum -= 1.5;
                         poison_ticks += 1;
+                    }
+                }
+                FoodEffectKind::Burning => {
+                    effect.tick_accum += dt;
+                    while effect.tick_accum >= 1.0 {
+                        effect.tick_accum -= 1.0;
+                        burning_ticks += 1;
                     }
                 }
                 FoodEffectKind::Regeneration => {
@@ -324,6 +372,16 @@ impl PlayerStats {
                 if dmg > 0.0 {
                     self.health = (self.health - dmg).max(1.0);
                     self.damage_flash = 0.3;
+                }
+            }
+        }
+        for _ in 0..burning_ticks {
+            if !self.is_dead {
+                self.health = (self.health - 1.0).max(0.0);
+                self.damage_flash = 0.35;
+                if self.health <= 0.0 {
+                    self.is_dead = true;
+                    break;
                 }
             }
         }
@@ -500,5 +558,30 @@ mod tests {
 
         stats.update(2.0, 10.0, false);
         assert_eq!(stats.breath, 15.0);
+    }
+
+    #[test]
+    fn test_lava_contact_lingering_burning_and_water_extinguish() {
+        let mut stats = PlayerStats::new();
+        assert_eq!(stats.health, 20.0);
+
+        // Contact with Lava deals 4 damage after 0.5s and applies 3s Burning
+        let dmg = stats.tick_lava_hazard(0.5, true, false, 1.0);
+        assert_eq!(dmg, 4.0);
+        assert_eq!(stats.health, 16.0);
+        assert!(stats.has_status_effect(FoodEffectKind::Burning));
+
+        // Step out of Lava: lingering Burning deals 1 HP/s
+        stats.tick_lava_hazard(0.1, false, false, 1.0);
+        stats.update(1.0, 10.0, false);
+        assert_eq!(stats.health, 15.0);
+        assert!(stats.has_status_effect(FoodEffectKind::Burning));
+
+        // Step into Water: Burning is immediately extinguished
+        stats.tick_lava_hazard(0.05, false, true, 1.0);
+        assert!(!stats.has_status_effect(FoodEffectKind::Burning));
+        let hp_after_water = stats.health;
+        stats.update(1.0, 10.0, false);
+        assert_eq!(stats.health, hp_after_water);
     }
 }

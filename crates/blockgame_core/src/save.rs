@@ -279,12 +279,12 @@ pub fn decode_chunk_rle(pos: ChunkPos, runs: &[(u16, BlockId)]) -> Chunk {
     chunk
 }
 
-/// Encodes all non-zero block facings in a `Chunk` as sparse `(voxel_index, facing)` pairs.
+/// Encodes all non-zero block facings / fluid metadata in a `Chunk` as sparse `(voxel_index, meta)` pairs.
 pub fn encode_chunk_facings(chunk: &Chunk) -> Vec<(u16, u8)> {
     let raw = chunk.raw_facings();
     let mut facings = Vec::new();
     for (idx, &f) in raw.iter().enumerate() {
-        let masked = f & 0x03;
+        let masked = f & 0x0F;
         if masked != 0 {
             facings.push((idx as u16, masked));
         }
@@ -292,12 +292,12 @@ pub fn encode_chunk_facings(chunk: &Chunk) -> Vec<(u16, u8)> {
     facings
 }
 
-/// Applies sparse `(voxel_index, facing)` pairs onto a decoded `Chunk`.
+/// Applies sparse `(voxel_index, meta)` pairs onto a decoded `Chunk`.
 pub fn apply_chunk_facings(chunk: &mut Chunk, facings: &[(u16, u8)]) {
     let raw = chunk.raw_facings_mut();
     for &(idx, f) in facings {
         if (idx as usize) < CHUNK_VOLUME {
-            raw[idx as usize] = f & 0x03;
+            raw[idx as usize] = f & 0x0F;
         }
     }
 }
@@ -645,7 +645,7 @@ pub fn save_chunk_file_with_facings(
     write_u32(&mut w, facings.len() as u32)?;
     for &(idx, facing) in facings {
         write_u16(&mut w, idx)?;
-        write_u8(&mut w, facing & 0x03)?;
+        write_u8(&mut w, facing & 0x0F)?;
     }
     w.flush()?;
     Ok(path)
@@ -697,7 +697,7 @@ pub fn load_chunk_file_with_facings(
         facings.reserve(facing_count);
         for _ in 0..facing_count {
             let idx = read_u16(&mut r)?;
-            let facing = read_u8(&mut r)? & 0x03;
+            let facing = read_u8(&mut r)? & 0x0F;
             facings.push((idx, facing));
         }
     }
@@ -2386,7 +2386,7 @@ mod tests {
 
         assert_eq!(restored_world.get_block(IVec3::new(3, 4, 5)), BlockId::CRAFTING_TABLE);
         assert_eq!(restored_world.get_block(IVec3::new(3, 5, 5)), BlockId::TORCH);
-        assert!(restored_world.light_sources.contains(&IVec3::new(3, 5, 5)));
+        assert!(restored_world.has_light_source(IVec3::new(3, 5, 5)));
 
         let restored_chest = restored_world.get_chest(chest_pos).expect("Chest should exist");
         assert_eq!(restored_chest[0], ItemSlot::new(ItemId::DIAMOND, 12));
@@ -2814,6 +2814,44 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_chunk_v2_4bit_fluid_level_roundtrip() {
+        let temp_dir = std::env::temp_dir().join("blockgame_test_fluid_level_v2_roundtrip");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let cpos = ChunkPos::new(1, 0, -2);
+        let mut chunk = Chunk::new(cpos);
+        chunk.set(2, 5, 2, BlockId::WATER);
+        chunk.set_facing(2, 5, 2, 0); // Source
+        chunk.set(3, 5, 2, BlockId::WATER);
+        chunk.set_facing(3, 5, 2, 4); // Mid-decay (bit 2 set)
+        chunk.set(4, 5, 2, BlockId::WATER);
+        chunk.set_facing(4, 5, 2, 7); // Tip decay
+        chunk.set(5, 5, 2, BlockId::LAVA);
+        chunk.set_facing(5, 5, 2, crate::fluid::FLUID_FALLING); // 8 (bit 3 set)
+
+        let runs = encode_chunk_rle(&chunk);
+        let facings = encode_chunk_facings(&chunk);
+        let path = save_chunk_file_with_facings(&temp_dir, cpos, &runs, &facings).unwrap();
+
+        let (loaded_pos, loaded_runs, loaded_facings) =
+            load_chunk_file_with_facings(&path).unwrap();
+        assert_eq!(loaded_pos, cpos);
+        let mut restored = decode_chunk_rle(loaded_pos, &loaded_runs);
+        apply_chunk_facings(&mut restored, &loaded_facings);
+
+        assert_eq!(restored.get_facing_unchecked(2, 5, 2), 0);
+        assert_eq!(restored.get_facing_unchecked(3, 5, 2), 4);
+        assert_eq!(restored.get_facing_unchecked(4, 5, 2), 7);
+        assert_eq!(
+            restored.get_facing_unchecked(5, 5, 2),
+            crate::fluid::FLUID_FALLING
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
 

@@ -47,7 +47,7 @@ pub fn raycast_voxel_with_water(
     let is_start_solid = if include_water {
         !start_block.is_air()
     } else {
-        !start_block.is_air() && start_block != BlockId::WATER
+        !start_block.is_air() && start_block != BlockId::WATER && start_block != BlockId::LAVA
     };
     if is_start_solid {
         return Some(RaycastHit {
@@ -137,7 +137,7 @@ pub fn raycast_voxel_with_water(
         let is_hit = if include_water {
             !block.is_air()
         } else {
-            !block.is_air() && block != BlockId::WATER
+            !block.is_air() && block != BlockId::WATER && block != BlockId::LAVA
         };
         if is_hit {
             let place_voxel = current + hit_face.normal_ivec();

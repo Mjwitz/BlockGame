@@ -184,11 +184,14 @@ impl ItemDrop {
         };
 
         if current_block == BlockId::WATER || current_block == BlockId::SEAGRASS {
-            // Water buoyancy: upward buoyant force + water drag
+            // Water buoyancy: upward buoyant force + water drag + flowing current push
             self.velocity.y += 12.0 * dt;
             self.velocity.y = self.velocity.y.min(2.5); // Max upward float velocity
             self.velocity.x *= 0.85;
             self.velocity.z *= 0.85;
+            let flow = crate::fluid::fluid_flow_vector(current_voxel, world);
+            self.velocity.x += flow.x * 4.5 * dt;
+            self.velocity.z += flow.z * 4.5 * dt;
         } else {
             self.velocity.y -= 18.0 * dt;
             self.velocity.x *= 0.92;

@@ -139,8 +139,8 @@ impl PlayerPhysics {
         }
     }
 
-    /// Returns whether the player's bounding box is submerged or touching water.
-    pub fn is_in_water(&self, world: &World) -> bool {
+    #[inline]
+    fn is_in_block(&self, world: &World, pred: impl Fn(BlockId) -> bool) -> bool {
         let player_box = self.aabb();
         let min_x = player_box.min.x.floor() as i32;
         let max_x = player_box.max.x.floor() as i32;
@@ -152,13 +152,23 @@ impl PlayerPhysics {
         for y in min_y..=max_y {
             for z in min_z..=max_z {
                 for x in min_x..=max_x {
-                    if world.get_block(IVec3::new(x, y, z)).is_water() {
+                    if pred(world.get_block(IVec3::new(x, y, z))) {
                         return true;
                     }
                 }
             }
         }
         false
+    }
+
+    /// Returns whether the player's bounding box is submerged or touching water.
+    pub fn is_in_water(&self, world: &World) -> bool {
+        self.is_in_block(world, |b| b.is_water())
+    }
+
+    /// Returns whether the player's bounding box is submerged or touching lava.
+    pub fn is_in_lava(&self, world: &World) -> bool {
+        self.is_in_block(world, |b| b.is_lava())
     }
 
     /// Returns whether the player's bounding box is touching or brushing against a cactus block.
@@ -229,6 +239,7 @@ impl PlayerPhysics {
         }
 
         let in_water = self.is_in_water(world);
+        let in_lava = !in_water && self.is_in_lava(world);
         let prev_y = self.position.y;
         let was_on_ground = self.on_ground;
 
@@ -248,10 +259,33 @@ impl PlayerPhysics {
                 self.velocity.y = 4.0 * jump_mult;
             }
 
-            // Water horizontal movement
+            // Water horizontal movement + flowing water current push
+            let feet_voxel = IVec3::new(
+                self.position.x.floor() as i32,
+                (self.position.y + 0.2).floor() as i32,
+                self.position.z.floor() as i32,
+            );
+            let flow = crate::fluid::fluid_flow_vector(feet_voxel, world);
             let target_speed = (if sprinting { 3.8 } else { 2.4 }) * speed_mult;
-            let target_vel = wish_dir * target_speed;
+            let target_vel = wish_dir * target_speed + flow * 1.4;
             let accel = 8.0;
+            self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
+            self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
+        } else if in_lava {
+            // Thick liquid cushions fall and heavily slows movement
+            self.fall_distance *= 0.5;
+
+            let lava_gravity = -4.5;
+            self.velocity.y += lava_gravity * dt;
+            self.velocity.y *= (1.0 - 4.0 * dt).clamp(0.0, 1.0);
+
+            if jumping {
+                self.velocity.y = 2.6 * jump_mult;
+            }
+
+            let target_speed = (if sprinting { 1.8 } else { 1.3 }) * speed_mult;
+            let target_vel = wish_dir * target_speed;
+            let accel = 6.0;
             self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
             self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
         } else {
@@ -280,7 +314,7 @@ impl PlayerPhysics {
 
         // Calculate fall distance and landing damage
         let mut fall_damage = 0.0;
-        if in_water {
+        if in_water || in_lava {
             self.fall_distance = 0.0;
         } else if self.on_ground {
             if !was_on_ground && self.fall_distance > 3.0 {
@@ -1200,6 +1234,49 @@ mod tests {
             (player.position.y - 20.0).abs() < 1e-3 && player.position.y < peak_y,
             "expected negative wish_dir.y to descend symmetrically while flying, got {}",
             player.position.y
+        );
+    }
+
+    #[test]
+    fn test_player_lava_slowdown() {
+        let reg = BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+        for x in 2..=12 {
+            for z in 2..=12 {
+                world.set_block(IVec3::new(x, 2, z), BlockId::DEEPSTONE);
+            }
+        }
+        for x in 3..=11 {
+            for z in 3..=11 {
+                world.set_block(IVec3::new(x, 3, z), BlockId::LAVA);
+                world.set_block(IVec3::new(x, 4, z), BlockId::LAVA);
+            }
+        }
+
+        let mut p_lava = PlayerPhysics::new(Vec3::new(5.5, 3.2, 5.5));
+        assert!(p_lava.is_in_lava(&world));
+        for _ in 0..20 {
+            p_lava.update(0.05, Vec3::X, false, false, &world, &reg);
+        }
+
+        let mut dry_world = World::new();
+        dry_world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+        for x in 2..=12 {
+            for z in 2..=12 {
+                dry_world.set_block(IVec3::new(x, 2, z), BlockId::DEEPSTONE);
+            }
+        }
+        let mut p_dry = PlayerPhysics::new(Vec3::new(5.5, 3.0, 5.5));
+        for _ in 0..20 {
+            p_dry.update(0.05, Vec3::X, false, false, &dry_world, &reg);
+        }
+
+        assert!(
+            p_lava.velocity.x < p_dry.velocity.x * 0.5,
+            "Lava must significantly slow player horizontal movement ({:.2} vs {:.2})",
+            p_lava.velocity.x,
+            p_dry.velocity.x
         );
     }
 }
