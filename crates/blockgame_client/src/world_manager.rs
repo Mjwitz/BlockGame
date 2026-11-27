@@ -1930,8 +1930,15 @@ impl WorldManager {
             (modified, drops)
         };
         if !modified.is_empty() {
-            self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+            for cpos in chunks_to_rebuild {
+                if self.loaded_chunks_set.contains(&cpos) {
+                    self.dirty_remesh.insert(cpos);
+                }
+            }
         }
+        let _ = (device, pipeline);
         for (dpos, item) in washed_drops {
             if !item.is_empty() {
                 self.spawn_item_drop(dpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), item);

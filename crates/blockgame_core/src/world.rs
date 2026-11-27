@@ -238,7 +238,7 @@ impl CookingPotState {
 pub struct World {
     chunks: HashMap<ChunkPos, Chunk>,
     pub dirty_chunks: HashSet<ChunkPos>,
-    pub light_sources: HashSet<IVec3>,
+    pub chunk_light_sources: HashMap<ChunkPos, HashSet<IVec3>>,
     pub chest_containers: HashMap<IVec3, Vec<ItemSlot>>,
     pub furnaces: HashMap<IVec3, FurnaceState>,
     pub cooking_pots: HashMap<IVec3, CookingPotState>,
@@ -254,7 +254,7 @@ impl World {
         Self {
             chunks: HashMap::new(),
             dirty_chunks: HashSet::new(),
-            light_sources: HashSet::new(),
+            chunk_light_sources: HashMap::new(),
             chest_containers: HashMap::new(),
             furnaces: HashMap::new(),
             cooking_pots: HashMap::new(),
@@ -379,9 +379,15 @@ impl World {
                 }
                 self.dirty_chunks.insert(cpos);
                 if block_id.is_emissive() {
-                    self.light_sources.insert(world_pos);
-                } else {
-                    self.light_sources.remove(&world_pos);
+                    self.chunk_light_sources
+                        .entry(cpos)
+                        .or_default()
+                        .insert(world_pos);
+                } else if let Some(bucket) = self.chunk_light_sources.get_mut(&cpos) {
+                    bucket.remove(&world_pos);
+                    if bucket.is_empty() {
+                        self.chunk_light_sources.remove(&cpos);
+                    }
                 }
                 if block_id.is_power_block() {
                     self.power_nodes.insert(world_pos);
@@ -432,20 +438,28 @@ impl World {
     pub fn insert_chunk(&mut self, chunk: Chunk) -> Option<Chunk> {
         // Index any light sources and power blocks in this chunk
         let origin = chunk.pos.to_world_origin();
-        for y in 0..CHUNK_SIZE_Y {
-            for z in 0..CHUNK_SIZE_Z {
-                for x in 0..CHUNK_SIZE_X {
-                    let block = chunk.get_unchecked(x, y, z);
-                    if block.is_emissive() {
-                        self.light_sources
-                            .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
-                    }
-                    if block.is_power_block() {
-                        self.power_nodes
-                            .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
+        let mut chunk_lights = HashSet::new();
+        if !chunk.is_all_air() {
+            for y in 0..CHUNK_SIZE_Y {
+                for z in 0..CHUNK_SIZE_Z {
+                    for x in 0..CHUNK_SIZE_X {
+                        let block = chunk.get_unchecked(x, y, z);
+                        if block.is_emissive() {
+                            chunk_lights
+                                .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
+                        }
+                        if block.is_power_block() {
+                            self.power_nodes
+                                .insert(origin + IVec3::new(x as i32, y as i32, z as i32));
+                        }
                     }
                 }
             }
+        }
+        if chunk_lights.is_empty() {
+            self.chunk_light_sources.remove(&chunk.pos);
+        } else {
+            self.chunk_light_sources.insert(chunk.pos, chunk_lights);
         }
         self.chunks.insert(chunk.pos, chunk)
     }
@@ -459,18 +473,26 @@ impl World {
 
     #[inline]
     pub fn remove_chunk(&mut self, pos: ChunkPos) -> Option<Chunk> {
-        self.light_sources.retain(|p| {
-            let (cp, _, _, _) = world_to_chunk_coords(*p);
-            cp != pos
-        });
-        self.power_nodes.retain(|p| {
-            let (cp, _, _, _) = world_to_chunk_coords(*p);
-            cp != pos
-        });
+        self.chunk_light_sources.remove(&pos);
+        if !self.power_nodes.is_empty() {
+            self.power_nodes.retain(|p| {
+                let (cp, _, _, _) = world_to_chunk_coords(*p);
+                cp != pos
+            });
+        }
         self.chunks.remove(&pos)
     }
 
+    #[inline]
+    pub fn has_light_source(&self, pos: IVec3) -> bool {
+        let (cpos, _, _, _) = world_to_chunk_coords(pos);
+        self.chunk_light_sources
+            .get(&cpos)
+            .map_or(false, |set| set.contains(&pos))
+    }
+
     /// Returns relative coordinates and luminance for all light sources within reach of a chunk.
+    /// Queries only the bounded neighborhood of chunk buckets (O(27) for `max_reach <= 15`).
     pub fn get_light_sources_near(&self, origin: IVec3, max_reach: i32) -> Vec<(IVec3, u8)> {
         let mut sources = Vec::new();
         let min_x = origin.x - max_reach;
@@ -480,18 +502,35 @@ impl World {
         let min_z = origin.z - max_reach;
         let max_z = origin.z + CHUNK_SIZE_Z as i32 + max_reach;
 
-        for &pos in &self.light_sources {
-            if pos.x >= min_x
-                && pos.x <= max_x
-                && pos.y >= min_y
-                && pos.y <= max_y
-                && pos.z >= min_z
-                && pos.z <= max_z
-            {
-                let rel = pos - origin;
-                let lum = self.get_block(pos).luminance();
-                if lum > 0 {
-                    sources.push((rel, lum));
+        let (center_cp, _, _, _) = world_to_chunk_coords(origin);
+        let r = (max_reach.max(0) + 15) / 16;
+
+        for dy in -r..=r {
+            let cy = center_cp.0.y + dy;
+            if cy < 0 || cy >= crate::chunk::VERTICAL_CHUNKS {
+                continue;
+            }
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    let cp = ChunkPos::new(center_cp.0.x + dx, cy, center_cp.0.z + dz);
+                    let Some(bucket) = self.chunk_light_sources.get(&cp) else {
+                        continue;
+                    };
+                    for &pos in bucket {
+                        if pos.x >= min_x
+                            && pos.x <= max_x
+                            && pos.y >= min_y
+                            && pos.y <= max_y
+                            && pos.z >= min_z
+                            && pos.z <= max_z
+                        {
+                            let rel = pos - origin;
+                            let lum = self.get_block(pos).luminance();
+                            if lum > 0 {
+                                sources.push((rel, lum));
+                            }
+                        }
+                    }
                 }
             }
         }

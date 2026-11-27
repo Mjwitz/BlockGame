@@ -2386,7 +2386,7 @@ mod tests {
 
         assert_eq!(restored_world.get_block(IVec3::new(3, 4, 5)), BlockId::CRAFTING_TABLE);
         assert_eq!(restored_world.get_block(IVec3::new(3, 5, 5)), BlockId::TORCH);
-        assert!(restored_world.light_sources.contains(&IVec3::new(3, 5, 5)));
+        assert!(restored_world.has_light_source(IVec3::new(3, 5, 5)));
 
         let restored_chest = restored_world.get_chest(chest_pos).expect("Chest should exist");
         assert_eq!(restored_chest[0], ItemSlot::new(ItemId::DIAMOND, 12));

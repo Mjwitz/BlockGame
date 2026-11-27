@@ -307,61 +307,19 @@ impl<'a> ChunkMesher<'a> {
                     }
 
                     if block_id == BlockId::SEAGRASS {
-                        // 1. Build crossed diagonal plant quads for seagrass
+                        // 1. Build crossed diagonal plant quads for seagrass, then fall through to the
+                        // unified waterlogged fluid mesher so its surface height matches adjacent Water
+                        // (0.875 when air is above, 1.0 when submerged) with zero side gaps.
                         self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
-
-                        // 2. Seagrass is waterlogged! Generate water boundary faces for any loaded direction
-                        // not adjacent to water or another waterlogged block.
-                        for dir in Direction::ALL {
-                            let normal = dir.normal_ivec();
-                            let nx = ix + normal.x;
-                            let ny = iy + normal.y;
-                            let nz = iz + normal.z;
-
-                            let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
-                                // Neighbor chunk not loaded yet; avoid emitting phantom water walls at chunk borders
-                                continue;
-                            };
-
-                            if neighbor_id.is_water() || neighbor_id == BlockId::ICE {
-                                continue;
-                            }
-
-                            if self.registry.is_transparent(neighbor_id) {
-                                let tile_id = self.registry.get_texture(BlockId::WATER, dir);
-                                let uv = TextureAtlas::get_uv_bounds(tile_id);
-
-                                let light = if nx >= 0
-                                    && nx < CHUNK_SIZE_X as i32
-                                    && ny >= 0
-                                    && ny < CHUNK_SIZE_Y as i32
-                                    && nz >= 0
-                                    && nz < CHUNK_SIZE_Z as i32
-                                {
-                                    let lv = light_map.get(nx as usize, ny as usize, nz as usize);
-                                    [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
-                                } else {
-                                    let blk = light_map.get_block_rel(nx, ny, nz);
-                                    [1.0, blk as f32 / 15.0]
-                                };
-
-                                self.build_water_face(
-                                    &mut mesh,
-                                    chunk.pos,
-                                    ix,
-                                    iy,
-                                    iz,
-                                    dir,
-                                    uv,
-                                    light,
-                                );
-                            }
-                        }
-                        continue;
                     }
 
-                    if block_id == BlockId::WATER || block_id == BlockId::LAVA {
-                        let is_water = block_id == BlockId::WATER;
+                    if block_id.is_water() || block_id == BlockId::LAVA {
+                        let is_water = block_id.is_water();
+                        let fluid_tex_block = if is_water {
+                            BlockId::WATER
+                        } else {
+                            BlockId::LAVA
+                        };
                         let is_same_fluid = |b: BlockId| {
                             if is_water {
                                 b.is_water()
@@ -369,7 +327,11 @@ impl<'a> ChunkMesher<'a> {
                                 b == BlockId::LAVA
                             }
                         };
-                        let fluid_level = chunk.get_facing_unchecked(x, y, z) & 0x0F;
+                        let fluid_level = if block_id == BlockId::SEAGRASS {
+                            blockgame_core::FLUID_SOURCE
+                        } else {
+                            chunk.get_facing_unchecked(x, y, z) & 0x0F
+                        };
                         let above_same = query_block_opt(ix, iy + 1, iz).map_or(false, |b| {
                             is_same_fluid(b) || (is_water && b == BlockId::ICE)
                         });
@@ -417,7 +379,7 @@ impl<'a> ChunkMesher<'a> {
                                 continue;
                             }
 
-                            let tile_id = self.registry.get_texture(block_id, dir);
+                            let tile_id = self.registry.get_texture(fluid_tex_block, dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
 
                             let light = if !is_water {
@@ -4361,9 +4323,20 @@ mod tests {
         assert_eq!(mesh.indices.len(), 24);
         assert_eq!(mesh.water_vertices.len(), 24);
         assert_eq!(mesh.water_indices.len(), 36);
+        let seagrass_top_y = mesh
+            .water_vertices
+            .iter()
+            .map(|v| v.position[1])
+            .fold(0.0_f32, f32::max);
+        assert!(
+            (seagrass_top_y - 4.875).abs() < 1e-4,
+            "Surface waterlogged seagrass must match Water Source Block height 4.875, got {}",
+            seagrass_top_y
+        );
 
         // When surrounded by water, seagrass should render its crossed quads
-        // and NO internal water faces between water and seagrass
+        // and NO internal full faces between water and seagrass (only 4 stepped 0.875->1.0 skirts
+        // closing the height step between the submerged center column and the 4 outer surface blocks)
         let mut water_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         water_chunk.set(4, 4, 4, BlockId::SEAGRASS);
         water_chunk.set(4, 5, 4, BlockId::WATER); // Above
@@ -4377,9 +4350,8 @@ mod tests {
 
         // Seagrass plant crop vertices: exactly 16
         assert_eq!(submerged_mesh.vertices.len(), 16);
-        // The 6 outer water blocks face air outward, but have zero internal faces facing seagrass
-        // Each of the 6 surrounding water blocks has 5 faces exposed to air = 30 faces * 4 = 120 vertices
-        assert_eq!(submerged_mesh.water_vertices.len(), 120);
+        // 6 outer water blocks * 5 exposed faces = 120 verts, plus 4 stepped side-skirts (0.875..1.0) = 16 verts
+        assert_eq!(submerged_mesh.water_vertices.len(), 136);
     }
 
     #[test]
