@@ -121,6 +121,7 @@ impl DynamicMeshBuffers {
 
 pub struct VoxelPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
+    pub cutout_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub celestial_pipeline: wgpu::RenderPipeline,
     pub camera_buffer: wgpu::Buffer,
@@ -269,7 +270,51 @@ impl VoxelPipeline {
         });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Voxel Render Pipeline"),
+            label: Some("Voxel Opaque Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[VoxelVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_opaque"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let cutout_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Voxel Cutout Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -282,7 +327,7 @@ impl VoxelPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -291,7 +336,7 @@ impl VoxelPipeline {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None, // Two-sided cutout quads (halves cross-plant geometry)
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -407,6 +452,7 @@ impl VoxelPipeline {
 
         Self {
             render_pipeline,
+            cutout_pipeline,
             water_pipeline,
             celestial_pipeline,
             camera_buffer,
@@ -442,6 +488,62 @@ impl VoxelPipeline {
             vertex_buffer,
             index_buffer,
             index_count: mesh.indices.len() as u32,
+        })
+    }
+
+    pub fn upload_cutout_mesh(
+        &self,
+        device: &wgpu::Device,
+        mesh: &ChunkMesh,
+    ) -> Option<GpuMeshBuffers> {
+        if mesh.cutout_indices.is_empty() {
+            return None;
+        }
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Chunk Cutout Vertex Buffer"),
+            contents: bytemuck::cast_slice(&mesh.cutout_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Chunk Cutout Index Buffer"),
+            contents: bytemuck::cast_slice(&mesh.cutout_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Some(GpuMeshBuffers {
+            vertex_buffer,
+            index_buffer,
+            index_count: mesh.cutout_indices.len() as u32,
+        })
+    }
+
+    pub fn upload_foliage_mesh(
+        &self,
+        device: &wgpu::Device,
+        mesh: &ChunkMesh,
+    ) -> Option<GpuMeshBuffers> {
+        if mesh.foliage_indices.is_empty() {
+            return None;
+        }
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Chunk Foliage Vertex Buffer"),
+            contents: bytemuck::cast_slice(&mesh.foliage_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Chunk Foliage Index Buffer"),
+            contents: bytemuck::cast_slice(&mesh.foliage_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Some(GpuMeshBuffers {
+            vertex_buffer,
+            index_buffer,
+            index_count: mesh.foliage_indices.len() as u32,
         })
     }
 

@@ -258,15 +258,34 @@ impl SceneRenderer {
             render_pass.set_bind_group(0, &self.pipeline.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.pipeline.texture_bind_group, &[]);
             let frustum = camera.build_frustum(aspect);
-            world_manager.render_with_frustum(&mut render_pass, Some(&frustum));
+            world_manager.render_with_frustum_and_camera(
+                &mut render_pass,
+                Some(&frustum),
+                Some(camera.position),
+            );
 
-            for opt_mesh in [&animals_gpu, &rotor_gpu, &held_gpu] {
+            for opt_mesh in [&animals_gpu, &rotor_gpu] {
                 if let Some(m) = opt_mesh {
                     render_pass.set_vertex_buffer(0, m.vertex_buffer.slice(..));
                     render_pass
                         .set_index_buffer(m.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     render_pass.draw_indexed(0..m.index_count, 0, 0..1);
                 }
+            }
+
+            // 2b. Alpha-cutout foliage, leaves, glass, and held items
+            render_pass.set_pipeline(&self.pipeline.cutout_pipeline);
+            render_pass.set_bind_group(0, &self.pipeline.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.pipeline.texture_bind_group, &[]);
+            world_manager.render_cutout_with_frustum_and_camera(
+                &mut render_pass,
+                Some(&frustum),
+                Some(camera.position),
+            );
+            if let Some(m) = &held_gpu {
+                render_pass.set_vertex_buffer(0, m.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(m.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..m.index_count, 0, 0..1);
             }
 
             // 3. Stylized low-poly 3D characters

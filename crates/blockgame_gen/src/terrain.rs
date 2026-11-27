@@ -116,6 +116,8 @@ fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+pub(crate) const MAX_STRUCTURE_GRID_CACHE_ENTRIES: usize = 2048;
+
 pub struct TerrainGenerator {
     pub seed: u32,
     continental_noise: Fbm<Perlin>,
@@ -143,6 +145,10 @@ pub struct TerrainGenerator {
     seed_altitude_bias: f64,
     seed_relief_scale: f64,
     pub water_level: i32,
+    pub(crate) village_grid_cache:
+        std::sync::RwLock<std::collections::HashMap<(i32, i32), Option<crate::village_gen::VillagePlacement>>>,
+    pub(crate) temple_grid_cache:
+        std::sync::RwLock<std::collections::HashMap<(i32, i32), Option<crate::temple_gen::TemplePlacement>>>,
 }
 
 impl TerrainGenerator {
@@ -224,6 +230,8 @@ impl TerrainGenerator {
             seed_altitude_bias,
             seed_relief_scale,
             water_level: 38,
+            village_grid_cache: std::sync::RwLock::new(std::collections::HashMap::new()),
+            temple_grid_cache: std::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 
@@ -1121,13 +1129,23 @@ impl TerrainGenerator {
             return;
         }
 
-        for lz in 0..CHUNK_SIZE_Z {
-            let wz = origin.z + lz as i32;
-            for lx in 0..CHUNK_SIZE_X {
-                let wx = origin.x + lx as i32;
+        if !chunk.is_all_air() {
+            let chunk_y_min = origin.y + 1;
+            let chunk_y_max = origin.y + CHUNK_SIZE_Y as i32;
+            let water_top_in_chunk =
+                (self.water_level + 1) >= chunk_y_min && (self.water_level + 1) < chunk_y_max;
 
-                let surface_y = self.surface_height(wx, wz);
-                let biome = self.get_biome(wx, wz, surface_y);
+            for lz in 0..CHUNK_SIZE_Z {
+                let wz = origin.z + lz as i32;
+                for lx in 0..CHUNK_SIZE_X {
+                    let wx = origin.x + lx as i32;
+
+                    let surface_y = self.surface_height(wx, wz);
+                    let surface_in_chunk = surface_y >= chunk_y_min && surface_y < chunk_y_max;
+                    if !surface_in_chunk && !(surface_y <= self.water_level && water_top_in_chunk) {
+                        continue;
+                    }
+                    let biome = self.get_biome(wx, wz, surface_y);
                 if surface_y <= self.water_level {
                     // Check for lily pads in Swamp on top of still water
                     if biome == Biome::Swamp {
@@ -2094,6 +2112,7 @@ impl TerrainGenerator {
                     _ => {}
                 }
             }
+        }
         }
 
         // Re-stamp intersecting boss temples & villages so foliage/trees never clip into interiors

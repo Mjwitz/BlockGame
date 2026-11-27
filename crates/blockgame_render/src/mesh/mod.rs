@@ -14,6 +14,13 @@ use crate::atlas::TextureAtlas;
 pub struct ChunkMesh {
     pub vertices: Vec<VoxelVertex>,
     pub indices: Vec<u32>,
+    /// Always-visible alpha-cutout geometry (leaves, glass, lily pads, dripstone, glow crystals, seagrass).
+    pub cutout_vertices: Vec<VoxelVertex>,
+    pub cutout_indices: Vec<u32>,
+    /// Ground foliage cross-quads (flowers, tall grass, crops, sugar cane) rendered with `cutout_pipeline`
+    /// and skipped beyond 48 blocks in `Fast` Graphics Quality mode.
+    pub foliage_vertices: Vec<VoxelVertex>,
+    pub foliage_indices: Vec<u32>,
     pub water_vertices: Vec<VoxelVertex>,
     pub water_indices: Vec<u32>,
 }
@@ -23,17 +30,28 @@ impl ChunkMesh {
         Self {
             vertices: Vec::new(),
             indices: Vec::new(),
+            cutout_vertices: Vec::new(),
+            cutout_indices: Vec::new(),
+            foliage_vertices: Vec::new(),
+            foliage_indices: Vec::new(),
             water_vertices: Vec::new(),
             water_indices: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.indices.is_empty() && self.water_indices.is_empty()
+        self.indices.is_empty()
+            && self.cutout_indices.is_empty()
+            && self.foliage_indices.is_empty()
+            && self.water_indices.is_empty()
     }
 
     pub fn face_count(&self) -> usize {
-        (self.indices.len() + self.water_indices.len()) / 6
+        (self.indices.len()
+            + self.cutout_indices.len()
+            + self.foliage_indices.len()
+            + self.water_indices.len())
+            / 6
     }
 }
 
@@ -63,11 +81,21 @@ fn rotate_horizontal_dir(dir: Direction, facing: u8) -> Direction {
 
 pub struct ChunkMesher<'a> {
     registry: &'a BlockRegistry,
+    fast_leaves: bool,
 }
 
 impl<'a> ChunkMesher<'a> {
     pub fn new(registry: &'a BlockRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            fast_leaves: false,
+        }
+    }
+
+    /// Enables or disables internal leaf-to-leaf face culling (`Fast` Graphics Quality mode).
+    pub fn with_fast_leaves(mut self, fast_leaves: bool) -> Self {
+        self.fast_leaves = fast_leaves;
+        self
     }
 
     /// Meshes a single standalone chunk (out-of-bounds voxels are treated as Air).
@@ -191,7 +219,30 @@ impl<'a> ChunkMesher<'a> {
                             || (self.registry.is_solid(query_block(ix, iy + 1, iz))
                                 && !self.registry.is_solid(query_block(ix, iy - 1, iz)));
                         let tile_id = if is_stalactite { 576 } else { 575 };
-                        self.build_cross_tile(&mut mesh, chunk.pos, ix, iy, iz, tile_id, &light_map);
+                        self.build_cross_tile(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            tile_id,
+                            &light_map,
+                            false,
+                        );
+                        continue;
+                    }
+
+                    if block_id == BlockId::GLOW_CRYSTAL {
+                        self.build_crop(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            block_id,
+                            &light_map,
+                            false,
+                        );
                         continue;
                     }
 
@@ -199,9 +250,17 @@ impl<'a> ChunkMesher<'a> {
                         || block_id == BlockId::SUGAR_CANE
                         || block_id == BlockId::TALL_GRASS
                         || block_id.is_flower()
-                        || block_id == BlockId::GLOW_CRYSTAL
                     {
-                        self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
+                        self.build_crop(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            block_id,
+                            &light_map,
+                            true,
+                        );
                         continue;
                     }
 
@@ -310,7 +369,16 @@ impl<'a> ChunkMesher<'a> {
                         // 1. Build crossed diagonal plant quads for seagrass, then fall through to the
                         // unified waterlogged fluid mesher so its surface height matches adjacent Water
                         // (0.875 when air is above, 1.0 when submerged) with zero side gaps.
-                        self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
+                        self.build_crop(
+                            &mut mesh,
+                            chunk.pos,
+                            ix,
+                            iy,
+                            iz,
+                            block_id,
+                            &light_map,
+                            false,
+                        );
                     }
 
                     if block_id.is_water() || block_id == BlockId::LAVA {
@@ -468,6 +536,7 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    let is_cutout_cube = block_id == BlockId::GLASS || block_id.is_leaves();
                     for dir in Direction::ALL {
                         let normal = dir.normal_ivec();
                         let nx = ix + normal.x;
@@ -478,6 +547,11 @@ impl<'a> ChunkMesher<'a> {
 
                         // Adjacent glass blocks should not render the internal face between them
                         if block_id == BlockId::GLASS && neighbor_id == BlockId::GLASS {
+                            continue;
+                        }
+
+                        // In Fast Graphics Quality mode, cull internal leaf-to-leaf faces
+                        if self.fast_leaves && block_id.is_leaves() && neighbor_id.is_leaves() {
                             continue;
                         }
 
@@ -512,6 +586,7 @@ impl<'a> ChunkMesher<'a> {
                                 uv,
                                 light,
                                 &query_block,
+                                is_cutout_cube,
                             );
                         }
                     }
@@ -542,6 +617,7 @@ impl<'a> ChunkMesher<'a> {
         uv_bounds: [f32; 4],
         light: [f32; 2],
         query: &F,
+        to_cutout: bool,
     ) where
         F: Fn(i32, i32, i32) -> BlockId,
     {
@@ -601,10 +677,15 @@ impl<'a> ChunkMesher<'a> {
 
         let ao = self.calculate_face_ao(x, y, z, dir, query);
 
-        let start_idx = mesh.vertices.len() as u32;
+        let (verts, idxs) = if to_cutout {
+            (&mut mesh.cutout_vertices, &mut mesh.cutout_indices)
+        } else {
+            (&mut mesh.vertices, &mut mesh.indices)
+        };
+        let start_idx = verts.len() as u32;
 
         for i in 0..4 {
-            mesh.vertices.push(VoxelVertex {
+            verts.push(VoxelVertex {
                 position: positions[i],
                 uv: uvs[i],
                 normal,
@@ -616,7 +697,7 @@ impl<'a> ChunkMesher<'a> {
         // Quad triangulation:
         // Flip diagonal if ao[0] + ao[2] < ao[1] + ao[3] to prevent anisotropy
         if ao[0] + ao[2] < ao[1] + ao[3] {
-            mesh.indices.extend_from_slice(&[
+            idxs.extend_from_slice(&[
                 start_idx + 1,
                 start_idx + 2,
                 start_idx + 3,
@@ -625,7 +706,7 @@ impl<'a> ChunkMesher<'a> {
                 start_idx + 1,
             ]);
         } else {
-            mesh.indices.extend_from_slice(&[
+            idxs.extend_from_slice(&[
                 start_idx + 0,
                 start_idx + 1,
                 start_idx + 2,
@@ -897,9 +978,10 @@ impl<'a> ChunkMesher<'a> {
         z: i32,
         block_id: BlockId,
         light_map: &blockgame_core::lighting::ChunkLightMap,
+        to_foliage: bool,
     ) {
         let tile_id = self.registry.get_texture(block_id, Direction::PosY);
-        self.build_cross_tile(mesh, chunk_pos, x, y, z, tile_id, light_map);
+        self.build_cross_tile(mesh, chunk_pos, x, y, z, tile_id, light_map, to_foliage);
     }
 
     fn build_cross_tile(
@@ -911,6 +993,7 @@ impl<'a> ChunkMesher<'a> {
         z: i32,
         tile_id: u16,
         light_map: &blockgame_core::lighting::ChunkLightMap,
+        to_foliage: bool,
     ) {
         let origin = chunk_pos.to_world_origin();
         let fx = (origin.x + x) as f32;
@@ -923,10 +1006,16 @@ impl<'a> ChunkMesher<'a> {
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
         let ao = 1.0;
 
+        let (verts, idxs) = if to_foliage {
+            (&mut mesh.foliage_vertices, &mut mesh.foliage_indices)
+        } else {
+            (&mut mesh.cutout_vertices, &mut mesh.cutout_indices)
+        };
+
         let mut add_quad = |positions: [[f32; 3]; 4], uvs: [[f32; 2]; 4], normal: [f32; 3]| {
-            let start_idx = mesh.vertices.len() as u32;
+            let start_idx = verts.len() as u32;
             for i in 0..4 {
-                mesh.vertices.push(VoxelVertex {
+                verts.push(VoxelVertex {
                     position: positions[i],
                     uv: uvs[i],
                     normal,
@@ -934,7 +1023,7 @@ impl<'a> ChunkMesher<'a> {
                     light,
                 });
             }
-            mesh.indices.extend_from_slice(&[
+            idxs.extend_from_slice(&[
                 start_idx + 0,
                 start_idx + 1,
                 start_idx + 2,
@@ -944,50 +1033,31 @@ impl<'a> ChunkMesher<'a> {
             ]);
         };
 
-        // Crossed diagonal 1 (from (fx, fz) to (fx+1, fz+1))
-        let diag1_front = [
-            [fx, fy, fz],
-            [fx + 1.0, fy, fz + 1.0],
-            [fx + 1.0, fy + 1.0, fz + 1.0],
-            [fx, fy + 1.0, fz],
-        ];
-        let diag1_back = [
-            [fx + 1.0, fy, fz + 1.0],
-            [fx, fy, fz],
-            [fx, fy + 1.0, fz],
-            [fx + 1.0, fy + 1.0, fz + 1.0],
-        ];
+        // Cutout pipeline uses `cull_mode: None`, so each diagonal needs only 1 quad (8 verts, 12 indices total).
         let uv_front = [
             [u_min, v_max],
             [u_max, v_max],
             [u_max, v_min],
             [u_min, v_min],
         ];
-        let uv_back = [
-            [u_max, v_max],
-            [u_min, v_max],
-            [u_min, v_min],
-            [u_max, v_min],
+
+        // Crossed diagonal 1 (from (fx, fz) to (fx+1, fz+1))
+        let diag1 = [
+            [fx, fy, fz],
+            [fx + 1.0, fy, fz + 1.0],
+            [fx + 1.0, fy + 1.0, fz + 1.0],
+            [fx, fy + 1.0, fz],
         ];
+        add_quad(diag1, uv_front, [0.0, 1.0, 0.0]);
 
-        add_quad(diag1_front, uv_front, [0.707, 0.0, -0.707]);
-        add_quad(diag1_back, uv_back, [-0.707, 0.0, 0.707]);
-
-        // Crossed diagonal 2 (from (fx+1, fz) to (fx, fz+1))
-        let diag2_front = [
+        // Crossed diagonal 2 (from (fx, fz+1) to (fx+1, fz))
+        let diag2 = [
             [fx, fy, fz + 1.0],
             [fx + 1.0, fy, fz],
             [fx + 1.0, fy + 1.0, fz],
             [fx, fy + 1.0, fz + 1.0],
         ];
-        let diag2_back = [
-            [fx + 1.0, fy, fz],
-            [fx, fy, fz + 1.0],
-            [fx, fy + 1.0, fz + 1.0],
-            [fx + 1.0, fy + 1.0, fz],
-        ];
-        add_quad(diag2_front, uv_front, [0.707, 0.0, 0.707]);
-        add_quad(diag2_back, uv_back, [-0.707, 0.0, -0.707]);
+        add_quad(diag2, uv_front, [0.0, 1.0, 0.0]);
     }
 
     /// Generates flat horizontal two-sided water surface quad for lily pads.
@@ -1009,7 +1079,7 @@ impl<'a> ChunkMesher<'a> {
         let lv = light_map.get(x as usize, y as usize, z as usize);
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
 
-        let base_index = mesh.vertices.len() as u32;
+        let base_index = mesh.cutout_vertices.len() as u32;
         let positions = [
             [fx, fy, fz + 1.0],
             [fx + 1.0, fy, fz + 1.0],
@@ -1024,7 +1094,7 @@ impl<'a> ChunkMesher<'a> {
         ];
 
         for i in 0..4 {
-            mesh.vertices.push(VoxelVertex {
+            mesh.cutout_vertices.push(VoxelVertex {
                 position: positions[i],
                 uv: uvs[i],
                 normal: [0.0, 1.0, 0.0],
@@ -1033,20 +1103,14 @@ impl<'a> ChunkMesher<'a> {
             });
         }
 
-        mesh.indices.extend_from_slice(&[
+        // Single quad rendered with cull_mode: None in cutout_pipeline
+        mesh.cutout_indices.extend_from_slice(&[
             base_index,
             base_index + 1,
             base_index + 2,
             base_index,
             base_index + 2,
             base_index + 3,
-            // Back face
-            base_index + 2,
-            base_index + 1,
-            base_index,
-            base_index + 3,
-            base_index + 2,
-            base_index,
         ]);
     }
 
@@ -4268,10 +4332,11 @@ mod tests {
         chunk.set(4, 4, 4, BlockId::WHEAT_3);
         let mesh = mesher.mesh_chunk(&chunk);
 
-        // 2 double-sided quads = 4 faces (16 vertices, 24 indices)
-        assert_eq!(mesh.face_count(), 4);
-        assert_eq!(mesh.vertices.len(), 16);
-        assert_eq!(mesh.indices.len(), 24);
+        // 2 crossed quads rendered two-sided via cutout_pipeline (`cull_mode: None`) = 8 vertices, 12 indices
+        assert_eq!(mesh.face_count(), 2);
+        assert!(mesh.vertices.is_empty());
+        assert_eq!(mesh.foliage_vertices.len(), 8);
+        assert_eq!(mesh.foliage_indices.len(), 12);
     }
 
     #[test]
@@ -4314,13 +4379,14 @@ mod tests {
         let mesher = ChunkMesher::new(&registry);
         let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
 
-        // Isolated seagrass in air: crossed quads (16 vertices, 24 indices)
+        // Isolated seagrass in air: crossed quads in cutout stream (8 vertices, 12 indices)
         // and waterlogged water faces (24 vertices, 36 indices)
         chunk.set(4, 4, 4, BlockId::SEAGRASS);
         let mesh = mesher.mesh_chunk(&chunk);
 
-        assert_eq!(mesh.vertices.len(), 16);
-        assert_eq!(mesh.indices.len(), 24);
+        assert!(mesh.vertices.is_empty());
+        assert_eq!(mesh.cutout_vertices.len(), 8);
+        assert_eq!(mesh.cutout_indices.len(), 12);
         assert_eq!(mesh.water_vertices.len(), 24);
         assert_eq!(mesh.water_indices.len(), 36);
         let seagrass_top_y = mesh
@@ -4348,8 +4414,8 @@ mod tests {
 
         let submerged_mesh = mesher.mesh_chunk(&water_chunk);
 
-        // Seagrass plant crop vertices: exactly 16
-        assert_eq!(submerged_mesh.vertices.len(), 16);
+        // Seagrass plant crop vertices in cutout stream: exactly 8
+        assert_eq!(submerged_mesh.cutout_vertices.len(), 8);
         // 6 outer water blocks * 5 exposed faces = 120 verts, plus 4 stepped side-skirts (0.875..1.0) = 16 verts
         assert_eq!(submerged_mesh.water_vertices.len(), 136);
     }
@@ -4414,10 +4480,12 @@ mod tests {
         bed_chunk.set(4, 4, 3, BlockId::BED_HEAD);
         assert_eq!(mesher.mesh_chunk(&bed_chunk).vertices.len(), 136);
 
-        // Flower (Poppy): crossed quads = 16 vertices
+        // Flower (Poppy): crossed quads in foliage stream = 8 vertices (12 indices)
         let mut flower_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         flower_chunk.set(4, 4, 4, BlockId::POPPY);
-        assert_eq!(mesher.mesh_chunk(&flower_chunk).vertices.len(), 16);
+        let flower_mesh = mesher.mesh_chunk(&flower_chunk);
+        assert!(flower_mesh.vertices.is_empty());
+        assert_eq!(flower_mesh.foliage_vertices.len(), 8);
     }
 
     #[test]
@@ -4512,7 +4580,7 @@ mod tests {
             let mut c = Chunk::new(ChunkPos::new(0, 0, 0));
             c.set(6, 6, 6, block);
             let m = mesher.mesh_chunk(&c);
-            assert!(!m.vertices.is_empty(), "Expected non-empty mesh for {:?}", block);
+            assert!(!m.is_empty(), "Expected non-empty mesh for {:?}", block);
         }
 
         // Hanging Dripstone stalactite (facing=1) uses tile 576, distinct from floor stalagmite (tile 575)
@@ -4529,11 +4597,11 @@ mod tests {
         let uv_575 = TextureAtlas::get_uv_bounds(575);
         let uv_576 = TextureAtlas::get_uv_bounds(576);
         assert!(
-            (m_floor.vertices[0].uv[0] - uv_575[0]).abs() < 1e-4,
+            (m_floor.cutout_vertices[0].uv[0] - uv_575[0]).abs() < 1e-4,
             "Floor stalagmite must use tile 575"
         );
         assert!(
-            (m_ceil.vertices[0].uv[0] - uv_576[0]).abs() < 1e-4,
+            (m_ceil.cutout_vertices[0].uv[0] - uv_576[0]).abs() < 1e-4,
             "Ceiling stalactite must use tile 576"
         );
 
@@ -4574,5 +4642,38 @@ mod tests {
             44,
             "Adjacent stepped Water levels must emit a side-skirt face closing the step gap"
         );
+    }
+
+    #[test]
+    fn test_opaque_cutout_foliage_split_and_fast_leaves_culling() {
+        let registry = BlockRegistry::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        // Solid stone (opaque), two adjacent leaves (cutout), flower + tall grass (foliage)
+        chunk.set(2, 2, 2, BlockId::STONE);
+        chunk.set(6, 6, 6, BlockId::LEAVES);
+        chunk.set(7, 6, 6, BlockId::LEAVES);
+        chunk.set(10, 6, 10, BlockId::POPPY);
+        chunk.set(11, 6, 10, BlockId::TALL_GRASS);
+
+        let fancy_mesh = ChunkMesher::new(&registry)
+            .with_fast_leaves(false)
+            .mesh_chunk(&chunk);
+        let fast_mesh = ChunkMesher::new(&registry)
+            .with_fast_leaves(true)
+            .mesh_chunk(&chunk);
+
+        // Opaque stone: 6 faces = 24 vertices
+        assert_eq!(fancy_mesh.vertices.len(), 24);
+        assert_eq!(fast_mesh.vertices.len(), 24);
+
+        // Ground foliage (Poppy + Tall Grass): 2 crossed quads each = 8 verts each = 16 verts total
+        assert_eq!(fancy_mesh.foliage_vertices.len(), 16);
+        assert_eq!(fancy_mesh.foliage_indices.len(), 24);
+        assert_eq!(fast_mesh.foliage_vertices.len(), 16);
+
+        // Two adjacent leaves:
+        // Fancy renders all 12 faces (48 verts), Fast culls the 2 shared internal faces (10 faces = 40 verts)
+        assert_eq!(fancy_mesh.cutout_vertices.len(), 48);
+        assert_eq!(fast_mesh.cutout_vertices.len(), 40);
     }
 }

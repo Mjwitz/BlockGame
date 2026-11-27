@@ -298,6 +298,7 @@ pub struct SettingsUiState {
     pub invert_y: bool,
     pub fullscreen: bool,
     pub vsync: bool,
+    pub graphics_quality_fast: bool,
     pub view_bobbing: bool,
     pub show_debug_hud: bool,
     pub ui_scale: f32,
@@ -8788,6 +8789,14 @@ impl UiBuilder {
                 format!("UI Scale: {}", ui_scale_str),
                 format!("Voice Chat: {}", voice_mode_str),
                 format!("Mic: {}", mic_display),
+                format!(
+                    "Graphics Quality: {}",
+                    if settings.graphics_quality_fast {
+                        "Fast"
+                    } else {
+                        "Fancy"
+                    }
+                ),
             ];
 
             for (idx, label) in toggles.iter().enumerate() {
@@ -13534,6 +13543,7 @@ mod tests {
             invert_y: false,
             fullscreen: false,
             vsync: true,
+            graphics_quality_fast: false,
             view_bobbing: true,
             show_debug_hud: false,
             ui_scale: 1.0,

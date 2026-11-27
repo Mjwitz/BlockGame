@@ -43,15 +43,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
-    
-    // Alpha cutout for foliage / transparent blocks
-    if (tex_color.a < 0.1) {
-        discard;
-    }
-
+fn shade_voxel(in: VertexOutput, tex_color: vec4<f32>) -> vec4<f32> {
     let sun_intensity = camera.sun_color.a;
     let sun_tint = camera.sun_color.rgb;
 
@@ -90,4 +82,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let final_rgb = mix(lit_rgb, sky_fog_color, fog_factor);
 
     return vec4<f32>(final_rgb, tex_color.a);
+}
+
+// Early-Z opaque terrain fragment shader (no discard, no alpha blending)
+@fragment
+fn fs_opaque(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
+    return shade_voxel(in, vec4<f32>(tex_color.rgb, 1.0));
+}
+
+// Alpha-cutout & translucent fragment shader
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
+
+    // Alpha cutout for foliage / transparent blocks
+    if (tex_color.a < 0.1) {
+        discard;
+    }
+
+    return shade_voxel(in, tex_color);
 }

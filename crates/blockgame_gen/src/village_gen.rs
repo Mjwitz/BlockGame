@@ -80,6 +80,22 @@ impl TerrainGenerator {
     /// Enforces `VILLAGE_SPAWN_CHANCE_PERCENT` (~50%) spawn chance, >=160 blocks from world origin,
     /// 4 themed biome families, and strict Boss Temple exclusion (same Voronoi biome cell or within 320 blocks).
     pub fn find_village_in_grid(&self, gx: i32, gz: i32) -> Option<VillagePlacement> {
+        if let Ok(cache) = self.village_grid_cache.read() {
+            if let Some(cached) = cache.get(&(gx, gz)) {
+                return cached.clone();
+            }
+        }
+        let computed = self.compute_village_in_grid(gx, gz);
+        if let Ok(mut cache) = self.village_grid_cache.write() {
+            if cache.len() >= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES {
+                cache.clear();
+            }
+            cache.insert((gx, gz), computed.clone());
+        }
+        computed
+    }
+
+    fn compute_village_in_grid(&self, gx: i32, gz: i32) -> Option<VillagePlacement> {
         let base_x = gx * VILLAGE_GRID_SIZE;
         if base_x >= ARENA_BAND_START_X - VILLAGE_GRID_SIZE {
             return None;
@@ -642,5 +658,35 @@ mod tests {
                 dist
             );
         }
+    }
+
+    #[test]
+    fn test_issue_26_village_temple_grid_cache_determinism_and_speedup() {
+        let gen = TerrainGenerator::new(2577988685);
+        // Issue #26 coordinates: (1711, 59, -1129) -> chunk (106, 3, -71), plus Flower Meadow (784, -784) -> chunk (49, 3, -49)
+        for (cx, cz) in [(106, -71), (49, -49)] {
+            let mut first_pass = Vec::new();
+            for dcz in -2..=2 {
+                for dcx in -2..=2 {
+                    let cpos = ChunkPos::new(cx + dcx, 3, cz + dcz);
+                    first_pass.push(gen.find_villages_for_chunk(cpos));
+                }
+            }
+
+            // Second pass must hit the bounded grid cache and return identical results
+            let mut second_pass = Vec::new();
+            for dcz in -2..=2 {
+                for dcx in -2..=2 {
+                    let cpos = ChunkPos::new(cx + dcx, 3, cz + dcz);
+                    second_pass.push(gen.find_villages_for_chunk(cpos));
+                }
+            }
+            assert_eq!(first_pass, second_pass);
+        }
+
+        let v_len = gen.village_grid_cache.read().unwrap().len();
+        let t_len = gen.temple_grid_cache.read().unwrap().len();
+        assert!(v_len > 0 && v_len <= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES);
+        assert!(t_len <= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES);
     }
 }
