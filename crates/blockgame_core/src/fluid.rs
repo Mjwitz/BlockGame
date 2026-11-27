@@ -47,7 +47,7 @@ pub fn fluid_surface_height(level: u8, above_same_fluid: bool) -> f32 {
 }
 
 /// Computes a normalized horizontal flow push vector for a Water voxel at `pos`
-/// based on the local flow-level gradient (returns `Vec3::ZERO` in still Source Pools).
+/// based on the local flow-level gradient (returns `Vec3::ZERO` in stationary Source Blocks).
 pub fn fluid_flow_vector(pos: IVec3, world: &World) -> Vec3 {
     let here_block = world.get_block(pos);
     if !here_block.is_water() {
@@ -152,6 +152,129 @@ impl FluidSimulation {
         check_and_queue(pos);
         for d in ALL_DIRS {
             check_and_queue(pos + d);
+        }
+    }
+
+    /// Scans a newly loaded/generated chunk and schedules any Water or Lava voxels that can
+    /// actively flow (exposed to air/fragile/opposite fluid in a loaded neighbor, or non-source
+    /// flowing fluid), plus any border fluid voxels in adjacent already-loaded chunks that now
+    /// face an open space inside `cpos`. Calm, enclosed pools schedule zero ticks.
+    pub fn schedule_exposed_fluids_in_chunk(
+        &mut self,
+        cpos: crate::chunk::ChunkPos,
+        world: &World,
+    ) {
+        let Some(chunk) = world.get_chunk(cpos) else {
+            return;
+        };
+        let origin = cpos.to_world_origin();
+        const FLOW_DIRS: [IVec3; 5] = [
+            IVec3::NEG_Y,
+            IVec3::X,
+            IVec3::NEG_X,
+            IVec3::Z,
+            IVec3::NEG_Z,
+        ];
+
+        if !chunk.is_all_air() {
+            for y in 0..crate::chunk::CHUNK_SIZE_Y {
+                for z in 0..crate::chunk::CHUNK_SIZE_Z {
+                    for x in 0..crate::chunk::CHUNK_SIZE_X {
+                        let b = chunk.get_unchecked(x, y, z);
+                        if b != BlockId::WATER && b != BlockId::LAVA {
+                            continue;
+                        }
+                        let is_lava = b == BlockId::LAVA;
+                        let wp = origin + IVec3::new(x as i32, y as i32, z as i32);
+                        let lvl = chunk.get_facing_unchecked(x, y, z) & 0x0F;
+                        if lvl != FLUID_SOURCE {
+                            self.enqueue_fluid(wp, is_lava);
+                            continue;
+                        }
+                        for d in FLOW_DIRS {
+                            let np = wp + d;
+                            if np.y < 0 {
+                                continue;
+                            }
+                            let (ncp, _, _, _) = crate::world::world_to_chunk_coords(np);
+                            if !world.has_chunk(ncp) {
+                                continue;
+                            }
+                            let nb = world.get_block(np);
+                            let reacts = if is_lava {
+                                nb.is_water()
+                            } else {
+                                nb == BlockId::LAVA
+                            };
+                            if can_flow_into(nb) || reacts {
+                                self.enqueue_fluid(wp, is_lava);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also wake border fluids in already-loaded adjacent chunks facing open space in `cpos`
+        let wake_if_exposed = |this: &mut Self, adj_pos: IVec3, into_pos: IVec3| {
+            let (acp, _, _, _) = crate::world::world_to_chunk_coords(adj_pos);
+            if !world.has_chunk(acp) {
+                return;
+            }
+            let ab = world.get_block(adj_pos);
+            if ab != BlockId::WATER && ab != BlockId::LAVA {
+                return;
+            }
+            let is_lava = ab == BlockId::LAVA;
+            let ib = world.get_block(into_pos);
+            let reacts = if is_lava {
+                ib.is_water()
+            } else {
+                ib == BlockId::LAVA
+            };
+            if can_flow_into(ib) || reacts {
+                this.enqueue_fluid(adj_pos, is_lava);
+            }
+        };
+
+        let sx = crate::chunk::CHUNK_SIZE_X as i32;
+        let sy = crate::chunk::CHUNK_SIZE_Y as i32;
+        let sz = crate::chunk::CHUNK_SIZE_Z as i32;
+        for y in 0..sy {
+            for z in 0..sz {
+                wake_if_exposed(
+                    self,
+                    origin + IVec3::new(-1, y, z),
+                    origin + IVec3::new(0, y, z),
+                );
+                wake_if_exposed(
+                    self,
+                    origin + IVec3::new(sx, y, z),
+                    origin + IVec3::new(sx - 1, y, z),
+                );
+            }
+            for x in 0..sx {
+                wake_if_exposed(
+                    self,
+                    origin + IVec3::new(x, y, -1),
+                    origin + IVec3::new(x, y, 0),
+                );
+                wake_if_exposed(
+                    self,
+                    origin + IVec3::new(x, y, sz),
+                    origin + IVec3::new(x, y, sz - 1),
+                );
+            }
+        }
+        for z in 0..sz {
+            for x in 0..sx {
+                wake_if_exposed(
+                    self,
+                    origin + IVec3::new(x, sy, z),
+                    origin + IVec3::new(x, sy - 1, z),
+                );
+            }
         }
     }
 
@@ -647,5 +770,48 @@ mod tests {
         sim.schedule_block_and_neighbors(IVec3::new(10, 6, 8), &world);
         sim.tick(LAVA_TICK_INTERVAL, &mut world, &reg);
         assert_eq!(world.get_block(IVec3::new(10, 5, 8)), BlockId::STONE);
+    }
+
+    #[test]
+    fn test_schedule_exposed_fluids_in_chunk_triggers_cave_spring_only() {
+        let reg = BlockRegistry::new();
+        let mut world = World::new();
+        let cpos = ChunkPos::new(0, 0, 0);
+        let mut chunk = Chunk::new(cpos);
+        // Solid stone floor y=0..=3, enclosed 1x1 Water basin at (3, 4, 3) ringed by Stone
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 0..=3 {
+                    chunk.set(x, y, z, BlockId::STONE);
+                }
+            }
+        }
+        for dx in -1i32..=1 {
+            for dz in -1i32..=1 {
+                if dx != 0 || dz != 0 {
+                    chunk.set((3 + dx) as usize, 4, (3 + dz) as usize, BlockId::STONE);
+                }
+            }
+        }
+        chunk.set(3, 4, 3, BlockId::WATER);
+        world.insert_chunk(chunk);
+
+        let mut sim = FluidSimulation::new();
+        sim.schedule_exposed_fluids_in_chunk(cpos, &world);
+        assert!(
+            !sim.has_pending(),
+            "Enclosed Source Water basin should schedule zero ticks on chunk load"
+        );
+
+        // Now place an exposed Lava spring on a cave wall at (10, 8, 10) with air beneath it
+        world.set_block(IVec3::new(10, 8, 10), BlockId::LAVA);
+        sim.schedule_exposed_fluids_in_chunk(cpos, &world);
+        assert!(
+            sim.has_pending(),
+            "Exposed Lava spring should schedule immediately on chunk load"
+        );
+        sim.tick(LAVA_TICK_INTERVAL, &mut world, &reg);
+        assert_eq!(world.get_block(IVec3::new(10, 7, 10)), BlockId::LAVA);
+        assert_eq!(world.get_fluid_level(IVec3::new(10, 7, 10)), FLUID_FALLING);
     }
 }

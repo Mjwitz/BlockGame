@@ -110,6 +110,22 @@ impl<'a> ChunkMesher<'a> {
     where
         F: Fn(i32, i32, i32) -> Option<BlockId>,
     {
+        self.mesh_chunk_with_lighting_and_meta_opt(chunk, light_sources_rel, get_neighbor_opt, |_, _, _| 0)
+    }
+
+    /// Meshes a chunk with external light sources, optional neighbor block lookup, and neighbor
+    /// 4-bit metadata lookup (used for seamless cross-chunk stepped fluid side-skirts).
+    pub fn mesh_chunk_with_lighting_and_meta_opt<F, M>(
+        &self,
+        chunk: &Chunk,
+        light_sources_rel: &[(glam::IVec3, u8)],
+        get_neighbor_opt: F,
+        get_neighbor_meta: M,
+    ) -> ChunkMesh
+    where
+        F: Fn(i32, i32, i32) -> Option<BlockId>,
+        M: Fn(i32, i32, i32) -> u8,
+    {
         let mut mesh = ChunkMesh::new();
         let mut ice_mesh = ChunkMesh::new();
 
@@ -124,6 +140,20 @@ impl<'a> ChunkMesher<'a> {
                 Some(chunk.get_unchecked(x as usize, y as usize, z as usize))
             } else {
                 get_neighbor_opt(x, y, z)
+            }
+        };
+
+        let query_meta = |x: i32, y: i32, z: i32| -> u8 {
+            if x >= 0
+                && x < CHUNK_SIZE_X as i32
+                && y >= 0
+                && y < CHUNK_SIZE_Y as i32
+                && z >= 0
+                && z < CHUNK_SIZE_Z as i32
+            {
+                chunk.get_facing_unchecked(x as usize, y as usize, z as usize) & 0x0F
+            } else {
+                get_neighbor_meta(x, y, z) & 0x0F
             }
         };
 
@@ -330,11 +360,21 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    if block_id == BlockId::WATER {
+                    if block_id == BlockId::WATER || block_id == BlockId::LAVA {
+                        let is_water = block_id == BlockId::WATER;
+                        let is_same_fluid = |b: BlockId| {
+                            if is_water {
+                                b.is_water()
+                            } else {
+                                b == BlockId::LAVA
+                            }
+                        };
                         let fluid_level = chunk.get_facing_unchecked(x, y, z) & 0x0F;
-                        let above_same = query_block_opt(ix, iy + 1, iz)
-                            .map_or(false, |b| b.is_water() || b == BlockId::ICE);
-                        let top_h = blockgame_core::fluid::fluid_surface_height(fluid_level, above_same);
+                        let above_same = query_block_opt(ix, iy + 1, iz).map_or(false, |b| {
+                            is_same_fluid(b) || (is_water && b == BlockId::ICE)
+                        });
+                        let top_h =
+                            blockgame_core::fluid::fluid_surface_height(fluid_level, above_same);
 
                         for dir in Direction::ALL {
                             let normal = dir.normal_ivec();
@@ -343,31 +383,22 @@ impl<'a> ChunkMesher<'a> {
                             let nz = iz + normal.z;
 
                             let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
-                                // Neighbor chunk not loaded yet; avoid emitting phantom water walls at chunk borders
+                                // Neighbor chunk not loaded yet; avoid emitting phantom fluid walls at chunk borders
                                 continue;
                             };
 
                             let mut bottom_h = 0.0_f32;
-                            if neighbor_id == BlockId::ICE {
+                            if is_water && neighbor_id == BlockId::ICE {
                                 continue;
-                            } else if neighbor_id.is_water() {
+                            } else if is_same_fluid(neighbor_id) {
                                 if matches!(dir, Direction::PosY | Direction::NegY) {
                                     continue;
                                 }
-                                let neighbor_level = if nx >= 0
-                                    && nx < CHUNK_SIZE_X as i32
-                                    && ny >= 0
-                                    && ny < CHUNK_SIZE_Y as i32
-                                    && nz >= 0
-                                    && nz < CHUNK_SIZE_Z as i32
-                                {
-                                    chunk.get_facing_unchecked(nx as usize, ny as usize, nz as usize)
-                                        & 0x0F
-                                } else {
-                                    blockgame_core::FLUID_SOURCE
-                                };
-                                let neighbor_above_same = query_block_opt(nx, ny + 1, nz)
-                                    .map_or(false, |b| b.is_water() || b == BlockId::ICE);
+                                let neighbor_level = query_meta(nx, ny, nz);
+                                let neighbor_above_same =
+                                    query_block_opt(nx, ny + 1, nz).map_or(false, |b| {
+                                        is_same_fluid(b) || (is_water && b == BlockId::ICE)
+                                    });
                                 let neighbor_top_h = blockgame_core::fluid::fluid_surface_height(
                                     neighbor_level,
                                     neighbor_above_same,
@@ -383,7 +414,9 @@ impl<'a> ChunkMesher<'a> {
                             let tile_id = self.registry.get_texture(block_id, dir);
                             let uv = TextureAtlas::get_uv_bounds(tile_id);
 
-                            let light = if nx >= 0
+                            let light = if !is_water {
+                                [0.0, 1.0]
+                            } else if nx >= 0
                                 && nx < CHUNK_SIZE_X as i32
                                 && ny >= 0
                                 && ny < CHUNK_SIZE_Y as i32
@@ -408,73 +441,7 @@ impl<'a> ChunkMesher<'a> {
                                 light,
                                 bottom_h,
                                 top_h,
-                                true,
-                            );
-                        }
-                        continue;
-                    }
-
-                    if block_id == BlockId::LAVA {
-                        let fluid_level = chunk.get_facing_unchecked(x, y, z) & 0x0F;
-                        let above_same = query_block_opt(ix, iy + 1, iz)
-                            .map_or(false, |b| b == BlockId::LAVA);
-                        let top_h = blockgame_core::fluid::fluid_surface_height(fluid_level, above_same);
-
-                        for dir in Direction::ALL {
-                            let normal = dir.normal_ivec();
-                            let nx = ix + normal.x;
-                            let ny = iy + normal.y;
-                            let nz = iz + normal.z;
-
-                            let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
-                                continue;
-                            };
-
-                            let mut bottom_h = 0.0_f32;
-                            if neighbor_id == BlockId::LAVA {
-                                if matches!(dir, Direction::PosY | Direction::NegY) {
-                                    continue;
-                                }
-                                let neighbor_level = if nx >= 0
-                                    && nx < CHUNK_SIZE_X as i32
-                                    && ny >= 0
-                                    && ny < CHUNK_SIZE_Y as i32
-                                    && nz >= 0
-                                    && nz < CHUNK_SIZE_Z as i32
-                                {
-                                    chunk.get_facing_unchecked(nx as usize, ny as usize, nz as usize)
-                                        & 0x0F
-                                } else {
-                                    blockgame_core::FLUID_SOURCE
-                                };
-                                let neighbor_above_same = query_block_opt(nx, ny + 1, nz)
-                                    .map_or(false, |b| b == BlockId::LAVA);
-                                let neighbor_top_h = blockgame_core::fluid::fluid_surface_height(
-                                    neighbor_level,
-                                    neighbor_above_same,
-                                );
-                                if top_h <= neighbor_top_h + 0.001 {
-                                    continue;
-                                }
-                                bottom_h = neighbor_top_h;
-                            } else if !self.registry.is_transparent(neighbor_id) {
-                                continue;
-                            }
-
-                            let tile_id = self.registry.get_texture(block_id, dir);
-                            let uv = TextureAtlas::get_uv_bounds(tile_id);
-                            self.build_fluid_face(
-                                &mut mesh,
-                                chunk.pos,
-                                ix,
-                                iy,
-                                iz,
-                                dir,
-                                uv,
-                                [0.0, 1.0],
-                                bottom_h,
-                                top_h,
-                                false,
+                                is_water,
                             );
                         }
                         continue;

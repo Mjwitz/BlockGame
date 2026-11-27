@@ -6027,6 +6027,19 @@ impl BlockGameApp {
                                         &state.pipeline,
                                     );
                                 }
+                                blockgame_core::net::ServerPacket::FluidUpdate {
+                                    pos,
+                                    block_id,
+                                    level,
+                                } => {
+                                    state.world_manager.apply_remote_fluid_update(
+                                        pos,
+                                        block_id,
+                                        level,
+                                        &state.device,
+                                        &state.pipeline,
+                                    );
+                                }
                                 blockgame_core::net::ServerPacket::ContainerSync {
                                     pos,
                                     is_furnace,
@@ -7725,6 +7738,11 @@ impl BlockGameApp {
                                                                     | BlockId::IRON_ORE
                                                                     | BlockId::GOLD_ORE
                                                                     | BlockId::DIAMOND_ORE
+                                                                    | BlockId::DEEPSTONE_COAL_ORE
+                                                                    | BlockId::DEEPSTONE_COPPER_ORE
+                                                                    | BlockId::DEEPSTONE_IRON_ORE
+                                                                    | BlockId::DEEPSTONE_GOLD_ORE
+                                                                    | BlockId::DEEPSTONE_DIAMOND_ORE
                                                             );
                                                             if is_ore
                                                                 && blockgame_core::fishing::next_f32(&mut state.fishing_rng)

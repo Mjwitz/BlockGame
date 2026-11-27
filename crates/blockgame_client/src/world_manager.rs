@@ -38,17 +38,32 @@ fn mesh_chunk_from_world(
     let mesher = ChunkMesher::new(registry);
     let origin = chunk.pos.to_world_origin();
     let sources = world.get_light_sources_near(origin, 15);
-    mesher.mesh_chunk_with_lighting_opt(chunk, &sources, |lx, ly, lz| {
-        let wp = origin + IVec3::new(lx, ly, lz);
-        let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
-        if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
-            Some(BlockId::AIR)
-        } else {
-            world
-                .get_chunk(ncpos)
-                .map(|c| c.get_unchecked(nlx, nly, nlz))
-        }
-    })
+    mesher.mesh_chunk_with_lighting_and_meta_opt(
+        chunk,
+        &sources,
+        |lx, ly, lz| {
+            let wp = origin + IVec3::new(lx, ly, lz);
+            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                Some(BlockId::AIR)
+            } else {
+                world
+                    .get_chunk(ncpos)
+                    .map(|c| c.get_unchecked(nlx, nly, nlz))
+            }
+        },
+        |lx, ly, lz| {
+            let wp = origin + IVec3::new(lx, ly, lz);
+            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                0
+            } else {
+                world
+                    .get_chunk(ncpos)
+                    .map_or(0, |c| c.get_facing_unchecked(nlx, nly, nlz) & 0x0F)
+            }
+        },
+    )
 }
 
 /// Meshes a batch of chunks in parallel across all Rayon worker threads without holding
@@ -100,17 +115,32 @@ fn mesh_batch_parallel(
         };
         let mesher = ChunkMesher::new(registry);
         let origin = pos.to_world_origin();
-        let mesh = mesher.mesh_chunk_with_lighting_opt(chunk, &sources, |lx, ly, lz| {
-            let wp = origin + IVec3::new(lx, ly, lz);
-            let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
-            if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
-                Some(BlockId::AIR)
-            } else {
-                snapshot
-                    .get(&ncpos)
-                    .map(|c| c.get_unchecked(nlx, nly, nlz))
-            }
-        });
+        let mesh = mesher.mesh_chunk_with_lighting_and_meta_opt(
+            chunk,
+            &sources,
+            |lx, ly, lz| {
+                let wp = origin + IVec3::new(lx, ly, lz);
+                let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+                if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                    Some(BlockId::AIR)
+                } else {
+                    snapshot
+                        .get(&ncpos)
+                        .map(|c| c.get_unchecked(nlx, nly, nlz))
+                }
+            },
+            |lx, ly, lz| {
+                let wp = origin + IVec3::new(lx, ly, lz);
+                let (ncpos, nlx, nly, nlz) = world_to_chunk_coords(wp);
+                if ncpos.0.y < 0 || ncpos.0.y >= VERTICAL_CHUNKS {
+                    0
+                } else {
+                    snapshot
+                        .get(&ncpos)
+                        .map_or(0, |c| c.get_facing_unchecked(nlx, nly, nlz) & 0x0F)
+                }
+            },
+        );
         let _ = tx.send((pos, epoch, mesh));
     });
 }
@@ -263,6 +293,7 @@ pub struct WorldManager {
     monster_rng_state: u64,
     pub farming_sim: blockgame_core::FarmingSimulation,
     pub fluid_sim: blockgame_core::FluidSimulation,
+    fluid_scanned_chunks: HashSet<ChunkPos>,
     pub is_multiplayer: bool,
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
@@ -324,6 +355,7 @@ impl WorldManager {
             monster_rng_state,
             farming_sim: blockgame_core::FarmingSimulation::new(seed as u64 ^ 0xFA4A_1234),
             fluid_sim: blockgame_core::FluidSimulation::new(),
+            fluid_scanned_chunks: HashSet::new(),
             is_multiplayer: false,
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
@@ -437,6 +469,13 @@ impl WorldManager {
 
         // Parallel chunk meshing for all chunks in the area
         let world_guard = self.world.lock().unwrap();
+        if !self.is_multiplayer {
+            for &pos in &area_chunks {
+                if self.fluid_scanned_chunks.insert(pos) {
+                    self.fluid_sim.schedule_exposed_fluids_in_chunk(pos, &world_guard);
+                }
+            }
+        }
         let meshes: Vec<(ChunkPos, ChunkMesh)> = area_chunks
             .par_iter()
             .filter_map(|&pos| {
@@ -673,6 +712,7 @@ impl WorldManager {
             self.gpu_water_chunks.remove(&pos);
             self.pending_gpu_uploads.remove(&pos);
             self.loaded_chunks_set.remove(&pos);
+            self.fluid_scanned_chunks.remove(&pos);
             self.queued_meshing.remove(&pos);
             self.queued_generation.remove(&pos);
             self.dirty_remesh.remove(&pos);
@@ -801,6 +841,7 @@ impl WorldManager {
         // 3. Drain completed background mesh results without letting empty chunks consume GPU upload budget
         let unload_radius_sq = (self.render_distance + 2) * (self.render_distance + 2);
         let mut completed_surface_chunks = Vec::new();
+        let mut newly_loaded_fluid_chunks = Vec::new();
         while let Ok((pos, epoch, mesh)) = self.mesh_rx.try_recv() {
             let latest_epoch = self.chunk_mesh_epoch.get(&pos).copied().unwrap_or(0);
             if epoch < latest_epoch {
@@ -816,6 +857,9 @@ impl WorldManager {
             }
 
             self.loaded_chunks_set.insert(pos);
+            if !self.is_multiplayer && self.fluid_scanned_chunks.insert(pos) {
+                newly_loaded_fluid_chunks.push(pos);
+            }
             if pos.0.y == 0 {
                 completed_surface_chunks.push((pos.0.x, pos.0.z));
             }
@@ -825,6 +869,13 @@ impl WorldManager {
                 self.store_mesh(pos, &mesh, device, pipeline);
             } else {
                 self.pending_gpu_uploads.insert(pos, mesh);
+            }
+        }
+
+        if !newly_loaded_fluid_chunks.is_empty() {
+            let world = self.world.lock().unwrap();
+            for pos in newly_loaded_fluid_chunks {
+                self.fluid_sim.schedule_exposed_fluids_in_chunk(pos, &world);
             }
         }
 
@@ -3496,6 +3547,53 @@ impl WorldManager {
                         }
                     }
                 }
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
+    /// Applies an authoritative `ServerPacket::FluidUpdate` (block + 4-bit fluid level) from the
+    /// multiplayer server and remeshes affected chunks.
+    pub fn apply_remote_fluid_update(
+        &mut self,
+        pos: IVec3,
+        block_id: BlockId,
+        level: u8,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let new_meshes = {
+            let mut world = self.world.lock().unwrap();
+            let old_block = world.get_block(pos);
+            let old_level = world.get_fluid_level(pos);
+            let level = level & 0x0F;
+            if old_block == block_id && old_level == level {
+                return;
+            }
+            let is_light_change = old_block.is_emissive() || block_id.is_emissive();
+            world.set_block(pos, block_id);
+            world.set_fluid_level(pos, level);
+
+            if is_light_change {
+                Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
             }
 
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));

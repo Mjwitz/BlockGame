@@ -95,12 +95,22 @@ impl SoundMaterial {
 
             BlockId::STONE
             | BlockId::COBBLESTONE
+            | BlockId::DEEPSTONE
+            | BlockId::DEEPSTONE_COBBLESTONE
+            | BlockId::MOSSY_DEEPSTONE_COBBLESTONE
+            | BlockId::DRIPSTONE
+            | BlockId::OBSIDIAN
             | BlockId::BEDROCK
             | BlockId::COAL_ORE
             | BlockId::COPPER_ORE
             | BlockId::IRON_ORE
             | BlockId::GOLD_ORE
             | BlockId::DIAMOND_ORE
+            | BlockId::DEEPSTONE_COAL_ORE
+            | BlockId::DEEPSTONE_COPPER_ORE
+            | BlockId::DEEPSTONE_IRON_ORE
+            | BlockId::DEEPSTONE_GOLD_ORE
+            | BlockId::DEEPSTONE_DIAMOND_ORE
             | BlockId::FURNACE
             | BlockId::FURNACE_LIT
             | BlockId::SANDSTONE

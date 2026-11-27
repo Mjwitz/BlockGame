@@ -417,6 +417,11 @@ pub enum ServerPacket {
     AchievementEvent {
         event: crate::achievement::AchievementEvent,
     },
+    FluidUpdate {
+        pos: IVec3,
+        block_id: BlockId,
+        level: u8,
+    },
 }
 
 
@@ -1316,6 +1321,16 @@ impl ServerPacket {
                 write_u8(&mut payload, 29)?;
                 event.encode(&mut payload)?;
             }
+            Self::FluidUpdate {
+                pos,
+                block_id,
+                level,
+            } => {
+                write_u8(&mut payload, 30)?;
+                write_ivec3(&mut payload, *pos)?;
+                write_u8(&mut payload, block_id.0)?;
+                write_u8(&mut payload, *level & 0x0F)?;
+            }
         }
 
         wrap_frame(&payload)
@@ -1856,6 +1871,16 @@ impl ServerPacket {
             29 => {
                 let event = crate::achievement::AchievementEvent::decode(&mut r)?;
                 Ok(Self::AchievementEvent { event })
+            }
+            30 => {
+                let pos = read_ivec3(&mut r)?;
+                let block_id = BlockId(read_u8(&mut r)?);
+                let level = read_u8(&mut r)? & 0x0F;
+                Ok(Self::FluidUpdate {
+                    pos,
+                    block_id,
+                    level,
+                })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -3088,6 +3113,7 @@ fn run_server_loop(
                         let (cpos, _, _, _) = world_to_chunk_coords(pos);
                         if world.get_chunk(cpos).is_none() {
                             world.insert_chunk(chunk_generator(cpos));
+                            fluid_sim.schedule_exposed_fluids_in_chunk(cpos, &world);
                         }
                         let existing_block = world.get_block(pos);
                         if save_data.temples.is_block_protected(pos, existing_block) {
@@ -3109,7 +3135,13 @@ fn run_server_loop(
                             ));
                         } else {
                             world.set_block(pos, block_id);
-                            world.set_fluid_level(pos, crate::fluid::FLUID_SOURCE);
+                            if block_id.is_water()
+                                || block_id.is_lava()
+                                || existing_block.is_water()
+                                || existing_block.is_lava()
+                            {
+                                world.set_fluid_level(pos, crate::fluid::FLUID_SOURCE);
+                            }
                             fluid_sim.schedule_block_and_neighbors(pos, &world);
                             if block_id.is_farmland() {
                                 farming_sim.track_farmland(pos);
@@ -4554,17 +4586,25 @@ fn run_server_loop(
                         fluid_sim.tick(dt, &mut world, &block_registry);
                     for pos in fluid_modified {
                         let block = world.get_block(pos);
+                        let level = world.get_fluid_level(pos);
                         let (cpos, _, _, _) = world_to_chunk_coords(pos);
                         if let Some(chunk) = world.get_chunk(cpos) {
                             save_data
                                 .modified_chunks
                                 .insert(cpos, encode_chunk_rle(chunk));
+                            let facings = crate::save::encode_chunk_facings(chunk);
+                            if facings.is_empty() {
+                                save_data.modified_chunk_facings.remove(&cpos);
+                            } else {
+                                save_data.modified_chunk_facings.insert(cpos, facings);
+                            }
                         }
                         broadcast_pkt(
                             &mut clients,
-                            &ServerPacket::BlockUpdate {
+                            &ServerPacket::FluidUpdate {
                                 pos,
                                 block_id: block,
+                                level,
                             },
                         );
                     }
