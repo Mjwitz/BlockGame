@@ -1358,11 +1358,29 @@ impl BlockGameApp {
     }
 }
 
-fn load_window_icon() -> Option<winit::window::Icon> {
+fn load_window_icon(target_size: Option<u32>) -> Option<winit::window::Icon> {
     let bytes = include_bytes!("../../../assets/icon.png");
-    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
-    let (width, height) = img.dimensions();
-    winit::window::Icon::from_rgba(img.into_raw(), width, height).ok()
+    let decoded = match image::load_from_memory(bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            log::warn!("Failed to decode embedded application icon: {}", e);
+            return None;
+        }
+    };
+    let rgba = match target_size {
+        Some(size) if decoded.width() != size || decoded.height() != size => {
+            image::imageops::resize(&decoded.to_rgba8(), size, size, image::imageops::FilterType::Lanczos3)
+        }
+        _ => decoded.into_rgba8(),
+    };
+    let (width, height) = rgba.dimensions();
+    match winit::window::Icon::from_rgba(rgba.into_raw(), width, height) {
+        Ok(icon) => Some(icon),
+        Err(e) => {
+            log::warn!("Failed to build winit window icon ({}x{}): {}", width, height, e);
+            None
+        }
+    }
 }
 
 impl ApplicationHandler for BlockGameApp {
@@ -1371,17 +1389,19 @@ impl ApplicationHandler for BlockGameApp {
             return;
         }
 
-        let window_icon = load_window_icon();
+        // 32x32 for crisp top-left titlebar (ICON_SMALL), 128x128 for taskbar / Alt+Tab (ICON_BIG)
+        let titlebar_icon = load_window_icon(Some(32));
+        let taskbar_icon = load_window_icon(Some(128));
         #[allow(unused_mut)]
         let mut window_attrs = WindowAttributes::default()
             .with_title("Roots & Ridges")
             .with_inner_size(PhysicalSize::new(1280, 720))
-            .with_window_icon(window_icon.clone());
+            .with_window_icon(titlebar_icon.clone().or_else(|| taskbar_icon.clone()));
 
         #[cfg(target_os = "windows")]
         {
             use winit::platform::windows::WindowAttributesExtWindows;
-            window_attrs = window_attrs.with_taskbar_icon(window_icon);
+            window_attrs = window_attrs.with_taskbar_icon(taskbar_icon.clone());
         }
 
         #[cfg(target_os = "linux")]
@@ -1401,6 +1421,14 @@ impl ApplicationHandler for BlockGameApp {
         }
 
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
+
+        // Re-apply icons after HWND creation to guarantee WM_SETICON updates both titlebar and taskbar
+        window.set_window_icon(titlebar_icon.or_else(|| taskbar_icon.clone()));
+        #[cfg(target_os = "windows")]
+        {
+            use winit::platform::windows::WindowExtWindows;
+            window.set_taskbar_icon(taskbar_icon);
+        }
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
