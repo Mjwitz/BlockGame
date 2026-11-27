@@ -2866,7 +2866,11 @@ fn solidify_adjacent_lava(water_pos: IVec3, world: &mut World, modified_position
     ] {
         let adj = water_pos + off;
         if world.get_block(adj).is_lava() {
-            let is_flowing = world.get_block(adj + IVec3::Y).is_lava();
+            let above = adj + IVec3::Y;
+            let is_flowing = world.get_block(above).is_lava()
+                && [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
+                    .iter()
+                    .any(|&h| world.get_block(above + h).is_air());
             let result_block = if is_flowing {
                 BlockId::COBBLESTONE
             } else {

@@ -334,7 +334,7 @@ pub fn get_item_source_info(item_id: ItemId) -> Option<ItemSourceInfo> {
         ItemId::DEEPSTONE => Some(ItemSourceInfo {
             location: "Deep underground rock stratum below y=16",
             tool_required: "Wooden Pickaxe or better",
-            notes: "Denser dark stone surrounding deep Lava Pools and Diamond Ore Veins.",
+            notes: "Denser deep-underground stratum surrounding deep Lava Pools and Diamond Ore Veins.",
         }),
         ItemId::DRIPSTONE => Some(ItemSourceInfo {
             location: "Hanging stalactites and floor stalagmites in underground caves",

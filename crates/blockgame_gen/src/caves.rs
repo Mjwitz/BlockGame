@@ -1034,14 +1034,25 @@ pub fn decorate_chunk_caves(
                             && below == BlockId::AIR
                             && r == 500
                         {
-                            // Cascade spring cleanly downward while staying strictly above y = 8
-                            let mut cy = ly;
-                            while cy > 0
-                                && (origin.y + cy as i32) > 8
-                                && chunk.get_unchecked(lx, cy, lz) == BlockId::AIR
-                            {
-                                chunk.set(lx, cy, lz, BlockId::WATER);
-                                cy -= 1;
+                            // Only spawn if a solid floor exists within this chunk strictly above y = 8
+                            // so springs never hang mid-air across vertical chunk seams.
+                            let mut floor_ly = None;
+                            for check_y in (0..ly).rev() {
+                                if origin.y + check_y as i32 <= 8 {
+                                    break;
+                                }
+                                let b = chunk.get_unchecked(lx, check_y, lz);
+                                if b != BlockId::AIR {
+                                    if b != BlockId::LAVA {
+                                        floor_ly = Some(check_y);
+                                    }
+                                    break;
+                                }
+                            }
+                            if let Some(fy) = floor_ly {
+                                for cy in (fy + 1)..=ly {
+                                    chunk.set(lx, cy, lz, BlockId::WATER);
+                                }
                             }
                             continue;
                         }
@@ -1051,10 +1062,18 @@ pub fn decorate_chunk_caves(
                             && below == BlockId::AIR
                             && r == 501
                         {
-                            let mut cy = ly;
-                            while cy > 0 && chunk.get_unchecked(lx, cy, lz) == BlockId::AIR {
-                                chunk.set(lx, cy, lz, BlockId::LAVA);
-                                cy -= 1;
+                            let mut floor_ly = None;
+                            for check_y in (0..ly).rev() {
+                                let b = chunk.get_unchecked(lx, check_y, lz);
+                                if b != BlockId::AIR {
+                                    floor_ly = Some(check_y);
+                                    break;
+                                }
+                            }
+                            if let Some(fy) = floor_ly {
+                                for cy in (fy + 1)..=ly {
+                                    chunk.set(lx, cy, lz, BlockId::LAVA);
+                                }
                             }
                             continue;
                         }

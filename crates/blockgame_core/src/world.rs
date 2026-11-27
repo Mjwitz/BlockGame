@@ -669,6 +669,23 @@ mod tests {
             "Water touching source Lava must convert it to Obsidian"
         );
 
+        // Submerged lower layer of a multi-block-deep Lava Pool also converts to Obsidian
+        for x in 1..=3 {
+            for z in 1..=3 {
+                world.set_block(IVec3::new(x, 1, z), BlockId::LAVA);
+                world.set_block(IVec3::new(x, 2, z), BlockId::LAVA);
+            }
+        }
+        world.set_block(IVec3::new(2, 0, 2), BlockId::BEDROCK);
+        // Place Water touching the submerged center (2, 1, 2) from an adjacent carved pocket
+        world.set_block(IVec3::new(2, 1, 3), BlockId::AIR);
+        crate::block::place_water_source(IVec3::new(2, 1, 3), &mut world);
+        assert_eq!(
+            world.get_block(IVec3::new(2, 1, 2)),
+            BlockId::OBSIDIAN,
+            "Submerged still Lava Pool block must convert to Obsidian, not Cobblestone"
+        );
+
         // Flowing/cascading Lava hitting Water converts to Cobblestone
         world.set_block(IVec3::new(10, 4, 10), BlockId::WATER);
         world.set_block(IVec3::new(11, 3, 10), BlockId::DEEPSTONE);

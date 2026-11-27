@@ -1548,4 +1548,41 @@ mod tests {
             dist
         );
     }
+
+    #[test]
+    fn test_monster_lava_damage_burning_and_slowdown() {
+        let registry = BlockRegistry::new();
+        let mut world = World::new();
+        let mut chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 2, z, BlockId::DEEPSTONE);
+            }
+        }
+        // Lava pool at x=4..10, z=4..10, y=3..4
+        for x in 4..=10 {
+            for z in 4..=10 {
+                chunk.set(x, 3, z, BlockId::LAVA);
+                chunk.set(x, 4, z, BlockId::LAVA);
+            }
+        }
+        // Water pool at x=12..14, z=4..6, y=3
+        for x in 12..=14 {
+            for z in 4..=6 {
+                chunk.set(x, 3, z, BlockId::WATER);
+            }
+        }
+        world.insert_chunk(chunk);
+
+        let mut z_lava = MonsterEntity::new(10, MonsterKind::Zombie, Vec3::new(6.5, 3.1, 6.5));
+        let start_hp = z_lava.health;
+        z_lava.update(0.5, Vec3::new(14.5, 3.1, 6.5), 0.0, &world, &registry);
+        assert!(z_lava.health < start_hp, "Monster in Lava must take contact damage");
+        assert!(z_lava.burning_timer > 2.0, "Monster in Lava must catch Burning");
+
+        // Stepping into Water immediately extinguishes Burning
+        z_lava.position = Vec3::new(13.5, 3.1, 5.5);
+        z_lava.update(0.1, Vec3::new(13.5, 3.1, 5.5), 0.0, &world, &registry);
+        assert_eq!(z_lava.burning_timer, 0.0, "Water must extinguish monster Burning");
+    }
 }

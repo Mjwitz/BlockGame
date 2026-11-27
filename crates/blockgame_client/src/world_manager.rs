@@ -1716,7 +1716,12 @@ impl WorldManager {
 
             let (modified_positions, water_drops) = place_water_source(pos, &mut world);
             for mpos in modified_positions {
-                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                let b = world.get_block(mpos);
+                if b == BlockId::OBSIDIAN || b == BlockId::COBBLESTONE {
+                    Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
+                } else {
+                    Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                }
             }
             let mut extra_drops = Vec::new();
             for (p, drop) in water_drops {
