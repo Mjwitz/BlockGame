@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Roots &amp; Ridges — Procedural Voxel Survival Sandbox | rootsandridges.gg</title>
+  <meta name="description" content="Roots &amp; Ridges is a procedural voxel survival sandbox for Windows and Linux. Explore 20 sweeping biomes, level 7 MMO skills to 1000, build wind-and-solar power grids and searchable storage networks, cook hearty stews, trade in living villages, and play solo or on dedicated multiplayer servers.">
+  <link rel="canonical" href="https://rootsandridges.gg/">
+
+  <!-- Open Graph & Social -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Roots &amp; Ridges">
+  <meta property="og:title" content="Roots &amp; Ridges — Procedural Voxel Survival Sandbox">
+  <meta property="og:description" content="Carve the peaks. Wire the valley. Survive the wild. 20 procedural biomes, 1–1000 MMO skills, electrical power grids, farming &amp; cooking, living villages, and co-op multiplayer.">
+  <meta property="og:url" content="https://rootsandridges.gg/">
+  <meta property="og:image" content="https://rootsandridges.gg/assets/images/promo_power.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Roots &amp; Ridges — Procedural Voxel Survival Sandbox">
+  <meta name="twitter:description" content="20 procedural biomes, EU power grids, 1–1000 MMO skills, farming, living villages, and dedicated multiplayer on Windows and Linux.">
+  <meta name="twitter:image" content="https://rootsandridges.gg/assets/images/promo_power.png">
+
+  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
+
+  <!-- Google Fonts: Fraunces (Display), Plus Jakarta Sans (Body), JetBrains Mono (Specs) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "VideoGame",
+    "name": "Roots & Ridges",
+    "url": "https://rootsandridges.gg/",
+    "image": "https://rootsandridges.gg/assets/images/promo_power.png",
+    "description": "A procedural voxel sandbox survival game featuring 20 procedural biomes, 1–1000 MMO skills, electrical power and storage networks, farming and cooking, living villages, native controller support, and dedicated multiplayer servers.",
+    "genre": ["Survival", "Sandbox", "Voxel", "Open World"],
+    "operatingSystem": ["Windows", "Linux"],
+    "applicationCategory": "Game",
+    "playMode": ["SinglePlayer", "MultiPlayer", "CoOp"],
+    "softwareVersion": "0.3.0",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD",
+      "availability": "https://schema.org/InStock",
+      "url": "https://github.com/Mjwitz/BlockGame/releases"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header class="site-header" id="site-header">
+    <div class="container nav-inner">
+      <a href="#hero" class="brand" id="nav-brand" aria-label="Roots &amp; Ridges Home">
+        <img src="assets/images/logo.svg" alt="" class="brand-icon" width="34" height="34">
+        <span>Roots &amp; Ridges</span>
+      </a>
+
+      <nav aria-label="Primary Navigation">
+        <ul class="nav-links" id="nav-links">
+          <li><a href="#systems" id="nav-link-systems">Systems</a></li>
+          <li><a href="#biomes" id="nav-link-biomes">20 Biomes</a></li>
+          <li><a href="#soundtrack" id="nav-link-soundtrack">Soundtrack</a></li>
+          <li><a href="#multiplayer" id="nav-link-multiplayer">Multiplayer</a></li>
+          <li><a href="https://github.com/Mjwitz/BlockGame/wiki" target="_blank" rel="noopener noreferrer" id="nav-link-wiki">Wiki</a></li>
+        </ul>
+      </nav>
+
+      <div class="nav-actions">
+        <a href="https://github.com/Mjwitz/BlockGame" target="_blank" rel="noopener noreferrer" class="btn btn-subtle btn-sm" id="nav-github-btn">GitHub</a>
+        <a href="#download" class="btn btn-primary btn-sm" id="nav-download-btn">Get v0.3.0</a>
+        <button class="nav-toggle" id="nav-toggle" type="button" aria-label="Toggle navigation menu" aria-expanded="false">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3 5.5H17M3 10H17M3 14.5H17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- Hero Section -->
+    <section class="hero" id="hero">
+      <div class="hero-media">
+        <img src="assets/images/promo_power.png" alt="In-game screenshot of Roots &amp; Ridges at dusk showing a timber workshop with spinning wind turbines, rooftop solar panels, glowing electric lamps, battery boxes, and birch forest hills" width="1600" height="900">
+      </div>
+      <div class="hero-scrim" aria-hidden="true"></div>
+
+      <div class="container hero-content">
+        <p class="hero-kicker">rootsandridges.gg &middot; v0.3.0 &middot; Windows &amp; Linux</p>
+        <h1>Roots &amp; Ridges</h1>
+        <p class="hero-subtitle">Carve the peaks. Wire the valley. Survive the wild.</p>
+        <p class="hero-copy">
+          A handcrafted voxel survival sandbox where every journey leaves a mark. Roam 20 sprawling biomes,
+          level 7 MMO skills from 1 to 1000, wire wind-and-solar power grids, cook hearty stews,
+          trade in living villages, and explore solo or with friends.
+        </p>
+        <div class="hero-cta">
+          <a href="#download" class="btn btn-primary" id="hero-download-cta">
+            Download Free (v0.3.0)
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 2.5V10.5M8 10.5L4.5 7M8 10.5L11.5 7M2.5 13.5H13.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </a>
+          <a href="#soundtrack" class="btn btn-secondary" id="hero-soundtrack-cta">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M4.2 2.8C3.5 2.4 2.7 2.9 2.7 3.7V12.3C2.7 13.1 3.5 13.6 4.2 13.2L12.1 8.9C12.8 8.5 12.8 7.5 12.1 7.1L4.2 2.8Z"/>
+            </svg>
+            Listen to the Soundtrack
+          </a>
+        </div>
+      </div>
+
+      <!-- Architectural Specs Strip -->
+      <div class="spec-strip">
+        <div class="container spec-strip-grid">
+          <div class="spec-cell">
+            <span class="spec-value">Smooth 60+ FPS</span>
+            <span class="spec-label">Seamless Open Worlds</span>
+          </div>
+          <div class="spec-cell">
+            <span class="spec-value">20 Biomes</span>
+            <span class="spec-label">Sweeping Landscapes</span>
+          </div>
+          <div class="spec-cell">
+            <span class="spec-value">Lvl 1 – 1000</span>
+            <span class="spec-label">7 MMO Skills &amp; Perks</span>
+          </div>
+          <div class="spec-cell">
+            <span class="spec-value">EU Power Grids</span>
+            <span class="spec-label">Wind, Solar &amp; Storage</span>
+          </div>
+          <div class="spec-cell">
+            <span class="spec-value">5 Gamepad Families</span>
+            <span class="spec-label">Native Glyphs &amp; Rumble</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Pillars of Survival Showcase -->
+    <section class="section-dark" id="systems">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="eyebrow">Built for Deep Progression</p>
+          <h2>Five interlocking systems, one seamless world.</h2>
+          <p class="section-lead">
+            Every mechanic in Roots &amp; Ridges feeds the next—from tilling fertilized soil and brewing stews
+            to wiring high-altitude wind turbines into searchable base storage.
+          </p>
+        </div>
+
+        <div class="pillars-layout reveal">
+          <div class="pillars-tabs" role="tablist" aria-label="Game Systems">
+            <button class="pillar-tab is-active" id="tab-engine" role="tab" aria-selected="true" aria-controls="pillar-panel" data-pillar="engine" type="button">
+              <span class="pillar-tab-index">01 &middot; The World</span>
+              <span class="pillar-tab-title">Living Worlds &amp; Dynamic Light</span>
+              <span class="pillar-tab-short">Fluid exploration, sunlit forest canopies, warm cavern lighting, and Survival or Creative play.</span>
+            </button>
+
+            <button class="pillar-tab" id="tab-power" role="tab" aria-selected="false" aria-controls="pillar-panel" data-pillar="power" type="button">
+              <span class="pillar-tab-index">02 &middot; Engineering</span>
+              <span class="pillar-tab-title">EU Power &amp; Storage Networks</span>
+              <span class="pillar-tab-short">Wind turbines, solar arrays, battery boxes, and searchable storage terminals.</span>
+            </button>
+
+            <button class="pillar-tab" id="tab-homestead" role="tab" aria-selected="false" aria-controls="pillar-panel" data-pillar="homestead" type="button">
+              <span class="pillar-tab-index">03 &middot; Homestead</span>
+              <span class="pillar-tab-title">Farming, Cooking &amp; Villages</span>
+              <span class="pillar-tab-short">Passive soil fertilizers, Cooking Pot meals, Shopkeepers, and gear Enhancements.</span>
+            </button>
+
+            <button class="pillar-tab" id="tab-skills" role="tab" aria-selected="false" aria-controls="pillar-panel" data-pillar="skills" type="button">
+              <span class="pillar-tab-index">04 &middot; Mastery</span>
+              <span class="pillar-tab-title">MMO Skills &amp; Fishing</span>
+              <span class="pillar-tab-short">Level 7 skills up to 1000 and master an interactive fishing minigame with 10 species.</span>
+            </button>
+
+            <button class="pillar-tab" id="tab-identity" role="tab" aria-selected="false" aria-controls="pillar-panel" data-pillar="identity" type="button">
+              <span class="pillar-tab-index">05 &middot; Play Your Way</span>
+              <span class="pillar-tab-title">Characters, Achievements &amp; Controllers</span>
+              <span class="pillar-tab-short">Procedural Character Creator, 42 global Achievements, and full gamepad support.</span>
+            </button>
+          </div>
+
+          <article class="pillar-stage" id="pillar-panel" role="tabpanel" aria-labelledby="tab-engine">
+            <div class="pillar-media-wrap" id="pillar-media-wrap">
+              <img id="pillar-image" src="assets/images/promo_hero.png" alt="In-game screenshot of a wildflower and pumpkin highland overlooking misty glacial ice spires across a frozen sea" width="1600" height="900">
+              <span class="pillar-caption" id="pillar-caption">Captured in-game &middot; Procedural Highlands &amp; Glacial Sea</span>
+            </div>
+            <div class="pillar-body">
+              <h3 id="pillar-title">Vast, Seamless Worlds Built to Explore</h3>
+              <p id="pillar-description">
+                Every world unfolds smoothly around you with zero lag spikes—even at full sprint or soaring in flight.
+                Sunlight filters naturally through forest canopies, torches and electric lamps cast warm glow across
+                deep caverns, and crystal rivers shift from dawn mist to starlit nights.
+              </p>
+              <div class="pillar-facts" id="pillar-facts">
+                <div class="pillar-fact">
+                  <span class="pillar-fact-key">Seamless Exploration</span>
+                  <span class="pillar-fact-val">Fluid 60+ FPS terrain streaming with sweeping vistas and atmospheric fog</span>
+                </div>
+                <div class="pillar-fact">
+                  <span class="pillar-fact-key">Dynamic Sky &amp; Water</span>
+                  <span class="pillar-fact-val">Translucent rivers and glacial ice under a full celestial day/night cycle</span>
+                </div>
+                <div class="pillar-fact">
+                  <span class="pillar-fact-key">Survival &amp; Creative</span>
+                  <span class="pillar-fact-val">True Survival with health, hunger &amp; beds—or unlimited flight in Creative Mode</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Warm Parchment Editorial Section: 20 Procedural Biomes Atlas -->
+    <section class="section-parchment" id="biomes">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="eyebrow">Seeded Procedural Atlas</p>
+          <h2>Twenty sweeping biomes, never cramped.</h2>
+          <p class="section-lead">
+            Domain-warped Voronoi macro cells guarantee expansive landscapes with true relief contrast—from
+            sun-drenched coral lagoons and wildflower meadows to red terracotta canyons and frozen glaciers.
+          </p>
+        </div>
+
+        <div class="biome-filters reveal" role="group" aria-label="Filter biomes by climate">
+          <button class="filter-btn is-active" id="filter-all" data-climate="all" type="button">All 20 Biomes</button>
+          <button class="filter-btn" id="filter-temperate" data-climate="temperate" type="button">Temperate (5)</button>
+          <button class="filter-btn" id="filter-boreal" data-climate="boreal" type="button">Boreal &amp; Alpine (4)</button>
+          <button class="filter-btn" id="filter-arid" data-climate="arid" type="button">Arid &amp; Canyon (4)</button>
+          <button class="filter-btn" id="filter-tropical" data-climate="tropical" type="button">Tropical &amp; Wetlands (2)</button>
+          <button class="filter-btn" id="filter-coastal" data-climate="coastal" type="button">Coastal &amp; Marine (5)</button>
+        </div>
+
+        <div class="biome-grid reveal" id="biome-grid">
+          <!-- Populated cleanly via app.js from the 20 authentic game biomes -->
+        </div>
+      </div>
+    </section>
+
+    <!-- Original Dynamic Soundtrack Listening Room -->
+    <section class="section-surface" id="soundtrack">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="eyebrow">Original Stereo Soundtrack</p>
+          <h2>Music that responds to where you roam.</h2>
+          <p class="section-lead">
+            Four original stereo compositions embedded directly into the game. Tracks trigger dynamically
+            when you sprint across open ridges, descend into dark mines, or build at camp—listen right here.
+          </p>
+        </div>
+
+        <div class="soundtrack-layout reveal">
+          <div class="player-console">
+            <div class="now-playing-label" id="player-status">Ready to Play</div>
+            <h3 class="now-playing-title" id="player-title">Where Maps End</h3>
+            <p class="now-playing-trigger" id="player-trigger">Triggers while running and sprinting across the world adventuring.</p>
+
+            <div class="player-controls">
+              <button class="play-btn" id="audio-play-btn" type="button" aria-label="Play soundtrack">
+                <svg id="icon-play" width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path d="M5.5 3.6C4.7 3.1 3.7 3.7 3.7 4.6V15.4C3.7 16.3 4.7 16.9 5.5 16.4L15.1 11C15.9 10.5 15.9 9.5 15.1 9L5.5 3.6Z"/>
+                </svg>
+                <svg id="icon-pause" width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" hidden>
+                  <rect x="4.5" y="3.5" width="4" height="13" rx="1"/>
+                  <rect x="11.5" y="3.5" width="4" height="13" rx="1"/>
+                </svg>
+              </button>
+
+              <div class="scrubber-wrap">
+                <input type="range" class="scrubber" id="audio-scrubber" min="0" max="100" value="0" step="0.1" aria-label="Seek track position">
+                <div class="time-row">
+                  <span id="audio-current">0:00</span>
+                  <span id="audio-duration">0:00</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="volume-row">
+              <span>Embedded Stereo MP3 &middot; 3D Spatial SFX In-Game</span>
+              <label class="volume-control" for="audio-volume">
+                <span>Vol</span>
+                <input type="range" class="volume-slider" id="audio-volume" min="0" max="1" step="0.02" value="0.75" aria-label="Audio volume">
+              </label>
+            </div>
+            <audio id="soundtrack-audio" preload="metadata"></audio>
+          </div>
+
+          <div class="track-list" id="track-list" role="list" aria-label="Soundtrack Tracks">
+            <button class="track-row is-active" id="track-btn-0" data-track-index="0" type="button">
+              <span class="track-num">01</span>
+              <span class="track-info">
+                <span class="track-name">Where Maps End</span>
+                <span class="track-context">Triggers when sprinting &amp; adventuring across biomes</span>
+              </span>
+              <span class="track-badge">Adventure</span>
+            </button>
+
+            <button class="track-row" id="track-btn-1" data-track-index="1" type="button">
+              <span class="track-num">02</span>
+              <span class="track-info">
+                <span class="track-name">Measure of the Dark</span>
+                <span class="track-context">Triggers while mining stone, ores, or digging underground</span>
+              </span>
+              <span class="track-badge">Mining</span>
+            </button>
+
+            <button class="track-row" id="track-btn-2" data-track-index="2" type="button">
+              <span class="track-num">03</span>
+              <span class="track-info">
+                <span class="track-name">Where the Roots Break Soil</span>
+                <span class="track-context">Atmospheric anytime background composition</span>
+              </span>
+              <span class="track-badge">Ambient</span>
+            </button>
+
+            <button class="track-row" id="track-btn-3" data-track-index="3" type="button">
+              <span class="track-num">04</span>
+              <span class="track-info">
+                <span class="track-name">The View From The Ridge</span>
+                <span class="track-context">Atmospheric anytime background composition</span>
+              </span>
+              <span class="track-badge">Ambient</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Multiplayer & Dedicated Server -->
+    <section class="section-dark" id="multiplayer">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="eyebrow">Co-Op &amp; Dedicated Hosting</p>
+          <h2>Spin up a server in one command.</h2>
+          <p class="section-lead">
+            Play solo or run a lightweight dedicated server for your friends. No subscriptions,
+            no launcher lock-in—just a single executable with full ownership of your world.
+          </p>
+        </div>
+
+        <div class="mp-grid reveal">
+          <ul class="mp-list">
+            <li>
+              <strong>Smooth, Synced Multiplayer Worlds</strong>
+              <span>Crops, EU power grids, mob AI, and village economies stay smoothly synced for every explorer on your server.</span>
+            </li>
+            <li>
+              <strong>Built-In Proximity Voice Chat &amp; Ranks</strong>
+              <span>Talk naturally with nearby explorers, configure player accounts, groups, permission nodes, and in-game slash commands.</span>
+            </li>
+            <li>
+              <strong>Cooperative Night Skipping &amp; Persistent Worlds</strong>
+              <span>Skip dusk to dawn when 50% of online players rest in beds, with per-server MMO skill progression and Achievements sync.</span>
+            </li>
+          </ul>
+
+          <div class="terminal-card">
+            <div class="terminal-bar">
+              <span class="terminal-title">blockgame_server &middot; Dedicated Server</span>
+              <button class="copy-btn" id="copy-server-cmd" type="button">Copy command</button>
+            </div>
+            <div class="terminal-body">
+              <div>
+                <span class="cmd-prompt">$ </span><span class="cmd-main" id="server-cmd-text">./blockgame_server --port 25565 --world "RidgeRealm" --seed 1337</span>
+              </div>
+              <span class="cmd-out">
+                [INFO] Loading world "RidgeRealm" (seed: 1337)<br>
+                [INFO] Power grid &amp; village economy systems initialized<br>
+                [INFO] Listening on 0.0.0.0:25565 &mdash; ready for explorers
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download & Get Started -->
+    <section class="section-surface" id="download">
+      <div class="container">
+        <div class="section-header reveal">
+          <p class="eyebrow">Play Today &middot; Release v0.3.0</p>
+          <h2>Download Roots &amp; Ridges.</h2>
+          <p class="section-lead">
+            Free, standalone downloads for Windows and Linux—no account or launcher required.
+            Each download includes both the desktop game and the dedicated multiplayer server.
+          </p>
+        </div>
+
+        <div class="download-grid reveal">
+          <article class="download-card" id="download-card-windows">
+            <div>
+              <div class="download-tag" id="tag-windows">Windows 10 / 11 &middot; 64-bit</div>
+              <h3>Windows</h3>
+              <p>Standalone desktop client and dedicated multiplayer server in one zip. Extract and launch.</p>
+              <div class="download-file">BlockGame-windows-x86_64.zip</div>
+            </div>
+            <a href="https://github.com/Mjwitz/BlockGame/releases/latest" target="_blank" rel="noopener noreferrer" class="btn btn-primary" id="btn-download-windows">
+              Download for Windows
+            </a>
+          </article>
+
+          <article class="download-card" id="download-card-linux">
+            <div>
+              <div class="download-tag" id="tag-linux">Linux &middot; 64-bit</div>
+              <h3>Linux</h3>
+              <p>Native Wayland &amp; X11 desktop client plus the headless multiplayer server in one archive.</p>
+              <div class="download-file">BlockGame-linux-x86_64.tar.gz</div>
+            </div>
+            <a href="https://github.com/Mjwitz/BlockGame/releases/latest" target="_blank" rel="noopener noreferrer" class="btn btn-primary" id="btn-download-linux">
+              Download for Linux
+            </a>
+          </article>
+
+          <article class="download-card" id="download-card-source">
+            <div>
+              <div class="download-tag">Community &amp; Open Source</div>
+              <h3>Mod &amp; Contribute</h3>
+              <p>Browse the open-source project, report feedback, or build custom tweaks directly from GitHub.</p>
+              <div class="download-file">github.com/Mjwitz/BlockGame</div>
+            </div>
+            <a href="https://github.com/Mjwitz/BlockGame" target="_blank" rel="noopener noreferrer" class="btn btn-subtle" id="btn-view-source">
+              View Project on GitHub
+            </a>
+          </article>
+        </div>
+
+        <div class="license-note reveal">
+          <span>Free &amp; open source under <strong>MIT</strong> and <strong>Apache License 2.0</strong>.</span>
+          <span>Need setup help? Read the <a href="https://github.com/Mjwitz/BlockGame/wiki/Getting-Started" target="_blank" rel="noopener noreferrer">Getting Started Wiki</a>.</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <a href="#hero" class="brand">
+            <img src="assets/images/logo.svg" alt="" class="brand-icon" width="30" height="30">
+            <span>Roots &amp; Ridges</span>
+          </a>
+          <p>
+            Official home of Roots &amp; Ridges at <strong>rootsandridges.gg</strong>.
+            A handcrafted voxel survival sandbox for solo explorers and co-op realms.
+          </p>
+        </div>
+
+        <div class="footer-nav">
+          <div class="footer-col">
+            <h4>Explore</h4>
+            <ul>
+              <li><a href="#systems">Game Systems</a></li>
+              <li><a href="#biomes">20 Biomes Atlas</a></li>
+              <li><a href="#soundtrack">Original Soundtrack</a></li>
+              <li><a href="#multiplayer">Dedicated Server</a></li>
+            </ul>
+          </div>
+          <div class="footer-col">
+            <h4>Resources</h4>
+            <ul>
+              <li><a href="https://github.com/Mjwitz/BlockGame/releases" target="_blank" rel="noopener noreferrer">Latest Releases</a></li>
+              <li><a href="https://github.com/Mjwitz/BlockGame/wiki" target="_blank" rel="noopener noreferrer">Official Wiki</a></li>
+              <li><a href="https://github.com/Mjwitz/BlockGame/wiki/Controls-and-UI" target="_blank" rel="noopener noreferrer">Controls &amp; UI</a></li>
+              <li><a href="https://github.com/Mjwitz/BlockGame/wiki/Multiplayer-and-Server-Guide" target="_blank" rel="noopener noreferrer">Server Hosting Guide</a></li>
+            </ul>
+          </div>
+          <div class="footer-col">
+            <h4>Project</h4>
+            <ul>
+              <li><a href="https://github.com/Mjwitz/BlockGame" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+              <li><a href="https://github.com/Mjwitz/BlockGame/issues" target="_blank" rel="noopener noreferrer">Report an Issue</a></li>
+              <li><a href="https://github.com/Mjwitz/BlockGame/wiki/Achievements" target="_blank" rel="noopener noreferrer">Achievements List</a></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <span>&copy; 2026 Roots &amp; Ridges (rootsandridges.gg)</span>
+        <span>Windows &amp; Linux &middot; Solo &amp; Co-Op Multiplayer</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

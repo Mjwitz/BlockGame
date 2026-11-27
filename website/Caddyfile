@@ -1,0 +1,28 @@
+{
+    # Automatic HTTPS for rootsandridges.gg (override with SITE_ADDRESS=:80 if behind an existing reverse proxy)
+}
+
+{$SITE_ADDRESS:rootsandridges.gg, www.rootsandridges.gg} {
+    root * /srv/website
+
+    # Fast compression for HTML, CSS, JS, SVG
+    encode zstd gzip
+
+    # Cache static images, audio, and video aggressively
+    @static path *.png *.jpg *.jpeg *.svg *.mp3 *.mp4 *.ico *.woff2
+    header @static Cache-Control "public, max-age=2592000, immutable"
+
+    # Keep HTML/CSS/JS fresh while still fast
+    @web path *.html *.css *.js
+    header @web Cache-Control "public, max-age=300, must-revalidate"
+
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    file_server
+}

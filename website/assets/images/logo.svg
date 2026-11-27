@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Background Badge -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#15201a"/>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="13.25" stroke="#e8dfd1" stroke-opacity="0.22" stroke-width="1.5"/>
+
+  <!-- Sun / Warm Horizon Disc behind the Ridge -->
+  <circle cx="43" cy="21" r="6.5" fill="#e8962a" fill-opacity="0.92"/>
+
+  <!-- Back Ridge Silhouette -->
+  <path d="M11 36L23 21L32 30L41 18L53 36H11Z" fill="#2c4435"/>
+
+  <!-- Front Alpine Ridge (Crisp Parchment Peaks) -->
+  <path d="M9 36.5L22.5 18.5L31.5 29L38 22.5L55 36.5H9Z" fill="#ece3d3"/>
+  <!-- Peak Shadow Facet -->
+  <path d="M22.5 18.5L26 28.5L31.5 29L22.5 18.5Z" fill="#bfb5a3"/>
+  <path d="M38 22.5L43.5 36.5H55L38 22.5Z" fill="#cfc5b4"/>
+
+  <!-- Ground / Soil Horizon Line -->
+  <line x1="9" y1="36.5" x2="55" y2="36.5" stroke="#e8962a" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Intertwined Living Roots Beneath the Ridge -->
+  <path d="M32 36.5V45.5" stroke="#6ea852" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M32 38.5C32 43 26.5 43.5 22 47.5C19.5 49.7 17.5 52 16 54" stroke="#6ea852" stroke-width="2.3" stroke-linecap="round"/>
+  <path d="M32 38.5C32 43 37.5 43.5 42 47.5C44.5 49.7 46.5 52 48 54" stroke="#6ea852" stroke-width="2.3" stroke-linecap="round"/>
+  <path d="M25.5 44.5C24.5 48 25.5 51.5 24 54.5" stroke="#53863d" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M38.5 44.5C39.5 48 38.5 51.5 40 54.5" stroke="#53863d" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M32 45.5C32 49.5 30.5 52.5 32 56" stroke="#85bd68" stroke-width="2" stroke-linecap="round"/>
+  <path d="M20 40.5C17 42.5 14 44.5 12 47.5" stroke="#53863d" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M44 40.5C47 42.5 50 44.5 52 47.5" stroke="#53863d" stroke-width="1.8" stroke-linecap="round"/>
+</svg>

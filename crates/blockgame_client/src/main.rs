@@ -3,6 +3,7 @@ mod app;
 pub mod audio;
 pub mod controller;
 mod headless;
+mod promo_render;
 pub mod settings;
 pub mod voice;
 mod world_manager;
@@ -21,6 +22,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let render_distance: i32 = loaded_settings.render_distance;
 
     let args: Vec<String> = std::env::args().collect();
+
+    if let Some(idx) = args.iter().position(|a| a == "--render-promo") {
+        let output_dir = args
+            .get(idx + 1)
+            .map(|s| s.as_str())
+            .unwrap_or("website/assets/images");
+        log::info!("Rendering in-engine promo screenshots to {}", output_dir);
+        pollster::block_on(promo_render::render_promo_screenshots(output_dir))?;
+        return Ok(());
+    }
+
+    if let Some(idx) = args.iter().position(|a| a == "--render-trailer") {
+        let output_dir = args
+            .get(idx + 1)
+            .map(|s| s.as_str())
+            .unwrap_or("trailer_clips");
+        log::info!("Rendering in-engine animated trailer clips to {}", output_dir);
+        pollster::block_on(promo_render::render_trailer_clips(output_dir))?;
+        return Ok(());
+    }
 
     // World seed determination:
     // If --seed <u32> is provided, use specified seed.

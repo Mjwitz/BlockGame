@@ -1,0 +1,20 @@
+services:
+  rootsandridges-website:
+    build:
+      context: .
+      dockerfile: Dockerfile.website
+    container_name: rootsandridges_website
+    restart: unless-stopped
+    ports:
+      - "${WEBSITE_HTTP_PORT:-80}:80"
+      - "${WEBSITE_HTTPS_PORT:-443}:443"
+      - "${WEBSITE_HTTPS_PORT:-443}:443/udp"
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:-rootsandridges.gg, www.rootsandridges.gg}
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
