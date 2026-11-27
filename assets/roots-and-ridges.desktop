@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Roots & Ridges
+Comment=Procedural voxel survival sandbox game
+Exec=blockgame_client
+Icon=roots-and-ridges
+Terminal=false
+Categories=Game;AdventureGame;
+StartupWMClass=roots-and-ridges

@@ -1384,6 +1384,22 @@ impl ApplicationHandler for BlockGameApp {
             window_attrs = window_attrs.with_taskbar_icon(window_icon);
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            use winit::platform::x11::WindowAttributesExtX11;
+            window_attrs = WindowAttributesExtWayland::with_name(
+                window_attrs,
+                "roots-and-ridges",
+                "roots-and-ridges",
+            );
+            window_attrs = WindowAttributesExtX11::with_name(
+                window_attrs,
+                "roots-and-ridges",
+                "roots-and-ridges",
+            );
+        }
+
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
