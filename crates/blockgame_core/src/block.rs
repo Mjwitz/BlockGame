@@ -2713,10 +2713,7 @@ where
             }
             let above = get_block(pos + IVec3::Y);
             let below = get_block(pos + IVec3::NEG_Y);
-            registry.is_solid(above)
-                || registry.is_solid(below)
-                || above == BlockId::DRIPSTONE
-                || below == BlockId::DRIPSTONE
+            registry.is_solid(above) || registry.is_solid(below)
         }
         BlockId::GLOW_CRYSTAL => {
             let current = get_block(pos);

@@ -1755,6 +1755,48 @@ impl WorldManager {
         true
     }
 
+    fn add_light_neighborhood(pos: IVec3, chunks: &mut Vec<ChunkPos>) {
+        Self::add_chunk_and_neighbors(pos, chunks);
+        let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    chunks.push(ChunkPos::new(
+                        chunk_pos.0.x + dx,
+                        chunk_pos.0.y + dy,
+                        chunk_pos.0.z + dz,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn rebuild_chunks_and_store(
+        &mut self,
+        mut chunks_to_rebuild: Vec<ChunkPos>,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+        chunks_to_rebuild.dedup();
+
+        let new_meshes: Vec<(ChunkPos, ChunkMesh)> = {
+            let world = self.world.lock().unwrap();
+            chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect()
+        };
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+    }
+
     /// Scoops a lava block at `pos` with an empty bucket, replacing it with AIR and updating meshes.
     pub fn scoop_lava(
         &mut self,
@@ -1763,54 +1805,15 @@ impl WorldManager {
         pipeline: &VoxelPipeline,
     ) -> bool {
         let mut chunks_to_rebuild = Vec::new();
-        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
-
-        let (scooped, new_meshes): (bool, Vec<(ChunkPos, ChunkMesh)>) = {
+        {
             let mut world = self.world.lock().unwrap();
-            let current = world.get_block(pos);
-            if !current.is_lava() {
+            if !world.get_block(pos).is_lava() {
                 return false;
             }
-
             world.set_block(pos, BlockId::AIR);
-
-            // Rebuild surrounding chunks so removed Lava blocklight updates cleanly
-            let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    for dz in -1..=1 {
-                        chunks_to_rebuild.push(ChunkPos::new(
-                            chunk_pos.0.x + dx,
-                            chunk_pos.0.y + dy,
-                            chunk_pos.0.z + dz,
-                        ));
-                    }
-                }
-            }
-
-            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
-            chunks_to_rebuild.dedup();
-
-            let meshes = chunks_to_rebuild
-                .into_iter()
-                .filter_map(|cpos| {
-                    world
-                        .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
-                })
-                .collect();
-
-            (true, meshes)
-        };
-
-        if !scooped {
-            return false;
         }
-
-        for (cpos, mesh) in new_meshes {
-            self.store_mesh(cpos, &mesh, device, pipeline);
-        }
-
+        Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
+        self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
         true
     }
 
@@ -1822,55 +1825,19 @@ impl WorldManager {
         pipeline: &VoxelPipeline,
     ) -> bool {
         let mut chunks_to_rebuild = Vec::new();
-        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
-
-        let (placed, new_meshes): (bool, Vec<(ChunkPos, ChunkMesh)>) = {
+        {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
             if !current.is_air() && !current.is_fragile() {
                 return false;
             }
-
             let (modified_positions, _) = place_lava_source(pos, &mut world);
             for mpos in modified_positions {
-                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
-                let (cpos, _, _, _) = world_to_chunk_coords(mpos);
-                for dx in -1..=1 {
-                    for dy in -1..=1 {
-                        for dz in -1..=1 {
-                            chunks_to_rebuild.push(ChunkPos::new(
-                                cpos.0.x + dx,
-                                cpos.0.y + dy,
-                                cpos.0.z + dz,
-                            ));
-                        }
-                    }
-                }
+                Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
             }
-
-            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
-            chunks_to_rebuild.dedup();
-
-            let meshes = chunks_to_rebuild
-                .into_iter()
-                .filter_map(|cpos| {
-                    world
-                        .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
-                })
-                .collect();
-
-            (true, meshes)
-        };
-
-        if !placed {
-            return false;
         }
-
-        for (cpos, mesh) in new_meshes {
-            self.store_mesh(cpos, &mesh, device, pipeline);
-        }
-
+        Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
+        self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
         true
     }
 

@@ -2716,6 +2716,28 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
     }
 }
 
+/// Consumes 1 unit of fuel from `fuel` if valid, replacing a consumed `Lava Bucket`
+/// with an empty `Bucket`, and returns the burn duration in seconds (0.0 if invalid).
+pub fn consume_fuel_slot(fuel: &mut ItemSlot) -> f32 {
+    if fuel.is_empty() || fuel.count == 0 {
+        return 0.0;
+    }
+    let burn_dur = get_fuel_burn_time(fuel.item_id);
+    if burn_dur <= 0.0 {
+        return 0.0;
+    }
+    let consumed_lava_bucket = fuel.item_id == ItemId::LAVA_BUCKET;
+    fuel.count -= 1;
+    if fuel.count == 0 {
+        *fuel = if consumed_lava_bucket {
+            ItemSlot::new(ItemId::BUCKET, 1)
+        } else {
+            ItemSlot::EMPTY
+        };
+    }
+    burn_dur
+}
+
 /// Returns the fuel burn duration (in seconds) for 1 item of the given type.
 /// Returns 0.0 if the item is not a valid furnace fuel.
 pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {

@@ -90,7 +90,21 @@ struct CarveNode {
     rz: f32,
     allows_surface_breach: bool,
     zone: CaveZone,
+    archetype: CaveArchetype,
     pool_water_y: Option<i32>,
+}
+
+/// Parameters for carving a single deterministic snaking tunnel path.
+#[derive(Clone, Copy)]
+struct WormConfig {
+    region_origin: (f32, f32),
+    start: (f32, f32, f32),
+    yaw: f32,
+    pitch: f32,
+    steps: i32,
+    base_radius: f32,
+    allows_surface_breach: bool,
+    zone: CaveZone,
 }
 
 /// Per-voxel carving result for a single 16x16x16 chunk.
@@ -99,6 +113,7 @@ pub struct ChunkCarveCell {
     pub carved: bool,
     pub allows_surface_breach: bool,
     pub zone: CaveZone,
+    pub archetype: CaveArchetype,
     pub pool_water_y: i32, // 0 means no local water pool
 }
 
@@ -108,6 +123,7 @@ impl Default for ChunkCarveCell {
             carved: false,
             allows_surface_breach: false,
             zone: CaveZone::Dry,
+            archetype: CaveArchetype::WindingPassage,
             pool_water_y: 0,
         }
     }
@@ -210,7 +226,8 @@ fn build_region_cave_nodes(
     let oz = (rz * CAVE_REGION_SIZE) as f32 + rng.range_f32(8.0, (CAVE_REGION_SIZE - 8) as f32);
     let oy = rng.range_f32(8.0, 34.0);
 
-    // Quick coarse horizontal rejection: max excursion from origin is <= 125 blocks
+    // Quick coarse horizontal rejection: all primary worms, branches, caverns, and fissures
+    // stay strictly within 124 blocks of `(ox, oz)` (fitting cleanly inside the 5x5 region scan).
     const MAX_REACH: f32 = 132.0;
     if ox + MAX_REACH < chunk_min[0]
         || ox - MAX_REACH > chunk_max[0]
@@ -231,22 +248,23 @@ fn build_region_cave_nodes(
 
     carve_worm_path(
         &mut rng,
-        ox,
-        oy,
-        oz,
-        primary_yaw,
-        primary_pitch,
-        primary_steps,
-        primary_radius,
-        false,
-        base_zone,
+        WormConfig {
+            region_origin: (ox, oz),
+            start: (ox, oy, oz),
+            yaw: primary_yaw,
+            pitch: primary_pitch,
+            steps: primary_steps,
+            base_radius: primary_radius,
+            allows_surface_breach: false,
+            zone: base_zone,
+        },
         chunk_min,
         chunk_max,
         Some(&mut branch_points),
         out,
     );
 
-    // 2. 1-3 branching Winding Passages off the main path
+    // 2. 1-3 branching Winding Passages off the main path (bounded relative to region origin `(ox, oz)`)
     let branch_count = rng.range_i32(1, 3) as usize;
     for b in 0..branch_count {
         if let Some(&(bx, by, bz, byaw)) = branch_points.get(b) {
@@ -257,15 +275,16 @@ fn build_region_cave_nodes(
             let rad = rng.range_f32(1.9, 2.8);
             carve_worm_path(
                 &mut rng,
-                bx,
-                by,
-                bz,
-                yaw,
-                pitch,
-                steps,
-                rad,
-                false,
-                base_zone,
+                WormConfig {
+                    region_origin: (ox, oz),
+                    start: (bx, by, bz),
+                    yaw,
+                    pitch,
+                    steps,
+                    base_radius: rad,
+                    allows_surface_breach: false,
+                    zone: base_zone,
+                },
                 chunk_min,
                 chunk_max,
                 None,
@@ -300,6 +319,7 @@ fn build_region_cave_nodes(
             rz: cav_rz,
             allows_surface_breach: false,
             zone: cav_zone,
+            archetype: CaveArchetype::VaultedCavern,
             pool_water_y,
         },
         chunk_min,
@@ -335,6 +355,7 @@ fn build_region_cave_nodes(
                     rz: width_r * taper,
                     allows_surface_breach: false,
                     zone: fzone,
+                    archetype: CaveArchetype::Fissure,
                     pool_water_y: None,
                 },
                 chunk_min,
@@ -346,6 +367,11 @@ fn build_region_cave_nodes(
             cur_x += yaw.cos() * 2.0;
             cur_z += yaw.sin() * 2.0;
             cur_y = (cur_y + rng.range_f32(-0.15, 0.15)).clamp(10.0, 28.0);
+            let rdx = cur_x - ox;
+            let rdz = cur_z - oz;
+            if rdx * rdx + rdz * rdz > 118.0 * 118.0 {
+                break;
+            }
         }
     }
 }
@@ -379,15 +405,16 @@ fn build_cave_mouth_nodes(
     // Entrance arch slightly above surface sloping smoothly underground
     carve_worm_path(
         &mut rng,
-        ox as f32,
-        (sy + 1) as f32,
-        oz as f32,
-        yaw,
-        -0.34, // Descending walkable ramp (~19 deg)
-        42,
-        2.9,
-        true,
-        zone,
+        WormConfig {
+            region_origin: (ox as f32, oz as f32),
+            start: (ox as f32, (sy + 1) as f32, oz as f32),
+            yaw,
+            pitch: -0.34, // Descending walkable ramp (~19 deg)
+            steps: 42,
+            base_radius: 2.9,
+            allows_surface_breach: true,
+            zone,
+        },
         chunk_min,
         chunk_max,
         None,
@@ -395,43 +422,34 @@ fn build_cave_mouth_nodes(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn carve_worm_path(
     rng: &mut Rng64,
-    start_x: f32,
-    start_y: f32,
-    start_z: f32,
-    mut yaw: f32,
-    mut pitch: f32,
-    steps: i32,
-    base_radius: f32,
-    allows_surface_breach: bool,
-    zone: CaveZone,
+    cfg: WormConfig,
     chunk_min: [f32; 3],
     chunk_max: [f32; 3],
     mut branch_points: Option<&mut Vec<(f32, f32, f32, f32)>>,
     out: &mut Vec<CarveNode>,
 ) {
-    let mut x = start_x;
-    let mut y = start_y;
-    let mut z = start_z;
+    let (mut x, mut y, mut z) = cfg.start;
+    let mut yaw = cfg.yaw;
+    let mut pitch = cfg.pitch;
     let mut yaw_vel = 0.0_f32;
     let mut pitch_vel = 0.0_f32;
     let step_len = 2.0_f32;
 
-    for s in 0..steps {
-        let t = s as f32 / steps.max(1) as f32;
+    for s in 0..cfg.steps {
+        let t = s as f32 / cfg.steps.max(1) as f32;
         let pulse = 0.82 + 0.36 * (t * std::f32::consts::PI * 3.0).sin().abs();
-        let rad = (base_radius * pulse).clamp(1.75, 4.2);
+        let rad = (cfg.base_radius * pulse).clamp(1.75, 4.2);
 
         let local_zone = if y <= 14.0 {
             CaveZone::DeepVolcanic
         } else {
-            zone
+            cfg.zone
         };
 
         // Subtle shallow water pool in low dips of Damp Winding Passages
-        let pool_water_y = if !allows_surface_breach
+        let pool_water_y = if !cfg.allows_surface_breach
             && local_zone == CaveZone::Damp
             && y >= 14.0
             && y <= 31.0
@@ -450,8 +468,9 @@ fn carve_worm_path(
                 rx: rad,
                 ry: (rad * 0.92).max(1.8),
                 rz: rad,
-                allows_surface_breach: allows_surface_breach && s < 14,
+                allows_surface_breach: cfg.allows_surface_breach && s < 14,
                 zone: local_zone,
+                archetype: CaveArchetype::WindingPassage,
                 pool_water_y,
             },
             chunk_min,
@@ -460,7 +479,7 @@ fn carve_worm_path(
         );
 
         if let Some(ref mut bps) = branch_points {
-            if s == steps / 4 || s == steps / 2 || s == (steps * 3) / 4 {
+            if s == cfg.steps / 4 || s == cfg.steps / 2 || s == (cfg.steps * 3) / 4 {
                 bps.push((x, y, z, yaw));
             }
         }
@@ -475,9 +494,9 @@ fn carve_worm_path(
         // Gently nudge away from bedrock floor and upper ceiling
         if y < 6.5 {
             pitch = pitch.max(0.10);
-        } else if !allows_surface_breach && y > 35.0 {
+        } else if !cfg.allows_surface_breach && y > 35.0 {
             pitch = pitch.min(-0.12);
-        } else if allows_surface_breach && s < 12 {
+        } else if cfg.allows_surface_breach && s < 12 {
             // Keep surface Cave Mouth descending steadily into the rock
             pitch = pitch.clamp(-0.42, -0.22);
         }
@@ -488,9 +507,10 @@ fn carve_worm_path(
         y += pitch.sin() * step_len;
         y = y.clamp(3.0, 96.0);
 
-        // Keep excursion bounded within 120 blocks of start so 5x5 region scan never clips
-        let dx = x - start_x;
-        let dz = z - start_z;
+        // Keep excursion strictly bounded relative to the region origin so the 5x5 region
+        // scan never clips cross-chunk branches (ADR 0009).
+        let dx = x - cfg.region_origin.0;
+        let dz = z - cfg.region_origin.1;
         if dx * dx + dz * dz > 118.0 * 118.0 {
             break;
         }
@@ -612,6 +632,7 @@ pub fn compute_chunk_cave_mask(
                             cell.allows_surface_breach = true;
                         }
                         cell.zone = node.zone;
+                        cell.archetype = node.archetype;
                         if let Some(py) = node.pool_water_y {
                             cell.pool_water_y = cell.pool_water_y.max(py);
                         }
@@ -1013,9 +1034,12 @@ pub fn decorate_chunk_caves(
                             && below == BlockId::AIR
                             && r == 500
                         {
-                            // Cascade spring cleanly downward to the cave floor inside this chunk
+                            // Cascade spring cleanly downward while staying strictly above y = 8
                             let mut cy = ly;
-                            while cy > 0 && chunk.get_unchecked(lx, cy, lz) == BlockId::AIR {
+                            while cy > 0
+                                && (origin.y + cy as i32) > 8
+                                && chunk.get_unchecked(lx, cy, lz) == BlockId::AIR
+                            {
                                 chunk.set(lx, cy, lz, BlockId::WATER);
                                 cy -= 1;
                             }
@@ -1045,6 +1069,7 @@ pub fn decorate_chunk_caves(
 mod tests {
     use super::*;
     use blockgame_core::chunk::ChunkPos;
+    use std::collections::HashSet;
 
     #[test]
     fn test_deepstone_stratum_lava_pools_water_pools_and_formations() {
@@ -1054,16 +1079,30 @@ mod tests {
         let mut found_glow_crystal = false;
         let mut found_lava = false;
         let mut found_underground_water = false;
+        let mut archetypes = HashSet::new();
+        let mut zones = HashSet::new();
 
         for cx in 0..8 {
             for cz in 0..8 {
                 for cy in 0..4 {
-                    let chunk = gen.generate_chunk(ChunkPos::new(cx, cy, cz));
-                    let origin = chunk.pos.to_world_origin();
-                    for ly in 0..CHUNK_SIZE_Y {
-                        let wy = origin.y + ly as i32;
-                        for lz in 0..CHUNK_SIZE_Z {
-                            for lx in 0..CHUNK_SIZE_X {
+                    let cpos = ChunkPos::new(cx, cy, cz);
+                    let origin = cpos.to_world_origin();
+                    let mask = compute_chunk_cave_mask(&gen, origin.x, origin.y, origin.z);
+                    for cell in &mask {
+                        if cell.carved {
+                            archetypes.insert(cell.archetype);
+                            zones.insert(cell.zone);
+                        }
+                    }
+
+                    let chunk = gen.generate_chunk(cpos);
+                    for lz in 0..CHUNK_SIZE_Z {
+                        let wz = origin.z + lz as i32;
+                        for lx in 0..CHUNK_SIZE_X {
+                            let wx = origin.x + lx as i32;
+                            let sy = gen.surface_height(wx, wz);
+                            for ly in 0..CHUNK_SIZE_Y {
+                                let wy = origin.y + ly as i32;
                                 let b = chunk.get_unchecked(lx, ly, lz);
                                 if wy == 0 {
                                     assert_eq!(b, BlockId::BEDROCK, "Bedrock at y=0 must never be carved");
@@ -1085,12 +1124,24 @@ mod tests {
                                     found_lava = true;
                                     assert!(wy >= 1 && wy <= 11, "Lava must only spawn deep underground, got y={}", wy);
                                 }
-                                if b == BlockId::WATER && wy < 35 {
-                                    let sy = gen.surface_height(origin.x + lx as i32, origin.z + lz as i32);
-                                    if wy < sy - 4 {
-                                        found_underground_water = true;
-                                        assert!(wy >= 1, "Underground water valid y");
-                                    }
+                                // Underwater beds must remain sealed (never carved within 3 blocks of seabed)
+                                if sy <= gen.water_level && wy >= sy - 3 && wy < sy {
+                                    assert_ne!(
+                                        b,
+                                        BlockId::AIR,
+                                        "Underwater seabed must not be breached by caves at ({},{},{})",
+                                        wx,
+                                        wy,
+                                        wz
+                                    );
+                                }
+                                if b == BlockId::WATER && wy < sy - 4 {
+                                    found_underground_water = true;
+                                    assert!(
+                                        wy > 8,
+                                        "Underground Water Pools/Springs must stay strictly above y=8, got y={}",
+                                        wy
+                                    );
                                 }
                             }
                         }
@@ -1099,11 +1150,25 @@ mod tests {
             }
         }
 
+        // Also sample a 6x6 grid of 64x64 cave regions to verify all three CaveZones occur
+        for rz in -3..3 {
+            for rx in -3..3 {
+                zones.insert(cave_zone_at(gen.seed, rx * CAVE_REGION_SIZE, 24, rz * CAVE_REGION_SIZE));
+                zones.insert(cave_zone_at(gen.seed, rx * CAVE_REGION_SIZE, 8, rz * CAVE_REGION_SIZE));
+            }
+        }
+
         assert!(found_deepstone, "Expected Deepstone below y=16");
         assert!(found_dripstone, "Expected Dripstone formations in caves");
         assert!(found_glow_crystal, "Expected Glow Crystals in caves");
         assert!(found_lava, "Expected deep Lava Pools in caves");
         assert!(found_underground_water, "Expected underground Water Pools in Damp caves");
+        assert!(archetypes.contains(&CaveArchetype::WindingPassage), "Expected WindingPassage");
+        assert!(archetypes.contains(&CaveArchetype::VaultedCavern), "Expected VaultedCavern");
+        assert!(archetypes.contains(&CaveArchetype::Fissure), "Expected Fissure");
+        assert!(zones.contains(&CaveZone::Dry), "Expected Dry CaveZone");
+        assert!(zones.contains(&CaveZone::Damp), "Expected Damp CaveZone");
+        assert!(zones.contains(&CaveZone::DeepVolcanic), "Expected DeepVolcanic CaveZone");
     }
 
     #[test]
@@ -1181,7 +1246,7 @@ mod tests {
             iron_deep
         );
 
-        // 2. Coal peaks in y 40..=80 and drops off below y 40
+        // 2. Coal peaks in y 40..=80, drops off below y 40, and drops off above y 80
         let coal_peak = rate(&coal_by_y, 40, 80);
         let coal_low = rate(&coal_by_y, 10, 30);
         assert!(
@@ -1189,6 +1254,10 @@ mod tests {
             "Coal should peak in y 40..=80 ({:.4}) over y 10..=30 ({:.4})",
             coal_peak,
             coal_low
+        );
+        assert!(
+            coal_weight(60) > coal_weight(95) && coal_weight(95) > coal_weight(112),
+            "Coal density curve must drop off above y=80"
         );
 
         // 3. Diamonds are genuinely rare (< 0.4% even in y 1..=10)

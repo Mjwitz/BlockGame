@@ -91,17 +91,8 @@ impl FurnaceState {
 
         // If fire expired but we have a valid recipe and fuel, ignite the next fuel item
         if !self.is_burning() && can_smelt {
-            let fuel_time = crate::crafting::get_fuel_burn_time(self.fuel.item_id);
-            if fuel_time > 0.0 && self.fuel.count > 0 {
-                let consumed_lava_bucket = self.fuel.item_id == crate::item::ItemId::LAVA_BUCKET;
-                self.fuel.count -= 1;
-                if self.fuel.count == 0 {
-                    self.fuel = if consumed_lava_bucket {
-                        ItemSlot::new(crate::item::ItemId::BUCKET, 1)
-                    } else {
-                        ItemSlot::EMPTY
-                    };
-                }
+            let fuel_time = crate::crafting::consume_fuel_slot(&mut self.fuel);
+            if fuel_time > 0.0 {
                 self.burn_time_remaining = fuel_time;
                 self.max_burn_time = fuel_time;
             }
@@ -194,17 +185,8 @@ impl CookingPotState {
         };
 
         if !self.is_burning() && can_cook {
-            let fuel_time = crate::crafting::get_fuel_burn_time(self.fuel.item_id);
-            if fuel_time > 0.0 && self.fuel.count > 0 {
-                let consumed_lava_bucket = self.fuel.item_id == crate::item::ItemId::LAVA_BUCKET;
-                self.fuel.count -= 1;
-                if self.fuel.count == 0 {
-                    self.fuel = if consumed_lava_bucket {
-                        ItemSlot::new(crate::item::ItemId::BUCKET, 1)
-                    } else {
-                        ItemSlot::EMPTY
-                    };
-                }
+            let fuel_time = crate::crafting::consume_fuel_slot(&mut self.fuel);
+            if fuel_time > 0.0 {
                 self.burn_time_remaining = fuel_time;
                 self.max_burn_time = fuel_time;
             }
@@ -715,18 +697,22 @@ mod tests {
         assert!(!reg.can_harvest(BlockId::OBSIDIAN, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Iron));
         assert!(reg.can_harvest(BlockId::OBSIDIAN, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Diamond));
 
-        // Ceiling Dripstone and wall Glow Crystal break when supporting rock is mined
+        // Ceiling Dripstone (including stacked pair) and wall Glow Crystal break when supporting rock is mined
         let ceil = IVec3::new(2, 10, 2);
         let stalactite = IVec3::new(2, 9, 2);
+        let stalactite_lower = IVec3::new(2, 8, 2);
         let wall_crystal = IVec3::new(3, 10, 2);
         world.set_block(ceil, BlockId::DEEPSTONE);
         world.set_block(stalactite, BlockId::DRIPSTONE);
+        world.set_block(stalactite_lower, BlockId::DRIPSTONE);
         world.set_block(wall_crystal, BlockId::GLOW_CRYSTAL);
         world.set_block(ceil, BlockId::AIR);
         let (drops, modified, _) = crate::block::break_unsupported_attached(ceil, &mut world, &reg);
         assert_eq!(world.get_block(stalactite), BlockId::AIR);
+        assert_eq!(world.get_block(stalactite_lower), BlockId::AIR);
         assert_eq!(world.get_block(wall_crystal), BlockId::AIR);
         assert!(modified.contains(&stalactite));
+        assert!(modified.contains(&stalactite_lower));
         assert!(modified.contains(&wall_crystal));
         assert!(drops.iter().any(|(_, s)| s.item_id == crate::item::ItemId::GLOW_CRYSTAL));
     }

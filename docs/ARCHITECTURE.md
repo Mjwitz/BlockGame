@@ -173,7 +173,7 @@ Dual-channel voxel lighting model:
   2. First solid block terminates the full-strength downward ray.
   3. Run BFS queue from each sunlight column to spread sunlight laterally with attenuation ($I - 1$).
 - **Blocklight Propagation**:
-  - Emissive blocks (torches = 14, lava = 15) seeded into BFS queue.
+  - Emissive blocks (torches = 14, lava = 14, glow crystal = 7) seeded into BFS queue.
   - Neighboring air blocks receive $\max(\text{current}, \text{source} - 1)$.
 - **Smooth Vertex Ambient Occlusion (AO)**:
   - For each vertex of a quad, query the 3 adjacent corner/edge voxels.

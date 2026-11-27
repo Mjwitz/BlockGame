@@ -1097,6 +1097,9 @@ impl MonsterEntity {
             .get_block(IVec3::new(bx, (self.position.y + 0.85).floor() as i32, bz))
             .is_water();
         let in_water = feet_in_water || body_in_water;
+        if in_lava {
+            target_vel *= 0.35;
+        }
 
         // Jump over 1-block obstacles or path around walls/buildings when chasing
         if self.is_moving && (self.on_ground || in_water) && target_vel.length_squared() > 0.1 {

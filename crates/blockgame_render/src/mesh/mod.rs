@@ -155,11 +155,20 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
+                    if block_id == BlockId::DRIPSTONE {
+                        let facing = chunk.get_facing_unchecked(x, y, z);
+                        let is_stalactite = facing == 1
+                            || (self.registry.is_solid(query_block(ix, iy + 1, iz))
+                                && !self.registry.is_solid(query_block(ix, iy - 1, iz)));
+                        let tile_id = if is_stalactite { 576 } else { 575 };
+                        self.build_cross_tile(&mut mesh, chunk.pos, ix, iy, iz, tile_id, &light_map);
+                        continue;
+                    }
+
                     if block_id.is_farmland_crop()
                         || block_id == BlockId::SUGAR_CANE
                         || block_id == BlockId::TALL_GRASS
                         || block_id.is_flower()
-                        || block_id == BlockId::DRIPSTONE
                         || block_id == BlockId::GLOW_CRYSTAL
                     {
                         self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
@@ -848,7 +857,7 @@ impl<'a> ChunkMesher<'a> {
         );
     }
 
-    /// Generates crossed diagonal plant quads for wheat crops.
+    /// Generates crossed diagonal plant quads for crops and decorative blocks.
     fn build_crop(
         &self,
         mesh: &mut ChunkMesh,
@@ -859,12 +868,25 @@ impl<'a> ChunkMesher<'a> {
         block_id: BlockId,
         light_map: &blockgame_core::lighting::ChunkLightMap,
     ) {
+        let tile_id = self.registry.get_texture(block_id, Direction::PosY);
+        self.build_cross_tile(mesh, chunk_pos, x, y, z, tile_id, light_map);
+    }
+
+    fn build_cross_tile(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        tile_id: u16,
+        light_map: &blockgame_core::lighting::ChunkLightMap,
+    ) {
         let origin = chunk_pos.to_world_origin();
         let fx = (origin.x + x) as f32;
         let fy = (origin.y + y) as f32;
         let fz = (origin.z + z) as f32;
 
-        let tile_id = self.registry.get_texture(block_id, Direction::PosY);
         let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
 
         let lv = light_map.get(x as usize, y as usize, z as usize);
@@ -4452,5 +4474,27 @@ mod tests {
             let m = mesher.mesh_chunk(&c);
             assert!(!m.vertices.is_empty(), "Expected non-empty mesh for {:?}", block);
         }
+
+        // Hanging Dripstone stalactite (facing=1) uses tile 576, distinct from floor stalagmite (tile 575)
+        let mut stalagmite = Chunk::new(ChunkPos::new(0, 0, 0));
+        stalagmite.set(6, 6, 6, BlockId::DRIPSTONE);
+        stalagmite.set_facing(6, 6, 6, 0);
+        let m_floor = mesher.mesh_chunk(&stalagmite);
+
+        let mut stalactite = Chunk::new(ChunkPos::new(0, 0, 0));
+        stalactite.set(6, 6, 6, BlockId::DRIPSTONE);
+        stalactite.set_facing(6, 6, 6, 1);
+        let m_ceil = mesher.mesh_chunk(&stalactite);
+
+        let uv_575 = TextureAtlas::get_uv_bounds(575);
+        let uv_576 = TextureAtlas::get_uv_bounds(576);
+        assert!(
+            (m_floor.vertices[0].uv[0] - uv_575[0]).abs() < 1e-4,
+            "Floor stalagmite must use tile 575"
+        );
+        assert!(
+            (m_ceil.vertices[0].uv[0] - uv_576[0]).abs() < 1e-4,
+            "Ceiling stalactite must use tile 576"
+        );
     }
 }
