@@ -513,6 +513,28 @@ impl World {
         &self.chunks
     }
 
+    /// Returns the 4-bit fluid metadata level (`0` = Source Block, `1..=7` = horizontal decay, `8` = falling).
+    #[inline]
+    pub fn get_fluid_level(&self, pos: IVec3) -> u8 {
+        let (cpos, lx, ly, lz) = world_to_chunk_coords(pos);
+        self.chunks
+            .get(&cpos)
+            .map_or(0, |c| c.get_facing_unchecked(lx, ly, lz) & 0x0F)
+    }
+
+    /// Sets the 4-bit fluid metadata level (`0..=8`) at `pos` and marks the chunk dirty.
+    #[inline]
+    pub fn set_fluid_level(&mut self, pos: IVec3, level: u8) -> bool {
+        let (cpos, lx, ly, lz) = world_to_chunk_coords(pos);
+        if let Some(chunk) = self.chunks.get_mut(&cpos) {
+            chunk.set_facing(lx, ly, lz, level & 0x0F);
+            self.dirty_chunks.insert(cpos);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Checks if all 6 immediate neighbor chunks (East, West, Top, Bottom, South, North) are loaded.
     pub fn are_neighbors_loaded(&self, pos: ChunkPos) -> bool {
         let p = pos.0;
@@ -702,7 +724,7 @@ mod tests {
         assert!(reg.can_harvest(BlockId::DEEPSTONE, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Wood));
         assert_eq!(
             reg.get_drop(BlockId::DEEPSTONE, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Wood),
-            Some((crate::item::ItemId::DEEPSTONE, 1))
+            Some((crate::item::ItemId::DEEPSTONE_COBBLESTONE, 1))
         );
         assert!(!reg.can_harvest(BlockId::DRIPSTONE, None, crate::tool::ToolTier::None));
         assert!(reg.can_harvest(BlockId::DRIPSTONE, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Wood));

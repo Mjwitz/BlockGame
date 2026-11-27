@@ -279,12 +279,12 @@ pub fn decode_chunk_rle(pos: ChunkPos, runs: &[(u16, BlockId)]) -> Chunk {
     chunk
 }
 
-/// Encodes all non-zero block facings in a `Chunk` as sparse `(voxel_index, facing)` pairs.
+/// Encodes all non-zero block facings / fluid metadata in a `Chunk` as sparse `(voxel_index, meta)` pairs.
 pub fn encode_chunk_facings(chunk: &Chunk) -> Vec<(u16, u8)> {
     let raw = chunk.raw_facings();
     let mut facings = Vec::new();
     for (idx, &f) in raw.iter().enumerate() {
-        let masked = f & 0x03;
+        let masked = f & 0x0F;
         if masked != 0 {
             facings.push((idx as u16, masked));
         }
@@ -292,12 +292,12 @@ pub fn encode_chunk_facings(chunk: &Chunk) -> Vec<(u16, u8)> {
     facings
 }
 
-/// Applies sparse `(voxel_index, facing)` pairs onto a decoded `Chunk`.
+/// Applies sparse `(voxel_index, meta)` pairs onto a decoded `Chunk`.
 pub fn apply_chunk_facings(chunk: &mut Chunk, facings: &[(u16, u8)]) {
     let raw = chunk.raw_facings_mut();
     for &(idx, f) in facings {
         if (idx as usize) < CHUNK_VOLUME {
-            raw[idx as usize] = f & 0x03;
+            raw[idx as usize] = f & 0x0F;
         }
     }
 }

@@ -7360,6 +7360,9 @@ impl BlockGameApp {
                     state
                         .world_manager
                         .update_falling_blocks(dt, &state.device, &state.pipeline);
+                    state
+                        .world_manager
+                        .tick_fluids(dt, &state.device, &state.pipeline);
 
                     // 4. Update Camera position (First-Person or F5 Third-Person) and atmosphere uniform
                     let eye_pos = state.player.eye_position()

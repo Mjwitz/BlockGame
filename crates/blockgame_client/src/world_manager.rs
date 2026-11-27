@@ -7,9 +7,8 @@ use std::sync::{
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{
-        apply_lava_fill, apply_water_fill, break_unsupported_attached, can_block_survive,
-        find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
-        is_leaf_supported, place_lava_source, place_water_source, try_grow_cactus, BlockId,
+        break_unsupported_attached, can_block_survive, find_decaying_leaves_around_pos,
+        get_leaf_decay_drops, is_farmland_hydrated, is_leaf_supported, try_grow_cactus, BlockId,
         BlockRegistry,
     },
     chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, VERTICAL_CHUNKS},
@@ -263,6 +262,7 @@ pub struct WorldManager {
     monster_spawn_timer: f32,
     monster_rng_state: u64,
     pub farming_sim: blockgame_core::FarmingSimulation,
+    pub fluid_sim: blockgame_core::FluidSimulation,
     pub is_multiplayer: bool,
     pub growing_cacti: Vec<(IVec3, f32)>,
     pub decaying_leaves: Vec<(IVec3, f32)>,
@@ -323,6 +323,7 @@ impl WorldManager {
             monster_spawn_timer: 4.0,
             monster_rng_state,
             farming_sim: blockgame_core::FarmingSimulation::new(seed as u64 ^ 0xFA4A_1234),
+            fluid_sim: blockgame_core::FluidSimulation::new(),
             is_multiplayer: false,
             growing_cacti: Vec::new(),
             decaying_leaves: Vec::new(),
@@ -1184,18 +1185,8 @@ impl WorldManager {
                 extra_drops.push((drop_pos, drop));
             }
 
-            // If broken block was air and has adjacent water or lava, liquid flows to fill exposed space
-            let (water_filled, water_drops) = apply_water_fill(pos, &mut world, &self.registry);
-            for wpos in water_filled {
-                Self::add_chunk_and_neighbors(wpos, &mut chunks_to_rebuild);
-            }
-            for (wpos, drop) in water_drops {
-                extra_drops.push((wpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
-            }
-            let (lava_filled, _) = apply_lava_fill(pos, &mut world, &self.registry);
-            for lpos in lava_filled {
-                Self::add_chunk_and_neighbors(lpos, &mut chunks_to_rebuild);
-            }
+            // Schedule nearby Water/Lava to flow dynamically into the newly opened space
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             if is_light_source {
                 let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
@@ -1490,7 +1481,7 @@ impl WorldManager {
             let current = world.get_block(pos);
             let can_place = if current.is_air() {
                 true
-            } else if current == BlockId::WATER {
+            } else if current == BlockId::WATER || current == BlockId::LAVA {
                 block_id.can_exist_in_water() || block_id.has_gravity() || self.registry.is_solid(block_id)
             } else {
                 false
@@ -1528,7 +1519,7 @@ impl WorldManager {
                 }
             }
 
-            let is_light_source = block_id.is_emissive();
+            let is_light_source = block_id.is_emissive() || world.get_block(pos).is_emissive();
             world.set_block(pos, block_id);
             world.set_block_facing(pos, facing);
             if block_id == BlockId::OAK_DOOR_CLOSED {
@@ -1563,6 +1554,7 @@ impl WorldManager {
                 }
                 spawned_falling = fall_blocks;
             }
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             if is_light_source {
                 let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
@@ -1640,11 +1632,13 @@ impl WorldManager {
         ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            if !current.is_water() {
+            if !current.is_water() || world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE {
                 return false;
             }
 
             world.set_block(pos, BlockId::AIR);
+            world.set_fluid_level(pos, 0);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             // Break any blocks above or adjacent that required support or water (e.g. lily pads, seagrass)
             let (unsupported_drops, modified_positions, spawned_falling) =
@@ -1693,7 +1687,7 @@ impl WorldManager {
         true
     }
 
-    /// Places a water block at `pos` from a water bucket, cascading downward and washing fragile blocks.
+    /// Places a Water Source Block at `pos` from a water bucket and schedules cellular fluid simulation.
     pub fn place_water(
         &mut self,
         pos: IVec3,
@@ -1710,23 +1704,25 @@ impl WorldManager {
         ) = {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            if !current.is_air() && !current.is_fragile() {
+            let is_flowing_water =
+                current.is_water() && world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE;
+            if !current.is_air() && !current.is_fragile() && !is_flowing_water {
                 return false;
             }
 
-            let (modified_positions, water_drops) = place_water_source(pos, &mut world);
-            for mpos in modified_positions {
-                let b = world.get_block(mpos);
-                if b == BlockId::OBSIDIAN || b == BlockId::COBBLESTONE {
-                    Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
-                } else {
-                    Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+            let mut extra_drops = Vec::new();
+            if current.is_fragile() {
+                if let Some(item_id) = self.registry.get(current).and_then(|def| def.drop_item) {
+                    extra_drops.push((
+                        pos.as_vec3() + Vec3::new(0.5, 0.5, 0.5),
+                        ItemSlot::new(item_id, 1),
+                    ));
                 }
             }
-            let mut extra_drops = Vec::new();
-            for (p, drop) in water_drops {
-                extra_drops.push((p.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
-            }
+
+            world.set_block(pos, BlockId::WATER);
+            world.set_fluid_level(pos, blockgame_core::FLUID_SOURCE);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
 
             chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
             chunks_to_rebuild.dedup();
@@ -1802,7 +1798,7 @@ impl WorldManager {
         }
     }
 
-    /// Scoops a lava block at `pos` with an empty bucket, replacing it with AIR and updating meshes.
+    /// Scoops a Lava Source Block at `pos` with an empty bucket, replacing it with AIR and scheduling neighbor draining.
     pub fn scoop_lava(
         &mut self,
         pos: IVec3,
@@ -1812,17 +1808,21 @@ impl WorldManager {
         let mut chunks_to_rebuild = Vec::new();
         {
             let mut world = self.world.lock().unwrap();
-            if !world.get_block(pos).is_lava() {
+            if !world.get_block(pos).is_lava()
+                || world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE
+            {
                 return false;
             }
             world.set_block(pos, BlockId::AIR);
+            world.set_fluid_level(pos, 0);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
         }
         Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
         self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
         true
     }
 
-    /// Places a lava source at `pos` from a lava bucket, cascading downward and solidifying if touching water.
+    /// Places a Lava Source Block at `pos` from a lava bucket and schedules cellular fluid simulation.
     pub fn place_lava(
         &mut self,
         pos: IVec3,
@@ -1833,17 +1833,57 @@ impl WorldManager {
         {
             let mut world = self.world.lock().unwrap();
             let current = world.get_block(pos);
-            if !current.is_air() && !current.is_fragile() {
+            let is_flowing_lava =
+                current.is_lava() && world.get_fluid_level(pos) != blockgame_core::FLUID_SOURCE;
+            if !current.is_air() && !current.is_fragile() && !is_flowing_lava {
                 return false;
             }
-            let (modified_positions, _) = place_lava_source(pos, &mut world);
-            for mpos in modified_positions {
-                Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
-            }
+            world.set_block(pos, BlockId::LAVA);
+            world.set_fluid_level(pos, blockgame_core::FLUID_SOURCE);
+            self.fluid_sim.schedule_block_and_neighbors(pos, &world);
         }
         Self::add_light_neighborhood(pos, &mut chunks_to_rebuild);
         self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
         true
+    }
+
+    /// Advances cellular Water and Lava flow ticks, rebuilding affected chunk meshes and spawning washed drops.
+    pub fn tick_fluids(
+        &mut self,
+        dt: f32,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) {
+        if !self.fluid_sim.has_pending() {
+            return;
+        }
+        let mut chunks_to_rebuild = Vec::new();
+        let (modified, washed_drops) = {
+            let mut world = self.world.lock().unwrap();
+            let (modified, drops) = self.fluid_sim.tick(dt, &mut world, &self.registry);
+            for &mpos in &modified {
+                let b = world.get_block(mpos);
+                if b.is_lava()
+                    || b == BlockId::OBSIDIAN
+                    || b == BlockId::COBBLESTONE
+                    || b == BlockId::STONE
+                    || b.is_air()
+                {
+                    Self::add_light_neighborhood(mpos, &mut chunks_to_rebuild);
+                } else {
+                    Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                }
+            }
+            (modified, drops)
+        };
+        if !modified.is_empty() {
+            self.rebuild_chunks_and_store(chunks_to_rebuild, device, pipeline);
+        }
+        for (dpos, item) in washed_drops {
+            if !item.is_empty() {
+                self.spawn_item_drop(dpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), item);
+            }
+        }
     }
 
     /// Performs raycast attack against closest animal within reach.

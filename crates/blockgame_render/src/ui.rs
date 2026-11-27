@@ -1426,6 +1426,8 @@ impl UiBuilder {
                 || block_id == blockgame_core::block::BlockId::TALL_GRASS
                 || block_id == blockgame_core::block::BlockId::SEAGRASS
                 || block_id == blockgame_core::block::BlockId::SUGAR_CANE
+                || block_id == blockgame_core::block::BlockId::DRIPSTONE
+                || block_id == blockgame_core::block::BlockId::GLOW_CRYSTAL
                 || block_id.is_farmland_crop()
             {
                 // -----------------------------------------------------------------

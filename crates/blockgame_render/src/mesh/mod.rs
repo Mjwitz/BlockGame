@@ -331,6 +331,11 @@ impl<'a> ChunkMesher<'a> {
                     }
 
                     if block_id == BlockId::WATER {
+                        let fluid_level = chunk.get_facing_unchecked(x, y, z) & 0x0F;
+                        let above_same = query_block_opt(ix, iy + 1, iz)
+                            .map_or(false, |b| b.is_water() || b == BlockId::ICE);
+                        let top_h = blockgame_core::fluid::fluid_surface_height(fluid_level, above_same);
+
                         for dir in Direction::ALL {
                             let normal = dir.normal_ivec();
                             let nx = ix + normal.x;
@@ -366,7 +371,7 @@ impl<'a> ChunkMesher<'a> {
                                     [1.0, blk as f32 / 15.0]
                                 };
 
-                                self.build_water_face(
+                                self.build_fluid_face(
                                     &mut mesh,
                                     chunk.pos,
                                     ix,
@@ -375,6 +380,8 @@ impl<'a> ChunkMesher<'a> {
                                     dir,
                                     uv,
                                     light,
+                                    top_h,
+                                    true,
                                 );
                             }
                         }
@@ -382,6 +389,11 @@ impl<'a> ChunkMesher<'a> {
                     }
 
                     if block_id == BlockId::LAVA {
+                        let fluid_level = chunk.get_facing_unchecked(x, y, z) & 0x0F;
+                        let above_same = query_block_opt(ix, iy + 1, iz)
+                            .map_or(false, |b| b == BlockId::LAVA);
+                        let top_h = blockgame_core::fluid::fluid_surface_height(fluid_level, above_same);
+
                         for dir in Direction::ALL {
                             let normal = dir.normal_ivec();
                             let nx = ix + normal.x;
@@ -399,7 +411,7 @@ impl<'a> ChunkMesher<'a> {
                             if self.registry.is_transparent(neighbor_id) {
                                 let tile_id = self.registry.get_texture(block_id, dir);
                                 let uv = TextureAtlas::get_uv_bounds(tile_id);
-                                self.build_face(
+                                self.build_fluid_face(
                                     &mut mesh,
                                     chunk.pos,
                                     ix,
@@ -408,7 +420,8 @@ impl<'a> ChunkMesher<'a> {
                                     dir,
                                     uv,
                                     [0.0, 1.0],
-                                    &query_block,
+                                    top_h,
+                                    false,
                                 );
                             }
                         }
@@ -647,19 +660,37 @@ impl<'a> ChunkMesher<'a> {
         uv_bounds: [f32; 4],
         light: [f32; 2],
     ) {
+        self.build_fluid_face(mesh, chunk_pos, x, y, z, dir, uv_bounds, light, 1.0, true);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_fluid_face(
+        &self,
+        mesh: &mut ChunkMesh,
+        chunk_pos: blockgame_core::chunk::ChunkPos,
+        x: i32,
+        y: i32,
+        z: i32,
+        dir: Direction,
+        uv_bounds: [f32; 4],
+        light: [f32; 2],
+        top_h: f32,
+        is_water: bool,
+    ) {
         let [u_min, v_min, u_max, v_max] = uv_bounds;
         let origin = chunk_pos.to_world_origin();
         let fx = (origin.x + x) as f32;
         let fy = (origin.y + y) as f32;
         let fz = (origin.z + z) as f32;
         let normal = dir.normal_f32();
+        let y_top = fy + top_h;
 
         let positions = match dir {
             Direction::PosY => [
-                [fx, fy + 1.0, fz + 1.0],
-                [fx + 1.0, fy + 1.0, fz + 1.0],
-                [fx + 1.0, fy + 1.0, fz],
-                [fx, fy + 1.0, fz],
+                [fx, y_top, fz + 1.0],
+                [fx + 1.0, y_top, fz + 1.0],
+                [fx + 1.0, y_top, fz],
+                [fx, y_top, fz],
             ],
             Direction::NegY => [
                 [fx, fy, fz],
@@ -670,26 +701,26 @@ impl<'a> ChunkMesher<'a> {
             Direction::PosZ => [
                 [fx, fy, fz + 1.0],
                 [fx + 1.0, fy, fz + 1.0],
-                [fx + 1.0, fy + 1.0, fz + 1.0],
-                [fx, fy + 1.0, fz + 1.0],
+                [fx + 1.0, y_top, fz + 1.0],
+                [fx, y_top, fz + 1.0],
             ],
             Direction::NegZ => [
                 [fx + 1.0, fy, fz],
                 [fx, fy, fz],
-                [fx, fy + 1.0, fz],
-                [fx + 1.0, fy + 1.0, fz],
+                [fx, y_top, fz],
+                [fx + 1.0, y_top, fz],
             ],
             Direction::PosX => [
                 [fx + 1.0, fy, fz + 1.0],
                 [fx + 1.0, fy, fz],
-                [fx + 1.0, fy + 1.0, fz],
-                [fx + 1.0, fy + 1.0, fz + 1.0],
+                [fx + 1.0, y_top, fz],
+                [fx + 1.0, y_top, fz + 1.0],
             ],
             Direction::NegX => [
                 [fx, fy, fz],
                 [fx, fy, fz + 1.0],
-                [fx, fy + 1.0, fz + 1.0],
-                [fx, fy + 1.0, fz],
+                [fx, y_top, fz + 1.0],
+                [fx, y_top, fz],
             ],
         };
 
@@ -700,10 +731,15 @@ impl<'a> ChunkMesher<'a> {
             [u_min, v_min],
         ];
 
-        let start_idx = mesh.water_vertices.len() as u32;
+        let (verts, inds) = if is_water {
+            (&mut mesh.water_vertices, &mut mesh.water_indices)
+        } else {
+            (&mut mesh.vertices, &mut mesh.indices)
+        };
+        let start_idx = verts.len() as u32;
 
         for i in 0..4 {
-            mesh.water_vertices.push(VoxelVertex {
+            verts.push(VoxelVertex {
                 position: positions[i],
                 uv: uvs[i],
                 normal,
@@ -712,7 +748,7 @@ impl<'a> ChunkMesher<'a> {
             });
         }
 
-        mesh.water_indices.extend_from_slice(&[
+        inds.extend_from_slice(&[
             start_idx + 0,
             start_idx + 1,
             start_idx + 2,
@@ -4496,5 +4532,25 @@ mod tests {
             (m_ceil.vertices[0].uv[0] - uv_576[0]).abs() < 1e-4,
             "Ceiling stalactite must use tile 576"
         );
+
+        // Stepped fluid surface heights: Source (0 -> 0.875), Flowing (4 -> 0.5), Falling (8 -> 1.0)
+        for (level, expected_h) in [(0u8, 0.875_f32), (4u8, 0.5_f32), (8u8, 1.0_f32)] {
+            let mut wc = Chunk::new(ChunkPos::new(0, 0, 0));
+            wc.set(4, 4, 4, BlockId::WATER);
+            wc.set_facing(4, 4, 4, level);
+            let wm = mesher.mesh_chunk(&wc);
+            let max_y = wm
+                .water_vertices
+                .iter()
+                .map(|v| v.position[1])
+                .fold(0.0_f32, f32::max);
+            assert!(
+                (max_y - (4.0 + expected_h)).abs() < 1e-4,
+                "Water level {} expected top y={}, got {}",
+                level,
+                4.0 + expected_h,
+                max_y
+            );
+        }
     }
 }

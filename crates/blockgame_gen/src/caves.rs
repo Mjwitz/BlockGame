@@ -648,6 +648,7 @@ pub fn compute_chunk_cave_mask(
 /// Depth-curve specification for an organic Ore Vein type.
 struct OreVeinSpec {
     block: BlockId,
+    deepstone_block: BlockId,
     salt: u64,
     min_y: i32,
     max_y: i32,
@@ -728,6 +729,7 @@ fn coal_weight(y: i32) -> f32 {
 const ORE_SPECS: [OreVeinSpec; 5] = [
     OreVeinSpec {
         block: BlockId::DIAMOND_ORE,
+        deepstone_block: BlockId::DEEPSTONE_DIAMOND_ORE,
         salt: 0x0D1A_1001,
         min_y: 1,
         max_y: 10,
@@ -739,6 +741,7 @@ const ORE_SPECS: [OreVeinSpec; 5] = [
     },
     OreVeinSpec {
         block: BlockId::GOLD_ORE,
+        deepstone_block: BlockId::DEEPSTONE_GOLD_ORE,
         salt: 0x0601_D002,
         min_y: 2,
         max_y: 24,
@@ -750,6 +753,7 @@ const ORE_SPECS: [OreVeinSpec; 5] = [
     },
     OreVeinSpec {
         block: BlockId::IRON_ORE,
+        deepstone_block: BlockId::DEEPSTONE_IRON_ORE,
         salt: 0x0120_4003,
         min_y: 1,
         max_y: 96,
@@ -761,6 +765,7 @@ const ORE_SPECS: [OreVeinSpec; 5] = [
     },
     OreVeinSpec {
         block: BlockId::COPPER_ORE,
+        deepstone_block: BlockId::DEEPSTONE_COPPER_ORE,
         salt: 0x0C09_9004,
         min_y: 16,
         max_y: 72,
@@ -772,6 +777,7 @@ const ORE_SPECS: [OreVeinSpec; 5] = [
     },
     OreVeinSpec {
         block: BlockId::COAL_ORE,
+        deepstone_block: BlockId::DEEPSTONE_COAL_ORE,
         salt: 0x0C0A_1005,
         min_y: 10,
         max_y: 116,
@@ -851,11 +857,18 @@ pub fn stamp_chunk_ore_veins(seed: u32, chunk: &mut Chunk) {
                                 {
                                     let existing =
                                         chunk.get_unchecked(lx as usize, ly as usize, lz as usize);
-                                    if matches!(
-                                        existing,
-                                        BlockId::STONE | BlockId::DEEPSTONE | BlockId::COBBLESTONE
-                                    ) {
+                                    if matches!(existing, BlockId::STONE | BlockId::COBBLESTONE) {
                                         chunk.set(lx as usize, ly as usize, lz as usize, spec.block);
+                                    } else if matches!(
+                                        existing,
+                                        BlockId::DEEPSTONE | BlockId::DEEPSTONE_COBBLESTONE
+                                    ) {
+                                        chunk.set(
+                                            lx as usize,
+                                            ly as usize,
+                                            lz as usize,
+                                            spec.deepstone_block,
+                                        );
                                     }
                                 }
                             }
@@ -887,7 +900,7 @@ pub fn decorate_chunk_caves(
         return;
     }
 
-    // Pass 1: Wall & floor material accents (Mossy Cobblestone, Clay, Gravel, Dirt)
+    // Pass 1: Wall & floor material accents (Mossy Cobblestone, Mossy Deepstone Cobblestone, Clay, Gravel, Dirt)
     for ly in 0..CHUNK_SIZE_Y {
         let wy = origin.y + ly as i32;
         if wy <= 0 {
@@ -906,7 +919,11 @@ pub fn decorate_chunk_caves(
                 // Floor decoration (solid rock directly below carved air/water)
                 if ly > 0 {
                     let below = chunk.get_unchecked(lx, ly - 1, lz);
-                    if below == BlockId::STONE || below == BlockId::DEEPSTONE {
+                    let is_deep_floor = matches!(
+                        below,
+                        BlockId::DEEPSTONE | BlockId::DEEPSTONE_COBBLESTONE
+                    );
+                    if below == BlockId::STONE || is_deep_floor {
                         let h = splitmix64(
                             (seed as u64).wrapping_add(0xF100_1234)
                                 ^ (wx as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -927,7 +944,12 @@ pub fn decorate_chunk_caves(
                                 CaveZone::Damp => {
                                     let r = h % 100;
                                     if r < 18 {
-                                        chunk.set(lx, ly - 1, lz, BlockId::MOSSY_COBBLESTONE);
+                                        let mossy = if is_deep_floor {
+                                            BlockId::MOSSY_DEEPSTONE_COBBLESTONE
+                                        } else {
+                                            BlockId::MOSSY_COBBLESTONE
+                                        };
+                                        chunk.set(lx, ly - 1, lz, mossy);
                                     } else if r < 26 {
                                         chunk.set(lx, ly - 1, lz, BlockId::CLAY);
                                     } else if r < 34 {
@@ -942,7 +964,12 @@ pub fn decorate_chunk_caves(
                                         chunk.set(lx, ly - 1, lz, BlockId::DIRT);
                                     }
                                 }
-                                CaveZone::DeepVolcanic => {}
+                                CaveZone::DeepVolcanic => {
+                                    let r = h % 100;
+                                    if r < 12 && is_deep_floor {
+                                        chunk.set(lx, ly - 1, lz, BlockId::DEEPSTONE_COBBLESTONE);
+                                    }
+                                }
                             }
                         }
                     }
@@ -978,7 +1005,10 @@ pub fn decorate_chunk_caves(
                 let below = chunk.get_unchecked(lx, ly - 1, lz);
                 let ceiling_rock = matches!(
                     above,
-                    BlockId::STONE | BlockId::DEEPSTONE | BlockId::COBBLESTONE
+                    BlockId::STONE
+                        | BlockId::DEEPSTONE
+                        | BlockId::COBBLESTONE
+                        | BlockId::DEEPSTONE_COBBLESTONE
                 );
                 let floor_rock = matches!(
                     below,
@@ -986,6 +1016,8 @@ pub fn decorate_chunk_caves(
                         | BlockId::DEEPSTONE
                         | BlockId::COBBLESTONE
                         | BlockId::MOSSY_COBBLESTONE
+                        | BlockId::DEEPSTONE_COBBLESTONE
+                        | BlockId::MOSSY_DEEPSTONE_COBBLESTONE
                 );
 
                 // Stalactites hanging from ceiling (facing = 1)
@@ -1212,30 +1244,33 @@ mod tests {
                             for lx in 0..CHUNK_SIZE_X {
                                 let b = chunk.get_unchecked(lx, ly, lz);
                                 match b {
-                                    BlockId::STONE | BlockId::DEEPSTONE | BlockId::COBBLESTONE => {
+                                    BlockId::STONE
+                                    | BlockId::DEEPSTONE
+                                    | BlockId::COBBLESTONE
+                                    | BlockId::DEEPSTONE_COBBLESTONE => {
                                         rock_by_y[wy] += 1;
                                     }
-                                    BlockId::DIAMOND_ORE => {
+                                    BlockId::DIAMOND_ORE | BlockId::DEEPSTONE_DIAMOND_ORE => {
                                         rock_by_y[wy] += 1;
                                         diamond_by_y[wy] += 1;
                                         assert!((1..=10).contains(&wy), "Diamond outside y 1..=10: y={}", wy);
                                     }
-                                    BlockId::GOLD_ORE => {
+                                    BlockId::GOLD_ORE | BlockId::DEEPSTONE_GOLD_ORE => {
                                         rock_by_y[wy] += 1;
                                         gold_by_y[wy] += 1;
                                         assert!((2..=24).contains(&wy), "Gold outside y 2..=24: y={}", wy);
                                     }
-                                    BlockId::IRON_ORE => {
+                                    BlockId::IRON_ORE | BlockId::DEEPSTONE_IRON_ORE => {
                                         rock_by_y[wy] += 1;
                                         iron_by_y[wy] += 1;
                                         assert!((1..=96).contains(&wy), "Iron outside y 1..=96: y={}", wy);
                                     }
-                                    BlockId::COPPER_ORE => {
+                                    BlockId::COPPER_ORE | BlockId::DEEPSTONE_COPPER_ORE => {
                                         rock_by_y[wy] += 1;
                                         copper_by_y[wy] += 1;
                                         assert!((16..=72).contains(&wy), "Copper outside y 16..=72: y={}", wy);
                                     }
-                                    BlockId::COAL_ORE => {
+                                    BlockId::COAL_ORE | BlockId::DEEPSTONE_COAL_ORE => {
                                         rock_by_y[wy] += 1;
                                         coal_by_y[wy] += 1;
                                         assert!((10..=116).contains(&wy), "Coal outside y 10..=116: y={}", wy);

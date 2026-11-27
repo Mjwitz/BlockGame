@@ -332,9 +332,19 @@ pub fn get_item_source_info(item_id: ItemId) -> Option<ItemSourceInfo> {
             notes: "Places Lava or burns as long-lasting Furnace fuel (1000s, returns empty Bucket).",
         }),
         ItemId::DEEPSTONE => Some(ItemSourceInfo {
-            location: "Deep underground rock stratum below y=16",
+            location: "Deep underground rock stratum below y=16 (or smelted from Deepstone Cobblestone)",
             tool_required: "Wooden Pickaxe or better",
             notes: "Denser deep-underground stratum surrounding deep Lava Pools and Diamond Ore Veins.",
+        }),
+        ItemId::DEEPSTONE_COBBLESTONE => Some(ItemSourceInfo {
+            location: "Dropped when mining Deepstone below y=16",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Fractured deepstone building block; smelts back into smooth Deepstone.",
+        }),
+        ItemId::MOSSY_DEEPSTONE_COBBLESTONE => Some(ItemSourceInfo {
+            location: "Damp deep cave floors or crafted with Deepstone Cobblestone + Leaves",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Moss-covered Deepstone Cobblestone.",
         }),
         ItemId::DRIPSTONE => Some(ItemSourceInfo {
             location: "Hanging stalactites and floor stalagmites in underground caves",
@@ -1627,6 +1637,20 @@ impl CraftingManager {
             inputs: vec![ItemId::COBBLESTONE, ItemId::DARK_OAK_LEAVES],
             output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
         });
+        for (leaf_name, leaf_id) in [
+            ("Leaves", ItemId::LEAVES),
+            ("Spruce Leaves", ItemId::SPRUCE_LEAVES),
+            ("Birch Leaves", ItemId::BIRCH_LEAVES),
+            ("Jungle Leaves", ItemId::JUNGLE_LEAVES),
+            ("Dark Oak Leaves", ItemId::DARK_OAK_LEAVES),
+        ] {
+            let _ = leaf_name;
+            self.register(Recipe::Shapeless {
+                name: "Mossy Deepstone Cobblestone",
+                inputs: vec![ItemId::DEEPSTONE_COBBLESTONE, leaf_id],
+                output: ItemSlot::new(ItemId::MOSSY_DEEPSTONE_COBBLESTONE, 1),
+            });
+        }
 
         // Prismarine: 4 Cobblestone + 1 Clay (Shapeless)
         self.register(Recipe::Shapeless {
@@ -2697,6 +2721,7 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
         ItemId::RAW_GOLD | ItemId::GOLD_ORE => Some(ItemId::GOLD_INGOT),
         ItemId::RAW_COPPER | ItemId::COPPER_ORE => Some(ItemId::COPPER_INGOT),
         ItemId::COBBLESTONE => Some(ItemId::STONE),
+        ItemId::DEEPSTONE_COBBLESTONE => Some(ItemId::DEEPSTONE),
         ItemId::SAND => Some(ItemId::GLASS),
         ItemId::CLAY => Some(ItemId::TERRACOTTA),
         ItemId::CACTUS => Some(ItemId::GREEN_DYE),

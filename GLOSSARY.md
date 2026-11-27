@@ -163,3 +163,15 @@ _Avoid_: Magma lake, lava lake, fire pool
 **Burning**:
 A temporary status effect triggered by contact with Lava that deals periodic damage after exiting Lava until it expires or is extinguished by Water.
 _Avoid_: On fire, ignite, scorch
+
+**Deepstone Cobblestone**:
+Rough fractured stone dropped when mining Deepstone, usable as a dark building stone and smeltable back into smooth Deepstone.
+_Avoid_: Cobbled deepslate, dark cobble, deep cobble
+
+**Source Block**:
+A stationary full-height Water or Lava block that feeds outward and downhill flow and is the only fluid state scoopable with a Bucket.
+_Avoid_: Still water, still lava, origin liquid
+
+**Flowing Fluid**:
+A dynamically spreading Water or Lava block fed by a Source Block that steps down in height with distance and drains automatically when cut off from its source.
+_Avoid_: Running water, fluid stream, moving liquid

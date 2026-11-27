@@ -216,6 +216,13 @@ impl BlockId {
     pub const GLOW_CRYSTAL: Self = Self(156);
     pub const OBSIDIAN: Self = Self(157);
     pub const LAVA: Self = Self(158);
+    pub const DEEPSTONE_COBBLESTONE: Self = Self(159);
+    pub const MOSSY_DEEPSTONE_COBBLESTONE: Self = Self(160);
+    pub const DEEPSTONE_COAL_ORE: Self = Self(161);
+    pub const DEEPSTONE_COPPER_ORE: Self = Self(162);
+    pub const DEEPSTONE_IRON_ORE: Self = Self(163);
+    pub const DEEPSTONE_GOLD_ORE: Self = Self(164);
+    pub const DEEPSTONE_DIAMOND_ORE: Self = Self(165);
 
     #[inline]
     pub const fn is_temple_interactive(&self) -> bool {
@@ -2422,7 +2429,105 @@ impl BlockRegistry {
             hardness: 2.4,
             required_tool: Some(ToolType::Pickaxe),
             min_tier: ToolTier::Wood,
-            drop_item: Some(ItemId::DEEPSTONE),
+            drop_item: Some(ItemId::DEEPSTONE_COBBLESTONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE_COBBLESTONE,
+            name: "Deepstone Cobblestone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [581; 6],
+            hardness: 2.6,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::DEEPSTONE_COBBLESTONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::MOSSY_DEEPSTONE_COBBLESTONE,
+            name: "Mossy Deepstone Cobblestone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [582; 6],
+            hardness: 2.6,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::MOSSY_DEEPSTONE_COBBLESTONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE_COAL_ORE,
+            name: "Deepstone Coal Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [583; 6],
+            hardness: 3.6,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::COAL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE_COPPER_ORE,
+            name: "Deepstone Copper Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [584; 6],
+            hardness: 3.6,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Stone,
+            drop_item: Some(ItemId::RAW_COPPER),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE_IRON_ORE,
+            name: "Deepstone Iron Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [585; 6],
+            hardness: 3.6,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Stone,
+            drop_item: Some(ItemId::RAW_IRON),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE_GOLD_ORE,
+            name: "Deepstone Gold Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [586; 6],
+            hardness: 3.6,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::RAW_GOLD),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE_DIAMOND_ORE,
+            name: "Deepstone Diamond Ore",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [587; 6],
+            hardness: 4.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Iron,
+            drop_item: Some(ItemId::DIAMOND),
             drop_count: (1, 1),
         });
 

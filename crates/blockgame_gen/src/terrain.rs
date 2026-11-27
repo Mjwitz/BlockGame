@@ -1037,7 +1037,14 @@ impl TerrainGenerator {
                                 }
                             }
                         } else if wy < deepstone_ceil {
-                            BlockId::DEEPSTONE
+                            if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23))
+                                % 23
+                                == 0
+                            {
+                                BlockId::DEEPSTONE_COBBLESTONE
+                            } else {
+                                BlockId::DEEPSTONE
+                            }
                         } else if (wx.wrapping_mul(13) ^ wy.wrapping_mul(17) ^ wz.wrapping_mul(23))
                             % 23
                             == 0
@@ -2152,19 +2159,19 @@ mod tests {
                 for cy in 0..5 {
                     let chunk = gen.generate_chunk(ChunkPos::new(cx, cy, cz));
                     for b in chunk.raw_blocks() {
-                        if *b == BlockId::COAL_ORE {
+                        if matches!(*b, BlockId::COAL_ORE | BlockId::DEEPSTONE_COAL_ORE) {
                             found_coal = true;
                         }
-                        if *b == BlockId::IRON_ORE {
+                        if matches!(*b, BlockId::IRON_ORE | BlockId::DEEPSTONE_IRON_ORE) {
                             found_iron = true;
                         }
-                        if *b == BlockId::COPPER_ORE {
+                        if matches!(*b, BlockId::COPPER_ORE | BlockId::DEEPSTONE_COPPER_ORE) {
                             found_copper = true;
                         }
-                        if *b == BlockId::GOLD_ORE {
+                        if matches!(*b, BlockId::GOLD_ORE | BlockId::DEEPSTONE_GOLD_ORE) {
                             found_gold = true;
                         }
-                        if *b == BlockId::DIAMOND_ORE {
+                        if matches!(*b, BlockId::DIAMOND_ORE | BlockId::DEEPSTONE_DIAMOND_ORE) {
                             found_diamond = true;
                         }
                     }

@@ -259,9 +259,15 @@ impl PlayerPhysics {
                 self.velocity.y = 4.0 * jump_mult;
             }
 
-            // Water horizontal movement
+            // Water horizontal movement + flowing water current push
+            let feet_voxel = IVec3::new(
+                self.position.x.floor() as i32,
+                (self.position.y + 0.2).floor() as i32,
+                self.position.z.floor() as i32,
+            );
+            let flow = crate::fluid::fluid_flow_vector(feet_voxel, world);
             let target_speed = (if sprinting { 3.8 } else { 2.4 }) * speed_mult;
-            let target_vel = wish_dir * target_speed;
+            let target_vel = wish_dir * target_speed + flow * 1.4;
             let accel = 8.0;
             self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
             self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
