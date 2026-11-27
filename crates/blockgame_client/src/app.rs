@@ -9468,7 +9468,11 @@ impl BlockGameApp {
                     let frustum = state.camera.build_frustum(aspect);
                     state
                         .world_manager
-                        .render_with_frustum(&mut render_pass, Some(&frustum));
+                        .render_with_frustum_and_camera(
+                            &mut render_pass,
+                            Some(&frustum),
+                            Some(state.camera.position),
+                        );
 
                     // Render floating 3D item drops
                     state.item_drop_dynamic_mesh.draw(&mut render_pass);

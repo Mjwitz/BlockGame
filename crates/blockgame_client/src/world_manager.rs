@@ -284,6 +284,7 @@ pub struct WorldManager {
     has_pending_chunks: bool,
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
+    gpu_chunks_dark_underground: HashSet<ChunkPos>,
     pending_gpu_uploads: HashMap<ChunkPos, ChunkMesh>,
     mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
     mesh_tx: Sender<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
@@ -346,6 +347,7 @@ impl WorldManager {
             has_pending_chunks: true,
             gpu_chunks: HashMap::new(),
             gpu_water_chunks: HashMap::new(),
+            gpu_chunks_dark_underground: HashSet::new(),
             pending_gpu_uploads: HashMap::new(),
             mesh_rx,
             mesh_tx,
@@ -393,8 +395,14 @@ impl WorldManager {
     ) {
         if let Some(gpu_mesh) = pipeline.upload_mesh(device, mesh) {
             self.gpu_chunks.insert(pos, gpu_mesh);
+            if pos.0.y <= 1 && !mesh.vertices.iter().any(|v| v.light[0] > 0.05) {
+                self.gpu_chunks_dark_underground.insert(pos);
+            } else {
+                self.gpu_chunks_dark_underground.remove(&pos);
+            }
         } else {
             self.gpu_chunks.remove(&pos);
+            self.gpu_chunks_dark_underground.remove(&pos);
         }
         if let Some(gpu_water) = pipeline.upload_water_mesh(device, mesh) {
             self.gpu_water_chunks.insert(pos, gpu_water);
@@ -719,6 +727,7 @@ impl WorldManager {
         for pos in to_remove {
             self.gpu_chunks.remove(&pos);
             self.gpu_water_chunks.remove(&pos);
+            self.gpu_chunks_dark_underground.remove(&pos);
             self.pending_gpu_uploads.remove(&pos);
             self.loaded_chunks_set.remove(&pos);
             self.fluid_scanned_chunks.remove(&pos);
@@ -967,17 +976,41 @@ impl WorldManager {
         render_pass: &mut wgpu::RenderPass<'a>,
         frustum: Option<&blockgame_render::Frustum>,
     ) {
+        self.render_with_frustum_and_camera(render_pass, frustum, None);
+    }
+
+    /// Renders loaded GPU chunk meshes with frustum culling and surface-to-underground occlusion
+    /// culling: when the camera is on the surface (`cam.y >= 34.0`), distant sealed dark
+    /// underground cave chunks (`cy <= 1`, zero sunlight, > 48 blocks away horizontally) are
+    /// skipped so underground caverns don't triple GPU triangle counts on the surface.
+    pub fn render_with_frustum_and_camera<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+        camera_pos: Option<Vec3>,
+    ) {
+        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
         for (&pos, gpu_mesh) in &self.gpu_chunks {
             if gpu_mesh.index_count == 0 {
                 continue;
             }
 
+            let min = Vec3::new(
+                pos.0.x as f32 * 16.0,
+                pos.0.y as f32 * 16.0,
+                pos.0.z as f32 * 16.0,
+            );
+            if let Some(cam) = cull_underground {
+                if self.gpu_chunks_dark_underground.contains(&pos) {
+                    let dx = (min.x + 8.0) - cam.x;
+                    let dz = (min.z + 8.0) - cam.z;
+                    if dx * dx + dz * dz > 48.0 * 48.0 {
+                        continue;
+                    }
+                }
+            }
+
             if let Some(f) = frustum {
-                let min = Vec3::new(
-                    pos.0.x as f32 * 16.0,
-                    pos.0.y as f32 * 16.0,
-                    pos.0.z as f32 * 16.0,
-                );
                 let max = min + Vec3::splat(16.0);
                 if !f.is_box_visible(min, max) {
                     continue;
@@ -1004,6 +1037,7 @@ impl WorldManager {
         frustum: Option<&blockgame_render::Frustum>,
         camera_pos: Option<Vec3>,
     ) {
+        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
         let mut visible: Vec<(f32, &'a GpuMeshBuffers)> = Vec::new();
         for (&pos, gpu_mesh) in &self.gpu_water_chunks {
             if gpu_mesh.index_count == 0 {
@@ -1015,6 +1049,15 @@ impl WorldManager {
                 pos.0.y as f32 * 16.0,
                 pos.0.z as f32 * 16.0,
             );
+            if let Some(cam) = cull_underground {
+                if self.gpu_chunks_dark_underground.contains(&pos) {
+                    let dx = (min.x + 8.0) - cam.x;
+                    let dz = (min.z + 8.0) - cam.z;
+                    if dx * dx + dz * dz > 48.0 * 48.0 {
+                        continue;
+                    }
+                }
+            }
             let max = min + Vec3::splat(16.0);
             if let Some(f) = frustum {
                 if !f.is_box_visible(min, max) {

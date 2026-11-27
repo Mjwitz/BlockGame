@@ -735,18 +735,28 @@ impl TerrainGenerator {
             return chunk;
         }
 
-        // Precompute deterministic region-seeded cave carvers for this chunk (ADR 0009)
-        let cave_mask = crate::caves::compute_chunk_cave_mask(self, origin.x, origin.y, origin.z);
-
         // Precompute surface heights across the chunk plus a 1-block border for steepness/cliff painting
         let mut heights = [[0i32; 18]; 18];
+        let mut max_surface_y = i32::MIN;
         for dz in 0..18usize {
             let wz = origin.z + dz as i32 - 1;
             for dx in 0..18usize {
                 let wx = origin.x + dx as i32 - 1;
-                heights[dz][dx] = self.surface_height(wx, wz);
+                let h = self.surface_height(wx, wz);
+                heights[dz][dx] = h;
+                if dx >= 1 && dx <= 16 && dz >= 1 && dz <= 16 && h > max_surface_y {
+                    max_surface_y = h;
+                }
             }
         }
+
+        // Pure sky chunks above all terrain and water need no cave carving, ores, or voxel fill
+        if origin.y > max_surface_y.max(self.water_level) {
+            return chunk;
+        }
+
+        // Precompute deterministic region-seeded cave carvers for this chunk (ADR 0009)
+        let cave_mask = crate::caves::compute_chunk_cave_mask(self, origin.x, origin.y, origin.z);
 
         for lz in 0..CHUNK_SIZE_Z {
             let wz = origin.z + lz as i32;

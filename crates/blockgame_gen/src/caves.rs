@@ -559,19 +559,21 @@ pub fn compute_chunk_cave_mask(
 
     let mut nodes: Vec<CarveNode> = Vec::with_capacity(64);
 
-    // 1. Scan 5x5 neighborhood of 64x64 underground cave regions
-    let base_rx = origin_x.div_euclid(CAVE_REGION_SIZE);
-    let base_rz = origin_z.div_euclid(CAVE_REGION_SIZE);
-    for drz in -2..=2 {
-        for drx in -2..=2 {
-            build_region_cave_nodes(
-                gen.seed,
-                base_rx + drx,
-                base_rz + drz,
-                chunk_min,
-                chunk_max,
-                &mut nodes,
-            );
+    // 1. Scan 5x5 neighborhood of 64x64 underground cave regions (strictly below y = 48)
+    if origin_y <= 48 {
+        let base_rx = origin_x.div_euclid(CAVE_REGION_SIZE);
+        let base_rz = origin_z.div_euclid(CAVE_REGION_SIZE);
+        for drz in -2..=2 {
+            for drx in -2..=2 {
+                build_region_cave_nodes(
+                    gen.seed,
+                    base_rx + drx,
+                    base_rz + drz,
+                    chunk_min,
+                    chunk_max,
+                    &mut nodes,
+                );
+            }
         }
     }
 
