@@ -44,9 +44,9 @@ pub use auth::{
     UserAccount,
 };
 pub use block::{
-    apply_water_fill, find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
-    is_leaf_supported, place_water_source, try_grow_cactus, try_grow_sugar_cane, BlockDefinition,
-    BlockId, BlockRegistry, FertilizerTier,
+    apply_lava_fill, apply_water_fill, find_decaying_leaves_around_pos, get_leaf_decay_drops,
+    is_farmland_hydrated, is_leaf_supported, place_lava_source, place_water_source,
+    try_grow_cactus, try_grow_sugar_cane, BlockDefinition, BlockId, BlockRegistry, FertilizerTier,
 };
 pub use farming::{
     CropEntry, FarmlandEntry, FarmingEvent, FarmingSimulation, SugarCaneEntry,

@@ -93,9 +93,14 @@ impl FurnaceState {
         if !self.is_burning() && can_smelt {
             let fuel_time = crate::crafting::get_fuel_burn_time(self.fuel.item_id);
             if fuel_time > 0.0 && self.fuel.count > 0 {
+                let consumed_lava_bucket = self.fuel.item_id == crate::item::ItemId::LAVA_BUCKET;
                 self.fuel.count -= 1;
                 if self.fuel.count == 0 {
-                    self.fuel = ItemSlot::EMPTY;
+                    self.fuel = if consumed_lava_bucket {
+                        ItemSlot::new(crate::item::ItemId::BUCKET, 1)
+                    } else {
+                        ItemSlot::EMPTY
+                    };
                 }
                 self.burn_time_remaining = fuel_time;
                 self.max_burn_time = fuel_time;
@@ -191,9 +196,14 @@ impl CookingPotState {
         if !self.is_burning() && can_cook {
             let fuel_time = crate::crafting::get_fuel_burn_time(self.fuel.item_id);
             if fuel_time > 0.0 && self.fuel.count > 0 {
+                let consumed_lava_bucket = self.fuel.item_id == crate::item::ItemId::LAVA_BUCKET;
                 self.fuel.count -= 1;
                 if self.fuel.count == 0 {
-                    self.fuel = ItemSlot::EMPTY;
+                    self.fuel = if consumed_lava_bucket {
+                        ItemSlot::new(crate::item::ItemId::BUCKET, 1)
+                    } else {
+                        ItemSlot::EMPTY
+                    };
                 }
                 self.burn_time_remaining = fuel_time;
                 self.max_burn_time = fuel_time;
@@ -630,5 +640,94 @@ mod tests {
         let (rel_pos, lum) = sources[0];
         assert_eq!(rel_pos, sea_lantern_pos - chunk1_origin);
         assert_eq!(lum, 15, "Sea lantern luminance must be 15");
+    }
+
+    #[test]
+    fn test_lava_bucket_furnace_fuel_returns_empty_bucket() {
+        let mut furnace = FurnaceState::new();
+        furnace.input = ItemSlot::new(crate::item::ItemId::RAW_IRON, 2);
+        furnace.fuel = ItemSlot::new(crate::item::ItemId::LAVA_BUCKET, 1);
+
+        let changed = furnace.update(1.0);
+        assert!(changed, "Furnace should ignite with Lava Bucket");
+        assert!(furnace.is_burning());
+        assert!(
+            (furnace.max_burn_time - 1000.0).abs() < 0.01,
+            "Lava Bucket must burn for 1000s"
+        );
+        assert_eq!(
+            furnace.fuel,
+            ItemSlot::new(crate::item::ItemId::BUCKET, 1),
+            "Consuming a Lava Bucket in a Furnace must leave an empty Bucket"
+        );
+    }
+
+    #[test]
+    fn test_lava_and_glow_crystal_lighting_and_water_conversion() {
+        let reg = crate::block::BlockRegistry::new();
+        let mut world = World::new();
+        world.insert_chunk(Chunk::new(ChunkPos::new(0, 0, 0)));
+
+        // Luminance checks
+        let lava_pos = IVec3::new(4, 4, 4);
+        let crystal_pos = IVec3::new(8, 6, 8);
+        world.set_block(lava_pos, BlockId::LAVA);
+        world.set_block(crystal_pos, BlockId::GLOW_CRYSTAL);
+        let sources = world.get_light_sources_near(IVec3::ZERO, 15);
+        assert!(sources.contains(&(lava_pos, 14)), "Lava must emit light level 14");
+        assert!(sources.contains(&(crystal_pos, 7)), "Glow Crystal must emit light level 7");
+
+        // Water placed next to source Lava converts source Lava -> Obsidian
+        world.set_block(IVec3::new(4, 3, 4), BlockId::DEEPSTONE);
+        world.set_block(IVec3::new(5, 3, 4), BlockId::DEEPSTONE);
+        crate::block::place_water_source(IVec3::new(5, 4, 4), &mut world);
+        assert_eq!(
+            world.get_block(lava_pos),
+            BlockId::OBSIDIAN,
+            "Water touching source Lava must convert it to Obsidian"
+        );
+
+        // Flowing/cascading Lava hitting Water converts to Cobblestone
+        world.set_block(IVec3::new(10, 4, 10), BlockId::WATER);
+        world.set_block(IVec3::new(11, 3, 10), BlockId::DEEPSTONE);
+        crate::block::place_lava_source(IVec3::new(11, 6, 10), &mut world);
+        assert_eq!(world.get_block(IVec3::new(11, 6, 10)), BlockId::LAVA);
+        assert_eq!(world.get_block(IVec3::new(11, 5, 10)), BlockId::LAVA);
+        assert_eq!(
+            world.get_block(IVec3::new(11, 4, 10)),
+            BlockId::COBBLESTONE,
+            "Cascading/flowing Lava meeting Water must convert to Cobblestone"
+        );
+
+        // Harvesting rules for new cave blocks
+        assert!(reg.can_harvest(BlockId::DEEPSTONE, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Wood));
+        assert_eq!(
+            reg.get_drop(BlockId::DEEPSTONE, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Wood),
+            Some((crate::item::ItemId::DEEPSTONE, 1))
+        );
+        assert!(!reg.can_harvest(BlockId::DRIPSTONE, None, crate::tool::ToolTier::None));
+        assert!(reg.can_harvest(BlockId::DRIPSTONE, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Wood));
+        assert!(reg.can_harvest(BlockId::GLOW_CRYSTAL, None, crate::tool::ToolTier::None));
+        assert_eq!(
+            reg.get_drop(BlockId::GLOW_CRYSTAL, None, crate::tool::ToolTier::None),
+            Some((crate::item::ItemId::GLOW_CRYSTAL, 1))
+        );
+        assert!(!reg.can_harvest(BlockId::OBSIDIAN, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Iron));
+        assert!(reg.can_harvest(BlockId::OBSIDIAN, Some(crate::tool::ToolType::Pickaxe), crate::tool::ToolTier::Diamond));
+
+        // Ceiling Dripstone and wall Glow Crystal break when supporting rock is mined
+        let ceil = IVec3::new(2, 10, 2);
+        let stalactite = IVec3::new(2, 9, 2);
+        let wall_crystal = IVec3::new(3, 10, 2);
+        world.set_block(ceil, BlockId::DEEPSTONE);
+        world.set_block(stalactite, BlockId::DRIPSTONE);
+        world.set_block(wall_crystal, BlockId::GLOW_CRYSTAL);
+        world.set_block(ceil, BlockId::AIR);
+        let (drops, modified, _) = crate::block::break_unsupported_attached(ceil, &mut world, &reg);
+        assert_eq!(world.get_block(stalactite), BlockId::AIR);
+        assert_eq!(world.get_block(wall_crystal), BlockId::AIR);
+        assert!(modified.contains(&stalactite));
+        assert!(modified.contains(&wall_crystal));
+        assert!(drops.iter().any(|(_, s)| s.item_id == crate::item::ItemId::GLOW_CRYSTAL));
     }
 }

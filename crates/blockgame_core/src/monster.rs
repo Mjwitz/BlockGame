@@ -625,15 +625,32 @@ impl MonsterEntity {
             return outcome;
         }
 
-        // Sunlight burning for Zombies & Skeletons
-        if self.kind.burns_in_sunlight() && sun_intensity > 0.55 {
-            let bpos = IVec3::new(
-                self.position.x.floor() as i32,
-                (self.position.y + 1.0).floor() as i32,
-                self.position.z.floor() as i32,
-            );
-            let in_water = world.get_block(bpos).is_water();
-            if !in_water && has_sky_access(bpos, world, registry) {
+        // Lava hazard & lingering burning (extinguished by Water)
+        let feet_pos = IVec3::new(
+            self.position.x.floor() as i32,
+            self.position.y.floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let body_pos = IVec3::new(
+            self.position.x.floor() as i32,
+            (self.position.y + 1.0).floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let in_water = world.get_block(feet_pos).is_water() || world.get_block(body_pos).is_water();
+        let in_lava = !in_water
+            && (world.get_block(feet_pos).is_lava() || world.get_block(body_pos).is_lava());
+
+        if in_water {
+            self.burning_timer = 0.0;
+        } else if in_lava {
+            self.burning_timer = 3.0;
+            self.health = (self.health - 8.0 * dt).max(0.0);
+            if self.health <= 0.0 {
+                self.dead = true;
+                return outcome;
+            }
+        } else if self.kind.burns_in_sunlight() && sun_intensity > 0.55 {
+            if has_sky_access(body_pos, world, registry) {
                 self.burning_timer = 0.5;
                 self.health = (self.health - 2.0 * dt).max(0.0);
                 if self.health <= 0.0 {
@@ -643,6 +660,11 @@ impl MonsterEntity {
             }
         } else if self.burning_timer > 0.0 {
             self.burning_timer = (self.burning_timer - dt).max(0.0);
+            self.health = (self.health - 1.0 * dt).max(0.0);
+            if self.health <= 0.0 {
+                self.dead = true;
+                return outcome;
+            }
         }
 
         // Choose nearest target: player or (for overworld mobs) a nearby Village NPC

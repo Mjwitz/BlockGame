@@ -7,9 +7,10 @@ use std::sync::{
 use blockgame_core::{
     animal::{AnimalEntity, AnimalKind},
     block::{
-        apply_water_fill, break_unsupported_attached, can_block_survive,
+        apply_lava_fill, apply_water_fill, break_unsupported_attached, can_block_survive,
         find_decaying_leaves_around_pos, get_leaf_decay_drops, is_farmland_hydrated,
-        is_leaf_supported, place_water_source, try_grow_cactus, BlockId, BlockRegistry,
+        is_leaf_supported, place_lava_source, place_water_source, try_grow_cactus, BlockId,
+        BlockRegistry,
     },
     chunk::{Chunk, ChunkPos, CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, VERTICAL_CHUNKS},
     direction::Direction,
@@ -1183,13 +1184,17 @@ impl WorldManager {
                 extra_drops.push((drop_pos, drop));
             }
 
-            // If broken block was air and has adjacent water, water flows to fill exposed space
+            // If broken block was air and has adjacent water or lava, liquid flows to fill exposed space
             let (water_filled, water_drops) = apply_water_fill(pos, &mut world, &self.registry);
             for wpos in water_filled {
                 Self::add_chunk_and_neighbors(wpos, &mut chunks_to_rebuild);
             }
             for (wpos, drop) in water_drops {
                 extra_drops.push((wpos.as_vec3() + Vec3::new(0.5, 0.5, 0.5), drop));
+            }
+            let (lava_filled, _) = apply_lava_fill(pos, &mut world, &self.registry);
+            for lpos in lava_filled {
+                Self::add_chunk_and_neighbors(lpos, &mut chunks_to_rebuild);
             }
 
             if is_light_source {
@@ -1745,6 +1750,125 @@ impl WorldManager {
             if !item.is_empty() {
                 self.spawn_item_drop(extra_pos, item);
             }
+        }
+
+        true
+    }
+
+    /// Scoops a lava block at `pos` with an empty bucket, replacing it with AIR and updating meshes.
+    pub fn scoop_lava(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let (scooped, new_meshes): (bool, Vec<(ChunkPos, ChunkMesh)>) = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            if !current.is_lava() {
+                return false;
+            }
+
+            world.set_block(pos, BlockId::AIR);
+
+            // Rebuild surrounding chunks so removed Lava blocklight updates cleanly
+            let (chunk_pos, _, _, _) = world_to_chunk_coords(pos);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        chunks_to_rebuild.push(ChunkPos::new(
+                            chunk_pos.0.x + dx,
+                            chunk_pos.0.y + dy,
+                            chunk_pos.0.z + dz,
+                        ));
+                    }
+                }
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            let meshes = chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect();
+
+            (true, meshes)
+        };
+
+        if !scooped {
+            return false;
+        }
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
+        }
+
+        true
+    }
+
+    /// Places a lava source at `pos` from a lava bucket, cascading downward and solidifying if touching water.
+    pub fn place_lava(
+        &mut self,
+        pos: IVec3,
+        device: &wgpu::Device,
+        pipeline: &VoxelPipeline,
+    ) -> bool {
+        let mut chunks_to_rebuild = Vec::new();
+        Self::add_chunk_and_neighbors(pos, &mut chunks_to_rebuild);
+
+        let (placed, new_meshes): (bool, Vec<(ChunkPos, ChunkMesh)>) = {
+            let mut world = self.world.lock().unwrap();
+            let current = world.get_block(pos);
+            if !current.is_air() && !current.is_fragile() {
+                return false;
+            }
+
+            let (modified_positions, _) = place_lava_source(pos, &mut world);
+            for mpos in modified_positions {
+                Self::add_chunk_and_neighbors(mpos, &mut chunks_to_rebuild);
+                let (cpos, _, _, _) = world_to_chunk_coords(mpos);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            chunks_to_rebuild.push(ChunkPos::new(
+                                cpos.0.x + dx,
+                                cpos.0.y + dy,
+                                cpos.0.z + dz,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            chunks_to_rebuild.sort_by_key(|c| (c.0.x, c.0.y, c.0.z));
+            chunks_to_rebuild.dedup();
+
+            let meshes = chunks_to_rebuild
+                .into_iter()
+                .filter_map(|cpos| {
+                    world
+                        .get_chunk(cpos)
+                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                })
+                .collect();
+
+            (true, meshes)
+        };
+
+        if !placed {
+            return false;
+        }
+
+        for (cpos, mesh) in new_meshes {
+            self.store_mesh(cpos, &mesh, device, pipeline);
         }
 
         true

@@ -1640,7 +1640,8 @@ impl UiBuilder {
             let is_arrow = active_slot.item_id == ItemId::ARROW;
 
             let is_bucket = active_slot.item_id == ItemId::BUCKET
-                || active_slot.item_id == ItemId::WATER_BUCKET;
+                || active_slot.item_id == ItemId::WATER_BUCKET
+                || active_slot.item_id == ItemId::LAVA_BUCKET;
 
             let is_bread = active_slot.item_id == ItemId::BREAD;
             let is_apple = active_slot.item_id == ItemId::APPLE;
@@ -2845,11 +2846,15 @@ impl UiBuilder {
                 let r_s = [bc[0], bc[1] - bh * 0.5 + 14.0 * scale];
                 let r_w = [bc[0] - bw_top, bc[1] - bh * 0.5];
 
-                // Water interior surface if Water Bucket
+                // Liquid interior surface if Water Bucket or Lava Bucket
                 if active_slot.item_id == ItemId::WATER_BUCKET {
                     let w_uv = TextureAtlas::get_uv_bounds(38); // water tile
                     let water_uvs = [[w_uv[0], w_uv[1]], [w_uv[2], w_uv[1]], [w_uv[2], w_uv[3]], [w_uv[0], w_uv[3]]];
                     mesh.add_quad_vertices([r_w, r_n, r_e, r_s], water_uvs, [[0.22, 0.55, 0.92, 0.95]; 4]);
+                } else if active_slot.item_id == ItemId::LAVA_BUCKET {
+                    let l_uv = TextureAtlas::get_uv_bounds(579); // lava tile
+                    let lava_uvs = [[l_uv[0], l_uv[1]], [l_uv[2], l_uv[1]], [l_uv[2], l_uv[3]], [l_uv[0], l_uv[3]]];
+                    mesh.add_quad_vertices([r_w, r_n, r_e, r_s], lava_uvs, [[1.0, 0.72, 0.22, 1.0]; 4]);
                 } else {
                     // Empty bucket dark interior
                     mesh.add_quad_vertices([r_w, r_n, r_e, r_s], white_uv, [[0.30, 0.32, 0.36, 1.0]; 4]);
@@ -3679,6 +3684,10 @@ impl UiBuilder {
                         blockgame_core::item::FoodEffectKind::MiningHaste => (
                             format!("HASTE {:.0}s", eff.remaining_secs.ceil()),
                             [1.00, 0.86, 0.36, 0.98],
+                        ),
+                        blockgame_core::item::FoodEffectKind::Burning => (
+                            format!("BURNING {:.0}s", eff.remaining_secs.ceil()),
+                            [1.00, 0.45, 0.14, 0.98],
                         ),
                     };
                     let tw = Self::string_width(&text, 7.5, 0.5);

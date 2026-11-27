@@ -324,7 +324,32 @@ pub fn get_item_source_info(item_id: ItemId) -> Option<ItemSourceInfo> {
         ItemId::WATER_BUCKET => Some(ItemSourceInfo {
             location: "Filled by right-clicking water with an empty Bucket",
             tool_required: "Bucket + Water Source",
-            notes: "Places water block and cascades downward.",
+            notes: "Places water block and cascades downward. Solidifies Lava into Obsidian.",
+        }),
+        ItemId::LAVA_BUCKET => Some(ItemSourceInfo {
+            location: "Filled by right-clicking deep underground Lava Pools (y 1-7) with a Bucket",
+            tool_required: "Bucket + Lava Source",
+            notes: "Places Lava or burns as long-lasting Furnace fuel (1000s, returns empty Bucket).",
+        }),
+        ItemId::DEEPSTONE => Some(ItemSourceInfo {
+            location: "Deep underground rock stratum below y=16",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Denser dark stone surrounding deep Lava Pools and Diamond Ore Veins.",
+        }),
+        ItemId::DRIPSTONE => Some(ItemSourceInfo {
+            location: "Hanging stalactites and floor stalagmites in underground caves",
+            tool_required: "Wooden Pickaxe or better",
+            notes: "Decorative cave mineral spire that breaks if its supporting rock is mined.",
+        }),
+        ItemId::GLOW_CRYSTAL => Some(ItemSourceInfo {
+            location: "Rare luminous clusters on deep cave walls and ceilings",
+            tool_required: "Any tool or bare hands",
+            notes: "Emits faint ambient cave light (level 7) and breaks if unsupported.",
+        }),
+        ItemId::OBSIDIAN => Some(ItemSourceInfo {
+            location: "Formed when Water contacts source Lava",
+            tool_required: "Diamond Pickaxe",
+            notes: "Ultra-hard volcanic glass.",
         }),
         ItemId::CORAL_BLOCK => Some(ItemSourceInfo {
             location: "Warm coral reef ocean shallows",
@@ -2695,6 +2720,7 @@ pub fn get_smelting_output(input: ItemId) -> Option<ItemId> {
 /// Returns 0.0 if the item is not a valid furnace fuel.
 pub fn get_fuel_burn_time(fuel: ItemId) -> f32 {
     match fuel {
+        ItemId::LAVA_BUCKET => 1000.0,
         ItemId::COAL => 80.0,
         ItemId::WOOD_LOG
         | ItemId::BIRCH_LOG

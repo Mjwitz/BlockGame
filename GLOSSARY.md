@@ -126,4 +126,40 @@ _Avoid_: Fake mouse, gamepad mouse, software cursor
 The single connected gamepad currently driving Controller Input Mode, dynamically reassigned whenever another connected gamepad produces input.
 _Avoid_: Primary gamepad, slot 0, player 1 controller
 
+### Underground & Caves
 
+**Cave Mouth**:
+A natural surface opening on dry land where an underground tunnel breaches the terrain, sealed off from ocean and river beds so surface water does not flood the cave.
+_Avoid_: Cave entrance, surface hole, tunnel opening
+
+**Ore Vein**:
+A compact, irregular underground cluster of matching ore blocks whose spawn frequency and cluster size follow a depth-dependent curve.
+_Avoid_: Ore blob, ore pocket, ore sphere
+
+**Cave Archetype**:
+One of the three underground carving shapes (`Winding Passage`, `Vaulted Cavern`, or `Fissure`) combined within a cave network to vary exploration.
+_Avoid_: Cave type, tunnel style, cave shape
+
+**Cave Zone**:
+The regional underground atmosphere (`Dry`, `Damp`, or `Deep Volcanic`) governing cave wall materials, moisture, pools, and decorative formations.
+_Avoid_: Cave biome, underground biome, cave theme
+
+**Deepstone**:
+A darker, tougher stone stratum forming the deepest underground layer where Diamonds and Lava Pools concentrate.
+_Avoid_: Deepslate, dark stone, bedrock stone
+
+**Dripstone**:
+Pointed mineral formations hanging from cave ceilings (stalactites) or rising from cave floors (stalagmites).
+_Avoid_: Cave spike, icicle rock, speleothem
+
+**Glow Crystal**:
+A rare, faintly luminous crystalline formation found on cave walls and ceilings that serves as a natural underground landmark.
+_Avoid_: Cave crystal, glowstone, luminescent gem
+
+**Lava Pool**:
+A natural underground basin of molten Lava collected in the lowest cave floors.
+_Avoid_: Magma lake, lava lake, fire pool
+
+**Burning**:
+A temporary status effect triggered by contact with Lava that deals periodic damage after exiting Lava until it expires or is extinguished by Water.
+_Avoid_: On fire, ignite, scorch

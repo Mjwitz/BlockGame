@@ -210,6 +210,13 @@ impl BlockId {
     pub const COOKING_POT: Self = Self(152);
     pub const COOKING_POT_LIT: Self = Self(153);
 
+    // Underground & Caves (Issue #23)
+    pub const DEEPSTONE: Self = Self(154);
+    pub const DRIPSTONE: Self = Self(155);
+    pub const GLOW_CRYSTAL: Self = Self(156);
+    pub const OBSIDIAN: Self = Self(157);
+    pub const LAVA: Self = Self(158);
+
     #[inline]
     pub const fn is_temple_interactive(&self) -> bool {
         matches!(
@@ -360,6 +367,16 @@ impl BlockId {
     #[inline]
     pub const fn is_water(&self) -> bool {
         self.0 == Self::WATER.0 || self.0 == Self::SEAGRASS.0
+    }
+
+    #[inline]
+    pub const fn is_lava(&self) -> bool {
+        self.0 == Self::LAVA.0
+    }
+
+    #[inline]
+    pub const fn is_liquid(&self) -> bool {
+        self.is_water() || self.is_lava()
     }
 
     #[inline]
@@ -569,6 +586,8 @@ impl BlockId {
             125 => 12, // BOSS_ALTAR
             126 => 15, // TEMPLE_BRAZIER
             153 => 12, // COOKING_POT_LIT
+            156 => 7,  // GLOW_CRYSTAL
+            158 => 14, // LAVA
             _ => 0,
         }
     }
@@ -588,6 +607,8 @@ impl BlockId {
                     | Self::CACTUS
                     | Self::SUGAR_CANE
                     | Self::TORCH
+                    | Self::DRIPSTONE
+                    | Self::GLOW_CRYSTAL
                     | Self::LILY_PAD
                     | Self::SEAGRASS
                     | Self::POPPY
@@ -2390,6 +2411,77 @@ impl BlockRegistry {
             drop_count: (1, 1),
         });
 
+        // Underground & Caves blocks (Issue #23)
+        registry.register(BlockDefinition {
+            id: BlockId::DEEPSTONE,
+            name: "Deepstone",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [574; 6],
+            hardness: 2.4,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::DEEPSTONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::DRIPSTONE,
+            name: "Dripstone",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 0,
+            textures: [575; 6],
+            hardness: 1.2,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Wood,
+            drop_item: Some(ItemId::DRIPSTONE),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::GLOW_CRYSTAL,
+            name: "Glow Crystal",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 7,
+            textures: [577; 6],
+            hardness: 0.4,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: Some(ItemId::GLOW_CRYSTAL),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::OBSIDIAN,
+            name: "Obsidian",
+            is_solid: true,
+            is_transparent: false,
+            luminance: 0,
+            textures: [578; 6],
+            hardness: 8.0,
+            required_tool: Some(ToolType::Pickaxe),
+            min_tier: ToolTier::Diamond,
+            drop_item: Some(ItemId::OBSIDIAN),
+            drop_count: (1, 1),
+        });
+
+        registry.register(BlockDefinition {
+            id: BlockId::LAVA,
+            name: "Lava",
+            is_solid: false,
+            is_transparent: true,
+            luminance: 14,
+            textures: [579; 6],
+            hardness: 100.0,
+            required_tool: None,
+            min_tier: ToolTier::None,
+            drop_item: None,
+            drop_count: (0, 0),
+        });
+
         registry
     }
 
@@ -2614,6 +2706,34 @@ where
             let below = get_block(pos + IVec3::NEG_Y);
             registry.is_solid(below)
         }
+        BlockId::DRIPSTONE => {
+            let current = get_block(pos);
+            if current == BlockId::LAVA {
+                return false;
+            }
+            let above = get_block(pos + IVec3::Y);
+            let below = get_block(pos + IVec3::NEG_Y);
+            registry.is_solid(above)
+                || registry.is_solid(below)
+                || above == BlockId::DRIPSTONE
+                || below == BlockId::DRIPSTONE
+        }
+        BlockId::GLOW_CRYSTAL => {
+            let current = get_block(pos);
+            if current == BlockId::LAVA {
+                return false;
+            }
+            [
+                IVec3::Y,
+                IVec3::NEG_Y,
+                IVec3::X,
+                IVec3::NEG_X,
+                IVec3::Z,
+                IVec3::NEG_Z,
+            ]
+            .iter()
+            .any(|&off| registry.is_solid(get_block(pos + off)))
+        }
         _ => true,
     }
 }
@@ -2677,6 +2797,7 @@ pub fn break_unsupported_attached(
 
     let mut check_queue = vec![
         trigger_pos + IVec3::Y,
+        trigger_pos + IVec3::NEG_Y,
         trigger_pos + IVec3::X,
         trigger_pos + IVec3::NEG_X,
         trigger_pos + IVec3::Z,
@@ -2722,8 +2843,9 @@ pub fn break_unsupported_attached(
                 gy += 1;
             }
 
-            // Cascade upward (e.g. cactus or stacked plants) and neighbors
+            // Cascade upward/downward (e.g. cactus, stacked plants, hanging dripstone) and neighbors
             check_queue.push(check_pos + IVec3::Y);
+            check_queue.push(check_pos + IVec3::NEG_Y);
             check_queue.push(check_pos + IVec3::X);
             check_queue.push(check_pos + IVec3::NEG_X);
             check_queue.push(check_pos + IVec3::Z);
@@ -2734,9 +2856,34 @@ pub fn break_unsupported_attached(
     (extra_drops, modified_positions, falling_blocks)
 }
 
+/// Converts any adjacent Lava blocks touching `water_pos` into Obsidian (for source Lava)
+/// or Cobblestone (for cascading/flowing Lava that has Lava directly above it).
+fn solidify_adjacent_lava(water_pos: IVec3, world: &mut World, modified_positions: &mut Vec<IVec3>) {
+    for off in [
+        IVec3::X,
+        IVec3::NEG_X,
+        IVec3::Z,
+        IVec3::NEG_Z,
+        IVec3::NEG_Y,
+        IVec3::Y,
+    ] {
+        let adj = water_pos + off;
+        if world.get_block(adj).is_lava() {
+            let is_flowing = world.get_block(adj + IVec3::Y).is_lava();
+            let result_block = if is_flowing {
+                BlockId::COBBLESTONE
+            } else {
+                BlockId::OBSIDIAN
+            };
+            world.set_block(adj, result_block);
+            modified_positions.push(adj);
+        }
+    }
+}
+
 /// Checks if `pos` (which is AIR or fragile) is adjacent to WATER, and if so,
 /// Places a water source at `pos` (from a Water Bucket), replacing open air or fragile blocks
-/// and cascading downward.
+/// and cascading downward. Converts adjacent Lava into Obsidian or Cobblestone.
 pub fn place_water_source(
     pos: IVec3,
     world: &mut World,
@@ -2746,6 +2893,20 @@ pub fn place_water_source(
         return (Vec::new(), Vec::new());
     }
     cascade_water_downward(pos, world)
+}
+
+/// Places a lava source at `pos` (from a Lava Bucket), replacing open air or fragile blocks
+/// and cascading downward. If placed touching Water, source Lava converts into Obsidian and
+/// cascading/flowing Lava converts into Cobblestone.
+pub fn place_lava_source(
+    pos: IVec3,
+    world: &mut World,
+) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
+    let current = world.get_block(pos);
+    if !current.is_air() && !current.is_fragile() {
+        return (Vec::new(), Vec::new());
+    }
+    cascade_lava_downward(pos, world, true)
 }
 
 /// Applies water inflow when an adjacent block is broken: checks if `pos` has a water neighbor,
@@ -2777,6 +2938,91 @@ pub fn apply_water_fill(
     }
 
     cascade_water_downward(pos, world)
+}
+
+/// Applies lava inflow when an adjacent block is broken: checks if `pos` has a lava neighbor,
+/// fills `pos` with LAVA (or Cobblestone if touching Water) and cascades downward.
+pub fn apply_lava_fill(
+    pos: IVec3,
+    world: &mut World,
+    _registry: &BlockRegistry,
+) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
+    let current = world.get_block(pos);
+    if !current.is_air() && !current.is_fragile() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let above = pos + IVec3::Y;
+    let horizontal = [
+        pos + IVec3::X,
+        pos - IVec3::X,
+        pos + IVec3::Z,
+        pos - IVec3::Z,
+    ];
+
+    let has_lava_neighbor = world.get_block(above).is_lava()
+        || horizontal.iter().any(|&p| world.get_block(p).is_lava());
+
+    if !has_lava_neighbor {
+        return (Vec::new(), Vec::new());
+    }
+
+    cascade_lava_downward(pos, world, false)
+}
+
+fn has_adjacent_water(pos: IVec3, world: &World) -> bool {
+    [
+        IVec3::X,
+        IVec3::NEG_X,
+        IVec3::Z,
+        IVec3::NEG_Z,
+        IVec3::Y,
+        IVec3::NEG_Y,
+    ]
+    .iter()
+    .any(|&off| world.get_block(pos + off).is_water())
+}
+
+fn cascade_lava_downward(
+    pos: IVec3,
+    world: &mut World,
+    is_source: bool,
+) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
+    let mut modified_positions = Vec::new();
+    let extra_drops = Vec::new(); // Lava destroys fragile foliage without dropping items
+
+    if has_adjacent_water(pos, world) {
+        let solid = if is_source {
+            BlockId::OBSIDIAN
+        } else {
+            BlockId::COBBLESTONE
+        };
+        world.set_block(pos, solid);
+        modified_positions.push(pos);
+        return (modified_positions, extra_drops);
+    }
+
+    world.set_block(pos, BlockId::LAVA);
+    modified_positions.push(pos);
+
+    let mut check_pos = pos - IVec3::Y;
+    while check_pos.y >= 0 {
+        let b = world.get_block(check_pos);
+        if b.is_air() || b.is_fragile() {
+            if has_adjacent_water(check_pos, world) {
+                world.set_block(check_pos, BlockId::COBBLESTONE);
+                modified_positions.push(check_pos);
+                break;
+            }
+            world.set_block(check_pos, BlockId::LAVA);
+            modified_positions.push(check_pos);
+            check_pos -= IVec3::Y;
+        } else {
+            break;
+        }
+    }
+
+    (modified_positions, extra_drops)
 }
 
 fn cascade_water_downward(
@@ -2831,6 +3077,7 @@ fn cascade_water_downward(
     // Fill pos with water
     world.set_block(pos, BlockId::WATER);
     modified_positions.push(pos);
+    solidify_adjacent_lava(pos, world, &mut modified_positions);
 
     // Cascade downward into open air or wash away fragile blocks
     let mut check_pos = pos - IVec3::Y;
@@ -2839,6 +3086,7 @@ fn cascade_water_downward(
         if b.is_air() {
             world.set_block(check_pos, BlockId::WATER);
             modified_positions.push(check_pos);
+            solidify_adjacent_lava(check_pos, world, &mut modified_positions);
             check_pos -= IVec3::Y;
         } else if b.is_fragile() {
             let drop_item = fragile_drop(b);
@@ -2847,9 +3095,10 @@ fn cascade_water_downward(
             }
             world.set_block(check_pos, BlockId::WATER);
             modified_positions.push(check_pos);
+            solidify_adjacent_lava(check_pos, world, &mut modified_positions);
             check_pos -= IVec3::Y;
         } else {
-            // Hit solid block below
+            // Hit solid block (or solidified lava) below
             break;
         }
     }

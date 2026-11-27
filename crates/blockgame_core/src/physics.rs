@@ -161,6 +161,28 @@ impl PlayerPhysics {
         false
     }
 
+    /// Returns whether the player's bounding box is submerged or touching lava.
+    pub fn is_in_lava(&self, world: &World) -> bool {
+        let player_box = self.aabb();
+        let min_x = player_box.min.x.floor() as i32;
+        let max_x = player_box.max.x.floor() as i32;
+        let min_y = player_box.min.y.floor() as i32;
+        let max_y = player_box.max.y.floor() as i32;
+        let min_z = player_box.min.z.floor() as i32;
+        let max_z = player_box.max.z.floor() as i32;
+
+        for y in min_y..=max_y {
+            for z in min_z..=max_z {
+                for x in min_x..=max_x {
+                    if world.get_block(IVec3::new(x, y, z)).is_lava() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Returns whether the player's bounding box is touching or brushing against a cactus block.
     pub fn is_touching_cactus(&self, world: &World) -> bool {
         let box_check = AABB::new(
@@ -229,6 +251,7 @@ impl PlayerPhysics {
         }
 
         let in_water = self.is_in_water(world);
+        let in_lava = !in_water && self.is_in_lava(world);
         let prev_y = self.position.y;
         let was_on_ground = self.on_ground;
 
@@ -252,6 +275,23 @@ impl PlayerPhysics {
             let target_speed = (if sprinting { 3.8 } else { 2.4 }) * speed_mult;
             let target_vel = wish_dir * target_speed;
             let accel = 8.0;
+            self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
+            self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
+        } else if in_lava {
+            // Thick liquid cushions fall and heavily slows movement
+            self.fall_distance *= 0.5;
+
+            let lava_gravity = -4.5;
+            self.velocity.y += lava_gravity * dt;
+            self.velocity.y *= (1.0 - 4.0 * dt).clamp(0.0, 1.0);
+
+            if jumping {
+                self.velocity.y = 2.6 * jump_mult;
+            }
+
+            let target_speed = (if sprinting { 1.8 } else { 1.3 }) * speed_mult;
+            let target_vel = wish_dir * target_speed;
+            let accel = 6.0;
             self.velocity.x += (target_vel.x - self.velocity.x) * (accel * dt).min(1.0);
             self.velocity.z += (target_vel.z - self.velocity.z) * (accel * dt).min(1.0);
         } else {
@@ -280,7 +320,7 @@ impl PlayerPhysics {
 
         // Calculate fall distance and landing damage
         let mut fall_damage = 0.0;
-        if in_water {
+        if in_water || in_lava {
             self.fall_distance = 0.0;
         } else if self.on_ground {
             if !was_on_ground && self.fall_distance > 3.0 {

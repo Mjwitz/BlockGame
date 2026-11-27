@@ -159,6 +159,8 @@ impl<'a> ChunkMesher<'a> {
                         || block_id == BlockId::SUGAR_CANE
                         || block_id == BlockId::TALL_GRASS
                         || block_id.is_flower()
+                        || block_id == BlockId::DRIPSTONE
+                        || block_id == BlockId::GLOW_CRYSTAL
                     {
                         self.build_crop(&mut mesh, chunk.pos, ix, iy, iz, block_id, &light_map);
                         continue;
@@ -364,6 +366,40 @@ impl<'a> ChunkMesher<'a> {
                                     dir,
                                     uv,
                                     light,
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
+                    if block_id == BlockId::LAVA {
+                        for dir in Direction::ALL {
+                            let normal = dir.normal_ivec();
+                            let nx = ix + normal.x;
+                            let ny = iy + normal.y;
+                            let nz = iz + normal.z;
+
+                            let Some(neighbor_id) = query_block_opt(nx, ny, nz) else {
+                                continue;
+                            };
+
+                            if neighbor_id == BlockId::LAVA {
+                                continue;
+                            }
+
+                            if self.registry.is_transparent(neighbor_id) {
+                                let tile_id = self.registry.get_texture(block_id, dir);
+                                let uv = TextureAtlas::get_uv_bounds(tile_id);
+                                self.build_face(
+                                    &mut mesh,
+                                    chunk.pos,
+                                    ix,
+                                    iy,
+                                    iz,
+                                    dir,
+                                    uv,
+                                    [0.0, 1.0],
+                                    &query_block,
                                 );
                             }
                         }
@@ -4390,5 +4426,31 @@ mod tests {
         ice_water.set(4, 5, 4, BlockId::ICE);
         let iw_mesh = mesher.mesh_chunk(&ice_water);
         assert_eq!(iw_mesh.water_vertices.len(), 44);
+    }
+
+    #[test]
+    fn test_cave_blocks_and_lava_culling_mesh() {
+        let registry = BlockRegistry::new();
+        let mesher = ChunkMesher::new(&registry);
+
+        // Two adjacent Lava blocks cull their shared face (10 faces = 40 opaque emissive vertices)
+        let mut lava_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
+        lava_chunk.set(4, 4, 4, BlockId::LAVA);
+        lava_chunk.set(5, 4, 4, BlockId::LAVA);
+        let lava_mesh = mesher.mesh_chunk(&lava_chunk);
+        assert_eq!(lava_mesh.vertices.len(), 40, "Adjacent Lava blocks should cull shared face");
+
+        // Deepstone, Obsidian, Dripstone, and Glow Crystal all produce valid non-empty meshes
+        for block in [
+            BlockId::DEEPSTONE,
+            BlockId::OBSIDIAN,
+            BlockId::DRIPSTONE,
+            BlockId::GLOW_CRYSTAL,
+        ] {
+            let mut c = Chunk::new(ChunkPos::new(0, 0, 0));
+            c.set(6, 6, 6, block);
+            let m = mesher.mesh_chunk(&c);
+            assert!(!m.vertices.is_empty(), "Expected non-empty mesh for {:?}", block);
+        }
     }
 }

@@ -444,9 +444,14 @@ pub fn tick_power_networks(world: &mut World, dt: f32, is_daytime: bool) -> Vec<
             } else if network_needs_fuel_gen && !gen.fuel.is_empty() {
                 let burn_dur = get_fuel_burn_time(gen.fuel.item_id);
                 if burn_dur > 0.0 {
+                    let consumed_lava_bucket = gen.fuel.item_id == crate::item::ItemId::LAVA_BUCKET;
                     gen.fuel.count -= 1;
                     if gen.fuel.count == 0 {
-                        gen.fuel = ItemSlot::EMPTY;
+                        gen.fuel = if consumed_lava_bucket {
+                            ItemSlot::new(crate::item::ItemId::BUCKET, 1)
+                        } else {
+                            ItemSlot::EMPTY
+                        };
                     }
                     gen.burn_time = (burn_dur - dt).max(0.0);
                     gen.max_burn_time = burn_dur;
