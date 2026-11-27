@@ -1637,14 +1637,14 @@ impl CraftingManager {
             inputs: vec![ItemId::COBBLESTONE, ItemId::DARK_OAK_LEAVES],
             output: ItemSlot::new(ItemId::MOSSY_COBBLESTONE, 1),
         });
-        for (leaf_name, leaf_id) in [
-            ("Leaves", ItemId::LEAVES),
-            ("Spruce Leaves", ItemId::SPRUCE_LEAVES),
-            ("Birch Leaves", ItemId::BIRCH_LEAVES),
-            ("Jungle Leaves", ItemId::JUNGLE_LEAVES),
-            ("Dark Oak Leaves", ItemId::DARK_OAK_LEAVES),
+        for leaf_id in [
+            ItemId::LEAVES,
+            ItemId::SPRUCE_LEAVES,
+            ItemId::BIRCH_LEAVES,
+            ItemId::JUNGLE_LEAVES,
+            ItemId::DARK_OAK_LEAVES,
+            ItemId::ACACIA_LEAVES,
         ] {
-            let _ = leaf_name;
             self.register(Recipe::Shapeless {
                 name: "Mossy Deepstone Cobblestone",
                 inputs: vec![ItemId::DEEPSTONE_COBBLESTONE, leaf_id],

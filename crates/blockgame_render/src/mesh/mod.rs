@@ -347,43 +347,69 @@ impl<'a> ChunkMesher<'a> {
                                 continue;
                             };
 
-                            // Adjacent water blocks, waterlogged seagrass, and ice handle the shared boundary cleanly
-                            if neighbor_id.is_water() || neighbor_id == BlockId::ICE {
+                            let mut bottom_h = 0.0_f32;
+                            if neighbor_id == BlockId::ICE {
                                 continue;
-                            }
-
-                            // Only generate water face if adjacent block is transparent (air, tall grass, glass, etc.)
-                            if self.registry.is_transparent(neighbor_id) {
-                                let tile_id = self.registry.get_texture(block_id, dir);
-                                let uv = TextureAtlas::get_uv_bounds(tile_id);
-
-                                let light = if nx >= 0
+                            } else if neighbor_id.is_water() {
+                                if matches!(dir, Direction::PosY | Direction::NegY) {
+                                    continue;
+                                }
+                                let neighbor_level = if nx >= 0
                                     && nx < CHUNK_SIZE_X as i32
                                     && ny >= 0
                                     && ny < CHUNK_SIZE_Y as i32
                                     && nz >= 0
                                     && nz < CHUNK_SIZE_Z as i32
                                 {
-                                    let lv = light_map.get(nx as usize, ny as usize, nz as usize);
-                                    [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
+                                    chunk.get_facing_unchecked(nx as usize, ny as usize, nz as usize)
+                                        & 0x0F
                                 } else {
-                                    let blk = light_map.get_block_rel(nx, ny, nz);
-                                    [1.0, blk as f32 / 15.0]
+                                    blockgame_core::FLUID_SOURCE
                                 };
-
-                                self.build_fluid_face(
-                                    &mut mesh,
-                                    chunk.pos,
-                                    ix,
-                                    iy,
-                                    iz,
-                                    dir,
-                                    uv,
-                                    light,
-                                    top_h,
-                                    true,
+                                let neighbor_above_same = query_block_opt(nx, ny + 1, nz)
+                                    .map_or(false, |b| b.is_water() || b == BlockId::ICE);
+                                let neighbor_top_h = blockgame_core::fluid::fluid_surface_height(
+                                    neighbor_level,
+                                    neighbor_above_same,
                                 );
+                                if top_h <= neighbor_top_h + 0.001 {
+                                    continue;
+                                }
+                                bottom_h = neighbor_top_h;
+                            } else if !self.registry.is_transparent(neighbor_id) {
+                                continue;
                             }
+
+                            let tile_id = self.registry.get_texture(block_id, dir);
+                            let uv = TextureAtlas::get_uv_bounds(tile_id);
+
+                            let light = if nx >= 0
+                                && nx < CHUNK_SIZE_X as i32
+                                && ny >= 0
+                                && ny < CHUNK_SIZE_Y as i32
+                                && nz >= 0
+                                && nz < CHUNK_SIZE_Z as i32
+                            {
+                                let lv = light_map.get(nx as usize, ny as usize, nz as usize);
+                                [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0]
+                            } else {
+                                let blk = light_map.get_block_rel(nx, ny, nz);
+                                [1.0, blk as f32 / 15.0]
+                            };
+
+                            self.build_fluid_face(
+                                &mut mesh,
+                                chunk.pos,
+                                ix,
+                                iy,
+                                iz,
+                                dir,
+                                uv,
+                                light,
+                                bottom_h,
+                                top_h,
+                                true,
+                            );
                         }
                         continue;
                     }
@@ -404,26 +430,52 @@ impl<'a> ChunkMesher<'a> {
                                 continue;
                             };
 
+                            let mut bottom_h = 0.0_f32;
                             if neighbor_id == BlockId::LAVA {
+                                if matches!(dir, Direction::PosY | Direction::NegY) {
+                                    continue;
+                                }
+                                let neighbor_level = if nx >= 0
+                                    && nx < CHUNK_SIZE_X as i32
+                                    && ny >= 0
+                                    && ny < CHUNK_SIZE_Y as i32
+                                    && nz >= 0
+                                    && nz < CHUNK_SIZE_Z as i32
+                                {
+                                    chunk.get_facing_unchecked(nx as usize, ny as usize, nz as usize)
+                                        & 0x0F
+                                } else {
+                                    blockgame_core::FLUID_SOURCE
+                                };
+                                let neighbor_above_same = query_block_opt(nx, ny + 1, nz)
+                                    .map_or(false, |b| b == BlockId::LAVA);
+                                let neighbor_top_h = blockgame_core::fluid::fluid_surface_height(
+                                    neighbor_level,
+                                    neighbor_above_same,
+                                );
+                                if top_h <= neighbor_top_h + 0.001 {
+                                    continue;
+                                }
+                                bottom_h = neighbor_top_h;
+                            } else if !self.registry.is_transparent(neighbor_id) {
                                 continue;
                             }
 
-                            if self.registry.is_transparent(neighbor_id) {
-                                let tile_id = self.registry.get_texture(block_id, dir);
-                                let uv = TextureAtlas::get_uv_bounds(tile_id);
-                                self.build_fluid_face(
-                                    &mut mesh,
-                                    chunk.pos,
-                                    ix,
-                                    iy,
-                                    iz,
-                                    dir,
-                                    uv,
-                                    [0.0, 1.0],
-                                    top_h,
-                                    false,
-                                );
-                            }
+                            let tile_id = self.registry.get_texture(block_id, dir);
+                            let uv = TextureAtlas::get_uv_bounds(tile_id);
+                            self.build_fluid_face(
+                                &mut mesh,
+                                chunk.pos,
+                                ix,
+                                iy,
+                                iz,
+                                dir,
+                                uv,
+                                [0.0, 1.0],
+                                bottom_h,
+                                top_h,
+                                false,
+                            );
                         }
                         continue;
                     }
@@ -660,7 +712,7 @@ impl<'a> ChunkMesher<'a> {
         uv_bounds: [f32; 4],
         light: [f32; 2],
     ) {
-        self.build_fluid_face(mesh, chunk_pos, x, y, z, dir, uv_bounds, light, 1.0, true);
+        self.build_fluid_face(mesh, chunk_pos, x, y, z, dir, uv_bounds, light, 0.0, 1.0, true);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -674,6 +726,7 @@ impl<'a> ChunkMesher<'a> {
         dir: Direction,
         uv_bounds: [f32; 4],
         light: [f32; 2],
+        bottom_h: f32,
         top_h: f32,
         is_water: bool,
     ) {
@@ -683,6 +736,7 @@ impl<'a> ChunkMesher<'a> {
         let fy = (origin.y + y) as f32;
         let fz = (origin.z + z) as f32;
         let normal = dir.normal_f32();
+        let y_bot = fy + bottom_h;
         let y_top = fy + top_h;
 
         let positions = match dir {
@@ -699,34 +753,39 @@ impl<'a> ChunkMesher<'a> {
                 [fx, fy, fz + 1.0],
             ],
             Direction::PosZ => [
-                [fx, fy, fz + 1.0],
-                [fx + 1.0, fy, fz + 1.0],
+                [fx, y_bot, fz + 1.0],
+                [fx + 1.0, y_bot, fz + 1.0],
                 [fx + 1.0, y_top, fz + 1.0],
                 [fx, y_top, fz + 1.0],
             ],
             Direction::NegZ => [
-                [fx + 1.0, fy, fz],
-                [fx, fy, fz],
+                [fx + 1.0, y_bot, fz],
+                [fx, y_bot, fz],
                 [fx, y_top, fz],
                 [fx + 1.0, y_top, fz],
             ],
             Direction::PosX => [
-                [fx + 1.0, fy, fz + 1.0],
-                [fx + 1.0, fy, fz],
+                [fx + 1.0, y_bot, fz + 1.0],
+                [fx + 1.0, y_bot, fz],
                 [fx + 1.0, y_top, fz],
                 [fx + 1.0, y_top, fz + 1.0],
             ],
             Direction::NegX => [
-                [fx, fy, fz],
-                [fx, fy, fz + 1.0],
+                [fx, y_bot, fz],
+                [fx, y_bot, fz + 1.0],
                 [fx, y_top, fz + 1.0],
                 [fx, y_top, fz],
             ],
         };
 
+        let v_bot = if matches!(dir, Direction::PosY | Direction::NegY) {
+            v_max
+        } else {
+            v_min + (v_max - v_min) * (top_h - bottom_h).clamp(0.0, 1.0)
+        };
         let uvs = [
-            [u_min, v_max],
-            [u_max, v_max],
+            [u_min, v_bot],
+            [u_max, v_bot],
             [u_max, v_min],
             [u_min, v_min],
         ];
@@ -4533,8 +4592,13 @@ mod tests {
             "Ceiling stalactite must use tile 576"
         );
 
-        // Stepped fluid surface heights: Source (0 -> 0.875), Flowing (4 -> 0.5), Falling (8 -> 1.0)
-        for (level, expected_h) in [(0u8, 0.875_f32), (4u8, 0.5_f32), (8u8, 1.0_f32)] {
+        // Stepped fluid surface heights: Source (0 -> 0.875), Flowing (1 -> 0.75, 4 -> 0.375), Falling (8 -> 1.0)
+        for (level, expected_h) in [
+            (0u8, 0.875_f32),
+            (1u8, 0.75_f32),
+            (4u8, 0.375_f32),
+            (8u8, 1.0_f32),
+        ] {
             let mut wc = Chunk::new(ChunkPos::new(0, 0, 0));
             wc.set(4, 4, 4, BlockId::WATER);
             wc.set_facing(4, 4, 4, level);
@@ -4552,5 +4616,18 @@ mod tests {
                 max_y
             );
         }
+
+        // Adjacent Water Source (level 0) and Flowing (level 1) emit a stepped side-skirt (11 faces = 44 verts)
+        let mut stepped = Chunk::new(ChunkPos::new(0, 0, 0));
+        stepped.set(4, 4, 4, BlockId::WATER);
+        stepped.set_facing(4, 4, 4, 0);
+        stepped.set(5, 4, 4, BlockId::WATER);
+        stepped.set_facing(5, 4, 4, 1);
+        let stepped_mesh = mesher.mesh_chunk(&stepped);
+        assert_eq!(
+            stepped_mesh.water_vertices.len(),
+            44,
+            "Adjacent stepped Water levels must emit a side-skirt face closing the step gap"
+        );
     }
 }

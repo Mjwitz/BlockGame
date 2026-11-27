@@ -4,7 +4,7 @@ use glam::{IVec3, Vec3};
 
 use crate::{
     block::{BlockId, BlockRegistry},
-    item::{ItemId, ItemSlot},
+    item::ItemSlot,
     world::World,
 };
 
@@ -31,16 +31,18 @@ const ALL_DIRS: [IVec3; 6] = [
     IVec3::NEG_Y,
 ];
 
-/// Returns the visual surface height (`0.125..=1.0`) for a Water or Lava voxel given its fluid level.
+/// Returns the visual surface height (`0.0625..=1.0`) for a Water or Lava voxel given its fluid level.
+/// Source Block (`0`) is `0.875`, stepping down `1/8` per decay level (`1 -> 0.75`, ..., `6 -> 0.125`, `7 -> 0.0625`),
+/// and `1.0` when falling (`8`) or submerged beneath the same fluid.
 #[inline]
 pub fn fluid_surface_height(level: u8, above_same_fluid: bool) -> f32 {
-    if above_same_fluid || level == FLUID_FALLING {
+    if above_same_fluid || level >= FLUID_FALLING {
         1.0
     } else if level == FLUID_SOURCE {
         0.875
     } else {
         let clamped = level.min(7);
-        ((8 - clamped) as f32 / 8.0).clamp(0.125, 0.875)
+        ((7 - clamped) as f32 / 8.0).max(0.0625)
     }
 }
 
@@ -113,6 +115,28 @@ impl FluidSimulation {
         if pos.y >= 0 && self.lava_queued.insert(pos) {
             self.lava_queue.push_back(pos);
         }
+    }
+
+    #[inline]
+    fn enqueue_fluid(&mut self, pos: IVec3, is_lava: bool) {
+        if is_lava {
+            self.enqueue_lava(pos);
+        } else {
+            self.enqueue_water(pos);
+        }
+    }
+
+    /// Solidifies Lava at `pos` into Obsidian (if Source Block) or Cobblestone (if Flowing Fluid).
+    fn solidify_lava_at(&mut self, pos: IVec3, world: &mut World, modified: &mut Vec<IVec3>) {
+        let solid = if world.get_fluid_level(pos) == FLUID_SOURCE {
+            BlockId::OBSIDIAN
+        } else {
+            BlockId::COBBLESTONE
+        };
+        world.set_block(pos, solid);
+        world.set_fluid_level(pos, 0);
+        modified.push(pos);
+        self.schedule_block_and_neighbors(pos, world);
     }
 
     /// Schedules `pos` and its 6 neighbors for fluid evaluation whenever a block changes.
@@ -197,35 +221,16 @@ impl FluidSimulation {
             for d in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z, IVec3::NEG_Y] {
                 let np = pos + d;
                 if world.get_block(np) == BlockId::LAVA {
-                    let lava_lvl = world.get_fluid_level(np);
-                    let solid = if lava_lvl == FLUID_SOURCE {
-                        BlockId::OBSIDIAN
-                    } else {
-                        BlockId::COBBLESTONE
-                    };
-                    world.set_block(np, solid);
-                    world.set_fluid_level(np, 0);
-                    modified.push(np);
-                    self.schedule_block_and_neighbors(np, world);
+                    self.solidify_lava_at(np, world, modified);
                 }
             }
-        } else {
+        } else if HORIZ_DIRS
+            .iter()
+            .any(|&d| world.get_block(pos + d).is_water())
+        {
             // Lava horizontally touching Water solidifies itself (Source -> Obsidian, Flowing -> Cobblestone)
-            if HORIZ_DIRS
-                .iter()
-                .any(|&d| world.get_block(pos + d).is_water())
-            {
-                let solid = if level == FLUID_SOURCE {
-                    BlockId::OBSIDIAN
-                } else {
-                    BlockId::COBBLESTONE
-                };
-                world.set_block(pos, solid);
-                world.set_fluid_level(pos, 0);
-                modified.push(pos);
-                self.schedule_block_and_neighbors(pos, world);
-                return;
-            }
+            self.solidify_lava_at(pos, world, modified);
+            return;
         }
 
         // 2. Infinite 2x2 Water Source formation (only for non-source Water over solid or source Water)
@@ -287,11 +292,7 @@ impl FluidSimulation {
                         let next_decay = level + 1;
                         world.set_fluid_level(pos, next_decay);
                         modified.push(pos);
-                        if is_lava {
-                            self.enqueue_lava(pos);
-                        } else {
-                            self.enqueue_water(pos);
-                        }
+                        self.enqueue_fluid(pos, is_lava);
                         self.schedule_block_and_neighbors(pos, world);
                         return;
                     }
@@ -325,43 +326,25 @@ impl FluidSimulation {
                 self.schedule_block_and_neighbors(below_pos, world);
                 return;
             } else if !is_lava && below_b == BlockId::LAVA {
-                let lava_lvl = world.get_fluid_level(below_pos);
-                let solid = if lava_lvl == FLUID_SOURCE {
-                    BlockId::OBSIDIAN
-                } else {
-                    BlockId::COBBLESTONE
-                };
-                world.set_block(below_pos, solid);
-                world.set_fluid_level(below_pos, 0);
-                modified.push(below_pos);
-                self.schedule_block_and_neighbors(below_pos, world);
+                self.solidify_lava_at(below_pos, world, modified);
                 return;
             } else if can_flow_into(below_b) {
                 if !is_lava && below_b.is_fragile() {
-                    let drop = fragile_wash_drop(below_b);
-                    if !drop.is_empty() {
-                        drops.push((below_pos, drop));
+                    if let Some(item_id) = registry.get(below_b).and_then(|def| def.drop_item) {
+                        drops.push((below_pos, ItemSlot::new(item_id, 1)));
                     }
                 }
                 world.set_block(below_pos, fluid_id);
                 world.set_fluid_level(below_pos, FLUID_FALLING);
                 modified.push(below_pos);
-                if is_lava {
-                    self.enqueue_lava(below_pos);
-                } else {
-                    self.enqueue_water(below_pos);
-                }
+                self.enqueue_fluid(below_pos, is_lava);
                 return;
             } else if below_b == fluid_id {
                 let below_lvl = world.get_fluid_level(below_pos);
                 if below_lvl != FLUID_SOURCE && below_lvl != FLUID_FALLING {
                     world.set_fluid_level(below_pos, FLUID_FALLING);
                     modified.push(below_pos);
-                    if is_lava {
-                        self.enqueue_lava(below_pos);
-                    } else {
-                        self.enqueue_water(below_pos);
-                    }
+                    self.enqueue_fluid(below_pos, is_lava);
                 }
                 // Falling fluid hitting same fluid below only spreads horizontally if below is a Source Block
                 if below_lvl != FLUID_SOURCE {
@@ -384,16 +367,7 @@ impl FluidSimulation {
             let np = pos + d;
             let nb = world.get_block(np);
             if !is_lava && nb == BlockId::LAVA {
-                let lava_lvl = world.get_fluid_level(np);
-                let solid = if lava_lvl == FLUID_SOURCE {
-                    BlockId::OBSIDIAN
-                } else {
-                    BlockId::COBBLESTONE
-                };
-                world.set_block(np, solid);
-                world.set_fluid_level(np, 0);
-                modified.push(np);
-                self.schedule_block_and_neighbors(np, world);
+                self.solidify_lava_at(np, world, modified);
             } else if is_lava && nb.is_water() {
                 world.set_block(np, BlockId::COBBLESTONE);
                 world.set_fluid_level(np, 0);
@@ -401,29 +375,20 @@ impl FluidSimulation {
                 self.schedule_block_and_neighbors(np, world);
             } else if can_flow_into(nb) {
                 if !is_lava && nb.is_fragile() {
-                    let drop = fragile_wash_drop(nb);
-                    if !drop.is_empty() {
-                        drops.push((np, drop));
+                    if let Some(item_id) = registry.get(nb).and_then(|def| def.drop_item) {
+                        drops.push((np, ItemSlot::new(item_id, 1)));
                     }
                 }
                 world.set_block(np, fluid_id);
                 world.set_fluid_level(np, next_level);
                 modified.push(np);
-                if is_lava {
-                    self.enqueue_lava(np);
-                } else {
-                    self.enqueue_water(np);
-                }
+                self.enqueue_fluid(np, is_lava);
             } else if nb == fluid_id {
                 let nl = world.get_fluid_level(np);
                 if nl != FLUID_SOURCE && nl != FLUID_FALLING && nl > next_level {
                     world.set_fluid_level(np, next_level);
                     modified.push(np);
-                    if is_lava {
-                        self.enqueue_lava(np);
-                    } else {
-                        self.enqueue_water(np);
-                    }
+                    self.enqueue_fluid(np, is_lava);
                 }
             }
         }
@@ -520,40 +485,6 @@ fn find_downhill_dirs(
             .collect()
     } else {
         HORIZ_DIRS.to_vec()
-    }
-}
-
-fn fragile_wash_drop(b: BlockId) -> ItemSlot {
-    match b {
-        BlockId::TORCH => ItemSlot::new(ItemId::TORCH, 1),
-        BlockId::WHEAT_0 | BlockId::WHEAT_1 | BlockId::WHEAT_2 => {
-            ItemSlot::new(ItemId::WHEAT_SEEDS, 1)
-        }
-        BlockId::WHEAT_3 => ItemSlot::new(ItemId::WHEAT, 1),
-        BlockId::CARROTS_0 | BlockId::CARROTS_1 | BlockId::CARROTS_2 => {
-            ItemSlot::new(ItemId::CARROT, 1)
-        }
-        BlockId::CARROTS_3 => ItemSlot::new(ItemId::CARROT, 2),
-        BlockId::POTATOES_0 | BlockId::POTATOES_1 | BlockId::POTATOES_2 => {
-            ItemSlot::new(ItemId::POTATO, 1)
-        }
-        BlockId::POTATOES_3 => ItemSlot::new(ItemId::POTATO, 2),
-        BlockId::TOMATOES_0 | BlockId::TOMATOES_1 | BlockId::TOMATOES_2 => {
-            ItemSlot::new(ItemId::TOMATO_SEEDS, 1)
-        }
-        BlockId::TOMATOES_3 => ItemSlot::new(ItemId::TOMATO, 2),
-        BlockId::MELON_STEM_0
-        | BlockId::MELON_STEM_1
-        | BlockId::MELON_STEM_2
-        | BlockId::MELON_STEM_3 => ItemSlot::new(ItemId::MELON_SEEDS, 1),
-        BlockId::PUMPKIN_STEM_0
-        | BlockId::PUMPKIN_STEM_1
-        | BlockId::PUMPKIN_STEM_2
-        | BlockId::PUMPKIN_STEM_3 => ItemSlot::new(ItemId::PUMPKIN_SEEDS, 1),
-        BlockId::SUGAR_CANE => ItemSlot::new(ItemId::SUGAR_CANE, 1),
-        BlockId::TALL_GRASS => ItemSlot::new(ItemId::WHEAT_SEEDS, 1),
-        BlockId::LILY_PAD => ItemSlot::new(ItemId::LILY_PAD, 1),
-        _ => ItemSlot::EMPTY,
     }
 }
 

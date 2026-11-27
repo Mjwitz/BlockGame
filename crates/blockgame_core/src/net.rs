@@ -2549,6 +2549,7 @@ fn run_server_loop(
     let mut world = World::new();
     save_data.apply_to_world(&mut world);
     let mut farming_sim = crate::farming::FarmingSimulation::from_save_data(&save_data);
+    let mut fluid_sim = crate::fluid::FluidSimulation::new();
     let mut station_sync_accum: f32 = 0.0;
     let mut animal_sync_accum: f32 = 0.0;
     let mut village_sync_accum: f32 = 0.0;
@@ -3108,6 +3109,8 @@ fn run_server_loop(
                             ));
                         } else {
                             world.set_block(pos, block_id);
+                            world.set_fluid_level(pos, crate::fluid::FLUID_SOURCE);
+                            fluid_sim.schedule_block_and_neighbors(pos, &world);
                             if block_id.is_farmland() {
                                 farming_sim.track_farmland(pos);
                             } else if block_id.is_farmland_crop() {
@@ -4542,6 +4545,47 @@ fn run_server_loop(
                                 },
                             );
                         }
+                    }
+                }
+
+                // A2. Authoritative cellular Water & Lava fluid simulation (ADR 0004 / ADR 0010)
+                if fluid_sim.has_pending() {
+                    let (fluid_modified, fluid_drops) =
+                        fluid_sim.tick(dt, &mut world, &block_registry);
+                    for pos in fluid_modified {
+                        let block = world.get_block(pos);
+                        let (cpos, _, _, _) = world_to_chunk_coords(pos);
+                        if let Some(chunk) = world.get_chunk(cpos) {
+                            save_data
+                                .modified_chunks
+                                .insert(cpos, encode_chunk_rle(chunk));
+                        }
+                        broadcast_pkt(
+                            &mut clients,
+                            &ServerPacket::BlockUpdate {
+                                pos,
+                                block_id: block,
+                            },
+                        );
+                    }
+                    for (pos, item) in fluid_drops {
+                        if item.is_empty() {
+                            continue;
+                        }
+                        let drop_id = next_local_drop_id();
+                        let drop_pos = pos.as_vec3() + Vec3::new(0.5, 0.35, 0.5);
+                        let mut drop = ItemDrop::new(drop_pos, item);
+                        drop.drop_id = drop_id;
+                        save_data.item_drops.push(drop);
+                        broadcast_pkt(
+                            &mut clients,
+                            &ServerPacket::ItemDropSpawned {
+                                drop_id,
+                                position: drop_pos,
+                                velocity: Vec3::new(0.0, 2.0, 0.0),
+                                item,
+                            },
+                        );
                     }
                 }
 

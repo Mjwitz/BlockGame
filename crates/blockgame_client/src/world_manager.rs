@@ -1847,14 +1847,14 @@ impl WorldManager {
         true
     }
 
-    /// Advances cellular Water and Lava flow ticks, rebuilding affected chunk meshes and spawning washed drops.
+    /// Advances cellular Water and Lava flow ticks in singleplayer, rebuilding affected chunk meshes and spawning washed drops.
     pub fn tick_fluids(
         &mut self,
         dt: f32,
         device: &wgpu::Device,
         pipeline: &VoxelPipeline,
     ) {
-        if !self.fluid_sim.has_pending() {
+        if self.is_multiplayer || !self.fluid_sim.has_pending() {
             return;
         }
         let mut chunks_to_rebuild = Vec::new();

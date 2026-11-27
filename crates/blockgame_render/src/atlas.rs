@@ -3290,7 +3290,7 @@ fn paint_cave_tiles(atlas: &mut TextureAtlas) {
         ]
     };
 
-    // 581: Deepstone Cobblestone (fractured dark cobble blocks with deep mortar grooves)
+    // 581: Deepstone Cobblestone (fractured Deepstone blocks with deep mortar grooves)
     atlas.paint_tile(581, |px, py| {
         let row = py / 8;
         let shift = (row % 2) * 5;
