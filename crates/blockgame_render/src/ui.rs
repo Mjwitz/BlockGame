@@ -67,11 +67,27 @@ impl UiVertex {
     }
 }
 
-/// Clickable action button inside the in-game chat log.
+/// Action triggered when clicking an interactive element inside the in-game chat log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatAction {
+    Command(String),
+    OpenUrl(String),
+}
+
+/// Clickable action hitbox inside the in-game chat log.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatActionHitbox {
     pub rect: [f32; 4],
-    pub command: String,
+    pub action: ChatAction,
+}
+
+/// Hitboxes for the clickable chat URL confirmation modal.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LinkConfirmModalHitboxes {
+    pub panel_rect: [f32; 4],
+    pub open_rect: [f32; 4],
+    pub copy_rect: [f32; 4],
+    pub cancel_rect: [f32; 4],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +98,10 @@ pub enum ChatSegment<'a> {
         command: String,
         color: [f32; 4],
         hover_color: [f32; 4],
+    },
+    Link {
+        label: &'a str,
+        url: String,
     },
 }
 
@@ -9724,95 +9744,191 @@ impl UiBuilder {
         }
     }
 
-    pub fn parse_chat_segments<'a>(line: &'a str, alpha: f32) -> Vec<ChatSegment<'a>> {
-    let mut segments = Vec::new();
-    let mut cursor = 0;
-
-    while let Some(start_rel) = line[cursor..].find('[') {
-        let abs_start = cursor + start_rel;
-        if let Some(end_rel) = line[abs_start..].find(']') {
-            let abs_end = abs_start + end_rel;
-            let inner = &line[abs_start + 1..abs_end];
-            let lower = inner.trim().to_ascii_lowercase();
-
-            let button = if lower == "accept" {
-                Some((
-                    "Accept",
-                    "/tpaccept".to_string(),
-                    [0.15, 0.58, 0.25, alpha],
-                    [0.25, 0.82, 0.38, alpha.max(0.95)],
-                ))
-            } else if lower == "deny" {
-                Some((
-                    "Deny",
-                    "/tpdeny".to_string(),
-                    [0.65, 0.20, 0.20, alpha],
-                    [0.88, 0.28, 0.28, alpha.max(0.95)],
-                ))
-            } else if lower == "spawn" {
-                Some((
-                    "Spawn",
-                    "/spawn".to_string(),
-                    [0.20, 0.45, 0.75, alpha],
-                    [0.30, 0.62, 0.95, alpha.max(0.95)],
-                ))
-            } else if inner.starts_with('/') {
-                Some((
-                    inner,
-                    inner.to_string(),
-                    [0.20, 0.48, 0.62, alpha],
-                    [0.30, 0.65, 0.85, alpha.max(0.95)],
-                ))
-            } else if lower.starts_with("home:") || lower.starts_with("home ") {
-                let hname = inner[5..].trim();
-                Some((
-                    hname,
-                    format!("/home {}", hname),
-                    [0.20, 0.48, 0.62, alpha],
-                    [0.30, 0.65, 0.85, alpha.max(0.95)],
-                ))
-            } else if lower.starts_with("click:") {
-                let cmd = inner[6..].trim();
-                Some((
-                    cmd,
-                    cmd.to_string(),
-                    [0.72, 0.58, 0.18, alpha],
-                    [0.92, 0.75, 0.25, alpha.max(0.95)],
-                ))
-            } else {
-                None
+    /// Splits a plain/color-coded text slice into `ChatSegment::Text` and `ChatSegment::Link`
+    /// segments for any valid `http://` or `https://` URLs. Non-HTTP(S) schemes are left as text.
+    fn split_text_with_urls<'a>(text: &'a str, out: &mut Vec<ChatSegment<'a>>) {
+        let mut cursor = 0;
+        let bytes = text.as_bytes();
+        while cursor < text.len() {
+            let rest = &text[cursor..];
+            let next_http = rest.find("http://");
+            let next_https = rest.find("https://");
+            let rel_start = match (next_http, next_https) {
+                (Some(a), Some(b)) => a.min(b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => break,
             };
 
-            if let Some((label, cmd, col, hover_col)) = button {
-                if abs_start > cursor {
-                    segments.push(ChatSegment::Text(&line[cursor..abs_start]));
+            let abs_start = cursor + rel_start;
+            let scheme_len = if text[abs_start..].starts_with("https://") {
+                8
+            } else {
+                7
+            };
+
+            // Reject if immediately preceded by an alphanumeric/scheme character (e.g., `foohttp://`)
+            if abs_start > 0 {
+                let prev = text[..abs_start].chars().next_back().unwrap_or(' ');
+                if prev.is_ascii_alphanumeric() || prev == '_' || prev == '+' || prev == '-' {
+                    let advance = abs_start + scheme_len;
+                    out.push(ChatSegment::Text(&text[cursor..advance]));
+                    cursor = advance;
+                    continue;
                 }
-                segments.push(ChatSegment::Button {
-                    label,
-                    command: cmd,
-                    color: col,
-                    hover_color: hover_col,
+            }
+
+            // Scan until whitespace or control character
+            let mut abs_end = abs_start + scheme_len;
+            while abs_end < bytes.len() {
+                let ch = text[abs_end..].chars().next().unwrap();
+                if ch.is_whitespace() || ch.is_control() || ch == '<' || ch == '>' {
+                    break;
+                }
+                abs_end += ch.len_utf8();
+            }
+
+            // Trim trailing sentence punctuation (preserving balanced parentheses in URLs)
+            while abs_end > abs_start + scheme_len {
+                let last = text[..abs_end].chars().next_back().unwrap();
+                let should_trim = match last {
+                    '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\'' | ']' => true,
+                    ')' => {
+                        let slice = &text[abs_start..abs_end];
+                        let opens = slice.chars().filter(|&c| c == '(').count();
+                        let closes = slice.chars().filter(|&c| c == ')').count();
+                        closes > opens
+                    }
+                    _ => false,
+                };
+                if should_trim {
+                    abs_end -= last.len_utf8();
+                } else {
+                    break;
+                }
+            }
+
+            let candidate = &text[abs_start..abs_end];
+            let host_part = &candidate[scheme_len..];
+            let valid_host = !host_part.is_empty()
+                && host_part
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '[');
+
+            if valid_host {
+                if abs_start > cursor {
+                    out.push(ChatSegment::Text(&text[cursor..abs_start]));
+                }
+                out.push(ChatSegment::Link {
+                    label: candidate,
+                    url: candidate.to_string(),
                 });
-                cursor = abs_end + 1;
-                continue;
+                cursor = abs_end;
+            } else {
+                let advance = abs_start + scheme_len;
+                out.push(ChatSegment::Text(&text[cursor..advance]));
+                cursor = advance;
             }
         }
-        let next_start = abs_start + 1;
-        if next_start <= line.len() {
-            let next_bracket = line[next_start..].find('[').map(|i| next_start + i).unwrap_or(line.len());
-            segments.push(ChatSegment::Text(&line[cursor..next_bracket]));
-            cursor = next_bracket;
-        } else {
-            break;
+
+        if cursor < text.len() {
+            out.push(ChatSegment::Text(&text[cursor..]));
         }
     }
 
-    if cursor < line.len() {
-        segments.push(ChatSegment::Text(&line[cursor..]));
-    }
+    pub fn parse_chat_segments<'a>(line: &'a str, alpha: f32) -> Vec<ChatSegment<'a>> {
+        let mut segments = Vec::new();
+        let mut cursor = 0;
 
-    segments
-}
+        while let Some(start_rel) = line[cursor..].find('[') {
+            let abs_start = cursor + start_rel;
+            if let Some(end_rel) = line[abs_start..].find(']') {
+                let abs_end = abs_start + end_rel;
+                let inner = &line[abs_start + 1..abs_end];
+                let lower = inner.trim().to_ascii_lowercase();
+
+                let button = if lower == "accept" {
+                    Some((
+                        "Accept",
+                        "/tpaccept".to_string(),
+                        [0.15, 0.58, 0.25, alpha],
+                        [0.25, 0.82, 0.38, alpha.max(0.95)],
+                    ))
+                } else if lower == "deny" {
+                    Some((
+                        "Deny",
+                        "/tpdeny".to_string(),
+                        [0.65, 0.20, 0.20, alpha],
+                        [0.88, 0.28, 0.28, alpha.max(0.95)],
+                    ))
+                } else if lower == "spawn" {
+                    Some((
+                        "Spawn",
+                        "/spawn".to_string(),
+                        [0.20, 0.45, 0.75, alpha],
+                        [0.30, 0.62, 0.95, alpha.max(0.95)],
+                    ))
+                } else if inner.starts_with('/') {
+                    Some((
+                        inner,
+                        inner.to_string(),
+                        [0.20, 0.48, 0.62, alpha],
+                        [0.30, 0.65, 0.85, alpha.max(0.95)],
+                    ))
+                } else if lower.starts_with("home:") || lower.starts_with("home ") {
+                    let hname = inner[5..].trim();
+                    Some((
+                        hname,
+                        format!("/home {}", hname),
+                        [0.20, 0.48, 0.62, alpha],
+                        [0.30, 0.65, 0.85, alpha.max(0.95)],
+                    ))
+                } else if lower.starts_with("click:") {
+                    let cmd = inner[6..].trim();
+                    Some((
+                        cmd,
+                        cmd.to_string(),
+                        [0.72, 0.58, 0.18, alpha],
+                        [0.92, 0.75, 0.25, alpha.max(0.95)],
+                    ))
+                } else {
+                    None
+                };
+
+                if let Some((label, cmd, col, hover_col)) = button {
+                    if abs_start > cursor {
+                        Self::split_text_with_urls(&line[cursor..abs_start], &mut segments);
+                    }
+                    segments.push(ChatSegment::Button {
+                        label,
+                        command: cmd,
+                        color: col,
+                        hover_color: hover_col,
+                    });
+                    cursor = abs_end + 1;
+                    continue;
+                }
+            }
+            let next_start = abs_start + 1;
+            if next_start <= line.len() {
+                let next_bracket = line[next_start..]
+                    .find('[')
+                    .map(|i| next_start + i)
+                    .unwrap_or(line.len());
+                Self::split_text_with_urls(&line[cursor..next_bracket], &mut segments);
+                cursor = next_bracket;
+            } else {
+                break;
+            }
+        }
+
+        if cursor < line.len() {
+            Self::split_text_with_urls(&line[cursor..], &mut segments);
+        }
+
+        segments
+    }
 
     /// Draws the in-game Multiplayer Chat Box (bottom-left) and the Tab Online Player List overlay.
     pub fn draw_multiplayer_hud_overlays(
@@ -9974,10 +10090,40 @@ impl UiBuilder {
                         if chat_open {
                             hitboxes.push(ChatActionHitbox {
                                 rect: [seg_x, btn_y, btn_w, btn_h],
-                                command,
+                                action: ChatAction::Command(command),
                             });
                         }
                         seg_x += btn_w + 5.0;
+                    }
+                    ChatSegment::Link { label, url } => {
+                        let link_w = Self::string_width(label, 8.0, 1.0);
+                        let link_h = 16.0;
+                        let link_y = msg_y + 2.0;
+                        let is_hovered =
+                            chat_open && Self::is_rect_hovered(cursor_pos, seg_x, link_y, link_w, link_h);
+                        let link_col = if is_hovered {
+                            [0.65, 0.90, 1.0, alpha.max(0.95)]
+                        } else {
+                            [0.42, 0.78, 1.0, alpha.max(0.90)]
+                        };
+                        Self::draw_string(
+                            mesh,
+                            seg_x,
+                            msg_y + 4.0,
+                            label,
+                            8.0,
+                            11.5,
+                            1.0,
+                            link_col,
+                        );
+                        mesh.add_quad(seg_x, msg_y + 16.0, link_w, 1.2, white_uv, link_col);
+                        if chat_open {
+                            hitboxes.push(ChatActionHitbox {
+                                rect: [seg_x, link_y, link_w, link_h],
+                                action: ChatAction::OpenUrl(url),
+                            });
+                        }
+                        seg_x += link_w;
                     }
                 }
             }
@@ -10104,6 +10250,160 @@ impl UiBuilder {
         }
 
         hitboxes
+    }
+
+    /// Draws the confirmation modal shown when a player clicks an `http://` or `https://` URL in chat.
+    /// Returns hitboxes for the Open in Browser, Copy URL, and Cancel buttons.
+    pub fn draw_link_confirm_modal(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        url: &str,
+        copied_feedback: bool,
+        cursor_pos: [f32; 2],
+    ) -> LinkConfirmModalHitboxes {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+
+        // Dim backdrop
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.02, 0.03, 0.05, 0.68]);
+
+        let panel_w = 540.0_f32.min(screen_w - 40.0).max(320.0);
+        let panel_h = 196.0;
+        let px = (screen_w - panel_w) * 0.5;
+        let py = (screen_h - panel_h) * 0.5;
+
+        // Outer border + dark panel
+        mesh.add_quad(px - 2.0, py - 2.0, panel_w + 4.0, panel_h + 4.0, white_uv, [0.42, 0.72, 0.98, 0.90]);
+        mesh.add_quad(px, py, panel_w, panel_h, white_uv, [0.07, 0.09, 0.13, 0.96]);
+
+        // Title
+        let title = "Open External Link?";
+        let tw = Self::string_width(title, 11.0, 1.2);
+        Self::draw_string(
+            mesh,
+            px + (panel_w - tw) * 0.5,
+            py + 16.0,
+            title,
+            11.0,
+            15.0,
+            1.2,
+            [0.95, 0.97, 1.0, 1.0],
+        );
+
+        let subtitle = "Only open links from people you trust:";
+        let sw = Self::string_width(subtitle, 7.5, 1.0);
+        Self::draw_string(
+            mesh,
+            px + (panel_w - sw) * 0.5,
+            py + 42.0,
+            subtitle,
+            7.5,
+            11.0,
+            1.0,
+            [0.75, 0.80, 0.88, 0.95],
+        );
+
+        // URL box (wrap into up to 2 lines if long)
+        let url_box_x = px + 18.0;
+        let url_box_y = py + 64.0;
+        let url_box_w = panel_w - 36.0;
+        let url_box_h = 54.0;
+        mesh.add_quad(url_box_x, url_box_y, url_box_w, url_box_h, white_uv, [0.04, 0.05, 0.08, 0.95]);
+
+        let max_chars = ((url_box_w - 16.0) / 8.5).floor().max(24.0) as usize;
+        let chars: Vec<char> = url.chars().collect();
+        if chars.len() <= max_chars {
+            Self::draw_string(
+                mesh,
+                url_box_x + 8.0,
+                url_box_y + 20.0,
+                url,
+                7.5,
+                11.0,
+                1.0,
+                [0.45, 0.82, 1.0, 1.0],
+            );
+        } else {
+            let line1: String = chars[..max_chars].iter().collect();
+            let rest = &chars[max_chars..];
+            let line2: String = if rest.len() > max_chars {
+                let mut s: String = rest[..max_chars.saturating_sub(3)].iter().collect();
+                s.push_str("...");
+                s
+            } else {
+                rest.iter().collect()
+            };
+            Self::draw_string(
+                mesh,
+                url_box_x + 8.0,
+                url_box_y + 10.0,
+                &line1,
+                7.5,
+                11.0,
+                1.0,
+                [0.45, 0.82, 1.0, 1.0],
+            );
+            Self::draw_string(
+                mesh,
+                url_box_x + 8.0,
+                url_box_y + 28.0,
+                &line2,
+                7.5,
+                11.0,
+                1.0,
+                [0.45, 0.82, 1.0, 1.0],
+            );
+        }
+
+        // Three action buttons: Open in Browser, Copy URL, Cancel
+        let btn_y = py + panel_h - 50.0;
+        let btn_h = 34.0;
+        let gap = 12.0;
+        let total_btn_w = panel_w - 36.0;
+        let btn_w = (total_btn_w - gap * 2.0) / 3.0;
+
+        let open_rect = [px + 18.0, btn_y, btn_w, btn_h];
+        let copy_rect = [px + 18.0 + btn_w + gap, btn_y, btn_w, btn_h];
+        let cancel_rect = [px + 18.0 + (btn_w + gap) * 2.0, btn_y, btn_w, btn_h];
+
+        let draw_btn = |mesh: &mut UiMesh, rect: [f32; 4], label: &str, base: [f32; 4], hover: [f32; 4]| {
+            let hovered = Self::is_rect_hovered(cursor_pos, rect[0], rect[1], rect[2], rect[3]);
+            mesh.add_quad(rect[0], rect[1], rect[2], rect[3], white_uv, if hovered { hover } else { base });
+            if hovered {
+                mesh.add_quad(rect[0] - 1.0, rect[1] - 1.0, rect[2] + 2.0, 1.0, white_uv, [1.0, 1.0, 1.0, 0.9]);
+                mesh.add_quad(rect[0] - 1.0, rect[1] + rect[3], rect[2] + 2.0, 1.0, white_uv, [1.0, 1.0, 1.0, 0.9]);
+                mesh.add_quad(rect[0] - 1.0, rect[1], 1.0, rect[3], white_uv, [1.0, 1.0, 1.0, 0.9]);
+                mesh.add_quad(rect[0] + rect[2], rect[1], 1.0, rect[3], white_uv, [1.0, 1.0, 1.0, 0.9]);
+            }
+            let lw = Self::string_width(label, 8.0, 1.0);
+            Self::draw_string(
+                mesh,
+                rect[0] + (rect[2] - lw) * 0.5,
+                rect[1] + 11.0,
+                label,
+                8.0,
+                11.5,
+                1.0,
+                [1.0, 1.0, 1.0, 1.0],
+            );
+        };
+
+        draw_btn(mesh, open_rect, "Open in Browser", [0.16, 0.52, 0.28, 0.95], [0.22, 0.68, 0.36, 1.0]);
+        draw_btn(
+            mesh,
+            copy_rect,
+            if copied_feedback { "Copied!" } else { "Copy URL" },
+            [0.20, 0.42, 0.68, 0.95],
+            [0.28, 0.56, 0.88, 1.0],
+        );
+        draw_btn(mesh, cancel_rect, "Cancel", [0.45, 0.22, 0.24, 0.95], [0.64, 0.30, 0.32, 1.0]);
+
+        LinkConfirmModalHitboxes {
+            panel_rect: [px, py, panel_w, panel_h],
+            open_rect,
+            copy_rect,
+            cancel_rect,
+        }
     }
 
     /// Draws a compact proximity voice chat status badge and nearby speaker indicators.
@@ -13469,8 +13769,8 @@ mod tests {
             "127.0.0.1:25565",
         );
         assert_eq!(hitboxes.len(), 2);
-        assert_eq!(hitboxes[0].command, "/tpaccept");
-        assert_eq!(hitboxes[1].command, "/tpdeny");
+        assert_eq!(hitboxes[0].action, ChatAction::Command("/tpaccept".to_string()));
+        assert_eq!(hitboxes[1].action, ChatAction::Command("/tpdeny".to_string()));
     }
 
     #[test]
@@ -13673,5 +13973,92 @@ mod tests {
             GamepadButton::LeftTrigger,
         );
         assert!(!fish_mesh.indices.is_empty());
+    }
+
+    #[test]
+    fn test_parse_chat_segments_http_and_https_links() {
+        let segs = UiBuilder::parse_chat_segments(
+            "Check out https://example.com/wiki_(help). and http://localhost:8080/test!",
+            1.0,
+        );
+        assert_eq!(
+            segs,
+            vec![
+                ChatSegment::Text("Check out "),
+                ChatSegment::Link {
+                    label: "https://example.com/wiki_(help)",
+                    url: "https://example.com/wiki_(help)".to_string(),
+                },
+                ChatSegment::Text(". and "),
+                ChatSegment::Link {
+                    label: "http://localhost:8080/test",
+                    url: "http://localhost:8080/test".to_string(),
+                },
+                ChatSegment::Text("!"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_chat_segments_ignores_non_http_schemes_and_preserves_buttons() {
+        let segs = UiBuilder::parse_chat_segments(
+            "Avoid file:///etc/passwd and javascript:alert(1) [Accept] https://blockgame.dev",
+            1.0,
+        );
+        assert_eq!(segs.len(), 4);
+        assert!(matches!(segs[0], ChatSegment::Text(t) if t.contains("file:///etc/passwd")));
+        assert!(matches!(segs[1], ChatSegment::Button { label: "Accept", .. }));
+        assert_eq!(segs[2], ChatSegment::Text(" "));
+        assert_eq!(
+            segs[3],
+            ChatSegment::Link {
+                label: "https://blockgame.dev",
+                url: "https://blockgame.dev".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_chat_link_hitbox_and_confirm_modal() {
+        let mut mesh = UiMesh::new();
+        let entry = blockgame_core::net::ChatEntry {
+            sender: "Steve".to_string(),
+            prefix: String::new(),
+            message: "Join https://discord.gg/blockgame now!".to_string(),
+            is_system: false,
+            age: 0.0,
+        };
+        let hitboxes = UiBuilder::draw_multiplayer_hud_overlays(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &[entry],
+            true,
+            "",
+            0,
+            [0.0, 0.0],
+            false,
+            &[],
+            "Steve",
+            false,
+            "",
+        );
+        assert_eq!(hitboxes.len(), 1);
+        assert_eq!(
+            hitboxes[0].action,
+            ChatAction::OpenUrl("https://discord.gg/blockgame".to_string())
+        );
+
+        let mut modal_mesh = UiMesh::new();
+        let modal_hb = UiBuilder::draw_link_confirm_modal(
+            &mut modal_mesh,
+            1280.0,
+            720.0,
+            "https://discord.gg/blockgame",
+            false,
+            [640.0, 360.0],
+        );
+        assert!(!modal_mesh.indices.is_empty());
+        assert!(modal_hb.open_rect[2] > 0.0 && modal_hb.copy_rect[2] > 0.0 && modal_hb.cancel_rect[2] > 0.0);
     }
 }

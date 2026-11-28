@@ -22,8 +22,9 @@ use blockgame_core::{
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture, ui::ChatActionHitbox, DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline,
-    WireframePipeline,
+    create_depth_texture,
+    ui::{ChatAction, ChatActionHitbox, LinkConfirmModalHitboxes},
+    DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline, WireframePipeline,
 };
 use glam::{IVec3, Vec3};
 use winit::{
@@ -42,6 +43,83 @@ pub struct JeiRecipeModalState {
     pub target_item: ItemId,
     pub is_usage_mode: bool,
     pub recipe_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatLinkModalState {
+    pub url: String,
+    pub copied_feedback: bool,
+}
+
+/// Returns true for either the main Enter key or Numpad Enter so both submit chat,
+/// dialogs, text inputs, and respawn identically while leaving custom keybinds distinct.
+#[inline]
+pub fn is_enter_key(key: KeyCode) -> bool {
+    matches!(key, KeyCode::Enter | KeyCode::NumpadEnter)
+}
+
+/// Opens a validated `http://` or `https://` URL in the user's default OS browser.
+fn open_external_url(url: &str) -> bool {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn().is_ok()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .is_ok()
+    }
+}
+
+/// Copies plain text to the OS clipboard using native platform tools.
+fn copy_text_to_clipboard(text: &str) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let try_pipe = |program: &str, args: &[&str]| -> bool {
+        let Ok(mut child) = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return false;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            if stdin.write_all(text.as_bytes()).is_err() {
+                return false;
+            }
+        }
+        child.wait().map(|s| s.success()).unwrap_or(false)
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        try_pipe("clip", &[])
+    }
+    #[cfg(target_os = "macos")]
+    {
+        try_pipe("pbcopy", &[])
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        try_pipe("wl-copy", &[])
+            || try_pipe("xclip", &["-selection", "clipboard"])
+            || try_pipe("xsel", &["--clipboard", "--input"])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +318,8 @@ pub struct AppState {
     pub chat_input: String,
     pub chat_scroll: usize,
     pub chat_hitboxes: Vec<ChatActionHitbox>,
+    pub pending_chat_link: Option<ChatLinkModalState>,
+    pub link_modal_hitboxes: LinkConfirmModalHitboxes,
     pub player_homes: HashMap<String, (Vec3, f32, f32)>,
     pub tab_held: bool,
     pub net_sync_timer: f32,
@@ -1719,6 +1799,8 @@ impl ApplicationHandler for BlockGameApp {
             chat_input: String::new(),
             chat_scroll: 0,
             chat_hitboxes: Vec::new(),
+            pending_chat_link: None,
+            link_modal_hitboxes: LinkConfirmModalHitboxes::default(),
             player_homes: HashMap::new(),
             tab_held: false,
             net_sync_timer: 0.0,
@@ -3510,51 +3592,88 @@ impl BlockGameApp {
                     return;
                 }
 
+                if state.pending_chat_link.is_some() {
+                    if pressed && button == MouseButton::Left {
+                        let (_, _, ui_cpos) = state.ui_metrics();
+                        let hb = state.link_modal_hitboxes;
+                        let hit = |r: [f32; 4]| {
+                            ui_cpos[0] >= r[0]
+                                && ui_cpos[0] <= r[0] + r[2]
+                                && ui_cpos[1] >= r[1]
+                                && ui_cpos[1] <= r[1] + r[3]
+                        };
+                        if hit(hb.open_rect) {
+                            if let Some(modal) = state.pending_chat_link.take() {
+                                let _ = open_external_url(&modal.url);
+                            }
+                        } else if hit(hb.copy_rect) {
+                            if let Some(modal) = &mut state.pending_chat_link {
+                                if copy_text_to_clipboard(&modal.url) {
+                                    modal.copied_feedback = true;
+                                }
+                            }
+                        } else if hit(hb.cancel_rect) || !hit(hb.panel_rect) {
+                            state.pending_chat_link = None;
+                        }
+                    }
+                    return;
+                }
+
                 if state.chat_open {
                     if pressed && button == MouseButton::Left {
                         let (_, _, ui_cpos) = state.ui_metrics();
-                        let mut clicked_command = None;
+                        let mut clicked_action = None;
                         for hb in &state.chat_hitboxes {
                             if ui_cpos[0] >= hb.rect[0]
                                 && ui_cpos[0] <= hb.rect[0] + hb.rect[2]
                                 && ui_cpos[1] >= hb.rect[1]
                                 && ui_cpos[1] <= hb.rect[1] + hb.rect[3]
                             {
-                                clicked_command = Some(hb.command.clone());
+                                clicked_action = Some(hb.action.clone());
                                 break;
                             }
                         }
 
-                        if let Some(cmd) = clicked_command {
-                            if let Some(client) = &mut state.mp_client {
-                                client.send(&blockgame_core::net::ClientPacket::Chat {
-                                    message: cmd,
-                                });
-                            } else {
-                                state.local_chat_messages.push(blockgame_core::net::ChatEntry {
-                                    sender: if state.local_username.is_empty() {
-                                        "Player".to_string()
-                                    } else {
-                                        state.local_username.clone()
-                                    },
-                                    prefix: String::new(),
-                                    message: cmd,
-                                    is_system: false,
-                                    age: 0.0,
-                                });
-                                if state.local_chat_messages.len() > 100 {
-                                    state.local_chat_messages.remove(0);
+                        if let Some(action) = clicked_action {
+                            match action {
+                                ChatAction::OpenUrl(url) => {
+                                    state.pending_chat_link = Some(ChatLinkModalState {
+                                        url,
+                                        copied_feedback: false,
+                                    });
                                 }
-                            }
-                            state.chat_open = false;
-                            state.chat_input.clear();
-                            state.chat_scroll = 0;
-                            if !state.inventory_open && !state.player_stats.is_dead {
-                                state.mouse_captured = true;
-                                let _ = state
-                                    .window
-                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
-                                state.window.set_cursor_visible(false);
+                                ChatAction::Command(cmd) => {
+                                    if let Some(client) = &mut state.mp_client {
+                                        client.send(&blockgame_core::net::ClientPacket::Chat {
+                                            message: cmd,
+                                        });
+                                    } else {
+                                        state.local_chat_messages.push(blockgame_core::net::ChatEntry {
+                                            sender: if state.local_username.is_empty() {
+                                                "Player".to_string()
+                                            } else {
+                                                state.local_username.clone()
+                                            },
+                                            prefix: String::new(),
+                                            message: cmd,
+                                            is_system: false,
+                                            age: 0.0,
+                                        });
+                                        if state.local_chat_messages.len() > 100 {
+                                            state.local_chat_messages.remove(0);
+                                        }
+                                    }
+                                    state.chat_open = false;
+                                    state.chat_input.clear();
+                                    state.chat_scroll = 0;
+                                    if !state.inventory_open && !state.player_stats.is_dead {
+                                        state.mouse_captured = true;
+                                        let _ = state
+                                            .window
+                                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                        state.window.set_cursor_visible(false);
+                                    }
+                                }
                             }
                         }
                     }
@@ -5084,7 +5203,7 @@ impl BlockGameApp {
                                 state.screen = AppScreen::WorldSelect {
                                     selected_index: sel,
                                 };
-                            } else if key == KeyCode::Enter {
+                            } else if is_enter_key(key) {
                                 if !name_input.trim().is_empty() {
                                     state.create_and_start_world(&name_input, &seed_input, game_mode);
                                 }
@@ -5131,7 +5250,7 @@ impl BlockGameApp {
                         AppScreen::WorldSelect { selected_index } => {
                             if key == KeyCode::Escape {
                                 state.screen = AppScreen::Title;
-                            } else if key == KeyCode::Enter {
+                            } else if is_enter_key(key) {
                                 if let Some(idx) = selected_index {
                                     if idx < state.saved_worlds.len() {
                                         let folder = state.saved_worlds[idx].folder_name.clone();
@@ -5180,7 +5299,7 @@ impl BlockGameApp {
                                 };
                             } else if key == KeyCode::Escape {
                                 state.screen = AppScreen::Title;
-                            } else if key == KeyCode::Enter {
+                            } else if is_enter_key(key) {
                                 if let Err(err) = state.join_multiplayer_server(
                                     &username_input,
                                     &password_input,
@@ -5281,7 +5400,7 @@ impl BlockGameApp {
                                     AppScreen::Title
                                 };
                             } else if preset_input_focused {
-                                if key == KeyCode::Enter {
+                                if is_enter_key(key) {
                                     let saved = state
                                         .character_profile
                                         .save_custom_preset(&preset_name_input, draft);
@@ -5337,9 +5456,17 @@ impl BlockGameApp {
                     return;
                 }
 
+                // Dismiss external link confirmation modal on Escape
+                if state.pending_chat_link.is_some() {
+                    if pressed && key == KeyCode::Escape {
+                        state.pending_chat_link = None;
+                    }
+                    return;
+                }
+
                 // When dead, Space or Enter triggers respawn
                 if state.player_stats.is_dead {
-                    if pressed && (key == KeyCode::Space || key == KeyCode::Enter) {
+                    if pressed && (key == KeyCode::Space || is_enter_key(key)) {
                         state.respawn_player();
                     }
                     return;
@@ -5359,7 +5486,7 @@ impl BlockGameApp {
                                     .set_cursor_grab(winit::window::CursorGrabMode::Confined);
                                 state.window.set_cursor_visible(false);
                             }
-                        } else if key == KeyCode::Enter {
+                        } else if is_enter_key(key) {
                             let msg = state.chat_input.trim().to_string();
                             if !msg.is_empty() {
                                 if let Some(client) = &mut state.mp_client {
@@ -5475,7 +5602,7 @@ impl BlockGameApp {
                 // Storage Terminal search bar text entry when focused
                 if state.storage_search_focused && state.inventory_open {
                     if pressed {
-                        if key == KeyCode::Escape || key == KeyCode::Enter {
+                        if key == KeyCode::Escape || is_enter_key(key) {
                             state.storage_search_focused = false;
                         } else if key == KeyCode::Backspace {
                             state.storage_search_text.pop();
@@ -5495,7 +5622,7 @@ impl BlockGameApp {
                 // Search Bar text entry when focused
                 if state.jei_search_focused && state.inventory_open {
                     if pressed {
-                        if key == KeyCode::Escape || key == KeyCode::Enter {
+                        if key == KeyCode::Escape || is_enter_key(key) {
                             state.jei_search_focused = false;
                         } else if key == KeyCode::Backspace {
                             state.jei_search_text.pop();
@@ -8710,6 +8837,16 @@ impl BlockGameApp {
                             state.mp_hosted_server.is_some(),
                             &server_addr,
                         );
+                        if let Some(ref modal) = state.pending_chat_link {
+                            state.link_modal_hitboxes = UiBuilder::draw_link_confirm_modal(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                &modal.url,
+                                modal.copied_feedback,
+                                ui_cursor,
+                            );
+                        }
                         if state.mp_client.is_some() {
                             let ptt_name = crate::settings::key_display_name(
                                 state.settings.keybinds.push_to_talk,
@@ -12375,5 +12512,21 @@ mod drop_item_tests {
         assert!(!bounds.contains(1000.0, 360.0));
         assert!(!bounds.contains(640.0, 20.0));
         assert!(!bounds.contains(640.0, 700.0));
+    }
+
+    #[test]
+    fn test_is_enter_key_parity() {
+        assert!(is_enter_key(KeyCode::Enter));
+        assert!(is_enter_key(KeyCode::NumpadEnter));
+        assert!(!is_enter_key(KeyCode::Space));
+        assert!(!is_enter_key(KeyCode::Escape));
+    }
+
+    #[test]
+    fn test_open_external_url_rejects_non_http_schemes() {
+        assert!(!open_external_url("file:///etc/passwd"));
+        assert!(!open_external_url("javascript:alert(1)"));
+        assert!(!open_external_url("ftp://example.com"));
+        assert!(!open_external_url(""));
     }
 }
