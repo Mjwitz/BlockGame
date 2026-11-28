@@ -25,7 +25,22 @@ pub struct ChunkMesh {
     pub water_indices: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeshStream {
+    Opaque,
+    Cutout,
+    Foliage,
+}
+
 impl ChunkMesh {
+    fn stream_mut(&mut self, stream: MeshStream) -> (&mut Vec<VoxelVertex>, &mut Vec<u32>) {
+        match stream {
+            MeshStream::Opaque => (&mut self.vertices, &mut self.indices),
+            MeshStream::Cutout => (&mut self.cutout_vertices, &mut self.cutout_indices),
+            MeshStream::Foliage => (&mut self.foliage_vertices, &mut self.foliage_indices),
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
@@ -227,7 +242,7 @@ impl<'a> ChunkMesher<'a> {
                             iz,
                             tile_id,
                             &light_map,
-                            false,
+                            MeshStream::Cutout,
                         );
                         continue;
                     }
@@ -241,7 +256,7 @@ impl<'a> ChunkMesher<'a> {
                             iz,
                             block_id,
                             &light_map,
-                            false,
+                            MeshStream::Cutout,
                         );
                         continue;
                     }
@@ -259,7 +274,7 @@ impl<'a> ChunkMesher<'a> {
                             iz,
                             block_id,
                             &light_map,
-                            true,
+                            MeshStream::Foliage,
                         );
                         continue;
                     }
@@ -377,7 +392,7 @@ impl<'a> ChunkMesher<'a> {
                             iz,
                             block_id,
                             &light_map,
-                            false,
+                            MeshStream::Cutout,
                         );
                     }
 
@@ -536,7 +551,11 @@ impl<'a> ChunkMesher<'a> {
                         continue;
                     }
 
-                    let is_cutout_cube = block_id == BlockId::GLASS || block_id.is_leaves();
+                    let cube_stream = if block_id == BlockId::GLASS || block_id.is_leaves() {
+                        MeshStream::Cutout
+                    } else {
+                        MeshStream::Opaque
+                    };
                     for dir in Direction::ALL {
                         let normal = dir.normal_ivec();
                         let nx = ix + normal.x;
@@ -586,7 +605,7 @@ impl<'a> ChunkMesher<'a> {
                                 uv,
                                 light,
                                 &query_block,
-                                is_cutout_cube,
+                                cube_stream,
                             );
                         }
                     }
@@ -606,6 +625,7 @@ impl<'a> ChunkMesher<'a> {
         mesh
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_face<F>(
         &self,
         mesh: &mut ChunkMesh,
@@ -617,7 +637,7 @@ impl<'a> ChunkMesher<'a> {
         uv_bounds: [f32; 4],
         light: [f32; 2],
         query: &F,
-        to_cutout: bool,
+        stream: MeshStream,
     ) where
         F: Fn(i32, i32, i32) -> BlockId,
     {
@@ -677,11 +697,7 @@ impl<'a> ChunkMesher<'a> {
 
         let ao = self.calculate_face_ao(x, y, z, dir, query);
 
-        let (verts, idxs) = if to_cutout {
-            (&mut mesh.cutout_vertices, &mut mesh.cutout_indices)
-        } else {
-            (&mut mesh.vertices, &mut mesh.indices)
-        };
+        let (verts, idxs) = mesh.stream_mut(stream);
         let start_idx = verts.len() as u32;
 
         for i in 0..4 {
@@ -969,6 +985,7 @@ impl<'a> ChunkMesher<'a> {
     }
 
     /// Generates crossed diagonal plant quads for crops and decorative blocks.
+    #[allow(clippy::too_many_arguments)]
     fn build_crop(
         &self,
         mesh: &mut ChunkMesh,
@@ -978,12 +995,13 @@ impl<'a> ChunkMesher<'a> {
         z: i32,
         block_id: BlockId,
         light_map: &blockgame_core::lighting::ChunkLightMap,
-        to_foliage: bool,
+        stream: MeshStream,
     ) {
         let tile_id = self.registry.get_texture(block_id, Direction::PosY);
-        self.build_cross_tile(mesh, chunk_pos, x, y, z, tile_id, light_map, to_foliage);
+        self.build_cross_tile(mesh, chunk_pos, x, y, z, tile_id, light_map, stream);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_cross_tile(
         &self,
         mesh: &mut ChunkMesh,
@@ -993,7 +1011,7 @@ impl<'a> ChunkMesher<'a> {
         z: i32,
         tile_id: u16,
         light_map: &blockgame_core::lighting::ChunkLightMap,
-        to_foliage: bool,
+        stream: MeshStream,
     ) {
         let origin = chunk_pos.to_world_origin();
         let fx = (origin.x + x) as f32;
@@ -1006,11 +1024,7 @@ impl<'a> ChunkMesher<'a> {
         let light = [lv.sun() as f32 / 15.0, lv.block() as f32 / 15.0];
         let ao = 1.0;
 
-        let (verts, idxs) = if to_foliage {
-            (&mut mesh.foliage_vertices, &mut mesh.foliage_indices)
-        } else {
-            (&mut mesh.cutout_vertices, &mut mesh.cutout_indices)
-        };
+        let (verts, idxs) = mesh.stream_mut(stream);
 
         let mut add_quad = |positions: [[f32; 3]; 4], uvs: [[f32; 2]; 4], normal: [f32; 3]| {
             let start_idx = verts.len() as u32;
@@ -1127,6 +1141,35 @@ impl<'a> ChunkMesher<'a> {
         tiles: [u16; 6], // [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
         light: [f32; 2],
     ) {
+        self.add_box_to_stream(
+            mesh,
+            x0,
+            y0,
+            z0,
+            x1,
+            y1,
+            z1,
+            tiles,
+            light,
+            MeshStream::Opaque,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_box_to_stream(
+        &self,
+        mesh: &mut ChunkMesh,
+        x0: f32,
+        y0: f32,
+        z0: f32,
+        x1: f32,
+        y1: f32,
+        z1: f32,
+        tiles: [u16; 6], // [South +Z, North -Z, East +X, West -X, Top +Y, Bottom -Y]
+        light: [f32; 2],
+        stream: MeshStream,
+    ) {
+        let (verts, idxs) = mesh.stream_mut(stream);
         let mut add_quad =
             |positions: [[f32; 3]; 4], normal: [f32; 3], tile_id: u16, ao: f32| {
                 let [u_min, v_min, u_max, v_max] = TextureAtlas::get_uv_bounds(tile_id);
@@ -1136,9 +1179,9 @@ impl<'a> ChunkMesher<'a> {
                     [u_max, v_min],
                     [u_min, v_min],
                 ];
-                let start_idx = mesh.vertices.len() as u32;
+                let start_idx = verts.len() as u32;
                 for i in 0..4 {
-                    mesh.vertices.push(VoxelVertex {
+                    verts.push(VoxelVertex {
                         position: positions[i],
                         uv: uvs[i],
                         normal,
@@ -1146,7 +1189,7 @@ impl<'a> ChunkMesher<'a> {
                         light,
                     });
                 }
-                mesh.indices.extend_from_slice(&[
+                idxs.extend_from_slice(&[
                     start_idx,
                     start_idx + 1,
                     start_idx + 2,
@@ -1586,7 +1629,13 @@ impl<'a> ChunkMesher<'a> {
             (2, true) | (3, true) => (0.0, 0.0, 1.0, 0.1875),
             _ => (0.0, 0.8125, 1.0, 1.0),
         };
-        self.add_box(
+        // Tile 333 (door top) contains alpha-cutout window panes and must render on cutout_pipeline
+        let stream = if is_top {
+            MeshStream::Cutout
+        } else {
+            MeshStream::Opaque
+        };
+        self.add_box_to_stream(
             mesh,
             fx + x0,
             fy,
@@ -1596,6 +1645,7 @@ impl<'a> ChunkMesher<'a> {
             fz + z1,
             [tile; 6],
             light,
+            stream,
         );
     }
 
@@ -4469,10 +4519,14 @@ mod tests {
         let mut door_chunk = Chunk::new(ChunkPos::new(0, 0, 0));
         door_chunk.set(4, 4, 4, BlockId::OAK_DOOR_CLOSED);
         door_chunk.set(4, 5, 4, BlockId::OAK_DOOR_TOP_CLOSED);
-        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 48);
+        let door_closed = mesher.mesh_chunk(&door_chunk);
+        assert_eq!(door_closed.vertices.len(), 24);
+        assert_eq!(door_closed.cutout_vertices.len(), 24);
         door_chunk.set(4, 4, 4, BlockId::OAK_DOOR_OPEN);
         door_chunk.set(4, 5, 4, BlockId::OAK_DOOR_TOP_OPEN);
-        assert_eq!(mesher.mesh_chunk(&door_chunk).vertices.len(), 48);
+        let door_open = mesher.mesh_chunk(&door_chunk);
+        assert_eq!(door_open.vertices.len(), 24);
+        assert_eq!(door_open.cutout_vertices.len(), 24);
 
         // 2-block Bed: foot (1 mattress (5 faces, seam culled) + 2 legs = 68) + head (1 mattress (5 faces, seam culled) + 2 legs = 68) = 136 vertices
         let mut bed_chunk = Chunk::new(ChunkPos::new(0, 0, 0));

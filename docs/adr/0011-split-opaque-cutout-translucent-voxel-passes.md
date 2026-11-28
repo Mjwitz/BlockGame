@@ -9,7 +9,7 @@
 
 ## Consequences
 
-- `ChunkMesh` stores separate `vertices`/`indices` (opaque), `cutout_vertices`/`cutout_indices` (alpha-tested), and `water_vertices`/`water_indices` (translucent) streams, uploaded as independent GPU buffers only when non-empty.
+- `ChunkMesh` stores four streams: `vertices`/`indices` (opaque), `cutout_vertices`/`cutout_indices` (always-visible alpha-tested geometry: leaves, glass, oak door tops, lily pads, dripstone, glow crystals, seagrass), `foliage_vertices`/`foliage_indices` (ground cross-quad plants: flowers, tall grass, crops, sugar cane), and `water_vertices`/`water_indices` (translucent), uploaded as independent GPU buffers only when non-empty. Both `cutout_*` and `foliage_*` draw on `cutout_pipeline`.
 - Solid terrain draws first in front-to-back chunk order with hardware Early-Z active and zero alpha blending, populating the depth buffer before cutout foliage is shaded.
-- Cross-quad plants (flowers, tall grass, crops, sugar cane, dripstone, glow crystal) emit 2 quads (8 vertices, 12 indices) instead of 4 quads (16 vertices, 24 indices) because the Cutout pipeline uses `cull_mode: None`, halving foliage vertex/index volume with identical visuals.
-- Having a dedicated Cutout pass makes distance-based foliage culling in low-end graphics modes a zero-remesh per-chunk skip at draw time.
+- Cross-quad plants emit 2 quads (8 vertices, 12 indices) instead of 4 quads (16 vertices, 24 indices) because the Cutout pipeline uses `cull_mode: None`, halving foliage vertex/index volume with identical visuals.
+- Separating `foliage_*` from always-visible `cutout_*` makes 48-block distant ground-foliage culling in `Fast` Graphics Quality mode a zero-remesh per-chunk skip at draw time without hiding distant tree canopies or glass.

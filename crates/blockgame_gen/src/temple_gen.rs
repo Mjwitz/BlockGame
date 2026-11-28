@@ -47,19 +47,8 @@ impl TerrainGenerator {
     /// Returns the deterministic boss temple placed in grid cell `(gx, gz)`, if the cell's
     /// biome is one of the 4 temple biomes and terrain elevation is suitable.
     pub fn find_temple_in_grid(&self, gx: i32, gz: i32) -> Option<TemplePlacement> {
-        if let Ok(cache) = self.temple_grid_cache.read() {
-            if let Some(cached) = cache.get(&(gx, gz)) {
-                return cached.clone();
-            }
-        }
-        let computed = self.compute_temple_in_grid(gx, gz);
-        if let Ok(mut cache) = self.temple_grid_cache.write() {
-            if cache.len() >= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES {
-                cache.clear();
-            }
-            cache.insert((gx, gz), computed.clone());
-        }
-        computed
+        self.temple_grid_cache
+            .get_or_insert_with((gx, gz), || self.compute_temple_in_grid(gx, gz))
     }
 
     fn compute_temple_in_grid(&self, gx: i32, gz: i32) -> Option<TemplePlacement> {

@@ -80,19 +80,8 @@ impl TerrainGenerator {
     /// Enforces `VILLAGE_SPAWN_CHANCE_PERCENT` (~50%) spawn chance, >=160 blocks from world origin,
     /// 4 themed biome families, and strict Boss Temple exclusion (same Voronoi biome cell or within 320 blocks).
     pub fn find_village_in_grid(&self, gx: i32, gz: i32) -> Option<VillagePlacement> {
-        if let Ok(cache) = self.village_grid_cache.read() {
-            if let Some(cached) = cache.get(&(gx, gz)) {
-                return cached.clone();
-            }
-        }
-        let computed = self.compute_village_in_grid(gx, gz);
-        if let Ok(mut cache) = self.village_grid_cache.write() {
-            if cache.len() >= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES {
-                cache.clear();
-            }
-            cache.insert((gx, gz), computed.clone());
-        }
-        computed
+        self.village_grid_cache
+            .get_or_insert_with((gx, gz), || self.compute_village_in_grid(gx, gz))
     }
 
     fn compute_village_in_grid(&self, gx: i32, gz: i32) -> Option<VillagePlacement> {
@@ -663,6 +652,14 @@ mod tests {
     #[test]
     fn test_issue_26_village_temple_grid_cache_determinism_and_speedup() {
         let gen = TerrainGenerator::new(2577988685);
+        // Verify (784, -784) on seed 2577988685 is actually a Flower Meadow biome
+        let fm_h = gen.surface_height(784, -784);
+        assert_eq!(
+            gen.get_biome(784, -784, fm_h),
+            Biome::FlowerMeadow,
+            "Expected (784, -784) on seed 2577988685 to be FlowerMeadow"
+        );
+
         // Issue #26 coordinates: (1711, 59, -1129) -> chunk (106, 3, -71), plus Flower Meadow (784, -784) -> chunk (49, 3, -49)
         for (cx, cz) in [(106, -71), (49, -49)] {
             let mut first_pass = Vec::new();
@@ -684,8 +681,8 @@ mod tests {
             assert_eq!(first_pass, second_pass);
         }
 
-        let v_len = gen.village_grid_cache.read().unwrap().len();
-        let t_len = gen.temple_grid_cache.read().unwrap().len();
+        let v_len = gen.village_grid_cache.len();
+        let t_len = gen.temple_grid_cache.len();
         assert!(v_len > 0 && v_len <= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES);
         assert!(t_len <= crate::terrain::MAX_STRUCTURE_GRID_CACHE_ENTRIES);
     }

@@ -118,6 +118,42 @@ fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
 
 pub(crate) const MAX_STRUCTURE_GRID_CACHE_ENTRIES: usize = 2048;
 
+pub(crate) struct GridCache<T> {
+    map: std::sync::RwLock<std::collections::HashMap<(i32, i32), Option<T>>>,
+}
+
+impl<T: Clone> GridCache<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            map: std::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+
+    pub(crate) fn get_or_insert_with<F>(&self, key: (i32, i32), compute: F) -> Option<T>
+    where
+        F: FnOnce() -> Option<T>,
+    {
+        if let Ok(cache) = self.map.read() {
+            if let Some(cached) = cache.get(&key) {
+                return cached.clone();
+            }
+        }
+        let computed = compute();
+        if let Ok(mut cache) = self.map.write() {
+            if cache.len() >= MAX_STRUCTURE_GRID_CACHE_ENTRIES {
+                cache.clear();
+            }
+            cache.insert(key, computed.clone());
+        }
+        computed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.map.read().map(|c| c.len()).unwrap_or(0)
+    }
+}
+
 pub struct TerrainGenerator {
     pub seed: u32,
     continental_noise: Fbm<Perlin>,
@@ -145,10 +181,8 @@ pub struct TerrainGenerator {
     seed_altitude_bias: f64,
     seed_relief_scale: f64,
     pub water_level: i32,
-    pub(crate) village_grid_cache:
-        std::sync::RwLock<std::collections::HashMap<(i32, i32), Option<crate::village_gen::VillagePlacement>>>,
-    pub(crate) temple_grid_cache:
-        std::sync::RwLock<std::collections::HashMap<(i32, i32), Option<crate::temple_gen::TemplePlacement>>>,
+    pub(crate) village_grid_cache: GridCache<crate::village_gen::VillagePlacement>,
+    pub(crate) temple_grid_cache: GridCache<crate::temple_gen::TemplePlacement>,
 }
 
 impl TerrainGenerator {
@@ -230,8 +264,8 @@ impl TerrainGenerator {
             seed_altitude_bias,
             seed_relief_scale,
             water_level: 38,
-            village_grid_cache: std::sync::RwLock::new(std::collections::HashMap::new()),
-            temple_grid_cache: std::sync::RwLock::new(std::collections::HashMap::new()),
+            village_grid_cache: GridCache::new(),
+            temple_grid_cache: GridCache::new(),
         }
     }
 

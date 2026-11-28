@@ -182,13 +182,6 @@ impl GraphicsQuality {
         }
     }
 
-    pub fn display_label(self) -> &'static str {
-        match self {
-            Self::Fancy => "Fancy",
-            Self::Fast => "Fast",
-        }
-    }
-
     pub fn from_str(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "fancy" => Some(Self::Fancy),

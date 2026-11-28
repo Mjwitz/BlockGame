@@ -467,28 +467,41 @@ impl VoxelPipeline {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[*uniform]));
     }
 
-    pub fn upload_mesh(&self, device: &wgpu::Device, mesh: &ChunkMesh) -> Option<GpuMeshBuffers> {
-        if mesh.indices.is_empty() {
+    fn upload_mesh_buffers(
+        device: &wgpu::Device,
+        v_label: &str,
+        i_label: &str,
+        vertices: &[VoxelVertex],
+        indices: &[u32],
+    ) -> Option<GpuMeshBuffers> {
+        if indices.is_empty() {
             return None;
         }
-
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.vertices),
+            label: Some(v_label),
+            contents: bytemuck::cast_slice(vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.indices),
+            label: Some(i_label),
+            contents: bytemuck::cast_slice(indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-
         Some(GpuMeshBuffers {
             vertex_buffer,
             index_buffer,
-            index_count: mesh.indices.len() as u32,
+            index_count: indices.len() as u32,
         })
+    }
+
+    pub fn upload_mesh(&self, device: &wgpu::Device, mesh: &ChunkMesh) -> Option<GpuMeshBuffers> {
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Vertex Buffer",
+            "Chunk Index Buffer",
+            &mesh.vertices,
+            &mesh.indices,
+        )
     }
 
     pub fn upload_cutout_mesh(
@@ -496,27 +509,13 @@ impl VoxelPipeline {
         device: &wgpu::Device,
         mesh: &ChunkMesh,
     ) -> Option<GpuMeshBuffers> {
-        if mesh.cutout_indices.is_empty() {
-            return None;
-        }
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Cutout Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.cutout_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Cutout Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.cutout_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Some(GpuMeshBuffers {
-            vertex_buffer,
-            index_buffer,
-            index_count: mesh.cutout_indices.len() as u32,
-        })
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Cutout Vertex Buffer",
+            "Chunk Cutout Index Buffer",
+            &mesh.cutout_vertices,
+            &mesh.cutout_indices,
+        )
     }
 
     pub fn upload_foliage_mesh(
@@ -524,27 +523,13 @@ impl VoxelPipeline {
         device: &wgpu::Device,
         mesh: &ChunkMesh,
     ) -> Option<GpuMeshBuffers> {
-        if mesh.foliage_indices.is_empty() {
-            return None;
-        }
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Foliage Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.foliage_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Foliage Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.foliage_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Some(GpuMeshBuffers {
-            vertex_buffer,
-            index_buffer,
-            index_count: mesh.foliage_indices.len() as u32,
-        })
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Foliage Vertex Buffer",
+            "Chunk Foliage Index Buffer",
+            &mesh.foliage_vertices,
+            &mesh.foliage_indices,
+        )
     }
 
     pub fn upload_water_mesh(
@@ -552,27 +537,13 @@ impl VoxelPipeline {
         device: &wgpu::Device,
         mesh: &ChunkMesh,
     ) -> Option<GpuMeshBuffers> {
-        if mesh.water_indices.is_empty() {
-            return None;
-        }
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Water Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.water_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Water Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.water_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Some(GpuMeshBuffers {
-            vertex_buffer,
-            index_buffer,
-            index_count: mesh.water_indices.len() as u32,
-        })
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Water Vertex Buffer",
+            "Chunk Water Index Buffer",
+            &mesh.water_vertices,
+            &mesh.water_indices,
+        )
     }
 }
 

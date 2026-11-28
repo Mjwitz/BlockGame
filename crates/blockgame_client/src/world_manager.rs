@@ -1037,22 +1037,24 @@ impl WorldManager {
         self.render_with_frustum_and_camera(render_pass, frustum, None);
     }
 
-    /// Renders loaded GPU opaque chunk meshes front-to-back with frustum culling and
-    /// surface-to-underground occlusion culling so hardware Early-Z rejects occluded terrain.
-    pub fn render_with_frustum_and_camera<'a>(
+    fn collect_visible_chunks<'a>(
         &'a self,
-        render_pass: &mut wgpu::RenderPass<'a>,
+        chunks: &'a HashMap<ChunkPos, GpuMeshBuffers>,
         frustum: Option<&blockgame_render::Frustum>,
         camera_pos: Option<Vec3>,
+        cull_dark_underground: bool,
+        max_horiz_dist_sq: Option<f32>,
+        out: &mut Vec<(f32, &'a GpuMeshBuffers)>,
     ) {
-        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
-        let mut visible: Vec<(f32, &'a GpuMeshBuffers)> =
-            Vec::with_capacity(self.gpu_chunks.len());
-        for (&pos, gpu_mesh) in &self.gpu_chunks {
+        let cull_underground = if cull_dark_underground {
+            camera_pos.filter(|cam| cam.y >= 34.0)
+        } else {
+            None
+        };
+        for (&pos, gpu_mesh) in chunks {
             if gpu_mesh.index_count == 0 {
                 continue;
             }
-
             let min = Vec3::new(
                 pos.0.x as f32 * 16.0,
                 pos.0.y as f32 * 16.0,
@@ -1067,27 +1069,33 @@ impl WorldManager {
                     }
                 }
             }
-
-            if let Some(f) = frustum {
-                let max = min + Vec3::splat(16.0);
-                if !f.is_box_visible(min, max) {
+            if let (Some(cam), Some(max_sq)) = (camera_pos, max_horiz_dist_sq) {
+                let dx = (min.x + 8.0) - cam.x;
+                let dz = (min.z + 8.0) - cam.z;
+                if dx * dx + dz * dz > max_sq {
                     continue;
                 }
             }
-
-            let dist_sq = if let Some(cam) = camera_pos {
-                (min + Vec3::splat(8.0)).distance_squared(cam)
-            } else {
-                0.0
-            };
-            visible.push((dist_sq, gpu_mesh));
+            if let Some(f) = frustum {
+                if !f.is_box_visible(min, min + Vec3::splat(16.0)) {
+                    continue;
+                }
+            }
+            let dist_sq = camera_pos
+                .map(|cam| (min + Vec3::splat(8.0)).distance_squared(cam))
+                .unwrap_or(0.0);
+            out.push((dist_sq, gpu_mesh));
         }
+    }
 
-        if camera_pos.is_some() {
-            // Front-to-back (nearest chunk first) to maximize hardware Early-Z rejection
+    fn draw_front_to_back<'a>(
+        render_pass: &mut wgpu::RenderPass<'a>,
+        mut visible: Vec<(f32, &'a GpuMeshBuffers)>,
+        sort: bool,
+    ) {
+        if sort {
             visible.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         }
-
         for (_, gpu_mesh) in visible {
             render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
             render_pass
@@ -1096,10 +1104,23 @@ impl WorldManager {
         }
     }
 
-    /// Renders alpha-cutout chunk meshes (leaves, glass, lily pads, dripstone, glow crystals,
-    /// seagrass) and ground foliage cross-quads (flowers, tall grass, crops, sugar cane)
-    /// front-to-back. In `Fast` Graphics Quality mode, ground foliage chunks beyond 48 blocks
-    /// horizontally are skipped immediately without remeshing.
+    /// Renders loaded GPU opaque chunk meshes front-to-back with frustum culling and
+    /// surface-to-underground occlusion culling so hardware Early-Z rejects occluded terrain.
+    pub fn render_with_frustum_and_camera<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+        camera_pos: Option<Vec3>,
+    ) {
+        let mut visible = Vec::with_capacity(self.gpu_chunks.len());
+        self.collect_visible_chunks(&self.gpu_chunks, frustum, camera_pos, true, None, &mut visible);
+        Self::draw_front_to_back(render_pass, visible, camera_pos.is_some());
+    }
+
+    /// Renders alpha-cutout chunk meshes (leaves, glass, oak door tops, lily pads, dripstone,
+    /// glow crystals, seagrass) and ground foliage cross-quads (flowers, tall grass, crops,
+    /// sugar cane) front-to-back. In `Fast` Graphics Quality mode, ground foliage chunks beyond
+    /// 48 blocks horizontally are skipped immediately without remeshing.
     pub fn render_cutout_with_frustum_and_camera<'a>(
         &'a self,
         render_pass: &mut wgpu::RenderPass<'a>,
@@ -1107,78 +1128,25 @@ impl WorldManager {
         camera_pos: Option<Vec3>,
     ) {
         const FAST_FOLIAGE_MAX_DIST_SQ: f32 = 48.0 * 48.0;
-        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
-        let mut visible: Vec<(f32, &'a GpuMeshBuffers)> =
+        let mut visible =
             Vec::with_capacity(self.gpu_cutout_chunks.len() + self.gpu_foliage_chunks.len());
-
-        for (&pos, gpu_mesh) in &self.gpu_cutout_chunks {
-            if gpu_mesh.index_count == 0 {
-                continue;
-            }
-            let min = Vec3::new(
-                pos.0.x as f32 * 16.0,
-                pos.0.y as f32 * 16.0,
-                pos.0.z as f32 * 16.0,
-            );
-            if let Some(cam) = cull_underground {
-                if self.gpu_chunks_dark_underground.contains(&pos) {
-                    let dx = (min.x + 8.0) - cam.x;
-                    let dz = (min.z + 8.0) - cam.z;
-                    if dx * dx + dz * dz > 48.0 * 48.0 {
-                        continue;
-                    }
-                }
-            }
-            if let Some(f) = frustum {
-                if !f.is_box_visible(min, min + Vec3::splat(16.0)) {
-                    continue;
-                }
-            }
-            let dist_sq = camera_pos
-                .map(|cam| (min + Vec3::splat(8.0)).distance_squared(cam))
-                .unwrap_or(0.0);
-            visible.push((dist_sq, gpu_mesh));
-        }
-
-        for (&pos, gpu_mesh) in &self.gpu_foliage_chunks {
-            if gpu_mesh.index_count == 0 {
-                continue;
-            }
-            let min = Vec3::new(
-                pos.0.x as f32 * 16.0,
-                pos.0.y as f32 * 16.0,
-                pos.0.z as f32 * 16.0,
-            );
-            if let Some(cam) = camera_pos {
-                if self.fast_graphics {
-                    let dx = (min.x + 8.0) - cam.x;
-                    let dz = (min.z + 8.0) - cam.z;
-                    if dx * dx + dz * dz > FAST_FOLIAGE_MAX_DIST_SQ {
-                        continue;
-                    }
-                }
-            }
-            if let Some(f) = frustum {
-                if !f.is_box_visible(min, min + Vec3::splat(16.0)) {
-                    continue;
-                }
-            }
-            let dist_sq = camera_pos
-                .map(|cam| (min + Vec3::splat(8.0)).distance_squared(cam))
-                .unwrap_or(0.0);
-            visible.push((dist_sq, gpu_mesh));
-        }
-
-        if camera_pos.is_some() {
-            visible.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
-        for (_, gpu_mesh) in visible {
-            render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-            render_pass
-                .set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
-        }
+        self.collect_visible_chunks(
+            &self.gpu_cutout_chunks,
+            frustum,
+            camera_pos,
+            true,
+            None,
+            &mut visible,
+        );
+        self.collect_visible_chunks(
+            &self.gpu_foliage_chunks,
+            frustum,
+            camera_pos,
+            false,
+            self.fast_graphics.then_some(FAST_FOLIAGE_MAX_DIST_SQ),
+            &mut visible,
+        );
+        Self::draw_front_to_back(render_pass, visible, camera_pos.is_some());
     }
 
     /// Renders all currently loaded GPU chunk meshes without frustum culling.
@@ -4207,6 +4175,29 @@ mod tests {
             "Fast Graphics Quality should cull internal leaf faces (fast={} vs fancy={})",
             fast_cutout,
             fancy_cutout
+        );
+
+        // 3. Verify Flower Meadow (784, -784) on seed 2577988685 routes flowers/tall grass to foliage stream
+        let fm_h = wm.generator.surface_height(784, -784);
+        assert_eq!(wm.generator.get_biome(784, -784, fm_h), Biome::FlowerMeadow);
+        let fm_cy = fm_h.div_euclid(16);
+        let fm_pos = ChunkPos::new(784_i32.div_euclid(16), fm_cy, (-784_i32).div_euclid(16));
+        let mut fm_chunk = wm.generator.generate_chunk(fm_pos);
+        wm.generator.populate_chunk_features(&mut fm_chunk);
+        world.insert_chunk(fm_chunk);
+        let fm_mesh = mesh_chunk_from_world_with_options(
+            &world,
+            &registry,
+            world.get_chunk(fm_pos).unwrap(),
+            false,
+        );
+        assert!(
+            !fm_mesh.vertices.is_empty(),
+            "Flower Meadow chunk should emit solid opaque ground vertices"
+        );
+        assert!(
+            !fm_mesh.foliage_vertices.is_empty() && fm_mesh.foliage_vertices.len() % 8 == 0,
+            "Flower Meadow chunk should emit 2-quad (8-vertex) flowers/tall grass into foliage stream"
         );
     }
 }
