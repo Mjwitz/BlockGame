@@ -21,7 +21,7 @@ use crate::config_io::now_unix_secs;
 use crate::item::{Enhancement, ItemId, ItemSlot};
 
 fn default_retention_days() -> u32 {
-    30
+    0
 }
 
 fn default_max_rollback_radius() -> i32 {

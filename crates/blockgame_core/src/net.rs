@@ -2432,13 +2432,17 @@ fn adjust_slots_by_delta(slots: &mut [ItemSlot], item: ItemSlot, add: bool) {
 
 fn apply_rollback_plan(
     world: &mut World,
+    save_data: &mut WorldSaveData,
     plan: &crate::blocklog::RollbackPlan,
     forward_undo: bool,
     outgoing_broadcasts: &mut Vec<(Option<u32>, ServerPacket)>,
 ) {
+    let mut touched_chunks: std::collections::HashSet<ChunkPos> = std::collections::HashSet::new();
     for ev in &plan.block_events {
         let target_block = if forward_undo { ev.new_block } else { ev.old_block };
         world.set_block(ev.pos, target_block);
+        let (cpos, _, _, _) = world_to_chunk_coords(ev.pos);
+        touched_chunks.insert(cpos);
         outgoing_broadcasts.push((
             None,
             ServerPacket::BlockUpdate {
@@ -2472,7 +2476,7 @@ fn apply_rollback_plan(
                             cook_progress: 0.0,
                         },
                     ));
-                } else if target_block == BlockId::FURNACE {
+                } else if target_block == BlockId::FURNACE || target_block == BlockId::FURNACE_LIT {
                     let f = world.get_or_create_furnace(ev.pos);
                     f.input = ItemSlot::EMPTY;
                     f.fuel = ItemSlot::EMPTY;
@@ -2497,7 +2501,7 @@ fn apply_rollback_plan(
                             cook_progress: f.cook_progress,
                         },
                     ));
-                } else if target_block == BlockId::COOKING_POT {
+                } else if target_block.is_cooking_pot() {
                     let p = world.get_or_create_cooking_pot(ev.pos);
                     p.ingredients = [ItemSlot::EMPTY; 4];
                     p.fuel = ItemSlot::EMPTY;
@@ -2523,6 +2527,21 @@ fn apply_rollback_plan(
                         },
                     ));
                 }
+            }
+        }
+    }
+
+    // Re-encode all touched chunks into save_data so rollbacks/undos survive restarts and sync to late joiners
+    for cpos in touched_chunks {
+        if let Some(chunk) = world.get_chunk(cpos) {
+            save_data
+                .modified_chunks
+                .insert(cpos, encode_chunk_rle(chunk));
+            let facings = crate::save::encode_chunk_facings(chunk);
+            if facings.is_empty() {
+                save_data.modified_chunk_facings.remove(&cpos);
+            } else {
+                save_data.modified_chunk_facings.insert(cpos, facings);
             }
         }
     }
@@ -2675,12 +2694,11 @@ fn apply_command_output(
     blocklog_mgr: &crate::blocklog::BlockLogManager,
     inspect_mode_players: &mut std::collections::HashSet<u32>,
     world: &mut World,
-    save_data_ref: &WorldSaveData,
+    save_data_ref: &mut WorldSaveData,
     default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
     config_dir: &std::path::Path,
     stop_flag: &Arc<AtomicBool>,
-    world_name: &str,
     uptime_secs: u64,
     current_tps: f32,
     broadcast_achievements: bool,
@@ -2832,7 +2850,13 @@ fn apply_command_output(
                             } else if b_cnt == 0 && c_cnt == 0 {
                                 log_feedback.push("No matching changes found to roll back.".to_string());
                             } else {
-                                apply_rollback_plan(world, &plan, false, outgoing_broadcasts);
+                                apply_rollback_plan(
+                                    world,
+                                    save_data_ref,
+                                    &plan,
+                                    false,
+                                    outgoing_broadcasts,
+                                );
                                 let b_ids: Vec<i64> = plan.block_events.iter().map(|e| e.id).collect();
                                 let c_ids: Vec<i64> = plan.container_events.iter().map(|e| e.id).collect();
                                 let _ = blocklog_mgr.mark_rolled_back(&b_ids, &c_ids, &actor_name);
@@ -2849,7 +2873,13 @@ fn apply_command_output(
                     Ok(Some(plan)) => {
                         let b_cnt = plan.block_events.len();
                         let c_cnt = plan.container_events.len();
-                        apply_rollback_plan(world, &plan, true, outgoing_broadcasts);
+                        apply_rollback_plan(
+                            world,
+                            save_data_ref,
+                            &plan,
+                            true,
+                            outgoing_broadcasts,
+                        );
                         log_feedback.push(format!(
                             "&aUndid last rollback ({} block change(s), {} container change(s) re-applied).",
                             b_cnt, c_cnt
@@ -3059,7 +3089,7 @@ fn apply_command_output(
             ban_manager,
             moderation_mgr,
             automessage_mgr,
-            world_name,
+            &save_data_ref.metadata.name,
             uptime_secs,
             current_tps,
             broadcast_achievements,
@@ -4002,12 +4032,11 @@ fn run_server_loop(
                 &blocklog_mgr,
                 &mut inspect_mode_players,
                 &mut world,
-                &save_data,
+                &mut save_data,
                 &mut default_spawn,
                 &world_dir,
                 &config_dir,
                 &stop_flag,
-                &save_data.metadata.name,
                 server_started_at.elapsed().as_secs(),
                                     current_tps,
                 broadcast_achievements.load(Ordering::Relaxed),
@@ -5483,12 +5512,11 @@ fn run_server_loop(
                                     &blocklog_mgr,
                                     &mut inspect_mode_players,
                                     &mut world,
-                                    &save_data,
+                                    &mut save_data,
                                     &mut default_spawn,
                                     &world_dir,
                                     &config_dir,
                                     &stop_flag,
-                                    &save_data.metadata.name,
                                     server_started_at.elapsed().as_secs(),
                                     current_tps,
                                     broadcast_achievements.load(Ordering::Relaxed),
@@ -5959,12 +5987,11 @@ fn run_server_loop(
                                     &blocklog_mgr,
                                     &mut inspect_mode_players,
                                     &mut world,
-                                    &save_data,
+                                    &mut save_data,
                                     &mut default_spawn,
                                     &world_dir,
                                     &config_dir,
                                     &stop_flag,
-                                    &save_data.metadata.name,
                                     server_started_at.elapsed().as_secs(),
                                     current_tps,
                                     broadcast_achievements.load(Ordering::Relaxed),

@@ -3795,6 +3795,23 @@ impl BlockGameApp {
                                         "player_gm_survival" if !target_player.is_empty() => Some(
                                             AdminPanelAction::RunCommand(format!("gamemode survival {}", target_player)),
                                         ),
+                                        "player_warnings" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("warnings {}", target_player)),
+                                        ),
+                                        "player_group_add" if !target_player.is_empty() && !input.is_empty() => Some(
+                                            AdminPanelAction::SetPlayerGroup {
+                                                username: target_player,
+                                                group: input.clone(),
+                                                assigned: true,
+                                            },
+                                        ),
+                                        "player_group_remove" if !target_player.is_empty() && !input.is_empty() => Some(
+                                            AdminPanelAction::SetPlayerGroup {
+                                                username: target_player,
+                                                group: input.clone(),
+                                                assigned: false,
+                                            },
+                                        ),
                                         "player_rank" if !target_player.is_empty() && !input.is_empty() => Some(
                                             AdminPanelAction::RunCommand(format!("rank {} {}", target_player, input)),
                                         ),
@@ -10744,6 +10761,9 @@ impl BlockGameApp {
 
     /// Collects interactive widget/slot rectangles for D-pad Virtual Cursor snapping on the active screen.
     fn collect_dpad_snap_rects(state: &AppState, screen_w: f32, screen_h: f32) -> Vec<[f32; 4]> {
+        if state.admin_panel_open {
+            return state.admin_panel_hitboxes.iter().map(|h| h.rect).collect();
+        }
         let mut rects = Vec::new();
         match &state.screen {
             AppScreen::Title => {

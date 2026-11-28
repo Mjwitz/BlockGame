@@ -10683,9 +10683,14 @@ impl UiBuilder {
                 let mut ry = content_y + 18.0;
                 for p in snapshot.online_players.iter().take(12) {
                     let is_sel = selected_player.is_some_and(|s| s.eq_ignore_ascii_case(&p.username));
+                    let grp_str = if p.groups.is_empty() {
+                        "default".to_string()
+                    } else {
+                        p.groups.join(",")
+                    };
                     let row_label = format!(
-                        "{} [{}] ({},{},{}) W:{}",
-                        p.username, p.gamemode, p.pos[0], p.pos[1], p.pos[2], p.warning_count
+                        "{} [{}] ({}) ({},{},{}) W:{}",
+                        p.username, p.gamemode, grp_str, p.pos[0], p.pos[1], p.pos[2], p.warning_count
                     );
                     push_btn(
                         mesh,
@@ -10726,17 +10731,19 @@ impl UiBuilder {
                     ("Mute 10m", "player_mute", [0.55, 0.42, 0.16, 0.95]),
                     ("Unmute", "player_unmute", [0.18, 0.52, 0.28, 0.95]),
                     ("Warn", "player_warn", [0.65, 0.46, 0.14, 0.95]),
+                    ("Warnings", "player_warnings", [0.46, 0.38, 0.20, 0.95]),
                     ("TP To", "player_tpto", [0.18, 0.42, 0.66, 0.95]),
                     ("TP Here", "player_tphere", [0.18, 0.42, 0.66, 0.95]),
                     ("Creative", "player_gm_creative", [0.24, 0.46, 0.58, 0.95]),
                     ("Survival", "player_gm_survival", [0.24, 0.46, 0.58, 0.95]),
-                    ("Set Rank", "player_rank", [0.34, 0.36, 0.62, 0.95]),
+                    ("+ Group", "player_group_add", [0.24, 0.48, 0.36, 0.95]),
+                    ("- Group", "player_group_remove", [0.48, 0.30, 0.26, 0.95]),
                     ("Reset Data", "player_reset", [0.50, 0.20, 0.22, 0.95]),
                 ];
                 let col_w = (right_w - 8.0) * 0.5;
                 for (i, &(label, key, col)) in actions.iter().enumerate() {
                     let cx = right_x + (i % 2) as f32 * (col_w + 8.0);
-                    let cy = content_y + 22.0 + (i / 2) as f32 * 32.0;
+                    let cy = content_y + 22.0 + (i / 2) as f32 * 28.0;
                     push_btn(
                         mesh,
                         [cx, cy, col_w, 26.0],
