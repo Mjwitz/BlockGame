@@ -182,3 +182,60 @@ _Avoid_: Running water, fluid stream, moving liquid
 A client-side visual preset (`Fancy` or `Fast`) in Settings that trades distant foliage detail and interior leaf transparency for higher frame rates on lower-end hardware without changing gameplay.
 _Avoid_: Quality preset, low graphics, detail level, LOD mode
 
+### Multiplayer & Moderation
+
+**Admin Panel**:
+The in-game multiplayer management interface with permission-gated tabs for managing players, bans, chat moderation, groups and permissions, Auto-Messages, and server controls.
+_Avoid_: Staff GUI, mod menu, OP panel
+
+**Auto-Message**:
+A scheduled, recurring server broadcast sent to all online players at a configured interval that can be toggled on or off.
+_Avoid_: Scheduled broadcast, announcement timer, bot message
+
+**Global Chat Lock**:
+A server-wide chat moderation state that blocks regular players from sending chat messages while allowing staff with bypass permission to continue speaking.
+_Avoid_: Server mute, chat freeze, lockdown
+
+**Slowmode**:
+A per-player cooldown enforced between consecutive chat messages on a server, bypassed by permitted staff.
+_Avoid_: Chat throttle, rate limit, chat delay
+
+**Word Filter**:
+A toggleable server chat filter that matches configured words (case-insensitive, whole-word) and either censors them with asterisks or blocks the message, bypassed by permitted staff.
+_Avoid_: Profanity filter, swear filter, chat blacklist
+
+**Warning**:
+A persisted moderation notice issued by staff to a player with a reason and timestamp, recorded in the player's warning history without triggering automatic punishments.
+_Avoid_: Strike, infraction, flag
+
+### Land Claiming
+
+**Claimed Chunk**:
+A full-height `16×16` vertical world column `(chunk_x, chunk_z)` owned by a player that disables PvP and blocks non-trusted players from modifying blocks, containers, or animals inside it.
+_Avoid_: Land claim, protected plot, zone
+
+**Trusted Player**:
+A player granted full build, container, door, and animal access across all of a claim owner's Claimed Chunks.
+_Avoid_: Claim friend, co-owner, claim member
+
+**Admin Claim**:
+A server-owned full-height `16×16` chunk claim used for spawn areas and server landmarks where only permitted admins can place or break blocks and PvP is disabled.
+_Avoid_: Safe zone, server plot, staff region
+
+**Claim Bypass**:
+An explicit per-session admin toggle that allows a permitted admin to ignore Claimed Chunk restrictions without automatically risking accidental edits.
+_Avoid_: God mode, override mode, admin ignore
+
+### Block Logging
+
+**Block Log**:
+The per-world SQLite audit history of player block placements, block breaks, and container item additions and removals.
+_Avoid_: Action log, grief log, audit trail
+
+**Inspect Mode**:
+A toggleable admin mode that displays the recent Block Log history of any clicked block or container in chat without modifying the world.
+_Avoid_: Inspector tool, audit wand, log stick
+
+**Rollback**:
+A reversible admin operation that reverts recorded Block Log changes (both blocks and container contents) within a specified radius and time window, optionally filtered to a single player.
+_Avoid_: Rewind, restore, world revert
