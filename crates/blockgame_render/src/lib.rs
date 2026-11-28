@@ -34,7 +34,10 @@ pub use ui::{
     CharacterCreatorLayout, CharacterCreatorTab, CharacterCreatorUiState, FishingHudPhase,
     FishingHudState, ShopUiAction, ShopUiTab, UiBuilder, UiMesh, UiPipeline, UiRect, UiVertex,
 };
-pub use wireframe::{LineVertex, WireframePipeline};
+pub use wireframe::{
+    build_claim_border_vertices, claim_border_color, claim_transition_notice, ClaimBorderPipeline,
+    ColoredLineVertex, LineVertex, WireframePipeline,
+};
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

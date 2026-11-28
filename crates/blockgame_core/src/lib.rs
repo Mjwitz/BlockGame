@@ -7,6 +7,7 @@ pub mod block;
 pub mod character;
 pub mod chat;
 pub mod chunk;
+pub mod claims;
 pub mod command;
 pub mod config_io;
 pub mod crafting;

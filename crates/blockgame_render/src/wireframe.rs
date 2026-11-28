@@ -417,3 +417,276 @@ impl WireframePipeline {
         (buffer, vertex_count)
     }
 }
+
+/// Per-vertex colored 3D line vertex used for claim chunk-border overlays.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct ColoredLineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+impl ColoredLineVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<ColoredLineVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+}
+
+/// Maps claim ownership relation to its 3D border RGBA color:
+/// Green = own, Cyan = trusted, Red = other player, Gold = Admin Claim.
+pub fn claim_border_color(relation: blockgame_core::claims::ClaimRelation) -> [f32; 4] {
+    use blockgame_core::claims::ClaimRelation;
+    match relation {
+        ClaimRelation::Own => [0.22, 0.92, 0.36, 0.88],
+        ClaimRelation::Trusted => [0.20, 0.88, 0.96, 0.88],
+        ClaimRelation::Other => [0.95, 0.25, 0.25, 0.88],
+        ClaimRelation::Admin => [1.00, 0.82, 0.20, 0.92],
+    }
+}
+
+/// Builds 3D line-list vertices for color-coded vertical chunk boundary pillars and horizontal rings
+/// around `player_y` for all synced nearby claimed chunks.
+pub fn build_claim_border_vertices(
+    claims: &[blockgame_core::claims::SyncedClaimChunk],
+    player_y: f32,
+) -> Vec<ColoredLineVertex> {
+    let mut verts = Vec::with_capacity(claims.len() * 40);
+    let y_min = (player_y - 24.0).max(0.0);
+    let y_max = player_y + 40.0;
+    let ring_step = 8.0;
+
+    for c in claims {
+        let color = claim_border_color(c.relation);
+        let x0 = (c.chunk_x * 16) as f32 + 0.03;
+        let x1 = ((c.chunk_x + 1) * 16) as f32 - 0.03;
+        let z0 = (c.chunk_z * 16) as f32 + 0.03;
+        let z1 = ((c.chunk_z + 1) * 16) as f32 - 0.03;
+
+        // 4 vertical corner pillars + 4 mid-edge vertical guides
+        let verticals = [
+            (x0, z0),
+            (x1, z0),
+            (x1, z1),
+            (x0, z1),
+            ((x0 + x1) * 0.5, z0),
+            ((x0 + x1) * 0.5, z1),
+            (x0, (z0 + z1) * 0.5),
+            (x1, (z0 + z1) * 0.5),
+        ];
+        for (vx, vz) in verticals {
+            verts.push(ColoredLineVertex { position: [vx, y_min, vz], color });
+            verts.push(ColoredLineVertex { position: [vx, y_max, vz], color });
+        }
+
+        // Horizontal perimeter rings every 8 blocks vertically
+        let mut ry = (y_min / ring_step).floor() * ring_step;
+        while ry <= y_max {
+            let edges = [
+                ([x0, ry, z0], [x1, ry, z0]),
+                ([x1, ry, z0], [x1, ry, z1]),
+                ([x1, ry, z1], [x0, ry, z1]),
+                ([x0, ry, z1], [x0, ry, z0]),
+            ];
+            for (a, b) in edges {
+                verts.push(ColoredLineVertex { position: a, color });
+                verts.push(ColoredLineVertex { position: b, color });
+            }
+            ry += ring_step;
+        }
+    }
+    verts
+}
+
+/// Computes an entry/exit notice when moving from `prev_owner` to `cur_owner` display names.
+/// Returns `None` when remaining inside the same claim owner or remaining in wilderness.
+pub fn claim_transition_notice(
+    prev_owner: Option<&str>,
+    cur_owner: Option<&str>,
+) -> Option<String> {
+    if prev_owner == cur_owner {
+        return None;
+    }
+    match (prev_owner, cur_owner) {
+        (_, Some(entered)) => Some(format!("&6Entered {}", entered)),
+        (Some(left), None) => Some(format!("&7Left {} (Wilderness)", left)),
+        (None, None) => None,
+    }
+}
+
+const CLAIM_BORDER_WGSL: &str = r#"
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+    sun_dir: vec4<f32>,
+    fog_color: vec4<f32>,
+    fog_params: vec4<f32>,
+    camera_pos: vec4<f32>,
+    sky_zenith: vec4<f32>,
+    sky_horizon: vec4<f32>,
+    sun_tint: vec4<f32>,
+    ambient_tint: vec4<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> camera: CameraUniform;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_position = camera.view_proj * vec4<f32>(in.position, 1.0);
+    out.color = in.color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return in.color;
+}
+"#;
+
+/// Render pipeline for color-coded 3D claim chunk borders.
+pub struct ClaimBorderPipeline {
+    pub render_pipeline: wgpu::RenderPipeline,
+}
+
+impl ClaimBorderPipeline {
+    pub fn new(
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+        camera_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Claim Border Shader"),
+            source: wgpu::ShaderSource::Wgsl(CLAIM_BORDER_WGSL.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Claim Border Pipeline Layout"),
+            bind_group_layouts: &[camera_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Claim Border Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[ColoredLineVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: crate::pipeline::DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        Self { render_pipeline }
+    }
+
+    pub fn create_border_buffer(
+        device: &wgpu::Device,
+        claims: &[blockgame_core::claims::SyncedClaimChunk],
+        player_y: f32,
+    ) -> Option<(wgpu::Buffer, u32)> {
+        let verts = build_claim_border_vertices(claims, player_y);
+        if verts.is_empty() {
+            return None;
+        }
+        let count = verts.len() as u32;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Claim Border Vertex Buffer"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        Some((buffer, count))
+    }
+}
+
+#[cfg(test)]
+mod claim_border_tests {
+    use super::*;
+    use blockgame_core::claims::{ClaimRelation, SyncedClaimChunk};
+
+    #[test]
+    fn claim_border_colors_and_vertices() {
+        let own = claim_border_color(ClaimRelation::Own);
+        let trusted = claim_border_color(ClaimRelation::Trusted);
+        let other = claim_border_color(ClaimRelation::Other);
+        let admin = claim_border_color(ClaimRelation::Admin);
+        assert!(own[1] > own[0] && own[1] > own[2], "Own must be green");
+        assert!(trusted[2] > trusted[0], "Trusted must be cyan");
+        assert!(other[0] > other[1] && other[0] > other[2], "Other must be red");
+        assert!(admin[0] > 0.9 && admin[1] > 0.7, "Admin must be gold");
+
+        let verts = build_claim_border_vertices(
+            &[SyncedClaimChunk {
+                chunk_x: 2,
+                chunk_z: -1,
+                relation: ClaimRelation::Admin,
+                display_name: "Spawn Plaza (Admin Claim)".to_string(),
+            }],
+            64.0,
+        );
+        assert!(!verts.is_empty());
+        assert_eq!(verts.len() % 2, 0, "LineList requires even vertex count");
+    }
+
+    #[test]
+    fn claim_transition_notices_avoid_spam_within_same_owner() {
+        assert_eq!(claim_transition_notice(None, None), None);
+        assert_eq!(
+            claim_transition_notice(None, Some("Steve's Claim")),
+            Some("&6Entered Steve's Claim".to_string())
+        );
+        assert_eq!(
+            claim_transition_notice(Some("Steve's Claim"), Some("Steve's Claim")),
+            None
+        );
+        assert_eq!(
+            claim_transition_notice(Some("Steve's Claim"), None),
+            Some("&7Left Steve's Claim (Wilderness)".to_string())
+        );
+    }
+}

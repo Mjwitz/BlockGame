@@ -432,6 +432,10 @@ pub enum ServerPacket {
     AdminAccessFlags {
         has_admin_panel: bool,
     },
+    ClaimsSync {
+        payload_yaml: String,
+    },
+    ClaimBordersToggle,
 }
 
 
@@ -1360,6 +1364,13 @@ impl ServerPacket {
                 write_u8(&mut payload, 33)?;
                 write_bool(&mut payload, *has_admin_panel)?;
             }
+            Self::ClaimsSync { payload_yaml } => {
+                write_u8(&mut payload, 34)?;
+                write_string(&mut payload, payload_yaml)?;
+            }
+            Self::ClaimBordersToggle => {
+                write_u8(&mut payload, 35)?;
+            }
         }
 
         wrap_frame(&payload)
@@ -1920,6 +1931,11 @@ impl ServerPacket {
                 let has_admin_panel = read_bool(&mut r)?;
                 Ok(Self::AdminAccessFlags { has_admin_panel })
             }
+            34 => {
+                let payload_yaml = read_string(&mut r)?;
+                Ok(Self::ClaimsSync { payload_yaml })
+            }
+            35 => Ok(Self::ClaimBordersToggle),
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ServerPacket tag {}", other),
@@ -2241,6 +2257,46 @@ fn build_admin_panel_snapshot(
     snap
 }
 
+fn chunk_intersects_protected_landmark(coord: (i32, i32), save_data: &WorldSaveData) -> bool {
+    let min_x = coord.0 * 16;
+    let max_x = min_x + 15;
+    let min_z = coord.1 * 16;
+    let max_z = min_z + 15;
+
+    for v in save_data.villages.villages.values() {
+        let vx = v.origin.x;
+        let vz = v.origin.z;
+        let radius = 48;
+        if max_x >= vx - radius && min_x <= vx + radius && max_z >= vz - radius && min_z <= vz + radius {
+            return true;
+        }
+    }
+    for t in save_data.temples.temples.values() {
+        let b = t.overworld_bounds;
+        if max_x >= b.min.x && min_x <= b.max.x && max_z >= b.min.z && min_z <= b.max.z {
+            return true;
+        }
+    }
+    false
+}
+
+fn push_claims_sync_to_all(
+    clients: &[ConnectedClient],
+    claim_mgr: &crate::claims::ClaimManager,
+    direct_sends: &mut Vec<(u32, ServerPacket)>,
+) {
+    for c in clients {
+        if c.authenticated && !c.is_dead {
+            let center = crate::claims::world_pos_to_claim_coord(c.model.position);
+            let nearby = claim_mgr.nearby_claims_for_client(center, 8, &c.username);
+            if let Ok(payload_yaml) = serde_yaml::to_string(&nearby) {
+                direct_sends.push((c.player_id, ServerPacket::ClaimsSync { payload_yaml }));
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn apply_command_output(
     output: CommandOutput,
     source_pid: Option<u32>,
@@ -2253,6 +2309,8 @@ fn apply_command_output(
     auth_db: &mut AuthDatabase,
     automessage_mgr: &mut crate::automessage::AutoMessageManager,
     moderation_mgr: &mut crate::moderation::ModerationManager,
+    claim_mgr: &mut crate::claims::ClaimManager,
+    save_data_ref: &WorldSaveData,
     default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
     config_dir: &std::path::Path,
@@ -2283,6 +2341,167 @@ fn apply_command_output(
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(config_dir);
+    }
+
+    if !output.claim_actions.is_empty() {
+        if let Some(pid) = source_pid {
+            let actor_pos = clients
+                .iter()
+                .find(|c| c.player_id == pid)
+                .map(|c| c.model.position)
+                .unwrap_or(*default_spawn);
+            let coord = crate::claims::world_pos_to_claim_coord(actor_pos);
+            let mut claim_feedback: Vec<String> = Vec::new();
+            let mut claims_dirty = false;
+            for action in output.claim_actions {
+                use crate::command::ClaimCommandAction;
+                match action {
+                    ClaimCommandAction::ClaimCurrent => {
+                        let landmark = chunk_intersects_protected_landmark(coord, save_data_ref);
+                        match claim_mgr.claim_chunk(coord, &actor_name, perms_manager, *default_spawn, landmark) {
+                            Ok(()) => {
+                                claims_dirty = true;
+                                let cnt = claim_mgr.count_player_claims(&actor_name);
+                                let max = claim_mgr.max_claims_for_player(perms_manager, &actor_name);
+                                claim_feedback.push(format!(
+                                    "&aClaimed chunk ({}, {}) ({}/{}).",
+                                    coord.0, coord.1, cnt, max
+                                ));
+                            }
+                            Err(e) => claim_feedback.push(format!("&c{}", e)),
+                        }
+                    }
+                    ClaimCommandAction::UnclaimCurrent => {
+                        match claim_mgr.unclaim_chunk(coord, &actor_name) {
+                            Ok(()) => {
+                                claims_dirty = true;
+                                claim_feedback.push(format!("&eUnclaimed chunk ({}, {}).", coord.0, coord.1));
+                            }
+                            Err(e) => claim_feedback.push(format!("&c{}", e)),
+                        }
+                    }
+                    ClaimCommandAction::UnclaimAll => {
+                        let removed = claim_mgr.unclaim_all(&actor_name);
+                        if removed > 0 {
+                            claims_dirty = true;
+                        }
+                        claim_feedback.push(format!("&eUnclaimed {} chunk(s).", removed));
+                    }
+                    ClaimCommandAction::Info => {
+                        match claim_mgr.get_owner(coord) {
+                            Some(owner) => claim_feedback.push(format!(
+                                "&6Chunk ({}, {}): &f{}",
+                                coord.0,
+                                coord.1,
+                                owner.display_name()
+                            )),
+                            None => claim_feedback.push(format!(
+                                "&7Chunk ({}, {}): Unclaimed wilderness.",
+                                coord.0, coord.1
+                            )),
+                        }
+                    }
+                    ClaimCommandAction::List => {
+                        let list = claim_mgr.list_player_claims(&actor_name);
+                        let max = claim_mgr.max_claims_for_player(perms_manager, &actor_name);
+                        if list.is_empty() {
+                            claim_feedback.push(format!("You have 0/{} claimed chunks.", max));
+                        } else {
+                            let coords: Vec<String> =
+                                list.iter().map(|(x, z)| format!("({},{})", x, z)).collect();
+                            claim_feedback.push(format!(
+                                "Your claims ({}/{}): {}",
+                                list.len(),
+                                max,
+                                coords.join(", ")
+                            ));
+                        }
+                    }
+                    ClaimCommandAction::Map => {
+                        claim_feedback.extend(claim_mgr.render_claim_map(coord, &actor_name));
+                    }
+                    ClaimCommandAction::Trust(friend) => {
+                        match claim_mgr.trust(&actor_name, &friend) {
+                            Ok(()) => {
+                                claims_dirty = true;
+                                claim_feedback.push(format!(
+                                    "&aTrusted '{}' across all of your claimed chunks.",
+                                    friend
+                                ));
+                            }
+                            Err(e) => claim_feedback.push(format!("&c{}", e)),
+                        }
+                    }
+                    ClaimCommandAction::Untrust(friend) => {
+                        if claim_mgr.untrust(&actor_name, &friend) {
+                            claims_dirty = true;
+                            claim_feedback.push(format!("&eRemoved '{}' from your trust list.", friend));
+                        } else {
+                            claim_feedback.push(format!("'{}' is not on your trust list.", friend));
+                        }
+                    }
+                    ClaimCommandAction::TrustList => {
+                        let list = claim_mgr.trust_list(&actor_name);
+                        if list.is_empty() {
+                            claim_feedback.push("Your Trusted Player list is empty.".to_string());
+                        } else {
+                            claim_feedback.push(format!("Trusted Players: {}", list.join(", ")));
+                        }
+                    }
+                    ClaimCommandAction::AdminClaim(label) => {
+                        match claim_mgr.admin_claim(coord, label.as_deref()) {
+                            Ok(final_label) => {
+                                claims_dirty = true;
+                                claim_feedback.push(format!(
+                                    "&6Created Admin Claim '{}' at ({}, {}).",
+                                    final_label, coord.0, coord.1
+                                ));
+                            }
+                            Err(e) => claim_feedback.push(format!("&c{}", e)),
+                        }
+                    }
+                    ClaimCommandAction::AdminBypassToggle => {
+                        let enabled = claim_mgr.toggle_admin_bypass(&actor_name);
+                        claim_feedback.push(format!(
+                            "&eClaim Bypass turned {}.",
+                            if enabled { "ON" } else { "OFF" }
+                        ));
+                    }
+                    ClaimCommandAction::AdminUnclaim => {
+                        match claim_mgr.admin_unclaim(coord) {
+                            Ok(prev) => {
+                                claims_dirty = true;
+                                claim_feedback.push(format!(
+                                    "&eAdmin-unclaimed chunk ({}, {}) (was {}).",
+                                    coord.0,
+                                    coord.1,
+                                    prev.display_name()
+                                ));
+                            }
+                            Err(e) => claim_feedback.push(format!("&c{}", e)),
+                        }
+                    }
+                    ClaimCommandAction::ToggleBorders => {
+                        direct_sends.push((pid, ServerPacket::ClaimBordersToggle));
+                    }
+                }
+            }
+            if claims_dirty {
+                let _ = claim_mgr.save_world_claims(world_dir);
+                push_claims_sync_to_all(clients, claim_mgr, direct_sends);
+            }
+            for line in claim_feedback {
+                direct_sends.push((
+                    pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: line,
+                        is_system: true,
+                    },
+                ));
+            }
+        }
     }
 
     if let (Some(preferred_tab), Some(pid)) = (output.open_admin_panel, source_pid) {
@@ -3096,6 +3315,9 @@ fn run_server_loop(
     let mut automessage_mgr =
         crate::automessage::AutoMessageManager::load_from_dir(&config_dir).unwrap_or_default();
     let mut moderation_mgr = crate::moderation::ModerationManager::load_from_dir(&config_dir);
+    let mut claim_mgr = crate::claims::ClaimManager::load(&config_dir, &world_dir);
+    let mut last_claim_warn: HashMap<u32, Instant> = HashMap::new();
+    let mut last_synced_claim_chunk: HashMap<u32, (i32, i32)> = HashMap::new();
     let server_started_at = Instant::now();
 
     let item_registry = ItemRegistry::new();
@@ -3218,6 +3440,8 @@ fn run_server_loop(
                 &mut auth_db,
                 &mut automessage_mgr,
                 &mut moderation_mgr,
+                &mut claim_mgr,
+                &save_data,
                 &mut default_spawn,
                 &world_dir,
                 &config_dir,
@@ -3660,6 +3884,39 @@ fn run_server_loop(
                             fluid_sim.schedule_exposed_fluids_in_chunk(cpos, &world);
                         }
                         let existing_block = world.get_block(pos);
+                        let claim_coord = crate::claims::block_pos_to_claim_coord(pos);
+                        let can_edit_admin = perms_manager
+                            .has_permission(&clients[idx].username, "blockgame.claim.admin");
+                        if let Err(claim_err) = claim_mgr.check_modify_at(
+                            claim_coord,
+                            &clients[idx].username,
+                            can_edit_admin,
+                        ) {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::BlockUpdate {
+                                    pos,
+                                    block_id: existing_block,
+                                },
+                            ));
+                            let should_warn = last_claim_warn
+                                .get(&pid)
+                                .map(|t| t.elapsed() >= Duration::from_secs(2))
+                                .unwrap_or(true);
+                            if should_warn {
+                                last_claim_warn.insert(pid, Instant::now());
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::ChatBroadcast {
+                                        sender: "Server".to_string(),
+                                        prefix: String::new(),
+                                        message: format!("&c{}", claim_err),
+                                        is_system: true,
+                                    },
+                                ));
+                            }
+                            continue;
+                        }
                         if save_data.temples.is_block_protected(pos, existing_block) {
                             direct_sends.push((
                                 pid,
@@ -4046,6 +4303,31 @@ fn run_server_loop(
                         max_burn_time,
                         cook_progress,
                     } if clients[idx].authenticated => {
+                        let can_edit_admin = perms_manager
+                            .has_permission(&clients[idx].username, "blockgame.claim.admin");
+                        if let Err(claim_err) = claim_mgr.check_modify_at(
+                            crate::claims::block_pos_to_claim_coord(pos),
+                            &clients[idx].username,
+                            can_edit_admin,
+                        ) {
+                            let should_warn = last_claim_warn
+                                .get(&pid)
+                                .map(|t| t.elapsed() >= Duration::from_secs(2))
+                                .unwrap_or(true);
+                            if should_warn {
+                                last_claim_warn.insert(pid, Instant::now());
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::ChatBroadcast {
+                                        sender: "Server".to_string(),
+                                        prefix: String::new(),
+                                        message: format!("&c{}", claim_err),
+                                        is_system: true,
+                                    },
+                                ));
+                            }
+                            continue;
+                        }
                         if !is_furnace && save_data.temples.is_chest_locked(pos) {
                             continue;
                         }
@@ -4083,7 +4365,32 @@ fn run_server_loop(
                         animal_id,
                         held_item,
                     } if clients[idx].authenticated => {
+                        let can_edit_admin = perms_manager
+                            .has_permission(&clients[idx].username, "blockgame.claim.admin");
                         if let Some(animal) = save_data.animals.iter_mut().find(|a| a.id == animal_id) {
+                            if let Err(claim_err) = claim_mgr.check_modify_at(
+                                crate::claims::world_pos_to_claim_coord(animal.position),
+                                &clients[idx].username,
+                                can_edit_admin,
+                            ) {
+                                let should_warn = last_claim_warn
+                                    .get(&pid)
+                                    .map(|t| t.elapsed() >= Duration::from_secs(2))
+                                    .unwrap_or(true);
+                                if should_warn {
+                                    last_claim_warn.insert(pid, Instant::now());
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!("&c{}", claim_err),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                                continue;
+                            }
                             if animal.can_milk(held_item) {
                                 direct_sends.push((
                                     pid,
@@ -4109,7 +4416,32 @@ fn run_server_loop(
                         damage,
                         knockback,
                     } if clients[idx].authenticated => {
+                        let can_edit_admin = perms_manager
+                            .has_permission(&clients[idx].username, "blockgame.claim.admin");
                         if let Some(animal) = save_data.animals.iter_mut().find(|a| a.id == animal_id) {
+                            if let Err(claim_err) = claim_mgr.check_modify_at(
+                                crate::claims::world_pos_to_claim_coord(animal.position),
+                                &clients[idx].username,
+                                can_edit_admin,
+                            ) {
+                                let should_warn = last_claim_warn
+                                    .get(&pid)
+                                    .map(|t| t.elapsed() >= Duration::from_secs(2))
+                                    .unwrap_or(true);
+                                if should_warn {
+                                    last_claim_warn.insert(pid, Instant::now());
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!("&c{}", claim_err),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                                continue;
+                            }
                             animal.take_damage(damage.clamp(0.0, 50.0), knockback);
                         }
                     }
@@ -4122,6 +4454,31 @@ fn run_server_loop(
                         max_burn_time,
                         cook_progress,
                     } if clients[idx].authenticated => {
+                        let can_edit_admin = perms_manager
+                            .has_permission(&clients[idx].username, "blockgame.claim.admin");
+                        if let Err(claim_err) = claim_mgr.check_modify_at(
+                            crate::claims::block_pos_to_claim_coord(pos),
+                            &clients[idx].username,
+                            can_edit_admin,
+                        ) {
+                            let should_warn = last_claim_warn
+                                .get(&pid)
+                                .map(|t| t.elapsed() >= Duration::from_secs(2))
+                                .unwrap_or(true);
+                            if should_warn {
+                                last_claim_warn.insert(pid, Instant::now());
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::ChatBroadcast {
+                                        sender: "Server".to_string(),
+                                        prefix: String::new(),
+                                        message: format!("&c{}", claim_err),
+                                        is_system: true,
+                                    },
+                                ));
+                            }
+                            continue;
+                        }
                         let pot = world.get_or_create_cooking_pot(pos);
                         pot.ingredients = ingredients;
                         pot.fuel = fuel;
@@ -4476,6 +4833,8 @@ fn run_server_loop(
                                     &mut auth_db,
                                     &mut automessage_mgr,
                                     &mut moderation_mgr,
+                                    &mut claim_mgr,
+                                    &save_data,
                                     &mut default_spawn,
                                     &world_dir,
                                     &config_dir,
@@ -4846,10 +5205,30 @@ fn run_server_loop(
                         damage,
                     } if clients[idx].authenticated => {
                         let attacker_name = clients[idx].username.clone();
+                        let attacker_pos = clients[idx].model.position;
                         if let Some(target) = clients
                             .iter_mut()
                             .find(|c| c.authenticated && c.player_id == target_player_id)
                         {
+                            if !claim_mgr.is_pvp_allowed(attacker_pos, target.model.position) {
+                                let should_warn = last_claim_warn
+                                    .get(&pid)
+                                    .map(|t| t.elapsed() >= Duration::from_secs(2))
+                                    .unwrap_or(true);
+                                if should_warn {
+                                    last_claim_warn.insert(pid, Instant::now());
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: "&cPvP is disabled inside claimed chunks.".to_string(),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                                continue;
+                            }
                             if target.model.hurt_timer <= 0.0 && target.model.health > 0.0 {
                                 target.model.health = (target.model.health - damage).max(0.0);
                                 target.model.hurt_timer = 0.45;
@@ -4925,6 +5304,8 @@ fn run_server_loop(
                                     &mut auth_db,
                                     &mut automessage_mgr,
                                     &mut moderation_mgr,
+                                    &mut claim_mgr,
+                                    &save_data,
                                     &mut default_spawn,
                                     &world_dir,
                                     &config_dir,
@@ -5215,6 +5596,22 @@ fn run_server_loop(
                 .collect();
 
             *online_count.lock().unwrap() = all_players.len();
+
+            // Sync nearby claims whenever a player enters a new (chunk_x, chunk_z)
+            for c in clients.iter_mut() {
+                if c.authenticated && !c.is_dead {
+                    let cur_chunk = crate::claims::world_pos_to_claim_coord(c.model.position);
+                    if last_synced_claim_chunk.get(&c.player_id) != Some(&cur_chunk) {
+                        last_synced_claim_chunk.insert(c.player_id, cur_chunk);
+                        let nearby = claim_mgr.nearby_claims_for_client(cur_chunk, 8, &c.username);
+                        if let Ok(payload_yaml) = serde_yaml::to_string(&nearby) {
+                            if let Ok(bytes) = (ServerPacket::ClaimsSync { payload_yaml }).encode() {
+                                let _ = c.stream.write_all(&bytes);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Tick scheduled Auto-Messages and broadcast when due
             if let Some(auto_msg) = automessage_mgr.tick(dt, !all_players.is_empty()) {
@@ -7297,6 +7694,152 @@ mod tests {
         let reloaded = PermissionsManager::load_from_dir(&config_dir).unwrap();
         assert!(reloaded.groups.contains_key("vip"));
         assert!(reloaded.has_permission("RootAdmin", "blockgame.command.perm"));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_chunk_claiming_protection_and_admin_claims() {
+        let temp_root = std::env::temp_dir().join("blockgame_net_claims_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let saves_root = temp_root.join("saves");
+        let config_dir = temp_root.join("config");
+        std::fs::create_dir_all(&saves_root).unwrap();
+
+        let mut meta = WorldMetadata::new("Claims World", 555);
+        meta.folder_name = "claims_world".to_string();
+        let save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+
+        let mut server = MultiplayerServer::start_with_config_dir(
+            "127.0.0.1:0",
+            saves_root.clone(),
+            config_dir.clone(),
+            "claims_world".to_string(),
+            "Claims World".to_string(),
+            555,
+            Some(save_data),
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server");
+
+        let addr_str = server.local_addr().to_string();
+        let (mut admin, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "AdminClaimer",
+            "pass",
+            CharacterAppearance::randomized(0),
+        )
+        .expect("Admin should connect");
+        let (mut bob, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "BobClaimer",
+            "pass",
+            CharacterAppearance::randomized(1),
+        )
+        .expect("Bob should connect");
+        let bob_pid = bob.player_id;
+
+        // Move both players outside spawn protection (to chunk (10, 10) -> x=165, z=165)
+        let claim_pos = Vec3::new(165.0, 64.0, 165.0);
+        let outside_pos = Vec3::new(150.0, 64.0, 165.0);
+        admin.send(&ClientPacket::PlayerStateUpdate {
+            position: claim_pos,
+            velocity: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            held_item: ItemId(0),
+            walk_anim: 0.0,
+            swing_anim: 0.0,
+            is_sneaking: false,
+            health: 20.0,
+        });
+        bob.send(&ClientPacket::PlayerStateUpdate {
+            position: outside_pos,
+            velocity: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            held_item: ItemId(0),
+            walk_anim: 0.0,
+            swing_anim: 0.0,
+            is_sneaking: false,
+            health: 20.0,
+        });
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        // 1. Admin claims chunk (10, 10)
+        admin.send(&ClientPacket::Chat {
+            message: "/claim".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let admin_pkts = admin.poll_packets();
+        assert!(
+            admin_pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, .. } if message.contains("Claimed chunk (10, 10)"))),
+            "Expected claim confirmation"
+        );
+        assert!(
+            admin_pkts.iter().any(|p| matches!(p, ServerPacket::ClaimsSync { .. })),
+            "Expected ClaimsSync after claiming"
+        );
+        let _ = bob.poll_packets();
+
+        // 2. Bob tries to place a block inside (10, 10) -> rejected & re-synced as AIR
+        let block_pos = IVec3::new(165, 64, 165);
+        bob.send(&ClientPacket::BlockChange {
+            pos: block_pos,
+            block_id: BlockId::STONE,
+        });
+        thread::sleep(Duration::from_millis(120));
+        let bob_pkts = bob.poll_packets();
+        assert!(
+            bob_pkts.iter().any(|p| matches!(p, ServerPacket::BlockUpdate { pos, block_id } if *pos == block_pos && *block_id == BlockId::AIR)),
+            "Server must re-sync original AIR block on rejected edit"
+        );
+        assert!(
+            bob_pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, .. } if message.contains("claimed by AdminClaimer"))),
+            "Bob must receive claim rejection notice"
+        );
+
+        // 3. PvP across claim border is blocked (Admin inside claim, Bob outside)
+        admin.send(&ClientPacket::AttackPlayer {
+            target_player_id: bob_pid,
+            damage: 5.0,
+        });
+        thread::sleep(Duration::from_millis(120));
+        let bob_pvp = bob.poll_packets();
+        assert!(
+            !bob_pvp.iter().any(|p| matches!(p, ServerPacket::PlayerDamaged { .. })),
+            "PvP must be blocked when attacker is inside a claim"
+        );
+
+        // 4. Admin trusts Bob -> Bob can now place blocks in (10, 10)
+        admin.send(&ClientPacket::Chat {
+            message: "/claim trust BobClaimer".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        bob.send(&ClientPacket::BlockChange {
+            pos: block_pos,
+            block_id: BlockId::STONE,
+        });
+        thread::sleep(Duration::from_millis(120));
+        assert!(
+            admin.poll_packets().iter().any(|p| matches!(p, ServerPacket::BlockUpdate { pos, block_id } if *pos == block_pos && *block_id == BlockId::STONE)),
+            "Trusted player must be able to build in owner's claim"
+        );
+
+        bob.disconnect();
+        admin.disconnect();
+        server.shutdown();
+
+        // 5. Verify world-bound claims persisted to saves/<world>/claims.yml
+        let world_dir = saves_root.join("claims_world");
+        let reloaded = crate::claims::ClaimManager::load(&config_dir, &world_dir);
+        assert_eq!(reloaded.count_player_claims("AdminClaimer"), 1);
+        assert!(reloaded.is_trusted("AdminClaimer", "BobClaimer"));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

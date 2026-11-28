@@ -22,9 +22,10 @@ use blockgame_core::{
 use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
-    create_depth_texture,
+    claim_transition_notice, create_depth_texture,
     ui::{AdminUiClickAction, AdminUiHitbox, ChatAction, ChatActionHitbox, LinkConfirmModalHitboxes},
-    DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline, WireframePipeline,
+    ClaimBorderPipeline, DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline,
+    WireframePipeline,
 };
 use glam::{IVec3, Vec3};
 use winit::{
@@ -332,6 +333,11 @@ pub struct AppState {
     pub admin_panel_node_scroll: usize,
     pub admin_panel_hitboxes: Vec<AdminUiHitbox>,
     pub pause_admin_btn_rect: Option<[f32; 4]>,
+    pub claim_border_pipeline: ClaimBorderPipeline,
+    pub synced_claims: Vec<blockgame_core::claims::SyncedClaimChunk>,
+    pub show_claim_borders: bool,
+    pub claim_border_buffer: Option<(wgpu::Buffer, u32)>,
+    pub last_claim_owner_display: Option<String>,
     pub player_homes: HashMap<String, (Vec3, f32, f32)>,
     pub tab_held: bool,
     pub net_sync_timer: f32,
@@ -1613,6 +1619,8 @@ impl ApplicationHandler for BlockGameApp {
         );
         let wireframe_pipeline =
             WireframePipeline::new(&device, surface_format, &pipeline.camera_bind_group_layout);
+        let claim_border_pipeline =
+            ClaimBorderPipeline::new(&device, surface_format, &pipeline.camera_bind_group_layout);
         let ui_pipeline =
             UiPipeline::new(&device, surface_format, &pipeline.texture_bind_group_layout);
 
@@ -1825,6 +1833,11 @@ impl ApplicationHandler for BlockGameApp {
             admin_panel_node_scroll: 0,
             admin_panel_hitboxes: Vec::new(),
             pause_admin_btn_rect: None,
+            claim_border_pipeline,
+            synced_claims: Vec::new(),
+            show_claim_borders: false,
+            claim_border_buffer: None,
+            last_claim_owner_display: None,
             player_homes: HashMap::new(),
             tab_held: false,
             net_sync_timer: 0.0,
@@ -6652,6 +6665,71 @@ impl BlockGameApp {
                                         state.admin_panel_open = false;
                                     }
                                 }
+                                blockgame_core::net::ServerPacket::ClaimsSync { payload_yaml } => {
+                                    if let Ok(list) = serde_yaml::from_str::<
+                                        Vec<blockgame_core::claims::SyncedClaimChunk>,
+                                    >(&payload_yaml)
+                                    {
+                                        state.synced_claims = list;
+                                        if state.show_claim_borders {
+                                            state.claim_border_buffer =
+                                                ClaimBorderPipeline::create_border_buffer(
+                                                    &state.device,
+                                                    &state.synced_claims,
+                                                    state.player.position.y,
+                                                );
+                                        }
+                                        let cur_coord =
+                                            blockgame_core::claims::world_pos_to_claim_coord(
+                                                state.player.position,
+                                            );
+                                        let cur_owner = state
+                                            .synced_claims
+                                            .iter()
+                                            .find(|c| {
+                                                c.chunk_x == cur_coord.0
+                                                    && c.chunk_z == cur_coord.1
+                                            })
+                                            .map(|c| c.display_name.clone());
+                                        if let Some(notice) = claim_transition_notice(
+                                            state.last_claim_owner_display.as_deref(),
+                                            cur_owner.as_deref(),
+                                        ) {
+                                            client.chat_history.push(
+                                                blockgame_core::net::ChatEntry {
+                                                    sender: "Server".to_string(),
+                                                    prefix: String::new(),
+                                                    message: notice,
+                                                    is_system: true,
+                                                    age: 0.0,
+                                                },
+                                            );
+                                        }
+                                        state.last_claim_owner_display = cur_owner;
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::ClaimBordersToggle => {
+                                    state.show_claim_borders = !state.show_claim_borders;
+                                    state.claim_border_buffer = if state.show_claim_borders {
+                                        ClaimBorderPipeline::create_border_buffer(
+                                            &state.device,
+                                            &state.synced_claims,
+                                            state.player.position.y,
+                                        )
+                                    } else {
+                                        None
+                                    };
+                                    client.chat_history.push(blockgame_core::net::ChatEntry {
+                                        sender: "Server".to_string(),
+                                        prefix: String::new(),
+                                        message: format!(
+                                            "&e3D Claim Borders: {}",
+                                            if state.show_claim_borders { "ON" } else { "OFF" }
+                                        ),
+                                        is_system: true,
+                                        age: 0.0,
+                                    });
+                                }
                                 blockgame_core::net::ServerPacket::AdminPanelSync {
                                     payload_yaml,
                                 } => {
@@ -10027,6 +10105,17 @@ impl BlockGameApp {
                         render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
                         render_pass.set_vertex_buffer(0, wireframe_buf.slice(..));
                         render_pass.draw(0..24, 0..1);
+                    }
+
+                    // Render toggleable color-coded 3D claim chunk borders (Issue #16)
+                    if state.show_claim_borders {
+                        if let Some((border_buf, vcount)) = &state.claim_border_buffer {
+                            render_pass
+                                .set_pipeline(&state.claim_border_pipeline.render_pipeline);
+                            render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, border_buf.slice(..));
+                            render_pass.draw(0..*vcount, 0..1);
+                        }
                     }
 
                     // Render translucent water meshes after all opaque geometry

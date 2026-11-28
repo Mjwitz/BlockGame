@@ -118,8 +118,28 @@ pub struct CommandOutput {
     pub moderation_actions: Vec<ModerationCommandAction>,
     /// Requests opening the in-game Admin Panel for the command sender (with optional target tab).
     pub open_admin_panel: Option<Option<crate::admin_panel::AdminTab>>,
+    /// Land claiming actions: handled by the server loop.
+    pub claim_actions: Vec<ClaimCommandAction>,
     /// Player IDs whose Achievement Eligibility is forfeited by this admin/cheat command.
     pub cheat_taint_players: Vec<u32>,
+}
+
+/// Land claiming actions produced by `/claim`, `/unclaim`, and `/unclaimall`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimCommandAction {
+    ClaimCurrent,
+    UnclaimCurrent,
+    UnclaimAll,
+    Info,
+    List,
+    Map,
+    Trust(String),
+    Untrust(String),
+    TrustList,
+    AdminClaim(Option<String>),
+    AdminBypassToggle,
+    AdminUnclaim,
+    ToggleBorders,
 }
 
 /// Chat moderation actions produced by `/mute`, `/unmute`, `/warn`, `/warnings`,
@@ -1839,6 +1859,85 @@ pub fn execute_command(
                 );
             }
             out.open_admin_panel = Some(Some(crate::admin_panel::AdminTab::Permissions));
+        }
+
+        "claim" => {
+            if source.is_console() {
+                return CommandOutput::error("/claim can only be run by an in-game player.");
+            }
+            let sub = args.first().map(|s| s.to_ascii_lowercase());
+            match sub.as_deref() {
+                None => out.claim_actions.push(ClaimCommandAction::ClaimCurrent),
+                Some("info") => out.claim_actions.push(ClaimCommandAction::Info),
+                Some("list") => out.claim_actions.push(ClaimCommandAction::List),
+                Some("map") => out.claim_actions.push(ClaimCommandAction::Map),
+                Some("borders") | Some("border") => {
+                    out.claim_actions.push(ClaimCommandAction::ToggleBorders);
+                }
+                Some("trust") => {
+                    let Some(friend) = args.get(1) else {
+                        return CommandOutput::error("Usage: /claim trust <player>");
+                    };
+                    out.claim_actions
+                        .push(ClaimCommandAction::Trust((*friend).to_string()));
+                }
+                Some("untrust") => {
+                    let Some(friend) = args.get(1) else {
+                        return CommandOutput::error("Usage: /claim untrust <player>");
+                    };
+                    out.claim_actions
+                        .push(ClaimCommandAction::Untrust((*friend).to_string()));
+                }
+                Some("trustlist") => out.claim_actions.push(ClaimCommandAction::TrustList),
+                Some("admin") => {
+                    if !check_perm("blockgame.claim.admin") {
+                        return CommandOutput::error(
+                            "You do not have permission: blockgame.claim.admin",
+                        );
+                    }
+                    let label = if args.len() > 1 {
+                        Some(args[1..].join(" "))
+                    } else {
+                        None
+                    };
+                    out.claim_actions.push(ClaimCommandAction::AdminClaim(label));
+                }
+                Some("adminbypass") | Some("bypass") => {
+                    if !check_perm("blockgame.claim.bypass") {
+                        return CommandOutput::error(
+                            "You do not have permission: blockgame.claim.bypass",
+                        );
+                    }
+                    out.claim_actions.push(ClaimCommandAction::AdminBypassToggle);
+                }
+                Some("adminunclaim") => {
+                    if !check_perm("blockgame.claim.admin") && !check_perm("blockgame.claim.bypass") {
+                        return CommandOutput::error(
+                            "You do not have permission: blockgame.claim.admin",
+                        );
+                    }
+                    out.claim_actions.push(ClaimCommandAction::AdminUnclaim);
+                }
+                _ => {
+                    return CommandOutput::error(
+                        "Usage: /claim [info|list|map|borders|trust <p>|untrust <p>|trustlist|admin [label]|adminbypass|adminunclaim]",
+                    );
+                }
+            }
+        }
+
+        "unclaim" => {
+            if source.is_console() {
+                return CommandOutput::error("/unclaim can only be run by an in-game player.");
+            }
+            out.claim_actions.push(ClaimCommandAction::UnclaimCurrent);
+        }
+
+        "unclaimall" => {
+            if source.is_console() {
+                return CommandOutput::error("/unclaimall can only be run by an in-game player.");
+            }
+            out.claim_actions.push(ClaimCommandAction::UnclaimAll);
         }
 
         other => {
