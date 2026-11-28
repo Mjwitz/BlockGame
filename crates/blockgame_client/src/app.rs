@@ -6345,6 +6345,10 @@ impl BlockGameApp {
                                         client.chat_history.remove(0);
                                     }
                                 }
+                                blockgame_core::net::ServerPacket::ClearChat => {
+                                    client.chat_history.clear();
+                                    state.chat_scroll = 0;
+                                }
                                 blockgame_core::net::ServerPacket::Kick { reason } => {
                                     kick_reason = Some(reason);
                                 }

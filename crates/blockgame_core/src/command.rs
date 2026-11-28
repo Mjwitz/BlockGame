@@ -114,8 +114,43 @@ pub struct CommandOutput {
     pub skill_actions: Vec<SkillCommandAction>,
     /// Auto-Message configuration or listing actions: handled by the server loop.
     pub automessage_actions: Vec<AutoMessageCommandAction>,
+    /// Chat moderation actions: handled by the server loop.
+    pub moderation_actions: Vec<ModerationCommandAction>,
     /// Player IDs whose Achievement Eligibility is forfeited by this admin/cheat command.
     pub cheat_taint_players: Vec<u32>,
+}
+
+/// Chat moderation actions produced by `/mute`, `/unmute`, `/warn`, `/warnings`,
+/// `/clearwarnings`, `/wordfilter`, `/chatlock`, `/slowmode`, and `/clearchat`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModerationCommandAction {
+    Mute {
+        target: String,
+        duration_secs: Option<u64>,
+        reason: String,
+    },
+    Unmute {
+        target: String,
+    },
+    Warn {
+        target: String,
+        reason: String,
+    },
+    Warnings {
+        target: String,
+    },
+    ClearWarnings {
+        target: String,
+    },
+    WordFilterStatus,
+    WordFilterSetEnabled(bool),
+    WordFilterSetMode(crate::moderation::WordFilterMode),
+    WordFilterList,
+    WordFilterAdd(String),
+    WordFilterRemove(String),
+    ChatLockToggle(Option<bool>),
+    SlowmodeSet(u64),
+    ClearChat,
 }
 
 /// Auto-Message management actions produced by `/automessage`.
@@ -1596,6 +1631,188 @@ pub fn execute_command(
                     );
                 }
             }
+        }
+
+        "mute" => {
+            if !check_perm("blockgame.command.mute") {
+                return CommandOutput::error("You do not have permission: blockgame.command.mute");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /mute <player> [duration] [reason]");
+            }
+            let target = args[0].to_string();
+            let (duration_secs, reason) = if args.len() >= 2 {
+                if let Some(secs) = crate::moderation::parse_duration_secs(args[1]) {
+                    let r = if args.len() > 2 {
+                        args[2..].join(" ")
+                    } else {
+                        "Muted by staff".to_string()
+                    };
+                    (Some(secs), r)
+                } else {
+                    (None, args[1..].join(" "))
+                }
+            } else {
+                (None, "Muted by staff".to_string())
+            };
+            out.moderation_actions.push(ModerationCommandAction::Mute {
+                target,
+                duration_secs,
+                reason,
+            });
+        }
+
+        "unmute" => {
+            if !check_perm("blockgame.command.unmute") {
+                return CommandOutput::error("You do not have permission: blockgame.command.unmute");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /unmute <player>");
+            }
+            out.moderation_actions.push(ModerationCommandAction::Unmute {
+                target: args[0].to_string(),
+            });
+        }
+
+        "warn" => {
+            if !check_perm("blockgame.command.warn") {
+                return CommandOutput::error("You do not have permission: blockgame.command.warn");
+            }
+            if args.len() < 2 {
+                return CommandOutput::error("Usage: /warn <player> <reason>");
+            }
+            out.moderation_actions.push(ModerationCommandAction::Warn {
+                target: args[0].to_string(),
+                reason: args[1..].join(" "),
+            });
+        }
+
+        "warnings" => {
+            if !check_perm("blockgame.command.warnings") {
+                return CommandOutput::error("You do not have permission: blockgame.command.warnings");
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /warnings <player>");
+            }
+            out.moderation_actions.push(ModerationCommandAction::Warnings {
+                target: args[0].to_string(),
+            });
+        }
+
+        "clearwarnings" => {
+            if !check_perm("blockgame.command.clearwarnings") {
+                return CommandOutput::error(
+                    "You do not have permission: blockgame.command.clearwarnings",
+                );
+            }
+            if args.is_empty() {
+                return CommandOutput::error("Usage: /clearwarnings <player>");
+            }
+            out.moderation_actions
+                .push(ModerationCommandAction::ClearWarnings {
+                    target: args[0].to_string(),
+                });
+        }
+
+        "wordfilter" | "wf" => {
+            if !check_perm("blockgame.command.wordfilter") {
+                return CommandOutput::error(
+                    "You do not have permission: blockgame.command.wordfilter",
+                );
+            }
+            let sub = args.first().map(|s| s.to_ascii_lowercase());
+            match sub.as_deref() {
+                None | Some("status") => out
+                    .moderation_actions
+                    .push(ModerationCommandAction::WordFilterStatus),
+                Some("on") | Some("enable") => out
+                    .moderation_actions
+                    .push(ModerationCommandAction::WordFilterSetEnabled(true)),
+                Some("off") | Some("disable") => out
+                    .moderation_actions
+                    .push(ModerationCommandAction::WordFilterSetEnabled(false)),
+                Some("mode") => {
+                    let Some(raw) = args.get(1) else {
+                        return CommandOutput::error("Usage: /wordfilter mode <censor|block>");
+                    };
+                    let Some(mode) = crate::moderation::WordFilterMode::parse(raw) else {
+                        return CommandOutput::error("Mode must be 'censor' or 'block'.");
+                    };
+                    out.moderation_actions
+                        .push(ModerationCommandAction::WordFilterSetMode(mode));
+                }
+                Some("list") => out
+                    .moderation_actions
+                    .push(ModerationCommandAction::WordFilterList),
+                Some("add") => {
+                    let Some(word) = args.get(1) else {
+                        return CommandOutput::error("Usage: /wordfilter add <word>");
+                    };
+                    out.moderation_actions
+                        .push(ModerationCommandAction::WordFilterAdd((*word).to_string()));
+                }
+                Some("remove") | Some("del") => {
+                    let Some(word) = args.get(1) else {
+                        return CommandOutput::error("Usage: /wordfilter remove <word>");
+                    };
+                    out.moderation_actions
+                        .push(ModerationCommandAction::WordFilterRemove(
+                            (*word).to_string(),
+                        ));
+                }
+                _ => {
+                    return CommandOutput::error(
+                        "Usage: /wordfilter <status|on|off|mode <censor|block>|list|add <word>|remove <word>>",
+                    );
+                }
+            }
+        }
+
+        "chatlock" => {
+            if !check_perm("blockgame.command.chatlock") {
+                return CommandOutput::error(
+                    "You do not have permission: blockgame.command.chatlock",
+                );
+            }
+            let state = match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+                None => None,
+                Some("on") | Some("lock") | Some("true") => Some(true),
+                Some("off") | Some("unlock") | Some("false") => Some(false),
+                _ => return CommandOutput::error("Usage: /chatlock [on|off]"),
+            };
+            out.moderation_actions
+                .push(ModerationCommandAction::ChatLockToggle(state));
+        }
+
+        "slowmode" => {
+            if !check_perm("blockgame.command.slowmode") {
+                return CommandOutput::error(
+                    "You do not have permission: blockgame.command.slowmode",
+                );
+            }
+            let Some(raw) = args.first() else {
+                return CommandOutput::error("Usage: /slowmode <seconds>");
+            };
+            let secs = if raw.eq_ignore_ascii_case("off") {
+                0
+            } else {
+                match raw.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => return CommandOutput::error(format!("Invalid seconds '{}'.", raw)),
+                }
+            };
+            out.moderation_actions
+                .push(ModerationCommandAction::SlowmodeSet(secs));
+        }
+
+        "clearchat" | "cc" => {
+            if !check_perm("blockgame.command.clearchat") {
+                return CommandOutput::error(
+                    "You do not have permission: blockgame.command.clearchat",
+                );
+            }
+            out.moderation_actions
+                .push(ModerationCommandAction::ClearChat);
         }
 
         other => {

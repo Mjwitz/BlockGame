@@ -17,6 +17,7 @@ pub mod fishing;
 pub mod fluid;
 pub mod item;
 pub mod lighting;
+pub mod moderation;
 pub mod monster;
 pub mod net;
 pub mod permissions;

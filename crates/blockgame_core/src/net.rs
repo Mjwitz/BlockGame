@@ -422,6 +422,7 @@ pub enum ServerPacket {
         block_id: BlockId,
         level: u8,
     },
+    ClearChat,
 }
 
 
@@ -1331,6 +1332,9 @@ impl ServerPacket {
                 write_u8(&mut payload, block_id.0)?;
                 write_u8(&mut payload, *level & 0x0F)?;
             }
+            Self::ClearChat => {
+                write_u8(&mut payload, 31)?;
+            }
         }
 
         wrap_frame(&payload)
@@ -1882,6 +1886,7 @@ impl ServerPacket {
                     level,
                 })
             }
+            31 => Ok(Self::ClearChat),
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ServerPacket tag {}", other),
@@ -2114,11 +2119,15 @@ fn apply_command_output(
     ban_manager: &mut BanManager,
     auth_db: &mut AuthDatabase,
     automessage_mgr: &mut crate::automessage::AutoMessageManager,
+    moderation_mgr: &mut crate::moderation::ModerationManager,
     default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
     config_dir: &std::path::Path,
     stop_flag: &Arc<AtomicBool>,
 ) {
+    let actor_name: String = source_pid
+        .and_then(|pid| clients.iter().find(|c| c.player_id == pid).map(|c| c.username.clone()))
+        .unwrap_or_else(|| "Console".to_string());
     if output.save_permissions {
         let _ = perms_manager.save_to_dir(config_dir);
         for c in clients.iter_mut() {
@@ -2129,6 +2138,234 @@ fn apply_command_output(
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(config_dir);
+    }
+
+    if !output.moderation_actions.is_empty() {
+        let mut mod_feedback: Vec<String> = Vec::new();
+        for action in output.moderation_actions {
+            match action {
+                crate::command::ModerationCommandAction::Mute {
+                    target,
+                    duration_secs,
+                    reason,
+                } => {
+                    let entry = moderation_mgr.mute(&target, &actor_name, duration_secs, &reason);
+                    let _ = moderation_mgr.save_mutes(config_dir);
+                    let dur_label = duration_secs
+                        .map(crate::moderation::format_duration_secs)
+                        .unwrap_or_else(|| "permanently".to_string());
+                    mod_feedback.push(format!(
+                        "Muted '{}' ({}) - Reason: {}",
+                        entry.username, dur_label, entry.reason
+                    ));
+                    if let Some(tc) = clients
+                        .iter()
+                        .find(|c| c.authenticated && c.username.eq_ignore_ascii_case(&target))
+                    {
+                        direct_sends.push((
+                            tc.player_id,
+                            ServerPacket::ChatBroadcast {
+                                sender: "Server".to_string(),
+                                prefix: String::new(),
+                                message: format!(
+                                    "&cYou have been muted ({}) by {}: {}",
+                                    dur_label, actor_name, entry.reason
+                                ),
+                                is_system: true,
+                            },
+                        ));
+                    }
+                }
+                crate::command::ModerationCommandAction::Unmute { target } => {
+                    if moderation_mgr.unmute(&target) {
+                        let _ = moderation_mgr.save_mutes(config_dir);
+                        mod_feedback.push(format!("Unmuted '{}'.", target));
+                        if let Some(tc) = clients
+                            .iter()
+                            .find(|c| c.authenticated && c.username.eq_ignore_ascii_case(&target))
+                        {
+                            direct_sends.push((
+                                tc.player_id,
+                                ServerPacket::ChatBroadcast {
+                                    sender: "Server".to_string(),
+                                    prefix: String::new(),
+                                    message: "&aYou have been unmuted.".to_string(),
+                                    is_system: true,
+                                },
+                            ));
+                        }
+                    } else {
+                        mod_feedback.push(format!("Player '{}' is not muted.", target));
+                    }
+                }
+                crate::command::ModerationCommandAction::Warn { target, reason } => {
+                    let entry = moderation_mgr.warn(&target, &actor_name, &reason);
+                    let _ = moderation_mgr.save_warnings(config_dir);
+                    let count = moderation_mgr.get_warnings(&target).len();
+                    mod_feedback.push(format!(
+                        "Warned '{}' (#{} total) - Reason: {}",
+                        entry.username, count, entry.reason
+                    ));
+                    if let Some(tc) = clients
+                        .iter()
+                        .find(|c| c.authenticated && c.username.eq_ignore_ascii_case(&target))
+                    {
+                        direct_sends.push((
+                            tc.player_id,
+                            ServerPacket::ChatBroadcast {
+                                sender: "Server".to_string(),
+                                prefix: String::new(),
+                                message: format!(
+                                    "&e[Warning] &cYou were warned by {}: {}",
+                                    actor_name, entry.reason
+                                ),
+                                is_system: true,
+                            },
+                        ));
+                    }
+                }
+                crate::command::ModerationCommandAction::Warnings { target } => {
+                    let list = moderation_mgr.get_warnings(&target);
+                    if list.is_empty() {
+                        mod_feedback.push(format!("Player '{}' has no warnings.", target));
+                    } else {
+                        mod_feedback.push(format!(
+                            "Warnings for '{}' ({}):",
+                            target,
+                            list.len()
+                        ));
+                        for (i, w) in list.iter().enumerate() {
+                            mod_feedback.push(format!(
+                                "  {}. [by {}] {}",
+                                i + 1,
+                                w.warned_by,
+                                w.reason
+                            ));
+                        }
+                    }
+                }
+                crate::command::ModerationCommandAction::ClearWarnings { target } => {
+                    let cleared = moderation_mgr.clear_warnings(&target);
+                    if cleared > 0 {
+                        let _ = moderation_mgr.save_warnings(config_dir);
+                    }
+                    mod_feedback.push(format!(
+                        "Cleared {} warning(s) for '{}'.",
+                        cleared, target
+                    ));
+                }
+                crate::command::ModerationCommandAction::WordFilterStatus => {
+                    mod_feedback.push(format!(
+                        "Word Filter: {} | Mode: {} | Words: {}",
+                        if moderation_mgr.word_filter.enabled { "ON" } else { "OFF" },
+                        moderation_mgr.word_filter.mode.as_str(),
+                        moderation_mgr.word_filter.words.len(),
+                    ));
+                }
+                crate::command::ModerationCommandAction::WordFilterSetEnabled(enabled) => {
+                    moderation_mgr.word_filter.enabled = enabled;
+                    let _ = moderation_mgr.save_word_filter(config_dir);
+                    mod_feedback.push(format!(
+                        "Word Filter turned {}.",
+                        if enabled { "ON" } else { "OFF" }
+                    ));
+                }
+                crate::command::ModerationCommandAction::WordFilterSetMode(mode) => {
+                    moderation_mgr.word_filter.mode = mode;
+                    let _ = moderation_mgr.save_word_filter(config_dir);
+                    mod_feedback.push(format!("Word Filter mode set to '{}'.", mode.as_str()));
+                }
+                crate::command::ModerationCommandAction::WordFilterList => {
+                    if moderation_mgr.word_filter.words.is_empty() {
+                        mod_feedback.push("Word Filter list is empty.".to_string());
+                    } else {
+                        mod_feedback.push(format!(
+                            "Filtered words ({}): {}",
+                            moderation_mgr.word_filter.words.len(),
+                            moderation_mgr.word_filter.words.join(", ")
+                        ));
+                    }
+                }
+                crate::command::ModerationCommandAction::WordFilterAdd(word) => {
+                    if moderation_mgr.add_filter_word(&word) {
+                        let _ = moderation_mgr.save_word_filter(config_dir);
+                        mod_feedback.push(format!("Added '{}' to Word Filter.", word));
+                    } else {
+                        mod_feedback.push(format!("'{}' is already in Word Filter or empty.", word));
+                    }
+                }
+                crate::command::ModerationCommandAction::WordFilterRemove(word) => {
+                    if moderation_mgr.remove_filter_word(&word) {
+                        let _ = moderation_mgr.save_word_filter(config_dir);
+                        mod_feedback.push(format!("Removed '{}' from Word Filter.", word));
+                    } else {
+                        mod_feedback.push(format!("'{}' is not in Word Filter.", word));
+                    }
+                }
+                crate::command::ModerationCommandAction::ChatLockToggle(explicit) => {
+                    let new_state = explicit.unwrap_or(!moderation_mgr.chat_settings.chat_locked);
+                    moderation_mgr.chat_settings.chat_locked = new_state;
+                    let _ = moderation_mgr.save_chat_settings(config_dir);
+                    outgoing_broadcasts.push((
+                        None,
+                        ServerPacket::ChatBroadcast {
+                            sender: "Server".to_string(),
+                            prefix: String::new(),
+                            message: if new_state {
+                                "&cGlobal Chat Lock enabled by staff.".to_string()
+                            } else {
+                                "&aGlobal Chat Lock disabled by staff.".to_string()
+                            },
+                            is_system: true,
+                        },
+                    ));
+                }
+                crate::command::ModerationCommandAction::SlowmodeSet(secs) => {
+                    moderation_mgr.chat_settings.slowmode_secs = secs;
+                    let _ = moderation_mgr.save_chat_settings(config_dir);
+                    outgoing_broadcasts.push((
+                        None,
+                        ServerPacket::ChatBroadcast {
+                            sender: "Server".to_string(),
+                            prefix: String::new(),
+                            message: if secs == 0 {
+                                "&aChat Slowmode disabled.".to_string()
+                            } else {
+                                format!("&eChat Slowmode set to {}s.", secs)
+                            },
+                            is_system: true,
+                        },
+                    ));
+                }
+                crate::command::ModerationCommandAction::ClearChat => {
+                    outgoing_broadcasts.push((None, ServerPacket::ClearChat));
+                    outgoing_broadcasts.push((
+                        None,
+                        ServerPacket::ChatBroadcast {
+                            sender: "Server".to_string(),
+                            prefix: String::new(),
+                            message: format!("&7Chat was cleared by {}.", actor_name),
+                            is_system: true,
+                        },
+                    ));
+                }
+            }
+        }
+        for line in mod_feedback {
+            if let Some(pid) = source_pid {
+                direct_sends.push((
+                    pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: line,
+                        is_system: true,
+                    },
+                ));
+            } else {
+                log::info!("[Console] {}", line);
+            }
+        }
     }
 
     if !output.automessage_actions.is_empty() {
@@ -2694,6 +2931,7 @@ fn run_server_loop(
         BanManager::load_from_config_dir(&config_dir, &legacy_dirs).unwrap_or_default();
     let mut automessage_mgr =
         crate::automessage::AutoMessageManager::load_from_dir(&config_dir).unwrap_or_default();
+    let mut moderation_mgr = crate::moderation::ModerationManager::load_from_dir(&config_dir);
 
     let item_registry = ItemRegistry::new();
     let block_registry = crate::block::BlockRegistry::new();
@@ -2814,6 +3052,7 @@ fn run_server_loop(
                 &mut ban_manager,
                 &mut auth_db,
                 &mut automessage_mgr,
+                &mut moderation_mgr,
                 &mut default_spawn,
                 &world_dir,
                 &config_dir,
@@ -4184,37 +4423,72 @@ fn run_server_loop(
                                     &mut ban_manager,
                                     &mut auth_db,
                                     &mut automessage_mgr,
+                                    &mut moderation_mgr,
                                     &mut default_spawn,
                                     &world_dir,
                                     &config_dir,
                                     &stop_flag,
                                 );
                             } else {
-                                let prefix = perms_manager.get_player_prefix(&clients[idx].username);
+                                let sender_name = clients[idx].username.clone();
+                                let bypass_lock = perms_manager
+                                    .has_permission(&sender_name, "blockgame.chat.lock.bypass");
+                                let bypass_slowmode = perms_manager
+                                    .has_permission(&sender_name, "blockgame.chat.slowmode.bypass");
+                                let bypass_filter = perms_manager
+                                    .has_permission(&sender_name, "blockgame.chat.filter.bypass");
                                 let raw_msg: String = trimmed.chars().take(120).collect();
-                                let message = if perms_manager
-                                    .has_permission(&clients[idx].username, "blockgame.chat.color")
-                                {
-                                    raw_msg.clone()
-                                } else {
-                                    crate::chat::escape_color_codes(&raw_msg)
-                                };
-                                if prefix.is_empty() {
-                                    println!("[Chat] <{}> {}", clients[idx].username, raw_msg);
-                                    log::info!("[Chat] <{}> {}", clients[idx].username, raw_msg);
-                                } else {
-                                    println!("[Chat] <{} {}> {}", prefix, clients[idx].username, raw_msg);
-                                    log::info!("[Chat] <{} {}> {}", prefix, clients[idx].username, raw_msg);
+
+                                let (decision, mutes_pruned) = moderation_mgr.evaluate_chat_message(
+                                    &sender_name,
+                                    &raw_msg,
+                                    bypass_lock,
+                                    bypass_slowmode,
+                                    bypass_filter,
+                                );
+                                if mutes_pruned {
+                                    let _ = moderation_mgr.save_mutes(&config_dir);
                                 }
-                                outgoing_broadcasts.push((
-                                    None,
-                                    ServerPacket::ChatBroadcast {
-                                        sender: clients[idx].username.clone(),
-                                        prefix,
-                                        message,
-                                        is_system: false,
-                                    },
-                                ));
+
+                                match decision {
+                                    crate::moderation::ChatModerationDecision::Reject(reason) => {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: "Server".to_string(),
+                                                prefix: String::new(),
+                                                message: format!("&c{}", reason),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    }
+                                    crate::moderation::ChatModerationDecision::Allow(filtered_msg) => {
+                                        let prefix = perms_manager.get_player_prefix(&sender_name);
+                                        let message = if perms_manager
+                                            .has_permission(&sender_name, "blockgame.chat.color")
+                                        {
+                                            filtered_msg.clone()
+                                        } else {
+                                            crate::chat::escape_color_codes(&filtered_msg)
+                                        };
+                                        if prefix.is_empty() {
+                                            println!("[Chat] <{}> {}", sender_name, filtered_msg);
+                                            log::info!("[Chat] <{}> {}", sender_name, filtered_msg);
+                                        } else {
+                                            println!("[Chat] <{} {}> {}", prefix, sender_name, filtered_msg);
+                                            log::info!("[Chat] <{} {}> {}", prefix, sender_name, filtered_msg);
+                                        }
+                                        outgoing_broadcasts.push((
+                                            None,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: sender_name,
+                                                prefix,
+                                                message,
+                                                is_system: false,
+                                            },
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
@@ -6250,6 +6524,161 @@ mod tests {
             .messages
             .iter()
             .any(|m| m == "&bJoin https://blockgame.dev"));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_chat_moderation_suite() {
+        let temp_root = std::env::temp_dir().join("blockgame_net_moderation_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let saves_root = temp_root.join("saves");
+        let config_dir = temp_root.join("config");
+        std::fs::create_dir_all(&saves_root).unwrap();
+
+        let mut meta = WorldMetadata::new("Mod World", 777);
+        meta.folder_name = "mod_world".to_string();
+        let save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+
+        let mut server = MultiplayerServer::start_with_config_dir(
+            "127.0.0.1:0",
+            saves_root,
+            config_dir.clone(),
+            "mod_world".to_string(),
+            "Mod World".to_string(),
+            777,
+            Some(save_data),
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server");
+
+        let addr_str = server.local_addr().to_string();
+        let (mut admin, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "AdminMod",
+            "pass",
+            CharacterAppearance::randomized(0),
+        )
+        .expect("Admin should connect");
+        let (mut bob, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "BobMod",
+            "pass",
+            CharacterAppearance::randomized(1),
+        )
+        .expect("Bob should connect");
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        // 1. Word Filter (Censor mode, then Block mode, plus Admin bypass)
+        admin.send(&ClientPacket::Chat {
+            message: "/wordfilter add badword".to_string(),
+        });
+        admin.send(&ClientPacket::Chat {
+            message: "/wordfilter on".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        bob.send(&ClientPacket::Chat {
+            message: "This has badword inside".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let admin_pkts = admin.poll_packets();
+        assert!(
+            admin_pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { sender, message, .. } if sender == "BobMod" && message.contains("***"))),
+            "Word filter censor mode must replace badword with ***"
+        );
+
+        admin.send(&ClientPacket::Chat {
+            message: "/wordfilter mode block".to_string(),
+        });
+        thread::sleep(Duration::from_millis(100));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        bob.send(&ClientPacket::Chat {
+            message: "Another badword message".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let bob_pkts = bob.poll_packets();
+        assert!(
+            bob_pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, is_system: true, .. } if message.contains("Word Filter"))),
+            "Block mode must reject Bob's message"
+        );
+
+        // 2. Warning + online notification + history
+        admin.send(&ClientPacket::Chat {
+            message: "/warn BobMod Watch your language".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let bob_warn_pkts = bob.poll_packets();
+        assert!(
+            bob_warn_pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, is_system: true, .. } if message.contains("Watch your language"))),
+            "Online target must receive Warning notice"
+        );
+
+        // 3. Mute + block chat
+        admin.send(&ClientPacket::Chat {
+            message: "/mute BobMod 10m Spamming".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        bob.send(&ClientPacket::Chat {
+            message: "Can I talk?".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let bob_muted_pkts = bob.poll_packets();
+        assert!(
+            bob_muted_pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, is_system: true, .. } if message.contains("muted"))),
+            "Muted player must be blocked from chatting"
+        );
+        let admin_saw_bob = admin.poll_packets().iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { sender, .. } if sender == "BobMod"));
+        assert!(!admin_saw_bob, "Muted player's chat must not broadcast");
+
+        // 4. Global Chat Lock & Slowmode & ClearChat
+        admin.send(&ClientPacket::Chat {
+            message: "/unmute BobMod".to_string(),
+        });
+        admin.send(&ClientPacket::Chat {
+            message: "/chatlock on".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+        let _ = bob.poll_packets();
+
+        bob.send(&ClientPacket::Chat {
+            message: "Locked?".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        assert!(
+            bob.poll_packets().iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, is_system: true, .. } if message.contains("locked"))),
+            "Global Chat Lock must block regular player"
+        );
+
+        admin.send(&ClientPacket::Chat {
+            message: "/clearchat".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        assert!(
+            bob.poll_packets().iter().any(|p| matches!(p, ServerPacket::ClearChat)),
+            "ClearChat packet must be broadcast to clients"
+        );
+
+        bob.disconnect();
+        admin.disconnect();
+        server.shutdown();
+
+        // Verify independent config files persisted cleanly
+        let reloaded = crate::moderation::ModerationManager::load_from_dir(&config_dir);
+        assert_eq!(reloaded.get_warnings("BobMod").len(), 1);
+        assert!(reloaded.chat_settings.chat_locked);
+        assert!(reloaded.word_filter.enabled);
+        assert_eq!(reloaded.word_filter.mode, crate::moderation::WordFilterMode::Block);
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }
