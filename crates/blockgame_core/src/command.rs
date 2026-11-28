@@ -116,6 +116,8 @@ pub struct CommandOutput {
     pub automessage_actions: Vec<AutoMessageCommandAction>,
     /// Chat moderation actions: handled by the server loop.
     pub moderation_actions: Vec<ModerationCommandAction>,
+    /// Requests opening the in-game Admin Panel for the command sender (with optional target tab).
+    pub open_admin_panel: Option<Option<crate::admin_panel::AdminTab>>,
     /// Player IDs whose Achievement Eligibility is forfeited by this admin/cheat command.
     pub cheat_taint_players: Vec<u32>,
 }
@@ -1813,6 +1815,30 @@ pub fn execute_command(
             }
             out.moderation_actions
                 .push(ModerationCommandAction::ClearChat);
+        }
+
+        "admin" => {
+            if source.is_console() {
+                return CommandOutput::error("The Admin Panel can only be opened by an in-game player.");
+            }
+            let tabs = crate::admin_panel::visible_tabs_for_player(perms, source.username());
+            if tabs.is_empty() {
+                return CommandOutput::error("You do not have permission to open the Admin Panel.");
+            }
+            out.open_admin_panel = Some(None);
+        }
+
+        "perms" | "permui" => {
+            if source.is_console() {
+                return CommandOutput::error("The Permissions UI can only be opened by an in-game player.");
+            }
+            let tabs = crate::admin_panel::visible_tabs_for_player(perms, source.username());
+            if !tabs.contains(&crate::admin_panel::AdminTab::Permissions) {
+                return CommandOutput::error(
+                    "You do not have permission to manage Groups & Permissions.",
+                );
+            }
+            out.open_admin_panel = Some(Some(crate::admin_panel::AdminTab::Permissions));
         }
 
         other => {

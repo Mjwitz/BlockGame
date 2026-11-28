@@ -212,6 +212,9 @@ pub enum ClientPacket {
     AchievementUnlocked {
         achievement_id: String,
     },
+    AdminPanelAction {
+        payload_yaml: String,
+    },
 }
 
 /// Compact network representation of a server-authoritative Village NPC (Shopkeeper or Village Guard).
@@ -423,6 +426,12 @@ pub enum ServerPacket {
         level: u8,
     },
     ClearChat,
+    AdminPanelSync {
+        payload_yaml: String,
+    },
+    AdminAccessFlags {
+        has_admin_panel: bool,
+    },
 }
 
 
@@ -673,6 +682,10 @@ impl ClientPacket {
             Self::AchievementUnlocked { achievement_id } => {
                 write_u8(&mut payload, 26)?;
                 write_string(&mut payload, achievement_id)?;
+            }
+            Self::AdminPanelAction { payload_yaml } => {
+                write_u8(&mut payload, 27)?;
+                write_string(&mut payload, payload_yaml)?;
             }
         }
         wrap_frame(&payload)
@@ -934,6 +947,10 @@ impl ClientPacket {
             26 => {
                 let achievement_id = read_string(&mut r)?;
                 Ok(Self::AchievementUnlocked { achievement_id })
+            }
+            27 => {
+                let payload_yaml = read_string(&mut r)?;
+                Ok(Self::AdminPanelAction { payload_yaml })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1334,6 +1351,14 @@ impl ServerPacket {
             }
             Self::ClearChat => {
                 write_u8(&mut payload, 31)?;
+            }
+            Self::AdminPanelSync { payload_yaml } => {
+                write_u8(&mut payload, 32)?;
+                write_string(&mut payload, payload_yaml)?;
+            }
+            Self::AdminAccessFlags { has_admin_panel } => {
+                write_u8(&mut payload, 33)?;
+                write_bool(&mut payload, *has_admin_panel)?;
             }
         }
 
@@ -1887,6 +1912,14 @@ impl ServerPacket {
                 })
             }
             31 => Ok(Self::ClearChat),
+            32 => {
+                let payload_yaml = read_string(&mut r)?;
+                Ok(Self::AdminPanelSync { payload_yaml })
+            }
+            33 => {
+                let has_admin_panel = read_bool(&mut r)?;
+                Ok(Self::AdminAccessFlags { has_admin_panel })
+            }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ServerPacket tag {}", other),
@@ -2108,6 +2141,106 @@ impl Drop for MultiplayerServer {
     }
 }
 
+fn build_admin_panel_snapshot(
+    requester: &str,
+    preferred_tab: Option<crate::admin_panel::AdminTab>,
+    status_message: String,
+    clients: &[ConnectedClient],
+    perms_manager: &PermissionsManager,
+    ban_manager: &BanManager,
+    moderation_mgr: &mut crate::moderation::ModerationManager,
+    automessage_mgr: &crate::automessage::AutoMessageManager,
+    world_name: &str,
+    uptime_secs: u64,
+    broadcast_achievements: bool,
+) -> crate::admin_panel::AdminPanelSnapshot {
+    use crate::admin_panel::*;
+
+    let allowed_tabs = visible_tabs_for_player(perms_manager, requester);
+    let mut snap = AdminPanelSnapshot {
+        allowed_tabs: allowed_tabs.clone(),
+        requested_tab: preferred_tab.filter(|t| allowed_tabs.contains(t)),
+        status_message,
+        ..Default::default()
+    };
+
+    if allowed_tabs.contains(&AdminTab::Players) {
+        let mut list: Vec<AdminOnlinePlayer> = clients
+            .iter()
+            .filter(|c| c.authenticated && !c.is_dead)
+            .map(|c| {
+                let (m, _) = moderation_mgr.check_mute(&c.username);
+                AdminOnlinePlayer {
+                    username: c.username.clone(),
+                    gamemode: format!("{:?}", c.saved_state.stats.game_mode),
+                    groups: perms_manager.get_player_groups(&c.username),
+                    pos: [
+                        c.model.position.x.floor() as i32,
+                        c.model.position.y.floor() as i32,
+                        c.model.position.z.floor() as i32,
+                    ],
+                    is_muted: m.is_some(),
+                    warning_count: moderation_mgr.get_warnings(&c.username).len(),
+                }
+            })
+            .collect();
+        list.sort_by(|a, b| a.username.to_ascii_lowercase().cmp(&b.username.to_ascii_lowercase()));
+        snap.online_players = list;
+    }
+
+    if allowed_tabs.contains(&AdminTab::Bans) {
+        snap.banned_players = ban_manager.list_bans().into_iter().cloned().collect();
+        snap.banned_ips = ban_manager.list_ip_bans().into_iter().cloned().collect();
+    }
+
+    if allowed_tabs.contains(&AdminTab::Chat) {
+        let (mutes, _) = moderation_mgr.active_mutes();
+        snap.active_mutes = mutes;
+        let mut all_warnings: Vec<crate::moderation::WarningEntry> = moderation_mgr
+            .warnings
+            .values()
+            .flat_map(|v| v.iter().cloned())
+            .collect();
+        all_warnings.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
+        all_warnings.truncate(50);
+        snap.recent_warnings = all_warnings;
+        snap.word_filter = moderation_mgr.word_filter.clone();
+        snap.chat_settings = moderation_mgr.chat_settings.clone();
+    }
+
+    if allowed_tabs.contains(&AdminTab::AutoMessages) {
+        snap.automessages = Some(automessage_mgr.config.clone());
+    }
+
+    if allowed_tabs.contains(&AdminTab::Server) {
+        snap.server_stats = Some(AdminServerStats {
+            world_name: world_name.to_string(),
+            online_count: clients.iter().filter(|c| c.authenticated && !c.is_dead).count(),
+            uptime_secs,
+            broadcast_achievements,
+        });
+    }
+
+    if allowed_tabs.contains(&AdminTab::Permissions) {
+        let mut groups: Vec<crate::permissions::PermissionGroup> =
+            perms_manager.groups.values().cloned().collect();
+        groups.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.name.cmp(&b.name)));
+        snap.permissions_groups = groups;
+
+        let mut players: Vec<crate::permissions::PlayerPermissions> =
+            perms_manager.players.values().cloned().collect();
+        players.sort_by(|a, b| a.username.to_ascii_lowercase().cmp(&b.username.to_ascii_lowercase()));
+        snap.permissions_players = players;
+
+        snap.known_permission_nodes = KNOWN_PERMISSION_NODES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+    }
+
+    snap
+}
+
 fn apply_command_output(
     output: CommandOutput,
     source_pid: Option<u32>,
@@ -2124,6 +2257,9 @@ fn apply_command_output(
     world_dir: &std::path::Path,
     config_dir: &std::path::Path,
     stop_flag: &Arc<AtomicBool>,
+    world_name: &str,
+    uptime_secs: u64,
+    broadcast_achievements: bool,
 ) {
     let actor_name: String = source_pid
         .and_then(|pid| clients.iter().find(|c| c.player_id == pid).map(|c| c.username.clone()))
@@ -2133,11 +2269,39 @@ fn apply_command_output(
         for c in clients.iter_mut() {
             if c.authenticated {
                 c.model.prefix = perms_manager.get_player_prefix(&c.username);
+                let has_access =
+                    !crate::admin_panel::visible_tabs_for_player(perms_manager, &c.username)
+                        .is_empty();
+                direct_sends.push((
+                    c.player_id,
+                    ServerPacket::AdminAccessFlags {
+                        has_admin_panel: has_access,
+                    },
+                ));
             }
         }
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(config_dir);
+    }
+
+    if let (Some(preferred_tab), Some(pid)) = (output.open_admin_panel, source_pid) {
+        let snap = build_admin_panel_snapshot(
+            &actor_name,
+            preferred_tab,
+            String::new(),
+            clients,
+            perms_manager,
+            ban_manager,
+            moderation_mgr,
+            automessage_mgr,
+            world_name,
+            uptime_secs,
+            broadcast_achievements,
+        );
+        if let Ok(payload_yaml) = serde_yaml::to_string(&snap) {
+            direct_sends.push((pid, ServerPacket::AdminPanelSync { payload_yaml }));
+        }
     }
 
     if !output.moderation_actions.is_empty() {
@@ -2932,6 +3096,7 @@ fn run_server_loop(
     let mut automessage_mgr =
         crate::automessage::AutoMessageManager::load_from_dir(&config_dir).unwrap_or_default();
     let mut moderation_mgr = crate::moderation::ModerationManager::load_from_dir(&config_dir);
+    let server_started_at = Instant::now();
 
     let item_registry = ItemRegistry::new();
     let block_registry = crate::block::BlockRegistry::new();
@@ -3057,6 +3222,9 @@ fn run_server_loop(
                 &world_dir,
                 &config_dir,
                 &stop_flag,
+                &save_data.metadata.name,
+                server_started_at.elapsed().as_secs(),
+                broadcast_achievements.load(Ordering::Relaxed),
             );
         }
 
@@ -3321,6 +3489,15 @@ fn run_server_loop(
                                         player_state: account.player_state.clone(),
                                         appearance: account.appearance,
                                     },
+                                ));
+                                let has_admin_panel = !crate::admin_panel::visible_tabs_for_player(
+                                    &perms_manager,
+                                    &account.username,
+                                )
+                                .is_empty();
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::AdminAccessFlags { has_admin_panel },
                                 ));
 
                                 let world_eligible = save_data.metadata.achievements_enabled
@@ -4219,6 +4396,330 @@ fn run_server_loop(
                             }
                         }
                     }
+                    ClientPacket::AdminPanelAction { payload_yaml }
+                        if clients[idx].authenticated =>
+                    {
+                        use crate::admin_panel::*;
+                        let requester = clients[idx].username.clone();
+                        let allowed_tabs = visible_tabs_for_player(&perms_manager, &requester);
+                        if allowed_tabs.is_empty() {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ChatBroadcast {
+                                    sender: "Server".to_string(),
+                                    prefix: String::new(),
+                                    message: "&cYou do not have permission to use the Admin Panel."
+                                        .to_string(),
+                                    is_system: true,
+                                },
+                            ));
+                            continue;
+                        }
+
+                        let Ok(action) = serde_yaml::from_str::<AdminPanelAction>(&payload_yaml)
+                        else {
+                            continue;
+                        };
+
+                        let mut preferred_tab = None;
+                        let mut status_message = String::new();
+                        let mut perms_changed = false;
+
+                        match action {
+                            AdminPanelAction::RequestSnapshot { preferred_tab: pt } => {
+                                preferred_tab = pt;
+                            }
+                            AdminPanelAction::RunCommand(raw_cmd) => {
+                                let online_info: Vec<OnlinePlayerInfo> = clients
+                                    .iter()
+                                    .filter(|c| c.authenticated)
+                                    .map(|c| {
+                                        let mut info = OnlinePlayerInfo::new(
+                                            c.player_id,
+                                            c.username.clone(),
+                                            c.model.position,
+                                            c.model.yaw,
+                                            c.model.pitch,
+                                        )
+                                        .with_ip(c.addr.ip().to_string());
+                                        info.homes = c.saved_state.homes.clone();
+                                        info
+                                    })
+                                    .collect();
+                                let out = execute_command(
+                                    &CommandSource::Player {
+                                        player_id: pid,
+                                        username: requester.clone(),
+                                    },
+                                    &raw_cmd,
+                                    &online_info,
+                                    &mut perms_manager,
+                                    &mut ban_manager,
+                                    &item_registry,
+                                    default_spawn,
+                                    &mut tpa_requests,
+                                );
+                                if let Some(first) = out.feedback.first() {
+                                    status_message = first.clone();
+                                } else {
+                                    status_message = format!("Executed: {}", raw_cmd);
+                                }
+                                apply_command_output(
+                                    out,
+                                    Some(pid),
+                                    &mut direct_sends,
+                                    &mut outgoing_broadcasts,
+                                    &mut clients,
+                                    &mut disconnected_indices,
+                                    &mut perms_manager,
+                                    &mut ban_manager,
+                                    &mut auth_db,
+                                    &mut automessage_mgr,
+                                    &mut moderation_mgr,
+                                    &mut default_spawn,
+                                    &world_dir,
+                                    &config_dir,
+                                    &stop_flag,
+                                    &save_data.metadata.name,
+                                    server_started_at.elapsed().as_secs(),
+                                    broadcast_achievements.load(Ordering::Relaxed),
+                                );
+                            }
+                            AdminPanelAction::SetBroadcastAchievements(enabled) => {
+                                if perms_manager.has_permission(&requester, "blockgame.admin.server")
+                                    || perms_manager.has_permission(&requester, "blockgame.command.stop")
+                                {
+                                    broadcast_achievements.store(enabled, Ordering::Relaxed);
+                                    status_message = format!(
+                                        "Achievement broadcasts turned {}.",
+                                        if enabled { "ON" } else { "OFF" }
+                                    );
+                                } else {
+                                    status_message = "[Error] Missing server management permission.".to_string();
+                                }
+                            }
+                            AdminPanelAction::SaveWorld => {
+                                if perms_manager.has_permission(&requester, "blockgame.admin.server")
+                                    || perms_manager.has_permission(&requester, "blockgame.command.stop")
+                                {
+                                    for c in &clients {
+                                        if c.authenticated {
+                                            auth_db.update_player_state(
+                                                &c.username,
+                                                c.model.appearance,
+                                                c.saved_state.clone(),
+                                            );
+                                        }
+                                    }
+                                    let _ = auth_db.save_to_dir(&world_dir);
+                                    farming_sim.export_to_save_data(&mut save_data);
+                                    save_data.capture_from_world(&world);
+                                    let _ = save_world_to_dir(&saves_root, &mut save_data);
+                                    status_message = "World saved successfully.".to_string();
+                                } else {
+                                    status_message = "[Error] Missing server management permission.".to_string();
+                                }
+                            }
+                            AdminPanelAction::CreateGroup { name } => {
+                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                    status_message = "[Error] Missing permissions management access.".to_string();
+                                } else {
+                                    match perms_manager.create_group(&name) {
+                                        Ok(()) => {
+                                            perms_changed = true;
+                                            status_message = format!("Created group '{}'.", name);
+                                        }
+                                        Err(e) => status_message = format!("[Error] {}", e),
+                                    }
+                                }
+                            }
+                            AdminPanelAction::DeleteGroup { name } => {
+                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                    status_message = "[Error] Missing permissions management access.".to_string();
+                                } else {
+                                    let mut candidate = perms_manager.clone();
+                                    match candidate.delete_group(&name) {
+                                        Ok(()) => match validate_no_self_lockout(&candidate, &requester) {
+                                            Ok(()) => {
+                                                perms_manager = candidate;
+                                                perms_changed = true;
+                                                status_message = format!("Deleted group '{}'.", name);
+                                            }
+                                            Err(err) => status_message = format!("[Error] {}", err),
+                                        },
+                                        Err(e) => status_message = format!("[Error] {}", e),
+                                    }
+                                }
+                            }
+                            AdminPanelAction::UpdateGroupMeta {
+                                name,
+                                prefix,
+                                priority,
+                                inherits,
+                            } => {
+                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                    status_message = "[Error] Missing permissions management access.".to_string();
+                                } else {
+                                    let key = name.trim().to_ascii_lowercase();
+                                    let mut candidate = perms_manager.clone();
+                                    if let Some(g) = candidate.groups.get_mut(&key) {
+                                        g.prefix = prefix;
+                                        g.priority = priority;
+                                        g.inherits = inherits
+                                            .into_iter()
+                                            .map(|s| s.trim().to_ascii_lowercase())
+                                            .filter(|s| !s.is_empty() && s != &key)
+                                            .collect();
+                                        match validate_no_self_lockout(&candidate, &requester) {
+                                            Ok(()) => {
+                                                perms_manager = candidate;
+                                                perms_changed = true;
+                                                status_message = format!("Updated group '{}'.", key);
+                                            }
+                                            Err(err) => status_message = format!("[Error] {}", err),
+                                        }
+                                    } else {
+                                        status_message = format!("[Error] Group '{}' not found.", name);
+                                    }
+                                }
+                            }
+                            AdminPanelAction::SetGroupNode { group, node, state } => {
+                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                    status_message = "[Error] Missing permissions management access.".to_string();
+                                } else {
+                                    let gkey = group.trim().to_ascii_lowercase();
+                                    let clean = node.trim().trim_start_matches('-').to_ascii_lowercase();
+                                    let mut candidate = perms_manager.clone();
+                                    if let Some(g) = candidate.groups.get_mut(&gkey) {
+                                        g.permissions.retain(|p| {
+                                            let pn = p.trim().trim_start_matches('-').to_ascii_lowercase();
+                                            pn != clean
+                                        });
+                                        if let Some(allow) = state {
+                                            g.permissions.push(if allow {
+                                                clean.clone()
+                                            } else {
+                                                format!("-{}", clean)
+                                            });
+                                        }
+                                        match validate_no_self_lockout(&candidate, &requester) {
+                                            Ok(()) => {
+                                                perms_manager = candidate;
+                                                perms_changed = true;
+                                                status_message = format!("Updated '{}' on group '{}'.", clean, gkey);
+                                            }
+                                            Err(err) => status_message = format!("[Error] {}", err),
+                                        }
+                                    } else {
+                                        status_message = format!("[Error] Group '{}' not found.", group);
+                                    }
+                                }
+                            }
+                            AdminPanelAction::SetPlayerGroup {
+                                username,
+                                group,
+                                assigned,
+                            } => {
+                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                    status_message = "[Error] Missing permissions management access.".to_string();
+                                } else {
+                                    let mut candidate = perms_manager.clone();
+                                    let res = if assigned {
+                                        candidate.add_player_group(&username, &group)
+                                    } else {
+                                        candidate.remove_player_group(&username, &group)
+                                    };
+                                    match res {
+                                        Ok(()) => match validate_no_self_lockout(&candidate, &requester) {
+                                            Ok(()) => {
+                                                perms_manager = candidate;
+                                                perms_changed = true;
+                                                status_message = format!(
+                                                    "{} '{}' {} group '{}'.",
+                                                    if assigned { "Added" } else { "Removed" },
+                                                    username,
+                                                    if assigned { "to" } else { "from" },
+                                                    group
+                                                );
+                                            }
+                                            Err(err) => status_message = format!("[Error] {}", err),
+                                        },
+                                        Err(e) => status_message = format!("[Error] {}", e),
+                                    }
+                                }
+                            }
+                            AdminPanelAction::SetPlayerNode {
+                                username,
+                                node,
+                                state,
+                            } => {
+                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                    status_message = "[Error] Missing permissions management access.".to_string();
+                                } else {
+                                    let ukey = username.trim().to_ascii_lowercase();
+                                    let clean = node.trim().trim_start_matches('-').to_ascii_lowercase();
+                                    let mut candidate = perms_manager.clone();
+                                    let p = candidate
+                                        .players
+                                        .entry(ukey)
+                                        .or_insert_with(|| {
+                                            crate::permissions::PlayerPermissions::new(username.trim())
+                                        });
+                                    p.permissions.retain(|existing| {
+                                        existing.trim().trim_start_matches('-').to_ascii_lowercase() != clean
+                                    });
+                                    if let Some(allow) = state {
+                                        p.permissions.push(if allow {
+                                            clean.clone()
+                                        } else {
+                                            format!("-{}", clean)
+                                        });
+                                    }
+                                    match validate_no_self_lockout(&candidate, &requester) {
+                                        Ok(()) => {
+                                            perms_manager = candidate;
+                                            perms_changed = true;
+                                            status_message = format!("Updated '{}' for '{}'.", clean, username);
+                                        }
+                                        Err(err) => status_message = format!("[Error] {}", err),
+                                    }
+                                }
+                            }
+                        }
+
+                        if perms_changed {
+                            let _ = perms_manager.save_to_dir(&config_dir);
+                            for c in clients.iter_mut() {
+                                if c.authenticated {
+                                    c.model.prefix = perms_manager.get_player_prefix(&c.username);
+                                    let has_access = !visible_tabs_for_player(&perms_manager, &c.username).is_empty();
+                                    direct_sends.push((
+                                        c.player_id,
+                                        ServerPacket::AdminAccessFlags {
+                                            has_admin_panel: has_access,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+
+                        let snap = build_admin_panel_snapshot(
+                            &requester,
+                            preferred_tab,
+                            status_message,
+                            &clients,
+                            &perms_manager,
+                            &ban_manager,
+                            &mut moderation_mgr,
+                            &automessage_mgr,
+                            &save_data.metadata.name,
+                            server_started_at.elapsed().as_secs(),
+                            broadcast_achievements.load(Ordering::Relaxed),
+                        );
+                        if let Ok(payload_yaml) = serde_yaml::to_string(&snap) {
+                            direct_sends.push((pid, ServerPacket::AdminPanelSync { payload_yaml }));
+                        }
+                    }
                     ClientPacket::RegisterVillageBlueprint {
                         village_id,
                         theme,
@@ -4428,6 +4929,9 @@ fn run_server_loop(
                                     &world_dir,
                                     &config_dir,
                                     &stop_flag,
+                                    &save_data.metadata.name,
+                                    server_started_at.elapsed().as_secs(),
+                                    broadcast_achievements.load(Ordering::Relaxed),
                                 );
                             } else {
                                 let sender_name = clients[idx].username.clone();
@@ -6679,6 +7183,120 @@ mod tests {
         assert!(reloaded.chat_settings.chat_locked);
         assert!(reloaded.word_filter.enabled);
         assert_eq!(reloaded.word_filter.mode, crate::moderation::WordFilterMode::Block);
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_admin_panel_and_permissions_self_lockout() {
+        use crate::admin_panel::*;
+
+        let temp_root = std::env::temp_dir().join("blockgame_net_admin_panel_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let saves_root = temp_root.join("saves");
+        let config_dir = temp_root.join("config");
+        std::fs::create_dir_all(&saves_root).unwrap();
+
+        let mut meta = WorldMetadata::new("AdminPanel World", 321);
+        meta.folder_name = "admin_world".to_string();
+        let save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+
+        let mut server = MultiplayerServer::start_with_config_dir(
+            "127.0.0.1:0",
+            saves_root,
+            config_dir.clone(),
+            "admin_world".to_string(),
+            "AdminPanel World".to_string(),
+            321,
+            Some(save_data),
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server");
+
+        let addr_str = server.local_addr().to_string();
+        let (mut admin, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "RootAdmin",
+            "pass",
+            CharacterAppearance::randomized(0),
+        )
+        .expect("Admin should connect");
+        let (mut guest, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "PlainGuest",
+            "pass",
+            CharacterAppearance::randomized(1),
+        )
+        .expect("Guest should connect");
+        thread::sleep(Duration::from_millis(120));
+
+        // 1. Admin gets AdminAccessFlags(true), Guest gets AdminAccessFlags(false)
+        let admin_login_pkts = admin.poll_packets();
+        let guest_login_pkts = guest.poll_packets();
+        assert!(admin_login_pkts.iter().any(|p| matches!(p, ServerPacket::AdminAccessFlags { has_admin_panel: true })));
+        assert!(guest_login_pkts.iter().any(|p| matches!(p, ServerPacket::AdminAccessFlags { has_admin_panel: false })));
+
+        // 2. Guest attempting to request Admin Panel snapshot is rejected
+        let req_yaml = serde_yaml::to_string(&AdminPanelAction::RequestSnapshot { preferred_tab: None }).unwrap();
+        guest.send(&ClientPacket::AdminPanelAction { payload_yaml: req_yaml });
+        thread::sleep(Duration::from_millis(100));
+        let guest_pkts = guest.poll_packets();
+        assert!(!guest_pkts.iter().any(|p| matches!(p, ServerPacket::AdminPanelSync { .. })));
+
+        // 3. Admin runs /perms -> receives snapshot scoped to Permissions tab
+        admin.send(&ClientPacket::Chat {
+            message: "/perms".to_string(),
+        });
+        thread::sleep(Duration::from_millis(120));
+        let sync_yaml = admin
+            .poll_packets()
+            .into_iter()
+            .find_map(|p| match p {
+                ServerPacket::AdminPanelSync { payload_yaml } => Some(payload_yaml),
+                _ => None,
+            })
+            .expect("Admin must receive AdminPanelSync from /perms");
+        let snap: AdminPanelSnapshot = serde_yaml::from_str(&sync_yaml).unwrap();
+        assert_eq!(snap.requested_tab, Some(AdminTab::Permissions));
+        assert!(snap.allowed_tabs.contains(&AdminTab::Permissions));
+        assert!(!snap.known_permission_nodes.is_empty());
+
+        // 4. Self-lockout guard rejects deleting default or removing own admin group
+        let lockout_yaml = serde_yaml::to_string(&AdminPanelAction::SetPlayerGroup {
+            username: "RootAdmin".to_string(),
+            group: "admin".to_string(),
+            assigned: false,
+        })
+        .unwrap();
+        admin.send(&ClientPacket::AdminPanelAction { payload_yaml: lockout_yaml });
+        thread::sleep(Duration::from_millis(120));
+        let lockout_snap_yaml = admin
+            .poll_packets()
+            .into_iter()
+            .find_map(|p| match p {
+                ServerPacket::AdminPanelSync { payload_yaml } => Some(payload_yaml),
+                _ => None,
+            })
+            .expect("Expected AdminPanelSync with lockout error");
+        let lockout_snap: AdminPanelSnapshot = serde_yaml::from_str(&lockout_snap_yaml).unwrap();
+        assert!(lockout_snap.status_message.contains("self-lockout guard"));
+
+        // 5. Creating a group and updating metadata persists to config/permissions.yml
+        let create_yaml = serde_yaml::to_string(&AdminPanelAction::CreateGroup {
+            name: "vip".to_string(),
+        })
+        .unwrap();
+        admin.send(&ClientPacket::AdminPanelAction { payload_yaml: create_yaml });
+        thread::sleep(Duration::from_millis(120));
+        let _ = admin.poll_packets();
+
+        guest.disconnect();
+        admin.disconnect();
+        server.shutdown();
+
+        let reloaded = PermissionsManager::load_from_dir(&config_dir).unwrap();
+        assert!(reloaded.groups.contains_key("vip"));
+        assert!(reloaded.has_permission("RootAdmin", "blockgame.command.perm"));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

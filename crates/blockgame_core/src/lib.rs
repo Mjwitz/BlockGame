@@ -1,4 +1,5 @@
 pub mod achievement;
+pub mod admin_panel;
 pub mod animal;
 pub mod auth;
 pub mod automessage;

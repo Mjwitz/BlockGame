@@ -23,7 +23,7 @@ use blockgame_render::{
     atlas::TextureAtlas,
     camera::{Camera, CameraUniform},
     create_depth_texture,
-    ui::{ChatAction, ChatActionHitbox, LinkConfirmModalHitboxes},
+    ui::{AdminUiClickAction, AdminUiHitbox, ChatAction, ChatActionHitbox, LinkConfirmModalHitboxes},
     DayNightCycle, UiBuilder, UiMesh, UiPipeline, VoxelPipeline, WireframePipeline,
 };
 use glam::{IVec3, Vec3};
@@ -320,6 +320,18 @@ pub struct AppState {
     pub chat_hitboxes: Vec<ChatActionHitbox>,
     pub pending_chat_link: Option<ChatLinkModalState>,
     pub link_modal_hitboxes: LinkConfirmModalHitboxes,
+    pub has_admin_panel_access: bool,
+    pub admin_panel_open: bool,
+    pub admin_panel_snapshot: Option<blockgame_core::admin_panel::AdminPanelSnapshot>,
+    pub admin_panel_tab: blockgame_core::admin_panel::AdminTab,
+    pub admin_panel_input: String,
+    pub admin_panel_selected_player: Option<String>,
+    pub admin_panel_selected_group: Option<String>,
+    pub admin_panel_selected_perm_player: Option<String>,
+    pub admin_panel_perm_players_view: bool,
+    pub admin_panel_node_scroll: usize,
+    pub admin_panel_hitboxes: Vec<AdminUiHitbox>,
+    pub pause_admin_btn_rect: Option<[f32; 4]>,
     pub player_homes: HashMap<String, (Vec3, f32, f32)>,
     pub tab_held: bool,
     pub net_sync_timer: f32,
@@ -1801,6 +1813,18 @@ impl ApplicationHandler for BlockGameApp {
             chat_hitboxes: Vec::new(),
             pending_chat_link: None,
             link_modal_hitboxes: LinkConfirmModalHitboxes::default(),
+            has_admin_panel_access: false,
+            admin_panel_open: false,
+            admin_panel_snapshot: None,
+            admin_panel_tab: blockgame_core::admin_panel::AdminTab::Players,
+            admin_panel_input: String::new(),
+            admin_panel_selected_player: None,
+            admin_panel_selected_group: None,
+            admin_panel_selected_perm_player: None,
+            admin_panel_perm_players_view: false,
+            admin_panel_node_scroll: 0,
+            admin_panel_hitboxes: Vec::new(),
+            pause_admin_btn_rect: None,
             player_homes: HashMap::new(),
             tab_held: false,
             net_sync_timer: 0.0,
@@ -2516,6 +2540,29 @@ impl BlockGameApp {
                                         .window
                                         .set_cursor_grab(winit::window::CursorGrabMode::None);
                                     state.window.set_cursor_visible(true);
+                                } else if state.mp_client.is_some()
+                                    && state.has_admin_panel_access
+                                    && state.pause_admin_btn_rect.is_some_and(|r| {
+                                        UiBuilder::is_rect_hovered(cpos, r[0], r[1], r[2], r[3])
+                                    })
+                                {
+                                    state.screen = AppScreen::InGame;
+                                    state.mouse_captured = false;
+                                    let _ = state
+                                        .window
+                                        .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                    state.window.set_cursor_visible(true);
+                                    if let Some(client) = &mut state.mp_client {
+                                        if let Ok(payload_yaml) = serde_yaml::to_string(
+                                            &blockgame_core::admin_panel::AdminPanelAction::RequestSnapshot {
+                                                preferred_tab: None,
+                                            },
+                                        ) {
+                                            client.send(&blockgame_core::net::ClientPacket::AdminPanelAction {
+                                                payload_yaml,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             AppScreen::Settings { return_to_pause } => {
@@ -3587,6 +3634,228 @@ impl BlockGameApp {
                         } else {
                             handle_inventory_click(state, is_right);
                             state.check_full_diamond_armor_achievement();
+                        }
+                    }
+                    return;
+                }
+
+                if state.admin_panel_open {
+                    if pressed && button == MouseButton::Left {
+                        let (_, _, ui_cpos) = state.ui_metrics();
+                        let clicked = state.admin_panel_hitboxes.iter().find_map(|hb| {
+                            if ui_cpos[0] >= hb.rect[0]
+                                && ui_cpos[0] <= hb.rect[0] + hb.rect[2]
+                                && ui_cpos[1] >= hb.rect[1]
+                                && ui_cpos[1] <= hb.rect[1] + hb.rect[3]
+                            {
+                                Some(hb.action.clone())
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(action) = clicked {
+                            use blockgame_core::admin_panel::AdminPanelAction;
+                            let send_admin = |state: &mut AppState, act: AdminPanelAction| {
+                                if let Some(client) = &mut state.mp_client {
+                                    if let Ok(payload_yaml) = serde_yaml::to_string(&act) {
+                                        client.send(&blockgame_core::net::ClientPacket::AdminPanelAction {
+                                            payload_yaml,
+                                        });
+                                    }
+                                }
+                            };
+                            match action {
+                                AdminUiClickAction::Close => {
+                                    state.admin_panel_open = false;
+                                    state.admin_panel_input.clear();
+                                    if !state.inventory_open && !state.chat_open && !state.player_stats.is_dead {
+                                        state.mouse_captured = true;
+                                        let _ = state
+                                            .window
+                                            .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                        state.window.set_cursor_visible(false);
+                                    }
+                                }
+                                AdminUiClickAction::Refresh => {
+                                    send_admin(
+                                        state,
+                                        AdminPanelAction::RequestSnapshot {
+                                            preferred_tab: Some(state.admin_panel_tab),
+                                        },
+                                    );
+                                }
+                                AdminUiClickAction::SelectTab(tab) => {
+                                    state.admin_panel_tab = tab;
+                                    state.admin_panel_input.clear();
+                                }
+                                AdminUiClickAction::SelectPlayer(name) => {
+                                    state.admin_panel_selected_player = Some(name);
+                                }
+                                AdminUiClickAction::SelectGroup(name) => {
+                                    state.admin_panel_selected_group = Some(name);
+                                    state.admin_panel_node_scroll = 0;
+                                }
+                                AdminUiClickAction::SelectPermPlayer(name) => {
+                                    state.admin_panel_selected_perm_player = Some(name);
+                                }
+                                AdminUiClickAction::SetPermPlayersView(v) => {
+                                    state.admin_panel_perm_players_view = v;
+                                }
+                                AdminUiClickAction::ScrollNodes(delta) => {
+                                    if delta < 0 {
+                                        state.admin_panel_node_scroll =
+                                            state.admin_panel_node_scroll.saturating_sub((-delta) as usize);
+                                    } else {
+                                        state.admin_panel_node_scroll =
+                                            state.admin_panel_node_scroll.saturating_add(delta as usize);
+                                    }
+                                }
+                                AdminUiClickAction::SendAction(act) => {
+                                    send_admin(state, act);
+                                }
+                                AdminUiClickAction::SubmitInput(kind) => {
+                                    let input = state.admin_panel_input.trim().to_string();
+                                    let target_player = state
+                                        .admin_panel_selected_player
+                                        .clone()
+                                        .filter(|s| !s.is_empty())
+                                        .unwrap_or_else(|| input.split_whitespace().next().unwrap_or("").to_string());
+                                    let target_group = state
+                                        .admin_panel_selected_group
+                                        .clone()
+                                        .or_else(|| {
+                                            state
+                                                .admin_panel_snapshot
+                                                .as_ref()
+                                                .and_then(|s| s.permissions_groups.first().map(|g| g.name.clone()))
+                                        })
+                                        .unwrap_or_else(|| "default".to_string());
+                                    let target_perm_user = state
+                                        .admin_panel_selected_perm_player
+                                        .clone()
+                                        .or_else(|| {
+                                            state
+                                                .admin_panel_snapshot
+                                                .as_ref()
+                                                .and_then(|s| s.permissions_players.first().map(|p| p.username.clone()))
+                                        })
+                                        .unwrap_or_default();
+
+                                    let maybe_act: Option<AdminPanelAction> = match kind.as_str() {
+                                        "player_kick" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(if input.is_empty() || input.eq_ignore_ascii_case(&target_player) {
+                                                format!("kick {}", target_player)
+                                            } else {
+                                                format!("kick {} {}", target_player, input)
+                                            }),
+                                        ),
+                                        "player_ban" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(if input.is_empty() || input.eq_ignore_ascii_case(&target_player) {
+                                                format!("ban {}", target_player)
+                                            } else {
+                                                format!("ban {} {}", target_player, input)
+                                            }),
+                                        ),
+                                        "player_banip" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("ban-ip {}", target_player)),
+                                        ),
+                                        "player_mute" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("mute {} 10m {}", target_player, if input.is_empty() { "Muted by staff" } else { &input })),
+                                        ),
+                                        "player_unmute" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("unmute {}", target_player)),
+                                        ),
+                                        "player_warn" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("warn {} {}", target_player, if input.is_empty() { "Please follow server rules" } else { &input })),
+                                        ),
+                                        "player_tpto" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("tp {} {}", state.local_username, target_player)),
+                                        ),
+                                        "player_tphere" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("tphere {}", target_player)),
+                                        ),
+                                        "player_gm_creative" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("gamemode creative {}", target_player)),
+                                        ),
+                                        "player_gm_survival" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("gamemode survival {}", target_player)),
+                                        ),
+                                        "player_rank" if !target_player.is_empty() && !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("rank {} {}", target_player, input)),
+                                        ),
+                                        "player_reset" if !target_player.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("resetplayer {}", target_player)),
+                                        ),
+                                        "ban_player" if !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("ban {}", input)),
+                                        ),
+                                        "ban_ip" if !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("ban-ip {}", input)),
+                                        ),
+                                        "wf_add" if !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("wordfilter add {}", input)),
+                                        ),
+                                        "wf_remove" if !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("wordfilter remove {}", input)),
+                                        ),
+                                        "am_add" if !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("automessage add {}", input)),
+                                        ),
+                                        "server_say" if !input.is_empty() => Some(
+                                            AdminPanelAction::RunCommand(format!("say {}", input)),
+                                        ),
+                                        "perm_create_group" if !input.is_empty() => {
+                                            Some(AdminPanelAction::CreateGroup { name: input.clone() })
+                                        }
+                                        "perm_set_prefix" => {
+                                            let existing = state
+                                                .admin_panel_snapshot
+                                                .as_ref()
+                                                .and_then(|s| s.permissions_groups.iter().find(|g| g.name.eq_ignore_ascii_case(&target_group)));
+                                            Some(AdminPanelAction::UpdateGroupMeta {
+                                                name: target_group,
+                                                prefix: input.clone(),
+                                                priority: existing.map(|g| g.priority).unwrap_or(0),
+                                                inherits: existing.map(|g| g.inherits.clone()).unwrap_or_default(),
+                                            })
+                                        }
+                                        "perm_group_custom_node" if !input.is_empty() => {
+                                            let deny = input.starts_with('-');
+                                            Some(AdminPanelAction::SetGroupNode {
+                                                group: target_group,
+                                                node: input.trim_start_matches('-').to_string(),
+                                                state: Some(!deny),
+                                            })
+                                        }
+                                        "perm_player_allow" if !target_perm_user.is_empty() && !input.is_empty() => {
+                                            Some(AdminPanelAction::SetPlayerNode {
+                                                username: target_perm_user,
+                                                node: input.clone(),
+                                                state: Some(true),
+                                            })
+                                        }
+                                        "perm_player_deny" if !target_perm_user.is_empty() && !input.is_empty() => {
+                                            Some(AdminPanelAction::SetPlayerNode {
+                                                username: target_perm_user,
+                                                node: input.clone(),
+                                                state: Some(false),
+                                            })
+                                        }
+                                        "perm_player_clear" if !target_perm_user.is_empty() && !input.is_empty() => {
+                                            Some(AdminPanelAction::SetPlayerNode {
+                                                username: target_perm_user,
+                                                node: input.clone(),
+                                                state: None,
+                                            })
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(act) = maybe_act {
+                                        send_admin(state, act);
+                                        state.admin_panel_input.clear();
+                                    }
+                                }
+                            }
                         }
                     }
                     return;
@@ -5456,6 +5725,32 @@ impl BlockGameApp {
                     return;
                 }
 
+                // Handle Admin Panel keyboard input & Escape close
+                if state.admin_panel_open {
+                    if pressed {
+                        if key == KeyCode::Escape {
+                            state.admin_panel_open = false;
+                            state.admin_panel_input.clear();
+                            if !state.inventory_open && !state.chat_open && !state.player_stats.is_dead {
+                                state.mouse_captured = true;
+                                let _ = state
+                                    .window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Confined);
+                                state.window.set_cursor_visible(false);
+                            }
+                        } else if key == KeyCode::Backspace {
+                            state.admin_panel_input.pop();
+                        } else if let Some(t) = text {
+                            for ch in t.chars() {
+                                if !ch.is_control() && state.admin_panel_input.len() < 120 {
+                                    state.admin_panel_input.push(ch);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 // Dismiss external link confirmation modal on Escape
                 if state.pending_chat_link.is_some() {
                     if pressed && key == KeyCode::Escape {
@@ -6348,6 +6643,39 @@ impl BlockGameApp {
                                 blockgame_core::net::ServerPacket::ClearChat => {
                                     client.chat_history.clear();
                                     state.chat_scroll = 0;
+                                }
+                                blockgame_core::net::ServerPacket::AdminAccessFlags {
+                                    has_admin_panel,
+                                } => {
+                                    state.has_admin_panel_access = has_admin_panel;
+                                    if !has_admin_panel {
+                                        state.admin_panel_open = false;
+                                    }
+                                }
+                                blockgame_core::net::ServerPacket::AdminPanelSync {
+                                    payload_yaml,
+                                } => {
+                                    if let Ok(snap) = serde_yaml::from_str::<
+                                        blockgame_core::admin_panel::AdminPanelSnapshot,
+                                    >(&payload_yaml)
+                                    {
+                                        if let Some(req) = snap.requested_tab {
+                                            state.admin_panel_tab = req;
+                                        } else if !snap.allowed_tabs.contains(&state.admin_panel_tab) {
+                                            if let Some(&first) = snap.allowed_tabs.first() {
+                                                state.admin_panel_tab = first;
+                                            }
+                                        }
+                                        state.has_admin_panel_access = !snap.allowed_tabs.is_empty();
+                                        state.admin_panel_snapshot = Some(snap);
+                                        state.admin_panel_open = true;
+                                        state.chat_open = false;
+                                        state.mouse_captured = false;
+                                        let _ = state
+                                            .window
+                                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                        state.window.set_cursor_visible(true);
+                                    }
                                 }
                                 blockgame_core::net::ServerPacket::Kick { reason } => {
                                     kick_reason = Some(reason);
@@ -8851,6 +9179,24 @@ impl BlockGameApp {
                                 ui_cursor,
                             );
                         }
+                        if state.admin_panel_open {
+                            if let Some(ref snap) = state.admin_panel_snapshot {
+                                state.admin_panel_hitboxes = UiBuilder::draw_admin_panel(
+                                    &mut state.ui_mesh,
+                                    screen_w,
+                                    screen_h,
+                                    snap,
+                                    state.admin_panel_tab,
+                                    &state.admin_panel_input,
+                                    state.admin_panel_selected_player.as_deref(),
+                                    state.admin_panel_selected_group.as_deref(),
+                                    state.admin_panel_selected_perm_player.as_deref(),
+                                    state.admin_panel_perm_players_view,
+                                    state.admin_panel_node_scroll,
+                                    ui_cursor,
+                                );
+                            }
+                        }
                         if state.mp_client.is_some() {
                             let ptt_name = crate::settings::key_display_name(
                                 state.settings.keybinds.push_to_talk,
@@ -8923,6 +9269,16 @@ impl BlockGameApp {
                             input_mode,
                             glyph_family,
                         );
+                        if state.mp_client.is_some() && state.has_admin_panel_access {
+                            state.pause_admin_btn_rect = Some(UiBuilder::draw_pause_admin_button(
+                                &mut state.ui_mesh,
+                                screen_w,
+                                screen_h,
+                                ui_cursor,
+                            ));
+                        } else {
+                            state.pause_admin_btn_rect = None;
+                        }
                     } else if let AppScreen::Settings { .. } = state.screen {
                         let ui_settings = state.settings_ui_state();
                         let keybinds = state.settings.keybinds.labels_and_keys();

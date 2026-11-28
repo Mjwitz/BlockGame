@@ -90,6 +90,29 @@ pub struct LinkConfirmModalHitboxes {
     pub cancel_rect: [f32; 4],
 }
 
+/// Interactive action triggered by clicking inside the in-game Admin Panel.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdminUiClickAction {
+    Close,
+    Refresh,
+    SelectTab(blockgame_core::admin_panel::AdminTab),
+    SelectPlayer(String),
+    SelectGroup(String),
+    SelectPermPlayer(String),
+    SetPermPlayersView(bool),
+    ScrollNodes(i32),
+    SendAction(blockgame_core::admin_panel::AdminPanelAction),
+    /// Uses the current text input buffer to execute a parameterized action.
+    SubmitInput(String),
+}
+
+/// Clickable hitbox inside the in-game Admin Panel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdminUiHitbox {
+    pub rect: [f32; 4],
+    pub action: AdminUiClickAction,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChatSegment<'a> {
     Text(&'a str),
@@ -10406,6 +10429,1026 @@ impl UiBuilder {
         }
     }
 
+    /// Draws the permission-gated "Admin Panel" button below the Pause Menu card on multiplayer servers.
+    /// Returns its hitbox `[x, y, w, h]`.
+    pub fn draw_pause_admin_button(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        cursor_pos: [f32; 2],
+    ) -> [f32; 4] {
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let card_w = 340.0_f32.min(screen_w - 40.0);
+        let card_h = 440.0_f32.min(screen_h - 40.0);
+        let card_y = (screen_h - card_h) * 0.5;
+        let btn_w = (card_w - 48.0).max(200.0);
+        let btn_h = 34.0;
+        let bx = (screen_w - btn_w) * 0.5;
+        let by = (card_y + card_h + 10.0).min(screen_h - btn_h - 8.0);
+        let hovered = Self::is_rect_hovered(cursor_pos, bx, by, btn_w, btn_h);
+        let bg = if hovered {
+            [0.24, 0.48, 0.78, 0.96]
+        } else {
+            [0.14, 0.30, 0.52, 0.92]
+        };
+        mesh.add_quad(bx - 1.5, by - 1.5, btn_w + 3.0, btn_h + 3.0, white_uv, [0.48, 0.78, 1.0, 0.85]);
+        mesh.add_quad(bx, by, btn_w, btn_h, white_uv, bg);
+        let label = "Admin Panel";
+        let lw = Self::string_width(label, 9.0, 1.0);
+        Self::draw_string(
+            mesh,
+            bx + (btn_w - lw) * 0.5,
+            by + 10.0,
+            label,
+            9.0,
+            12.5,
+            1.0,
+            [0.96, 0.98, 1.0, 1.0],
+        );
+        [bx, by, btn_w, btn_h]
+    }
+
+    /// Draws the unified, permission-gated in-game Admin Panel (Players, Bans, Chat, Permissions,
+    /// Auto-Messages, and Server tabs) and returns clickable hitboxes for mouse and Virtual Cursor input.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_admin_panel(
+        mesh: &mut UiMesh,
+        screen_w: f32,
+        screen_h: f32,
+        snapshot: &blockgame_core::admin_panel::AdminPanelSnapshot,
+        active_tab: blockgame_core::admin_panel::AdminTab,
+        input_text: &str,
+        selected_player: Option<&str>,
+        selected_group: Option<&str>,
+        selected_perm_player: Option<&str>,
+        perm_players_view: bool,
+        node_scroll: usize,
+        cursor_pos: [f32; 2],
+    ) -> Vec<AdminUiHitbox> {
+        use blockgame_core::admin_panel::{AdminPanelAction, AdminTab};
+        use blockgame_core::automessage::AutoMessageOrder;
+        use blockgame_core::moderation::WordFilterMode;
+
+        let white_uv = TextureAtlas::get_uv_bounds(Self::WHITE_TILE);
+        let mut hitboxes: Vec<AdminUiHitbox> = Vec::new();
+
+        // Backdrop
+        mesh.add_quad(0.0, 0.0, screen_w, screen_h, white_uv, [0.02, 0.03, 0.05, 0.72]);
+
+        let panel_w = 820.0_f32.min(screen_w - 32.0).max(520.0);
+        let panel_h = 540.0_f32.min(screen_h - 32.0).max(380.0);
+        let px = (screen_w - panel_w) * 0.5;
+        let py = (screen_h - panel_h) * 0.5;
+
+        // Frame & background
+        mesh.add_quad(px - 2.0, py - 2.0, panel_w + 4.0, panel_h + 4.0, white_uv, [0.36, 0.64, 0.92, 0.88]);
+        mesh.add_quad(px, py, panel_w, panel_h, white_uv, [0.06, 0.08, 0.12, 0.96]);
+
+        let mut push_btn = |mesh: &mut UiMesh,
+                            rect: [f32; 4],
+                            label: &str,
+                            base: [f32; 4],
+                            hover: [f32; 4],
+                            action: AdminUiClickAction| {
+            let hovered = Self::is_rect_hovered(cursor_pos, rect[0], rect[1], rect[2], rect[3]);
+            mesh.add_quad(rect[0], rect[1], rect[2], rect[3], white_uv, if hovered { hover } else { base });
+            if hovered {
+                mesh.add_quad(rect[0] - 1.0, rect[1] - 1.0, rect[2] + 2.0, 1.0, white_uv, [1.0, 1.0, 1.0, 0.85]);
+                mesh.add_quad(rect[0] - 1.0, rect[1] + rect[3], rect[2] + 2.0, 1.0, white_uv, [1.0, 1.0, 1.0, 0.85]);
+            }
+            let lw = Self::string_width(label, 7.2, 0.9);
+            Self::draw_string(
+                mesh,
+                rect[0] + (rect[2] - lw).max(4.0) * 0.5,
+                rect[1] + (rect[3] - 10.0) * 0.5,
+                label,
+                7.2,
+                10.0,
+                0.9,
+                [0.98, 0.99, 1.0, 1.0],
+            );
+            hitboxes.push(AdminUiHitbox { rect, action });
+        };
+
+        // Header bar
+        mesh.add_quad(px, py, panel_w, 36.0, white_uv, [0.09, 0.12, 0.18, 0.98]);
+        Self::draw_string(
+            mesh,
+            px + 14.0,
+            py + 10.0,
+            "Admin Panel",
+            10.5,
+            14.5,
+            1.1,
+            [0.95, 0.97, 1.0, 1.0],
+        );
+        push_btn(
+            mesh,
+            [px + panel_w - 154.0, py + 6.0, 72.0, 24.0],
+            "Refresh",
+            [0.18, 0.36, 0.58, 0.95],
+            [0.26, 0.50, 0.78, 1.0],
+            AdminUiClickAction::Refresh,
+        );
+        push_btn(
+            mesh,
+            [px + panel_w - 74.0, py + 6.0, 62.0, 24.0],
+            "Close",
+            [0.52, 0.20, 0.22, 0.95],
+            [0.72, 0.28, 0.30, 1.0],
+            AdminUiClickAction::Close,
+        );
+
+        // Permission-gated Tab Bar
+        let tab_y = py + 42.0;
+        let mut tx = px + 12.0;
+        for &tab in &snapshot.allowed_tabs {
+            let tw = (Self::string_width(tab.label(), 7.8, 1.0) + 22.0).max(76.0);
+            let is_active = tab == active_tab;
+            push_btn(
+                mesh,
+                [tx, tab_y, tw, 26.0],
+                tab.label(),
+                if is_active {
+                    [0.24, 0.52, 0.82, 0.98]
+                } else {
+                    [0.12, 0.16, 0.23, 0.92]
+                },
+                [0.30, 0.60, 0.92, 1.0],
+                AdminUiClickAction::SelectTab(tab),
+            );
+            tx += tw + 6.0;
+        }
+
+        // Status banner
+        let body_top = py + 76.0;
+        let mut content_y = body_top;
+        if !snapshot.status_message.is_empty() {
+            let is_err = snapshot.status_message.starts_with("[Error]");
+            mesh.add_quad(
+                px + 12.0,
+                content_y,
+                panel_w - 24.0,
+                22.0,
+                white_uv,
+                if is_err {
+                    [0.34, 0.10, 0.12, 0.92]
+                } else {
+                    [0.09, 0.24, 0.14, 0.92]
+                },
+            );
+            Self::draw_string(
+                mesh,
+                px + 18.0,
+                content_y + 5.0,
+                &snapshot.status_message,
+                7.2,
+                10.5,
+                0.9,
+                if is_err {
+                    [1.0, 0.65, 0.65, 1.0]
+                } else {
+                    [0.65, 0.98, 0.72, 1.0]
+                },
+            );
+            content_y += 28.0;
+        }
+
+        // Shared Input Bar at the bottom of the panel
+        let input_y = py + panel_h - 38.0;
+        mesh.add_quad(px + 12.0, input_y, panel_w - 24.0, 26.0, white_uv, [0.04, 0.05, 0.08, 0.96]);
+        let prompt_hint = match active_tab {
+            AdminTab::Players => "Input (offline player / reason / group):",
+            AdminTab::Bans => "Input (username or IP to ban):",
+            AdminTab::Chat => "Input (word to add/remove, or player for warn/mute):",
+            AdminTab::Permissions => "Input (group name / prefix / custom node / player):",
+            AdminTab::AutoMessages => "Input (new Auto-Message text, supports & colors & URLs):",
+            AdminTab::Server => "Input (server broadcast message):",
+        };
+        Self::draw_string(
+            mesh,
+            px + 14.0,
+            input_y - 14.0,
+            prompt_hint,
+            6.8,
+            9.5,
+            0.9,
+            [0.68, 0.76, 0.86, 0.92],
+        );
+        let displayed_input = format!("> {}_", input_text);
+        Self::draw_string(
+            mesh,
+            px + 18.0,
+            input_y + 7.0,
+            &displayed_input,
+            7.6,
+            11.0,
+            1.0,
+            [0.95, 0.98, 1.0, 1.0],
+        );
+
+        let content_x = px + 14.0;
+        let content_w = panel_w - 28.0;
+
+        if !snapshot.allowed_tabs.contains(&active_tab) {
+            Self::draw_string(
+                mesh,
+                content_x,
+                content_y + 12.0,
+                "You do not have permission to view this tab.",
+                8.0,
+                11.5,
+                1.0,
+                [0.95, 0.55, 0.55, 1.0],
+            );
+            return hitboxes;
+        }
+
+        match active_tab {
+            AdminTab::Players => {
+                let left_w = (content_w * 0.44).max(200.0);
+                let right_x = content_x + left_w + 14.0;
+                let right_w = content_w - left_w - 14.0;
+
+                Self::draw_string(
+                    mesh,
+                    content_x,
+                    content_y,
+                    &format!("Online Players ({})", snapshot.online_players.len()),
+                    8.0,
+                    11.0,
+                    1.0,
+                    [0.80, 0.90, 1.0, 1.0],
+                );
+                let mut ry = content_y + 18.0;
+                for p in snapshot.online_players.iter().take(12) {
+                    let is_sel = selected_player.is_some_and(|s| s.eq_ignore_ascii_case(&p.username));
+                    let row_label = format!(
+                        "{} [{}] ({},{},{}) W:{}",
+                        p.username, p.gamemode, p.pos[0], p.pos[1], p.pos[2], p.warning_count
+                    );
+                    push_btn(
+                        mesh,
+                        [content_x, ry, left_w, 24.0],
+                        &row_label,
+                        if is_sel {
+                            [0.22, 0.48, 0.76, 0.96]
+                        } else {
+                            [0.11, 0.14, 0.20, 0.90]
+                        },
+                        [0.26, 0.54, 0.84, 1.0],
+                        AdminUiClickAction::SelectPlayer(p.username.clone()),
+                    );
+                    ry += 28.0;
+                }
+
+                let target_label = selected_player
+                    .or_else(|| {
+                        let t = input_text.trim();
+                        if t.is_empty() { None } else { Some(t) }
+                    })
+                    .unwrap_or("(select player or type in input)");
+                Self::draw_string(
+                    mesh,
+                    right_x,
+                    content_y,
+                    &format!("Target: {}", target_label),
+                    8.0,
+                    11.0,
+                    1.0,
+                    [0.98, 0.88, 0.45, 1.0],
+                );
+
+                let actions: &[(&str, &str, [f32; 4])] = &[
+                    ("Kick", "player_kick", [0.58, 0.34, 0.16, 0.95]),
+                    ("Ban", "player_ban", [0.62, 0.18, 0.20, 0.95]),
+                    ("Ban IP", "player_banip", [0.52, 0.14, 0.18, 0.95]),
+                    ("Mute 10m", "player_mute", [0.55, 0.42, 0.16, 0.95]),
+                    ("Unmute", "player_unmute", [0.18, 0.52, 0.28, 0.95]),
+                    ("Warn", "player_warn", [0.65, 0.46, 0.14, 0.95]),
+                    ("TP To", "player_tpto", [0.18, 0.42, 0.66, 0.95]),
+                    ("TP Here", "player_tphere", [0.18, 0.42, 0.66, 0.95]),
+                    ("Creative", "player_gm_creative", [0.24, 0.46, 0.58, 0.95]),
+                    ("Survival", "player_gm_survival", [0.24, 0.46, 0.58, 0.95]),
+                    ("Set Rank", "player_rank", [0.34, 0.36, 0.62, 0.95]),
+                    ("Reset Data", "player_reset", [0.50, 0.20, 0.22, 0.95]),
+                ];
+                let col_w = (right_w - 8.0) * 0.5;
+                for (i, &(label, key, col)) in actions.iter().enumerate() {
+                    let cx = right_x + (i % 2) as f32 * (col_w + 8.0);
+                    let cy = content_y + 22.0 + (i / 2) as f32 * 32.0;
+                    push_btn(
+                        mesh,
+                        [cx, cy, col_w, 26.0],
+                        label,
+                        col,
+                        [
+                            (col[0] + 0.14).min(1.0),
+                            (col[1] + 0.14).min(1.0),
+                            (col[2] + 0.14).min(1.0),
+                            1.0,
+                        ],
+                        AdminUiClickAction::SubmitInput(key.to_string()),
+                    );
+                }
+            }
+            AdminTab::Bans => {
+                push_btn(
+                    mesh,
+                    [content_x, content_y, 130.0, 24.0],
+                    "+ Ban Player",
+                    [0.62, 0.20, 0.22, 0.95],
+                    [0.78, 0.28, 0.30, 1.0],
+                    AdminUiClickAction::SubmitInput("ban_player".to_string()),
+                );
+                push_btn(
+                    mesh,
+                    [content_x + 138.0, content_y, 110.0, 24.0],
+                    "+ Ban IP",
+                    [0.54, 0.16, 0.20, 0.95],
+                    [0.70, 0.24, 0.28, 1.0],
+                    AdminUiClickAction::SubmitInput("ban_ip".to_string()),
+                );
+
+                let mut ry = content_y + 34.0;
+                Self::draw_string(
+                    mesh,
+                    content_x,
+                    ry,
+                    &format!(
+                        "Banned Players ({}) & IPs ({})",
+                        snapshot.banned_players.len(),
+                        snapshot.banned_ips.len()
+                    ),
+                    8.0,
+                    11.0,
+                    1.0,
+                    [0.85, 0.90, 1.0, 1.0],
+                );
+                ry += 18.0;
+
+                for b in snapshot.banned_players.iter().take(6) {
+                    let line = format!("{} - {} (by {})", b.username, b.reason, b.banned_by);
+                    Self::draw_string(mesh, content_x, ry + 5.0, &line, 7.2, 10.5, 0.9, [0.95, 0.80, 0.80, 1.0]);
+                    push_btn(
+                        mesh,
+                        [content_x + content_w - 76.0, ry, 74.0, 22.0],
+                        "Unban",
+                        [0.18, 0.52, 0.28, 0.95],
+                        [0.26, 0.68, 0.38, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "unban {}",
+                            b.username
+                        ))),
+                    );
+                    ry += 26.0;
+                }
+                for b in snapshot.banned_ips.iter().take(4) {
+                    let line = format!("IP {} - {} (by {})", b.ip, b.reason, b.banned_by);
+                    Self::draw_string(mesh, content_x, ry + 5.0, &line, 7.2, 10.5, 0.9, [0.95, 0.72, 0.72, 1.0]);
+                    push_btn(
+                        mesh,
+                        [content_x + content_w - 86.0, ry, 84.0, 22.0],
+                        "Unban IP",
+                        [0.18, 0.52, 0.28, 0.95],
+                        [0.26, 0.68, 0.38, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "unban-ip {}",
+                            b.ip
+                        ))),
+                    );
+                    ry += 26.0;
+                }
+            }
+            AdminTab::Chat => {
+                // Row 1: Chat Lock, Slowmode presets, Clear Chat
+                let locked = snapshot.chat_settings.chat_locked;
+                push_btn(
+                    mesh,
+                    [content_x, content_y, 145.0, 26.0],
+                    if locked { "Chat Lock: ON" } else { "Chat Lock: OFF" },
+                    if locked { [0.65, 0.20, 0.20, 0.95] } else { [0.18, 0.45, 0.28, 0.95] },
+                    [0.75, 0.30, 0.30, 1.0],
+                    AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                        "chatlock {}",
+                        if locked { "off" } else { "on" }
+                    ))),
+                );
+                let sm = snapshot.chat_settings.slowmode_secs;
+                let next_sm = match sm {
+                    0 => 3,
+                    3 => 10,
+                    _ => 0,
+                };
+                push_btn(
+                    mesh,
+                    [content_x + 153.0, content_y, 140.0, 26.0],
+                    &format!("Slowmode: {}s", sm),
+                    [0.22, 0.40, 0.62, 0.95],
+                    [0.30, 0.54, 0.80, 1.0],
+                    AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                        "slowmode {}",
+                        next_sm
+                    ))),
+                );
+                push_btn(
+                    mesh,
+                    [content_x + 301.0, content_y, 110.0, 26.0],
+                    "Clear Chat",
+                    [0.52, 0.36, 0.16, 0.95],
+                    [0.68, 0.48, 0.22, 1.0],
+                    AdminUiClickAction::SendAction(AdminPanelAction::RunCommand("clearchat".to_string())),
+                );
+
+                // Row 2: Word Filter toggle, mode, add/remove word
+                let wf_y = content_y + 34.0;
+                let wf_on = snapshot.word_filter.enabled;
+                push_btn(
+                    mesh,
+                    [content_x, wf_y, 145.0, 26.0],
+                    if wf_on { "Word Filter: ON" } else { "Word Filter: OFF" },
+                    if wf_on { [0.18, 0.52, 0.28, 0.95] } else { [0.35, 0.22, 0.24, 0.95] },
+                    [0.28, 0.66, 0.38, 1.0],
+                    AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                        "wordfilter {}",
+                        if wf_on { "off" } else { "on" }
+                    ))),
+                );
+                let next_mode = match snapshot.word_filter.mode {
+                    WordFilterMode::Censor => "block",
+                    WordFilterMode::Block => "censor",
+                };
+                push_btn(
+                    mesh,
+                    [content_x + 153.0, wf_y, 130.0, 26.0],
+                    &format!("Mode: {}", snapshot.word_filter.mode.as_str()),
+                    [0.26, 0.36, 0.58, 0.95],
+                    [0.34, 0.48, 0.74, 1.0],
+                    AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                        "wordfilter mode {}",
+                        next_mode
+                    ))),
+                );
+                push_btn(
+                    mesh,
+                    [content_x + 291.0, wf_y, 96.0, 26.0],
+                    "+ Add Word",
+                    [0.18, 0.48, 0.34, 0.95],
+                    [0.26, 0.64, 0.44, 1.0],
+                    AdminUiClickAction::SubmitInput("wf_add".to_string()),
+                );
+                push_btn(
+                    mesh,
+                    [content_x + 395.0, wf_y, 108.0, 26.0],
+                    "- Remove Word",
+                    [0.54, 0.24, 0.24, 0.95],
+                    [0.70, 0.32, 0.32, 1.0],
+                    AdminUiClickAction::SubmitInput("wf_remove".to_string()),
+                );
+
+                let words_preview = if snapshot.word_filter.words.is_empty() {
+                    "Filtered words: (none)".to_string()
+                } else {
+                    format!("Filtered words: {}", snapshot.word_filter.words.join(", "))
+                };
+                Self::draw_string(
+                    mesh,
+                    content_x,
+                    wf_y + 32.0,
+                    &words_preview,
+                    7.2,
+                    10.5,
+                    0.9,
+                    [0.78, 0.84, 0.92, 0.95],
+                );
+
+                // Active Mutes & Recent Warnings
+                let mut ry = wf_y + 54.0;
+                Self::draw_string(
+                    mesh,
+                    content_x,
+                    ry,
+                    &format!(
+                        "Active Mutes ({}) | Recent Warnings ({})",
+                        snapshot.active_mutes.len(),
+                        snapshot.recent_warnings.len()
+                    ),
+                    7.6,
+                    11.0,
+                    0.95,
+                    [0.98, 0.86, 0.48, 1.0],
+                );
+                ry += 18.0;
+                for m in snapshot.active_mutes.iter().take(4) {
+                    let line = format!("[Muted] {} - {}", m.username, m.reason);
+                    Self::draw_string(mesh, content_x, ry + 4.0, &line, 7.2, 10.0, 0.9, [0.98, 0.72, 0.72, 1.0]);
+                    push_btn(
+                        mesh,
+                        [content_x + content_w - 78.0, ry, 76.0, 20.0],
+                        "Unmute",
+                        [0.18, 0.50, 0.28, 0.95],
+                        [0.26, 0.66, 0.38, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "unmute {}",
+                            m.username
+                        ))),
+                    );
+                    ry += 24.0;
+                }
+                for w in snapshot.recent_warnings.iter().take(4) {
+                    let line = format!("[Warn] {} (by {}): {}", w.username, w.warned_by, w.reason);
+                    Self::draw_string(mesh, content_x, ry + 4.0, &line, 7.2, 10.0, 0.9, [0.96, 0.90, 0.65, 1.0]);
+                    push_btn(
+                        mesh,
+                        [content_x + content_w - 78.0, ry, 76.0, 20.0],
+                        "Clear",
+                        [0.44, 0.24, 0.24, 0.95],
+                        [0.60, 0.32, 0.32, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "clearwarnings {}",
+                            w.username
+                        ))),
+                    );
+                    ry += 24.0;
+                }
+            }
+            AdminTab::AutoMessages => {
+                if let Some(ref am) = snapshot.automessages {
+                    push_btn(
+                        mesh,
+                        [content_x, content_y, 145.0, 26.0],
+                        if am.enabled { "Auto-Msg: ON" } else { "Auto-Msg: OFF" },
+                        if am.enabled { [0.18, 0.52, 0.28, 0.95] } else { [0.48, 0.20, 0.22, 0.95] },
+                        [0.28, 0.68, 0.38, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "automessage {}",
+                            if am.enabled { "off" } else { "on" }
+                        ))),
+                    );
+                    let next_order = match am.order {
+                        AutoMessageOrder::Sequential => "random",
+                        AutoMessageOrder::Random => "sequential",
+                    };
+                    push_btn(
+                        mesh,
+                        [content_x + 153.0, content_y, 150.0, 26.0],
+                        &format!("Order: {}", am.order.as_str()),
+                        [0.22, 0.40, 0.62, 0.95],
+                        [0.30, 0.54, 0.80, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "automessage order {}",
+                            next_order
+                        ))),
+                    );
+                    let next_interval = match am.interval_secs {
+                        0..=59 => 60,
+                        60..=299 => 300,
+                        _ => 30,
+                    };
+                    push_btn(
+                        mesh,
+                        [content_x + 311.0, content_y, 130.0, 26.0],
+                        &format!("Every: {}s", am.interval_secs),
+                        [0.26, 0.38, 0.56, 0.95],
+                        [0.34, 0.50, 0.72, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                            "automessage interval {}",
+                            next_interval
+                        ))),
+                    );
+                    push_btn(
+                        mesh,
+                        [content_x + 449.0, content_y, 120.0, 26.0],
+                        "+ Add Message",
+                        [0.18, 0.48, 0.34, 0.95],
+                        [0.26, 0.64, 0.44, 1.0],
+                        AdminUiClickAction::SubmitInput("am_add".to_string()),
+                    );
+
+                    let mut ry = content_y + 38.0;
+                    for (idx, msg) in am.messages.iter().enumerate().take(10) {
+                        let line = format!("{}. {}", idx + 1, msg);
+                        Self::draw_colored_string(
+                            mesh,
+                            content_x,
+                            ry + 4.0,
+                            &line,
+                            7.2,
+                            10.5,
+                            0.9,
+                            [0.92, 0.95, 1.0, 1.0],
+                        );
+                        push_btn(
+                            mesh,
+                            [content_x + content_w - 72.0, ry, 70.0, 22.0],
+                            "Remove",
+                            [0.52, 0.20, 0.22, 0.95],
+                            [0.70, 0.28, 0.30, 1.0],
+                            AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
+                                "automessage remove {}",
+                                idx + 1
+                            ))),
+                        );
+                        ry += 26.0;
+                    }
+                }
+            }
+            AdminTab::Server => {
+                if let Some(ref stats) = snapshot.server_stats {
+                    let info = format!(
+                        "World: {}  |  Online: {}  |  Uptime: {}s",
+                        stats.world_name, stats.online_count, stats.uptime_secs
+                    );
+                    Self::draw_string(mesh, content_x, content_y, &info, 8.2, 11.5, 1.0, [0.85, 0.92, 1.0, 1.0]);
+
+                    let row1 = content_y + 28.0;
+                    push_btn(
+                        mesh,
+                        [content_x, row1, 210.0, 28.0],
+                        if stats.broadcast_achievements {
+                            "Achievement Broadcasts: ON"
+                        } else {
+                            "Achievement Broadcasts: OFF"
+                        },
+                        if stats.broadcast_achievements {
+                            [0.18, 0.50, 0.28, 0.95]
+                        } else {
+                            [0.45, 0.24, 0.24, 0.95]
+                        },
+                        [0.28, 0.64, 0.38, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::SetBroadcastAchievements(
+                            !stats.broadcast_achievements,
+                        )),
+                    );
+                    push_btn(
+                        mesh,
+                        [content_x + 220.0, row1, 130.0, 28.0],
+                        "Broadcast /say",
+                        [0.20, 0.42, 0.68, 0.95],
+                        [0.28, 0.56, 0.86, 1.0],
+                        AdminUiClickAction::SubmitInput("server_say".to_string()),
+                    );
+                    push_btn(
+                        mesh,
+                        [content_x + 360.0, row1, 110.0, 28.0],
+                        "Set Spawn",
+                        [0.26, 0.42, 0.56, 0.95],
+                        [0.34, 0.56, 0.72, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand("setspawn".to_string())),
+                    );
+
+                    let row2 = row1 + 38.0;
+                    push_btn(
+                        mesh,
+                        [content_x, row2, 140.0, 28.0],
+                        "Save World",
+                        [0.18, 0.48, 0.34, 0.95],
+                        [0.26, 0.64, 0.44, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::SaveWorld),
+                    );
+                    push_btn(
+                        mesh,
+                        [content_x + 150.0, row2, 140.0, 28.0],
+                        "Stop Server",
+                        [0.62, 0.16, 0.18, 0.95],
+                        [0.82, 0.24, 0.26, 1.0],
+                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand("stop".to_string())),
+                    );
+                }
+            }
+            AdminTab::Permissions => {
+                // Sub-view toggle: Groups vs Players
+                push_btn(
+                    mesh,
+                    [content_x, content_y, 110.0, 24.0],
+                    "Groups View",
+                    if !perm_players_view { [0.24, 0.52, 0.82, 0.98] } else { [0.12, 0.16, 0.24, 0.92] },
+                    [0.30, 0.60, 0.92, 1.0],
+                    AdminUiClickAction::SetPermPlayersView(false),
+                );
+                push_btn(
+                    mesh,
+                    [content_x + 118.0, content_y, 110.0, 24.0],
+                    "Players View",
+                    if perm_players_view { [0.24, 0.52, 0.82, 0.98] } else { [0.12, 0.16, 0.24, 0.92] },
+                    [0.30, 0.60, 0.92, 1.0],
+                    AdminUiClickAction::SetPermPlayersView(true),
+                );
+
+                let sub_y = content_y + 32.0;
+                let left_w = 190.0;
+                let right_x = content_x + left_w + 14.0;
+                let right_w = content_w - left_w - 14.0;
+
+                if !perm_players_view {
+                    // Groups View
+                    push_btn(
+                        mesh,
+                        [content_x, sub_y, left_w, 22.0],
+                        "+ Create Group (input)",
+                        [0.18, 0.48, 0.34, 0.95],
+                        [0.26, 0.64, 0.44, 1.0],
+                        AdminUiClickAction::SubmitInput("perm_create_group".to_string()),
+                    );
+                    let mut gy = sub_y + 28.0;
+                    for g in snapshot.permissions_groups.iter().take(10) {
+                        let is_sel = selected_group.is_some_and(|s| s.eq_ignore_ascii_case(&g.name));
+                        push_btn(
+                            mesh,
+                            [content_x, gy, left_w, 22.0],
+                            &format!("{} (P:{})", g.name, g.priority),
+                            if is_sel { [0.22, 0.48, 0.76, 0.96] } else { [0.11, 0.14, 0.20, 0.90] },
+                            [0.26, 0.54, 0.84, 1.0],
+                            AdminUiClickAction::SelectGroup(g.name.clone()),
+                        );
+                        gy += 26.0;
+                    }
+
+                    if let Some(grp) = snapshot
+                        .permissions_groups
+                        .iter()
+                        .find(|g| selected_group.is_some_and(|s| s.eq_ignore_ascii_case(&g.name)))
+                        .or_else(|| snapshot.permissions_groups.first())
+                    {
+                        // Group metadata + live color prefix preview
+                        let preview = format!(
+                            "Group: {} | Priority: {} | Preview: {}&rPlayer",
+                            grp.name, grp.priority, grp.prefix
+                        );
+                        Self::draw_colored_string(
+                            mesh,
+                            right_x,
+                            sub_y + 2.0,
+                            &preview,
+                            7.4,
+                            10.5,
+                            0.95,
+                            [0.92, 0.96, 1.0, 1.0],
+                        );
+
+                        let meta_y = sub_y + 22.0;
+                        push_btn(
+                            mesh,
+                            [right_x, meta_y, 110.0, 22.0],
+                            "Set Prefix",
+                            [0.22, 0.42, 0.64, 0.95],
+                            [0.30, 0.56, 0.82, 1.0],
+                            AdminUiClickAction::SubmitInput("perm_set_prefix".to_string()),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + 116.0, meta_y, 68.0, 22.0],
+                            "P +10",
+                            [0.22, 0.46, 0.44, 0.95],
+                            [0.30, 0.62, 0.58, 1.0],
+                            AdminUiClickAction::SendAction(AdminPanelAction::UpdateGroupMeta {
+                                name: grp.name.clone(),
+                                prefix: grp.prefix.clone(),
+                                priority: grp.priority + 10,
+                                inherits: grp.inherits.clone(),
+                            }),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + 190.0, meta_y, 68.0, 22.0],
+                            "P -10",
+                            [0.44, 0.34, 0.22, 0.95],
+                            [0.60, 0.46, 0.30, 1.0],
+                            AdminUiClickAction::SendAction(AdminPanelAction::UpdateGroupMeta {
+                                name: grp.name.clone(),
+                                prefix: grp.prefix.clone(),
+                                priority: grp.priority - 10,
+                                inherits: grp.inherits.clone(),
+                            }),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + 264.0, meta_y, 108.0, 22.0],
+                            "+ Custom Node",
+                            [0.24, 0.48, 0.32, 0.95],
+                            [0.32, 0.64, 0.42, 1.0],
+                            AdminUiClickAction::SubmitInput("perm_group_custom_node".to_string()),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + right_w - 84.0, meta_y, 84.0, 22.0],
+                            "Delete Grp",
+                            [0.56, 0.18, 0.20, 0.95],
+                            [0.74, 0.26, 0.28, 1.0],
+                            AdminUiClickAction::SendAction(AdminPanelAction::DeleteGroup {
+                                name: grp.name.clone(),
+                            }),
+                        );
+
+                        // Scrollable known permission node catalog
+                        let cat_y = meta_y + 30.0;
+                        let page_size = 8usize;
+                        let max_scroll = snapshot.known_permission_nodes.len().saturating_sub(page_size);
+                        let start = node_scroll.min(max_scroll);
+
+                        push_btn(
+                            mesh,
+                            [right_x + right_w - 118.0, cat_y - 2.0, 56.0, 18.0],
+                            "Up",
+                            [0.16, 0.22, 0.32, 0.95],
+                            [0.24, 0.34, 0.48, 1.0],
+                            AdminUiClickAction::ScrollNodes(-4),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + right_w - 58.0, cat_y - 2.0, 56.0, 18.0],
+                            "Down",
+                            [0.16, 0.22, 0.32, 0.95],
+                            [0.24, 0.34, 0.48, 1.0],
+                            AdminUiClickAction::ScrollNodes(4),
+                        );
+                        Self::draw_string(
+                            mesh,
+                            right_x,
+                            cat_y + 1.0,
+                            &format!(
+                                "Permission Nodes ({}-{} / {})",
+                                start + 1,
+                                (start + page_size).min(snapshot.known_permission_nodes.len()),
+                                snapshot.known_permission_nodes.len()
+                            ),
+                            7.0,
+                            10.0,
+                            0.9,
+                            [0.78, 0.86, 0.95, 1.0],
+                        );
+
+                        let mut ny = cat_y + 22.0;
+                        for node in snapshot
+                            .known_permission_nodes
+                            .iter()
+                            .skip(start)
+                            .take(page_size)
+                        {
+                            let is_allow = grp.permissions.iter().any(|p| p.eq_ignore_ascii_case(node));
+                            let is_deny = grp
+                                .permissions
+                                .iter()
+                                .any(|p| p.eq_ignore_ascii_case(&format!("-{}", node)));
+                            Self::draw_string(
+                                mesh,
+                                right_x,
+                                ny + 4.0,
+                                node,
+                                6.8,
+                                9.8,
+                                0.9,
+                                if is_allow {
+                                    [0.55, 0.96, 0.65, 1.0]
+                                } else if is_deny {
+                                    [0.98, 0.55, 0.55, 1.0]
+                                } else {
+                                    [0.82, 0.86, 0.92, 0.90]
+                                },
+                            );
+                            let bx = right_x + right_w - 172.0;
+                            push_btn(
+                                mesh,
+                                [bx, ny, 52.0, 19.0],
+                                "Allow",
+                                if is_allow { [0.18, 0.58, 0.30, 0.98] } else { [0.13, 0.17, 0.22, 0.90] },
+                                [0.26, 0.72, 0.40, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::SetGroupNode {
+                                    group: grp.name.clone(),
+                                    node: node.clone(),
+                                    state: Some(true),
+                                }),
+                            );
+                            push_btn(
+                                mesh,
+                                [bx + 56.0, ny, 56.0, 19.0],
+                                "Neutral",
+                                if !is_allow && !is_deny { [0.24, 0.34, 0.48, 0.95] } else { [0.13, 0.17, 0.22, 0.90] },
+                                [0.32, 0.44, 0.60, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::SetGroupNode {
+                                    group: grp.name.clone(),
+                                    node: node.clone(),
+                                    state: None,
+                                }),
+                            );
+                            push_btn(
+                                mesh,
+                                [bx + 116.0, ny, 54.0, 19.0],
+                                "Deny",
+                                if is_deny { [0.62, 0.20, 0.22, 0.98] } else { [0.13, 0.17, 0.22, 0.90] },
+                                [0.78, 0.28, 0.30, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::SetGroupNode {
+                                    group: grp.name.clone(),
+                                    node: node.clone(),
+                                    state: Some(false),
+                                }),
+                            );
+                            ny += 23.0;
+                        }
+                    }
+                } else {
+                    // Players View
+                    let mut names: Vec<String> = snapshot
+                        .permissions_players
+                        .iter()
+                        .map(|p| p.username.clone())
+                        .collect();
+                    for op in &snapshot.online_players {
+                        if !names.iter().any(|n| n.eq_ignore_ascii_case(&op.username)) {
+                            names.push(op.username.clone());
+                        }
+                    }
+                    let mut py_row = sub_y;
+                    for name in names.iter().take(10) {
+                        let is_sel = selected_perm_player.is_some_and(|s| s.eq_ignore_ascii_case(name));
+                        push_btn(
+                            mesh,
+                            [content_x, py_row, left_w, 22.0],
+                            name,
+                            if is_sel { [0.22, 0.48, 0.76, 0.96] } else { [0.11, 0.14, 0.20, 0.90] },
+                            [0.26, 0.54, 0.84, 1.0],
+                            AdminUiClickAction::SelectPermPlayer(name.clone()),
+                        );
+                        py_row += 26.0;
+                    }
+
+                    let target_user = selected_perm_player
+                        .or_else(|| names.first().map(|s| s.as_str()))
+                        .unwrap_or("");
+                    if !target_user.is_empty() {
+                        Self::draw_string(
+                            mesh,
+                            right_x,
+                            sub_y + 2.0,
+                            &format!("Player Groups for '{}':", target_user),
+                            7.6,
+                            11.0,
+                            0.95,
+                            [0.98, 0.88, 0.48, 1.0],
+                        );
+                        let p_rec = snapshot
+                            .permissions_players
+                            .iter()
+                            .find(|p| p.username.eq_ignore_ascii_case(target_user));
+                        let mut gx = right_x;
+                        let mut gy = sub_y + 22.0;
+                        for g in &snapshot.permissions_groups {
+                            let assigned = p_rec
+                                .map(|p| p.groups.iter().any(|pg| pg.eq_ignore_ascii_case(&g.name)))
+                                .unwrap_or_else(|| g.name.eq_ignore_ascii_case("default"));
+                            let gw = (Self::string_width(&g.name, 7.2, 0.9) + 28.0).max(74.0);
+                            if gx + gw > right_x + right_w {
+                                gx = right_x;
+                                gy += 28.0;
+                            }
+                            push_btn(
+                                mesh,
+                                [gx, gy, gw, 22.0],
+                                &format!("{} {}", if assigned { "[x]" } else { "[ ]" }, g.name),
+                                if assigned { [0.18, 0.52, 0.28, 0.95] } else { [0.14, 0.18, 0.25, 0.92] },
+                                [0.26, 0.66, 0.38, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::SetPlayerGroup {
+                                    username: target_user.to_string(),
+                                    group: g.name.clone(),
+                                    assigned: !assigned,
+                                }),
+                            );
+                            gx += gw + 6.0;
+                        }
+
+                        let node_y = gy + 38.0;
+                        push_btn(
+                            mesh,
+                            [right_x, node_y, 124.0, 24.0],
+                            "+ Allow Node",
+                            [0.18, 0.50, 0.30, 0.95],
+                            [0.26, 0.66, 0.40, 1.0],
+                            AdminUiClickAction::SubmitInput("perm_player_allow".to_string()),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + 132.0, node_y, 120.0, 24.0],
+                            "- Deny Node",
+                            [0.56, 0.20, 0.22, 0.95],
+                            [0.74, 0.28, 0.30, 1.0],
+                            AdminUiClickAction::SubmitInput("perm_player_deny".to_string()),
+                        );
+                        push_btn(
+                            mesh,
+                            [right_x + 260.0, node_y, 110.0, 24.0],
+                            "Clear Node",
+                            [0.26, 0.34, 0.48, 0.95],
+                            [0.36, 0.46, 0.62, 1.0],
+                            AdminUiClickAction::SubmitInput("perm_player_clear".to_string()),
+                        );
+                    }
+                }
+            }
+        }
+
+        hitboxes
+    }
+
     /// Draws a compact proximity voice chat status badge and nearby speaker indicators.
     pub fn draw_voice_hud_badge(
         mesh: &mut UiMesh,
@@ -14060,5 +15103,42 @@ mod tests {
         );
         assert!(!modal_mesh.indices.is_empty());
         assert!(modal_hb.open_rect[2] > 0.0 && modal_hb.copy_rect[2] > 0.0 && modal_hb.cancel_rect[2] > 0.0);
+    }
+
+    #[test]
+    fn test_admin_panel_tab_gating_and_pause_button() {
+        use blockgame_core::admin_panel::{AdminPanelSnapshot, AdminTab};
+
+        let mut pause_mesh = UiMesh::new();
+        let pause_btn = UiBuilder::draw_pause_admin_button(&mut pause_mesh, 1280.0, 720.0, [640.0, 600.0]);
+        assert!(pause_btn[2] > 0.0 && pause_btn[3] > 0.0);
+
+        let snap = AdminPanelSnapshot {
+            allowed_tabs: vec![AdminTab::Players, AdminTab::Chat],
+            ..Default::default()
+        };
+        let mut mesh = UiMesh::new();
+        let hbs = UiBuilder::draw_admin_panel(
+            &mut mesh,
+            1280.0,
+            720.0,
+            &snap,
+            AdminTab::Players,
+            "",
+            None,
+            None,
+            None,
+            false,
+            0,
+            [0.0, 0.0],
+        );
+        let tab_actions: Vec<AdminTab> = hbs
+            .iter()
+            .filter_map(|h| match h.action {
+                AdminUiClickAction::SelectTab(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tab_actions, vec![AdminTab::Players, AdminTab::Chat]);
     }
 }

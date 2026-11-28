@@ -695,7 +695,7 @@ impl PermissionsManager {
 }
 
 /// A ban record detailing a banned player, the banner, reason, and timestamp.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BanEntry {
     pub username: String,
     pub reason: String,
@@ -704,7 +704,7 @@ pub struct BanEntry {
 }
 
 /// An IP ban record detailing a banned IP address, the banner, reason, and timestamp.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IpBanEntry {
     pub ip: String,
     pub reason: String,
