@@ -206,27 +206,41 @@ impl ItemDrop {
             self.velocity.z *= air_drag;
         }
 
-        let next_pos = self.position + self.velocity * dt;
-
-        // Check if next position collides with a solid voxel
-        let check_y = next_pos.y.floor() as i32;
-        let check_x = next_pos.x.floor() as i32;
-        let check_z = next_pos.z.floor() as i32;
-
-        let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
-        let is_solid = if let Some(chunk) = world.get_chunk(cp_next) {
-            chunk
-                .get(nlx, nly, nlz)
+        let is_solid_at = |x: f32, y: f32, z: f32| -> bool {
+            let voxel = IVec3::new(x.floor() as i32, y.floor() as i32, z.floor() as i32);
+            let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(voxel);
+            world
+                .get_chunk(cp_next)
+                .and_then(|chunk| chunk.get(nlx, nly, nlz))
                 .map_or(false, |b| registry.is_solid(b))
-        } else {
-            false
         };
 
-        if is_solid {
-            self.position.y = (check_y + 1) as f32;
-            self.velocity = Vec3::ZERO;
+        // Resolve horizontal movement first so hitting a wall stops X/Z without teleporting upward
+        let next_x = self.position.x + self.velocity.x * dt;
+        if is_solid_at(next_x, self.position.y, self.position.z) {
+            self.velocity.x = 0.0;
         } else {
-            self.position = next_pos;
+            self.position.x = next_x;
+        }
+
+        let next_z = self.position.z + self.velocity.z * dt;
+        if is_solid_at(self.position.x, self.position.y, next_z) {
+            self.velocity.z = 0.0;
+        } else {
+            self.position.z = next_z;
+        }
+
+        // Resolve vertical movement (floor landing vs ceiling bump)
+        let next_y = self.position.y + self.velocity.y * dt;
+        if is_solid_at(self.position.x, next_y, self.position.z) {
+            if self.velocity.y <= 0.0 {
+                self.position.y = (next_y.floor() as i32 + 1) as f32;
+                self.velocity = Vec3::ZERO;
+            } else {
+                self.velocity.y = 0.0;
+            }
+        } else {
+            self.position.y = next_y;
         }
 
         true
@@ -494,6 +508,44 @@ mod tests {
         assert_eq!(
             status,
             ItemDropStatus::Collected(ItemSlot::new(ItemId::DIAMOND, 4))
+        );
+    }
+
+    #[test]
+    fn test_item_drop_thrown_into_wall_falls_to_floor() {
+        let mut world = World::new();
+        let registry = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Floor at y=5, vertical wall at x=9 for y=6..10
+        for x in 0..16 {
+            for z in 0..16 {
+                world.set_block(IVec3::new(x, 5, z), BlockId::STONE);
+            }
+        }
+        for y in 6..10 {
+            world.set_block(IVec3::new(9, y, 8), BlockId::STONE);
+        }
+
+        // Thrown toward +X from x=8.7 directly into the wall at x=9
+        let mut drop = ItemDrop::with_velocity(
+            Vec3::new(8.7, 7.2, 8.5),
+            Vec3::new(10.5, 2.0, 0.0),
+            ItemSlot::new(ItemId::COBBLESTONE, 1),
+        );
+
+        for _ in 0..120 {
+            assert!(drop.update_physics_without_magnetism(1.0 / 60.0, &world, &registry));
+        }
+
+        assert!(
+            drop.position.x < 9.0,
+            "Item drop must not enter solid wall at x=9, got x={}",
+            drop.position.x
+        );
+        assert_eq!(
+            drop.position.y, 6.0,
+            "Item drop must fall to the floor at y=6 instead of climbing the wall"
         );
     }
 }

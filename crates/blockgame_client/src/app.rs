@@ -10319,41 +10319,6 @@ fn split_cursor_item_for_drop(cursor_held: &mut ItemSlot, is_right_click: bool) 
     }
 }
 
-fn is_outside_rect(cx: f32, cy: f32, rect: [f32; 4]) -> bool {
-    cx < rect[0] || cx > rect[0] + rect[2] || cy < rect[1] || cy > rect[1] + rect[3]
-}
-
-fn inventory_panel_bounds(screen_w: f32, screen_h: f32, grid_h: usize) -> [f32; 4] {
-    let slot_size = UiBuilder::SLOT_SIZE;
-    let slot_gap = UiBuilder::SLOT_GAP;
-    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
-    let inv_start_x = (screen_w - inv_w) * 0.5;
-    let armor_left_x = inv_start_x - slot_size - 16.0;
-    let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
-    let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
-    let hotbar_y = inv_start_y + 3.0 * (slot_size + slot_gap) + 16.0;
-
-    let pad = 12.0;
-    let left = armor_left_x - pad;
-    let right = inv_start_x + inv_w + pad;
-    let top = craft_y - 24.0;
-    let bottom = hotbar_y + slot_size + pad;
-    [left, top, right - left, bottom - top]
-}
-
-fn container_panel_bounds(screen_w: f32, top_y: f32, hotbar_y: f32) -> [f32; 4] {
-    let slot_size = UiBuilder::SLOT_SIZE;
-    let slot_gap = UiBuilder::SLOT_GAP;
-    let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
-    let start_x = (screen_w - inv_w) * 0.5;
-    let pad = 12.0;
-    let left = start_x - pad;
-    let top = top_y - 28.0;
-    let width = inv_w + pad * 2.0;
-    let height = (hotbar_y + slot_size + pad) - top;
-    [left, top, width, height]
-}
-
 fn drop_cursor_held_item(state: &mut AppState, is_right_click: bool) {
     let item_to_drop = split_cursor_item_for_drop(&mut state.cursor_held, is_right_click);
     if item_to_drop.is_empty() {
@@ -10366,9 +10331,38 @@ fn drop_cursor_held_item(state: &mut AppState, is_right_click: bool) {
     } else {
         Vec3::Z
     };
-    let drop_pos = state.player.eye_position() - Vec3::new(0.0, 0.25, 0.0) + throw_dir * 0.5;
-    let drop_vel = throw_dir * 10.5 + Vec3::new(0.0, 2.0, 0.0);
+    let origin = state.player.eye_position() - Vec3::new(0.0, 0.25, 0.0);
+    let candidate_pos = origin + throw_dir * 0.5;
+    let blocked = {
+        let world_guard = state.world_manager.world().lock().unwrap();
+        let voxel = IVec3::new(
+            candidate_pos.x.floor() as i32,
+            candidate_pos.y.floor() as i32,
+            candidate_pos.z.floor() as i32,
+        );
+        state
+            .world_manager
+            .registry()
+            .is_solid(world_guard.get_block(voxel))
+    };
+    let (drop_pos, drop_vel) = if blocked {
+        (origin, Vec3::new(0.0, 1.5, 0.0))
+    } else {
+        (candidate_pos, throw_dir * 10.5 + Vec3::new(0.0, 2.0, 0.0))
+    };
     state.spawn_drop_synced_with_delay(drop_pos, drop_vel, item_to_drop, 1.5);
+}
+
+fn drop_cursor_if_outside(
+    state: &mut AppState,
+    cx: f32,
+    cy: f32,
+    bounds: blockgame_render::UiRect,
+    is_right_click: bool,
+) {
+    if !state.cursor_held.is_empty() && !bounds.contains(cx, cy) {
+        drop_cursor_held_item(state, is_right_click);
+    }
 }
 
 fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
@@ -10621,11 +10615,13 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     }
 
     // 6. Click outside inventory panel drops the cursor-held item on the ground
-    if !state.cursor_held.is_empty()
-        && is_outside_rect(cx, cy, inventory_panel_bounds(screen_w, screen_h, grid_h))
-    {
-        drop_cursor_held_item(state, is_right_click);
-    }
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::inventory_panel_bounds(screen_w, screen_h, grid_h),
+        is_right_click,
+    );
 }
 
 fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
@@ -10759,11 +10755,13 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
     }
 
     // 4. Click outside chest panel drops the cursor-held item on the ground
-    if !state.cursor_held.is_empty()
-        && is_outside_rect(cx, cy, container_panel_bounds(screen_w, chest_y, hotbar_y))
-    {
-        drop_cursor_held_item(state, is_right_click);
-    }
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, chest_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_storage_terminal_click(state: &mut AppState, is_right_click: bool) {
@@ -11003,11 +11001,13 @@ fn handle_storage_terminal_click(state: &mut AppState, is_right_click: bool) {
         }
     }
 
-    if !state.cursor_held.is_empty()
-        && is_outside_rect(cx, cy, container_panel_bounds(screen_w, ctrl_y, hotbar_y))
-    {
-        drop_cursor_held_item(state, is_right_click);
-    }
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, ctrl_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_backpack_click(state: &mut AppState, is_right_click: bool) {
@@ -11154,11 +11154,13 @@ fn handle_backpack_click(state: &mut AppState, is_right_click: bool) {
         }
     }
 
-    if !state.cursor_held.is_empty()
-        && is_outside_rect(cx, cy, container_panel_bounds(screen_w, chest_y, hotbar_y))
-    {
-        drop_cursor_held_item(state, is_right_click);
-    }
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, chest_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_power_screen_inv_click(state: &mut AppState, is_right_click: bool) {
@@ -11203,11 +11205,13 @@ fn handle_power_screen_inv_click(state: &mut AppState, is_right_click: bool) {
         }
     }
 
-    if !state.cursor_held.is_empty()
-        && is_outside_rect(cx, cy, container_panel_bounds(screen_w, top_y, hotbar_y))
-    {
-        drop_cursor_held_item(state, is_right_click);
-    }
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, top_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_coal_generator_click(state: &mut AppState, is_right_click: bool) {
@@ -11610,15 +11614,13 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
         }
     }
 
-    if !state.cursor_held.is_empty()
-        && is_outside_rect(
-            cx,
-            cy,
-            container_panel_bounds(screen_w, furnace_top_y, hotbar_y),
-        )
-    {
-        drop_cursor_held_item(state, is_right_click);
-    }
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, furnace_top_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn add_to_chest_slots(
@@ -12201,16 +12203,13 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
 
     let Some((kind, idx)) = UiBuilder::hit_test_cooking_pot_screen(screen_w, screen_h, mx, my)
     else {
-        let slot_size = UiBuilder::SLOT_SIZE;
-        let slot_gap = UiBuilder::SLOT_GAP;
-        let top_y = screen_h * 0.5 - 220.0;
-        let inv_y = top_y + 12.0 + 2.0 * (slot_size + slot_gap) + 28.0;
-        let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
-        if !state.cursor_held.is_empty()
-            && is_outside_rect(mx, my, container_panel_bounds(screen_w, top_y, hotbar_y))
-        {
-            drop_cursor_held_item(state, is_right_click);
-        }
+        drop_cursor_if_outside(
+            state,
+            mx,
+            my,
+            UiBuilder::cooking_pot_panel_bounds(screen_w, screen_h),
+            is_right_click,
+        );
         return;
     };
 
@@ -12366,15 +12365,15 @@ mod drop_item_tests {
 
     #[test]
     fn test_inventory_panel_bounds_outside_detection() {
-        let bounds = inventory_panel_bounds(1280.0, 720.0, 2);
+        let bounds = UiBuilder::inventory_panel_bounds(1280.0, 720.0, 2);
 
-        // Center of the screen (inside inventory grid) is NOT outside
-        assert!(!is_outside_rect(640.0, 360.0, bounds));
+        // Center of the screen (inside inventory grid) is inside
+        assert!(bounds.contains(640.0, 360.0));
 
-        // Clicking far left, far right, top, or bottom margin IS outside
-        assert!(is_outside_rect(40.0, 360.0, bounds));
-        assert!(is_outside_rect(1000.0, 360.0, bounds));
-        assert!(is_outside_rect(640.0, 20.0, bounds));
-        assert!(is_outside_rect(640.0, 700.0, bounds));
+        // Clicking far left, far right, top, or bottom margin is outside
+        assert!(!bounds.contains(40.0, 360.0));
+        assert!(!bounds.contains(1000.0, 360.0));
+        assert!(!bounds.contains(640.0, 20.0));
+        assert!(!bounds.contains(640.0, 700.0));
     }
 }

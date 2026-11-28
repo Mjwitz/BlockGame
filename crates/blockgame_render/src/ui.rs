@@ -18,6 +18,21 @@ pub struct ScreenUniform {
     pub padding: [f32; 2],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl UiRect {
+    #[inline]
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.x && px <= self.x + self.w && py >= self.y && py <= self.y + self.h
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct UiVertex {
@@ -3845,6 +3860,57 @@ impl UiBuilder {
         let ay = inv_start_y + (idx as f32) * (slot_size + slot_gap)
             + if idx == 3 { 16.0 } else { 0.0 };
         [ax, ay, slot_size, slot_size]
+    }
+
+    /// Bounding rectangle for the player inventory (armor, crafting grid, backpack, and hotbar).
+    pub fn inventory_panel_bounds(screen_w: f32, screen_h: f32, grid_h: usize) -> UiRect {
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let inv_start_x = (screen_w - inv_w) * 0.5;
+        let armor_left_x = inv_start_x - slot_size - 16.0;
+        let craft_y = screen_h * 0.5 - (if grid_h == 3 { 210.0 } else { 180.0 });
+        let inv_start_y = craft_y + (grid_h as f32) * (slot_size + slot_gap) + 24.0;
+        let hotbar_y = inv_start_y + 3.0 * (slot_size + slot_gap) + 16.0;
+
+        let pad = 12.0;
+        let x = armor_left_x - pad;
+        let y = craft_y - 24.0;
+        let right = inv_start_x + inv_w + pad;
+        let bottom = hotbar_y + slot_size + pad;
+        UiRect {
+            x,
+            y,
+            w: right - x,
+            h: bottom - y,
+        }
+    }
+
+    /// Bounding rectangle for standard 9-column container screens (chest, furnace, backpack, etc.).
+    pub fn container_panel_bounds(screen_w: f32, top_y: f32, hotbar_y: f32) -> UiRect {
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let inv_w = 9.0 * (slot_size + slot_gap) - slot_gap;
+        let start_x = (screen_w - inv_w) * 0.5;
+        let pad = 12.0;
+        let x = start_x - pad;
+        let y = top_y - 28.0;
+        UiRect {
+            x,
+            y,
+            w: inv_w + pad * 2.0,
+            h: (hotbar_y + slot_size + pad) - y,
+        }
+    }
+
+    /// Bounding rectangle for the cooking pot screen.
+    pub fn cooking_pot_panel_bounds(screen_w: f32, screen_h: f32) -> UiRect {
+        let slot_size = Self::SLOT_SIZE;
+        let slot_gap = Self::SLOT_GAP;
+        let top_y = screen_h * 0.5 - 220.0;
+        let inv_y = top_y + 12.0 + 2.0 * (slot_size + slot_gap) + 28.0;
+        let hotbar_y = inv_y + 3.0 * (slot_size + slot_gap) + 16.0;
+        Self::container_panel_bounds(screen_w, top_y, hotbar_y)
     }
 
     /// Builds the full Inventory & 2x2 Crafting Screen Overlay.

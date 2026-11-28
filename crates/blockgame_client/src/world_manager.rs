@@ -1598,10 +1598,7 @@ impl WorldManager {
         vel: Vec3,
         item: ItemSlot,
     ) {
-        if !item.is_empty() && !self.item_drops.iter().any(|d| d.drop_id == drop_id) {
-            self.item_drops
-                .push(ItemDrop::with_id_and_velocity(drop_id, pos, vel, item));
-        }
+        self.spawn_item_drop_with_id_velocity_and_delay(drop_id, pos, vel, item, 0.5);
     }
 
     /// Spawns a floating item drop with an explicit network drop ID, velocity, and custom pickup delay
