@@ -215,6 +215,10 @@ pub enum ClientPacket {
     AdminPanelAction {
         payload_yaml: String,
     },
+    /// Non-destructive Block Log Inspect Mode click on a block or container.
+    InspectBlock {
+        pos: IVec3,
+    },
 }
 
 /// Compact network representation of a server-authoritative Village NPC (Shopkeeper or Village Guard).
@@ -436,6 +440,10 @@ pub enum ServerPacket {
         payload_yaml: String,
     },
     ClaimBordersToggle,
+    /// Syncs whether Block Log Inspect Mode is active for this client.
+    InspectModeSync {
+        enabled: bool,
+    },
 }
 
 
@@ -690,6 +698,12 @@ impl ClientPacket {
             Self::AdminPanelAction { payload_yaml } => {
                 write_u8(&mut payload, 27)?;
                 write_string(&mut payload, payload_yaml)?;
+            }
+            Self::InspectBlock { pos } => {
+                write_u8(&mut payload, 28)?;
+                write_i32(&mut payload, pos.x)?;
+                write_i32(&mut payload, pos.y)?;
+                write_i32(&mut payload, pos.z)?;
             }
         }
         wrap_frame(&payload)
@@ -955,6 +969,14 @@ impl ClientPacket {
             27 => {
                 let payload_yaml = read_string(&mut r)?;
                 Ok(Self::AdminPanelAction { payload_yaml })
+            }
+            28 => {
+                let x = read_i32(&mut r)?;
+                let y = read_i32(&mut r)?;
+                let z = read_i32(&mut r)?;
+                Ok(Self::InspectBlock {
+                    pos: IVec3::new(x, y, z),
+                })
             }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
@@ -1370,6 +1392,10 @@ impl ServerPacket {
             }
             Self::ClaimBordersToggle => {
                 write_u8(&mut payload, 35)?;
+            }
+            Self::InspectModeSync { enabled } => {
+                write_u8(&mut payload, 36)?;
+                write_bool(&mut payload, *enabled)?;
             }
         }
 
@@ -1936,6 +1962,10 @@ impl ServerPacket {
                 Ok(Self::ClaimsSync { payload_yaml })
             }
             35 => Ok(Self::ClaimBordersToggle),
+            36 => {
+                let enabled = read_bool(&mut r)?;
+                Ok(Self::InspectModeSync { enabled })
+            }
             other => Err(io::Error::new(
                 ErrorKind::InvalidData,
                 format!("Unknown ServerPacket tag {}", other),
@@ -2168,6 +2198,7 @@ fn build_admin_panel_snapshot(
     automessage_mgr: &crate::automessage::AutoMessageManager,
     world_name: &str,
     uptime_secs: u64,
+    current_tps: f32,
     broadcast_achievements: bool,
 ) -> crate::admin_panel::AdminPanelSnapshot {
     use crate::admin_panel::*;
@@ -2233,6 +2264,7 @@ fn build_admin_panel_snapshot(
             world_name: world_name.to_string(),
             online_count: clients.iter().filter(|c| c.authenticated && !c.is_dead).count(),
             uptime_secs,
+            tps: current_tps,
             broadcast_achievements,
         });
     }
@@ -2465,6 +2497,31 @@ fn apply_rollback_plan(
                             cook_progress: f.cook_progress,
                         },
                     ));
+                } else if target_block == BlockId::COOKING_POT {
+                    let p = world.get_or_create_cooking_pot(ev.pos);
+                    p.ingredients = [ItemSlot::EMPTY; 4];
+                    p.fuel = ItemSlot::EMPTY;
+                    p.output = ItemSlot::EMPTY;
+                    for &(slot_idx, slot) in snap {
+                        match slot_idx {
+                            0..=3 => p.ingredients[slot_idx] = slot,
+                            4 => p.fuel = slot,
+                            5 => p.output = slot,
+                            _ => {}
+                        }
+                    }
+                    outgoing_broadcasts.push((
+                        None,
+                        ServerPacket::CookingPotSync {
+                            pos: ev.pos,
+                            ingredients: p.ingredients,
+                            fuel: p.fuel,
+                            output: p.output,
+                            burn_time: p.burn_time_remaining,
+                            max_burn_time: p.max_burn_time,
+                            cook_progress: p.cook_progress,
+                        },
+                    ));
                 }
             }
         }
@@ -2474,63 +2531,127 @@ fn apply_rollback_plan(
         // Reversing an "add" removes the item; reversing a "remove" adds it back.
         // On forward_undo, do the original operation again.
         let should_add = if forward_undo { ev.is_add } else { !ev.is_add };
-        if ev.container_kind == "chest" {
-            let chest = world.get_or_create_chest(ev.pos);
-            adjust_slots_by_delta(chest, ev.item, should_add);
-            let sync_slots = chest.clone();
-            outgoing_broadcasts.push((
-                None,
-                ServerPacket::ContainerSync {
-                    pos: ev.pos,
-                    is_furnace: false,
-                    slots: sync_slots,
-                    burn_time: 0.0,
-                    max_burn_time: 0.0,
-                    cook_progress: 0.0,
+        match ev.container_kind {
+            crate::blocklog::ContainerKind::Chest => {
+                let chest = world.get_or_create_chest(ev.pos);
+                adjust_slots_by_delta(chest, ev.item, should_add);
+                let sync_slots = chest.clone();
+                outgoing_broadcasts.push((
+                    None,
+                    ServerPacket::ContainerSync {
+                        pos: ev.pos,
+                        is_furnace: false,
+                        slots: sync_slots,
+                        burn_time: 0.0,
+                        max_burn_time: 0.0,
+                        cook_progress: 0.0,
+                    },
+                ));
+            }
+            crate::blocklog::ContainerKind::Furnace => {
+                let f = world.get_or_create_furnace(ev.pos);
+                let mut arr = [f.input, f.fuel, f.output];
+                adjust_slots_by_delta(&mut arr, ev.item, should_add);
+                f.input = arr[0];
+                f.fuel = arr[1];
+                f.output = arr[2];
+                outgoing_broadcasts.push((
+                    None,
+                    ServerPacket::ContainerSync {
+                        pos: ev.pos,
+                        is_furnace: true,
+                        slots: vec![f.input, f.fuel, f.output],
+                        burn_time: f.burn_time_remaining,
+                        max_burn_time: f.max_burn_time,
+                        cook_progress: f.cook_progress,
+                    },
+                ));
+            }
+            crate::blocklog::ContainerKind::CookingPot => {
+                let p = world.get_or_create_cooking_pot(ev.pos);
+                let mut arr = [
+                    p.ingredients[0],
+                    p.ingredients[1],
+                    p.ingredients[2],
+                    p.ingredients[3],
+                    p.fuel,
+                    p.output,
+                ];
+                adjust_slots_by_delta(&mut arr, ev.item, should_add);
+                p.ingredients = [arr[0], arr[1], arr[2], arr[3]];
+                p.fuel = arr[4];
+                p.output = arr[5];
+                outgoing_broadcasts.push((
+                    None,
+                    ServerPacket::CookingPotSync {
+                        pos: ev.pos,
+                        ingredients: p.ingredients,
+                        fuel: p.fuel,
+                        output: p.output,
+                        burn_time: p.burn_time_remaining,
+                        max_burn_time: p.max_burn_time,
+                        cook_progress: p.cook_progress,
+                    },
+                ));
+            }
+        }
+    }
+}
+
+fn send_inspect_history(
+    pid: u32,
+    pos: IVec3,
+    blocklog_mgr: &crate::blocklog::BlockLogManager,
+    direct_sends: &mut Vec<(u32, ServerPacket)>,
+) {
+    match blocklog_mgr.inspect_coord(pos, 8) {
+        Ok(entries) if entries.is_empty() => {
+            direct_sends.push((
+                pid,
+                ServerPacket::ChatBroadcast {
+                    sender: "Server".to_string(),
+                    prefix: String::new(),
+                    message: format!(
+                        "&7[Inspect] No Block Log history at ({}, {}, {}).",
+                        pos.x, pos.y, pos.z
+                    ),
+                    is_system: true,
                 },
             ));
-        } else if ev.container_kind == "furnace" {
-            let f = world.get_or_create_furnace(ev.pos);
-            let mut arr = [f.input, f.fuel, f.output];
-            adjust_slots_by_delta(&mut arr, ev.item, should_add);
-            f.input = arr[0];
-            f.fuel = arr[1];
-            f.output = arr[2];
-            outgoing_broadcasts.push((
-                None,
-                ServerPacket::ContainerSync {
-                    pos: ev.pos,
-                    is_furnace: true,
-                    slots: vec![f.input, f.fuel, f.output],
-                    burn_time: f.burn_time_remaining,
-                    max_burn_time: f.max_burn_time,
-                    cook_progress: f.cook_progress,
+        }
+        Ok(entries) => {
+            direct_sends.push((
+                pid,
+                ServerPacket::ChatBroadcast {
+                    sender: "Server".to_string(),
+                    prefix: String::new(),
+                    message: format!(
+                        "&6[Inspect] History at ({}, {}, {}):",
+                        pos.x, pos.y, pos.z
+                    ),
+                    is_system: true,
                 },
             ));
-        } else if ev.container_kind == "cooking_pot" {
-            let p = world.get_or_create_cooking_pot(ev.pos);
-            let mut arr = [
-                p.ingredients[0],
-                p.ingredients[1],
-                p.ingredients[2],
-                p.ingredients[3],
-                p.fuel,
-                p.output,
-            ];
-            adjust_slots_by_delta(&mut arr, ev.item, should_add);
-            p.ingredients = [arr[0], arr[1], arr[2], arr[3]];
-            p.fuel = arr[4];
-            p.output = arr[5];
-            outgoing_broadcasts.push((
-                None,
-                ServerPacket::CookingPotSync {
-                    pos: ev.pos,
-                    ingredients: p.ingredients,
-                    fuel: p.fuel,
-                    output: p.output,
-                    burn_time: p.burn_time_remaining,
-                    max_burn_time: p.max_burn_time,
-                    cook_progress: p.cook_progress,
+            for e in entries {
+                direct_sends.push((
+                    pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: format!("  &f{} &e{}", e.actor, e.summary),
+                        is_system: true,
+                    },
+                ));
+            }
+        }
+        Err(err) => {
+            direct_sends.push((
+                pid,
+                ServerPacket::ChatBroadcast {
+                    sender: "Server".to_string(),
+                    prefix: String::new(),
+                    message: format!("&c[Inspect] Failed: {}", err),
+                    is_system: true,
                 },
             ));
         }
@@ -2561,6 +2682,7 @@ fn apply_command_output(
     stop_flag: &Arc<AtomicBool>,
     world_name: &str,
     uptime_secs: u64,
+    current_tps: f32,
     broadcast_achievements: bool,
 ) {
     let actor_name: String = source_pid
@@ -2613,6 +2735,7 @@ fn apply_command_output(
                             inspect_mode_players.insert(pid);
                             true
                         };
+                        direct_sends.push((pid, ServerPacket::InspectModeSync { enabled }));
                         log_feedback.push(format!(
                             "&eBlock Log Inspect Mode turned {}.",
                             if enabled { "ON" } else { "OFF" }
@@ -2631,7 +2754,9 @@ fn apply_command_output(
                         since_ts: time_secs.map(|s| now_ts.saturating_sub(s)),
                         center: radius.map(|_| center),
                         radius,
-                        action_filter: action.clone(),
+                        action_filter: crate::blocklog::BlockLogActionFilter::parse_opt(
+                            action.as_deref(),
+                        ),
                         page,
                         page_size: 6,
                     };
@@ -2936,6 +3061,7 @@ fn apply_command_output(
             automessage_mgr,
             world_name,
             uptime_secs,
+            current_tps,
             broadcast_achievements,
         );
         if let Ok(payload_yaml) = serde_yaml::to_string(&snap) {
@@ -3226,6 +3352,15 @@ fn apply_command_output(
                     let count = automessage_mgr.add_message(msg);
                     am_dirty = true;
                     am_feedback.push(format!("Added Auto-Message #{}.", count));
+                }
+                crate::command::AutoMessageCommandAction::Edit { index, message } => {
+                    match automessage_mgr.edit_message(index, message) {
+                        Ok(()) => {
+                            am_dirty = true;
+                            am_feedback.push(format!("Updated Auto-Message #{}.", index));
+                        }
+                        Err(err) => am_feedback.push(format!("[Error] {}", err)),
+                    }
                 }
                 crate::command::AutoMessageCommandAction::Remove(idx) => {
                     match automessage_mgr.remove_message(idx) {
@@ -3787,6 +3922,7 @@ fn run_server_loop(
     let mut clients: Vec<ConnectedClient> = Vec::new();
     let mut next_player_id: u32 = 1;
     let mut last_tick = Instant::now();
+    let mut current_tps: f32 = 20.0;
     if save_data.metadata.day_night_time <= 1.0 {
         save_data.metadata.day_night_time =
             (save_data.metadata.day_night_time * 24000.0).rem_euclid(24000.0);
@@ -3873,6 +4009,7 @@ fn run_server_loop(
                 &stop_flag,
                 &save_data.metadata.name,
                 server_started_at.elapsed().as_secs(),
+                                    current_tps,
                 broadcast_achievements.load(Ordering::Relaxed),
             );
         }
@@ -4317,58 +4454,7 @@ fn run_server_loop(
                                     block_id: existing_block,
                                 },
                             ));
-                            match blocklog_mgr.inspect_coord(pos, 8) {
-                                Ok(entries) if entries.is_empty() => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!(
-                                                "&7[Inspect] No Block Log history at ({}, {}, {}).",
-                                                pos.x, pos.y, pos.z
-                                            ),
-                                            is_system: true,
-                                        },
-                                    ));
-                                }
-                                Ok(entries) => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!(
-                                                "&6[Inspect] History at ({}, {}, {}):",
-                                                pos.x, pos.y, pos.z
-                                            ),
-                                            is_system: true,
-                                        },
-                                    ));
-                                    for e in entries {
-                                        direct_sends.push((
-                                            pid,
-                                            ServerPacket::ChatBroadcast {
-                                                sender: "Server".to_string(),
-                                                prefix: String::new(),
-                                                message: format!("  &f{} &e{}", e.actor, e.summary),
-                                                is_system: true,
-                                            },
-                                        ));
-                                    }
-                                }
-                                Err(err) => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!("&c{}", err),
-                                            is_system: true,
-                                        },
-                                    ));
-                                }
-                            }
+                            send_inspect_history(pid, pos, &blocklog_mgr, &mut direct_sends);
                             continue;
                         }
                         let claim_coord = crate::claims::block_pos_to_claim_coord(pos);
@@ -4803,58 +4889,7 @@ fn run_server_loop(
                         cook_progress,
                     } if clients[idx].authenticated => {
                         if inspect_mode_players.contains(&pid) {
-                            match blocklog_mgr.inspect_coord(pos, 8) {
-                                Ok(entries) if entries.is_empty() => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!(
-                                                "&7[Inspect] No Block Log history at ({}, {}, {}).",
-                                                pos.x, pos.y, pos.z
-                                            ),
-                                            is_system: true,
-                                        },
-                                    ));
-                                }
-                                Ok(entries) => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!(
-                                                "&6[Inspect] History at ({}, {}, {}):",
-                                                pos.x, pos.y, pos.z
-                                            ),
-                                            is_system: true,
-                                        },
-                                    ));
-                                    for e in entries {
-                                        direct_sends.push((
-                                            pid,
-                                            ServerPacket::ChatBroadcast {
-                                                sender: "Server".to_string(),
-                                                prefix: String::new(),
-                                                message: format!("  &f{} &e{}", e.actor, e.summary),
-                                                is_system: true,
-                                            },
-                                        ));
-                                    }
-                                }
-                                Err(err) => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!("&c[Inspect] Failed: {}", err),
-                                            is_system: true,
-                                        },
-                                    ));
-                                }
-                            }
+                            send_inspect_history(pid, pos, &blocklog_mgr, &mut direct_sends);
                             continue;
                         }
                         let can_edit_admin = perms_manager
@@ -4898,7 +4933,11 @@ fn run_server_loop(
                                 .cloned()
                                 .unwrap_or_default()
                         };
-                        let container_kind = if is_furnace { "furnace" } else { "chest" };
+                        let container_kind = if is_furnace {
+                            crate::blocklog::ContainerKind::Furnace
+                        } else {
+                            crate::blocklog::ContainerKind::Chest
+                        };
                         for (is_add, item) in crate::blocklog::diff_container_slots(&old_slots, &slots) {
                             blocklog_mgr.log_container(
                                 &clients[idx].username,
@@ -5022,6 +5061,11 @@ fn run_server_loop(
                             animal.take_damage(damage.clamp(0.0, 50.0), knockback);
                         }
                     }
+                    ClientPacket::InspectBlock { pos } if clients[idx].authenticated => {
+                        if inspect_mode_players.contains(&pid) {
+                            send_inspect_history(pid, pos, &blocklog_mgr, &mut direct_sends);
+                        }
+                    }
                     ClientPacket::CookingPotUpdate {
                         pos,
                         ingredients,
@@ -5031,6 +5075,10 @@ fn run_server_loop(
                         max_burn_time,
                         cook_progress,
                     } if clients[idx].authenticated => {
+                        if inspect_mode_players.contains(&pid) {
+                            send_inspect_history(pid, pos, &blocklog_mgr, &mut direct_sends);
+                            continue;
+                        }
                         let can_edit_admin = perms_manager
                             .has_permission(&clients[idx].username, "blockgame.claim.admin");
                         if let Err(claim_err) = claim_mgr.check_modify_at(
@@ -5056,61 +5104,6 @@ fn run_server_loop(
                             }
                             continue;
                         }
-                        if inspect_mode_players.contains(&pid) {
-                            match blocklog_mgr.inspect_coord(pos, 8) {
-                                Ok(entries) if entries.is_empty() => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!(
-                                                "&7[Inspect] No Block Log history at ({}, {}, {}).",
-                                                pos.x, pos.y, pos.z
-                                            ),
-                                            is_system: true,
-                                        },
-                                    ));
-                                }
-                                Ok(entries) => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!(
-                                                "&6[Inspect] History at ({}, {}, {}):",
-                                                pos.x, pos.y, pos.z
-                                            ),
-                                            is_system: true,
-                                        },
-                                    ));
-                                    for e in entries {
-                                        direct_sends.push((
-                                            pid,
-                                            ServerPacket::ChatBroadcast {
-                                                sender: "Server".to_string(),
-                                                prefix: String::new(),
-                                                message: format!("  &f{} &e{}", e.actor, e.summary),
-                                                is_system: true,
-                                            },
-                                        ));
-                                    }
-                                }
-                                Err(err) => {
-                                    direct_sends.push((
-                                        pid,
-                                        ServerPacket::ChatBroadcast {
-                                            sender: "Server".to_string(),
-                                            prefix: String::new(),
-                                            message: format!("&c[Inspect] Failed: {}", err),
-                                            is_system: true,
-                                        },
-                                    ));
-                                }
-                            }
-                            continue;
-                        }
                         let mut old_slots: Vec<ItemSlot> = Vec::new();
                         if let Some(existing) = world.cooking_pots.get(&pos) {
                             old_slots.extend_from_slice(&existing.ingredients);
@@ -5127,7 +5120,7 @@ fn run_server_loop(
                             blocklog_mgr.log_container(
                                 &clients[idx].username,
                                 pos,
-                                "cooking_pot",
+                                crate::blocklog::ContainerKind::CookingPot,
                                 is_add,
                                 item,
                             );
@@ -5497,6 +5490,7 @@ fn run_server_loop(
                                     &stop_flag,
                                     &save_data.metadata.name,
                                     server_started_at.elapsed().as_secs(),
+                                    current_tps,
                                     broadcast_achievements.load(Ordering::Relaxed),
                                 );
                             }
@@ -5729,6 +5723,7 @@ fn run_server_loop(
                             &automessage_mgr,
                             &save_data.metadata.name,
                             server_started_at.elapsed().as_secs(),
+                                    current_tps,
                             broadcast_achievements.load(Ordering::Relaxed),
                         );
                         if let Ok(payload_yaml) = serde_yaml::to_string(&snap) {
@@ -5971,6 +5966,7 @@ fn run_server_loop(
                                     &stop_flag,
                                     &save_data.metadata.name,
                                     server_started_at.elapsed().as_secs(),
+                                    current_tps,
                                     broadcast_achievements.load(Ordering::Relaxed),
                                 );
                             } else {
@@ -6231,6 +6227,10 @@ fn run_server_loop(
         if now.duration_since(last_tick) >= tick_interval {
             let dt = now.duration_since(last_tick).as_secs_f32().min(0.2);
             last_tick = now;
+            if dt > 0.0 {
+                let inst_tps = (1.0 / dt).min(20.0);
+                current_tps = current_tps * 0.9 + inst_tps * 0.1;
+            }
 
             // Advance server day/night time (20 ticks/sec, 24000 ticks full cycle)
             save_data.metadata.total_time += dt;
@@ -6573,8 +6573,12 @@ fn run_server_loop(
 
                 // A2. Authoritative cellular Water & Lava fluid simulation (ADR 0004 / ADR 0010)
                 if fluid_sim.has_pending() {
-                    let (fluid_modified, fluid_drops) =
-                        fluid_sim.tick(dt, &mut world, &block_registry);
+                    let (fluid_modified, fluid_drops) = fluid_sim.tick_with_guard(
+                        dt,
+                        &mut world,
+                        &block_registry,
+                        |from, to| claim_mgr.can_fluid_flow_into(from, to),
+                    );
                     for pos in fluid_modified {
                         let block = world.get_block(pos);
                         let level = world.get_fluid_level(pos);

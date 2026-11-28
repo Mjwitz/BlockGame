@@ -6,6 +6,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Returns the current Unix timestamp in seconds.
+pub fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Atomically writes `bytes` to `path` by writing to a sibling temporary file,
 /// flushing and syncing it to disk, and renaming it into place.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {

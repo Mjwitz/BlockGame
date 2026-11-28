@@ -117,7 +117,7 @@ fn decode_coord_key(key: &str) -> Option<(i32, i32)> {
     Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
 }
 
-/// Authoritative Land Claiming manager for Claimed Chunks, Admin Claims, Trusted Players, and Claim Bypass.
+/// Authoritative Chunk Claiming manager for Claimed Chunks, Admin Claims, Trusted Players, and Claim Bypass.
 #[derive(Debug, Clone, Default)]
 pub struct ClaimManager {
     pub settings: ClaimSettings,
@@ -150,7 +150,7 @@ impl ClaimManager {
             let def = ClaimSettings::default();
             let _ = crate::config_io::atomic_write_yaml(
                 &cfg_path,
-                "# BlockGame Land Claiming Rules\n# World-bound claims live in saves/<world>/claims.yml.",
+                "# BlockGame Chunk Claiming Rules\n# World-bound Claimed Chunks live in saves/<world>/claims.yml.",
                 &def,
             );
             def
@@ -196,7 +196,7 @@ impl ClaimManager {
         };
         crate::config_io::atomic_write_yaml(
             &world_dir.join("claims.yml"),
-            "# BlockGame World Land Claims (full-height 16x16 columns)",
+            "# BlockGame World Claimed Chunks (full-height 16x16 columns)",
             &data,
         )
     }

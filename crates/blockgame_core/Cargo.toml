@@ -11,4 +11,11 @@ log.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+[features]
+default = []
+sqlite-blocklog = ["dep:rusqlite"]
+
+[dev-dependencies]
+blockgame_core = { path = ".", features = ["sqlite-blocklog"] }

@@ -3,14 +3,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
-fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
+use crate::config_io::now_unix_secs;
 
 /// Parses a compact duration string such as `30s`, `10m`, `2h`, `7d`, or `1h30m` into seconds.
 pub fn parse_duration_secs(input: &str) -> Option<u64> {

@@ -10770,54 +10770,142 @@ impl UiBuilder {
                     AdminUiClickAction::SubmitInput("ban_ip".to_string()),
                 );
 
+                let filter_q = input_text.trim().to_ascii_lowercase();
+                let filtered_players: Vec<_> = snapshot
+                    .banned_players
+                    .iter()
+                    .filter(|b| {
+                        filter_q.is_empty()
+                            || b.username.to_ascii_lowercase().contains(&filter_q)
+                            || b.reason.to_ascii_lowercase().contains(&filter_q)
+                            || b.banned_by.to_ascii_lowercase().contains(&filter_q)
+                    })
+                    .collect();
+                let filtered_ips: Vec<_> = snapshot
+                    .banned_ips
+                    .iter()
+                    .filter(|b| {
+                        filter_q.is_empty()
+                            || b.ip.to_ascii_lowercase().contains(&filter_q)
+                            || b.reason.to_ascii_lowercase().contains(&filter_q)
+                            || b.banned_by.to_ascii_lowercase().contains(&filter_q)
+                    })
+                    .collect();
+
                 let mut ry = content_y + 34.0;
+                let header = if filter_q.is_empty() {
+                    format!(
+                        "Banned Players ({}) & IPs ({})  [Type in input bar to search]",
+                        filtered_players.len(),
+                        filtered_ips.len()
+                    )
+                } else {
+                    format!(
+                        "Banned Players ({}) & IPs ({})  [Filter: \"{}\"]",
+                        filtered_players.len(),
+                        filtered_ips.len(),
+                        input_text.trim()
+                    )
+                };
                 Self::draw_string(
                     mesh,
                     content_x,
                     ry,
-                    &format!(
-                        "Banned Players ({}) & IPs ({})",
-                        snapshot.banned_players.len(),
-                        snapshot.banned_ips.len()
-                    ),
-                    8.0,
-                    11.0,
-                    1.0,
+                    &header,
+                    7.5,
+                    10.8,
+                    0.95,
                     [0.85, 0.90, 1.0, 1.0],
                 );
-                ry += 18.0;
+                push_btn(
+                    mesh,
+                    [content_x + content_w - 118.0, ry - 2.0, 56.0, 18.0],
+                    "Up",
+                    [0.16, 0.22, 0.32, 0.95],
+                    [0.24, 0.34, 0.48, 1.0],
+                    AdminUiClickAction::ScrollNodes(-4),
+                );
+                push_btn(
+                    mesh,
+                    [content_x + content_w - 58.0, ry - 2.0, 56.0, 18.0],
+                    "Down",
+                    [0.16, 0.22, 0.32, 0.95],
+                    [0.24, 0.34, 0.48, 1.0],
+                    AdminUiClickAction::ScrollNodes(4),
+                );
+                ry += 20.0;
 
-                for b in snapshot.banned_players.iter().take(6) {
-                    let line = format!("{} - {} (by {})", b.username, b.reason, b.banned_by);
-                    Self::draw_string(mesh, content_x, ry + 5.0, &line, 7.2, 10.5, 0.9, [0.95, 0.80, 0.80, 1.0]);
-                    push_btn(
-                        mesh,
-                        [content_x + content_w - 76.0, ry, 74.0, 22.0],
-                        "Unban",
-                        [0.18, 0.52, 0.28, 0.95],
-                        [0.26, 0.68, 0.38, 1.0],
-                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
-                            "unban {}",
-                            b.username
-                        ))),
-                    );
-                    ry += 26.0;
+                enum BanRow<'a> {
+                    Player(&'a blockgame_core::permissions::BanEntry),
+                    Ip(&'a blockgame_core::permissions::IpBanEntry),
                 }
-                for b in snapshot.banned_ips.iter().take(4) {
-                    let line = format!("IP {} - {} (by {})", b.ip, b.reason, b.banned_by);
-                    Self::draw_string(mesh, content_x, ry + 5.0, &line, 7.2, 10.5, 0.9, [0.95, 0.72, 0.72, 1.0]);
-                    push_btn(
-                        mesh,
-                        [content_x + content_w - 86.0, ry, 84.0, 22.0],
-                        "Unban IP",
-                        [0.18, 0.52, 0.28, 0.95],
-                        [0.26, 0.68, 0.38, 1.0],
-                        AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(format!(
-                            "unban-ip {}",
-                            b.ip
-                        ))),
-                    );
-                    ry += 26.0;
+                let mut rows: Vec<BanRow<'_>> = Vec::with_capacity(filtered_players.len() + filtered_ips.len());
+                for b in filtered_players {
+                    rows.push(BanRow::Player(b));
+                }
+                for b in filtered_ips {
+                    rows.push(BanRow::Ip(b));
+                }
+                let page_size = 10usize;
+                let max_scroll = rows.len().saturating_sub(page_size);
+                let start = node_scroll.min(max_scroll);
+
+                for row in rows.iter().skip(start).take(page_size) {
+                    match row {
+                        BanRow::Player(b) => {
+                            let line = format!(
+                                "{} - {} (by {}, {})",
+                                b.username, b.reason, b.banned_by, b.created_at
+                            );
+                            Self::draw_string(
+                                mesh,
+                                content_x,
+                                ry + 5.0,
+                                &line,
+                                7.0,
+                                10.2,
+                                0.88,
+                                [0.95, 0.80, 0.80, 1.0],
+                            );
+                            push_btn(
+                                mesh,
+                                [content_x + content_w - 76.0, ry, 74.0, 22.0],
+                                "Unban",
+                                [0.18, 0.52, 0.28, 0.95],
+                                [0.26, 0.68, 0.38, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(
+                                    format!("unban {}", b.username),
+                                )),
+                            );
+                        }
+                        BanRow::Ip(b) => {
+                            let line = format!(
+                                "IP {} - {} (by {}, {})",
+                                b.ip, b.reason, b.banned_by, b.created_at
+                            );
+                            Self::draw_string(
+                                mesh,
+                                content_x,
+                                ry + 5.0,
+                                &line,
+                                7.0,
+                                10.2,
+                                0.88,
+                                [0.95, 0.72, 0.72, 1.0],
+                            );
+                            push_btn(
+                                mesh,
+                                [content_x + content_w - 86.0, ry, 84.0, 22.0],
+                                "Unban IP",
+                                [0.18, 0.52, 0.28, 0.95],
+                                [0.26, 0.68, 0.38, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::RunCommand(
+                                    format!("unban-ip {}", b.ip),
+                                )),
+                            );
+                        }
+                    }
+                    ry += 25.0;
                 }
             }
             AdminTab::Chat => {
@@ -11040,6 +11128,14 @@ impl UiBuilder {
                         );
                         push_btn(
                             mesh,
+                            [content_x + content_w - 134.0, ry, 56.0, 22.0],
+                            "Edit",
+                            [0.20, 0.42, 0.64, 0.95],
+                            [0.28, 0.56, 0.82, 1.0],
+                            AdminUiClickAction::SubmitInput(format!("am_edit:{}", idx + 1)),
+                        );
+                        push_btn(
+                            mesh,
                             [content_x + content_w - 72.0, ry, 70.0, 22.0],
                             "Remove",
                             [0.52, 0.20, 0.22, 0.95],
@@ -11056,8 +11152,8 @@ impl UiBuilder {
             AdminTab::Server => {
                 if let Some(ref stats) = snapshot.server_stats {
                     let info = format!(
-                        "World: {}  |  Online: {}  |  Uptime: {}s",
-                        stats.world_name, stats.online_count, stats.uptime_secs
+                        "World: {}  |  Online: {}  |  TPS: {:.1}  |  Uptime: {}s",
+                        stats.world_name, stats.online_count, stats.tps, stats.uptime_secs
                     );
                     Self::draw_string(mesh, content_x, content_y, &info, 8.2, 11.5, 1.0, [0.85, 0.92, 1.0, 1.0]);
 
@@ -11240,9 +11336,60 @@ impl UiBuilder {
                             }),
                         );
 
+                        // Inheritance toggles for other groups
+                        let inh_y = meta_y + 26.0;
+                        Self::draw_string(
+                            mesh,
+                            right_x,
+                            inh_y + 4.0,
+                            "Inherits:",
+                            7.0,
+                            10.0,
+                            0.9,
+                            [0.75, 0.84, 0.96, 1.0],
+                        );
+                        let mut ix = right_x + 68.0;
+                        for other_grp in &snapshot.permissions_groups {
+                            if other_grp.name.eq_ignore_ascii_case(&grp.name) {
+                                continue;
+                            }
+                            let is_inherited = grp
+                                .inherits
+                                .iter()
+                                .any(|n| n.eq_ignore_ascii_case(&other_grp.name));
+                            let pill_w = (other_grp.name.len() as f32 * 7.5 + 18.0).clamp(52.0, 110.0);
+                            if ix + pill_w > right_x + right_w {
+                                break;
+                            }
+                            let mut next_inherits = grp.inherits.clone();
+                            if is_inherited {
+                                next_inherits.retain(|n| !n.eq_ignore_ascii_case(&other_grp.name));
+                            } else {
+                                next_inherits.push(other_grp.name.clone());
+                            }
+                            push_btn(
+                                mesh,
+                                [ix, inh_y, pill_w, 19.0],
+                                &format!("{}{}", if is_inherited { "✓ " } else { "+ " }, other_grp.name),
+                                if is_inherited {
+                                    [0.18, 0.50, 0.30, 0.95]
+                                } else {
+                                    [0.16, 0.20, 0.28, 0.92]
+                                },
+                                [0.28, 0.64, 0.42, 1.0],
+                                AdminUiClickAction::SendAction(AdminPanelAction::UpdateGroupMeta {
+                                    name: grp.name.clone(),
+                                    prefix: grp.prefix.clone(),
+                                    priority: grp.priority,
+                                    inherits: next_inherits,
+                                }),
+                            );
+                            ix += pill_w + 5.0;
+                        }
+
                         // Scrollable known permission node catalog
-                        let cat_y = meta_y + 30.0;
-                        let page_size = 8usize;
+                        let cat_y = inh_y + 26.0;
+                        let page_size = 7usize;
                         let max_scroll = snapshot.known_permission_nodes.len().saturating_sub(page_size);
                         let start = node_scroll.min(max_scroll);
 

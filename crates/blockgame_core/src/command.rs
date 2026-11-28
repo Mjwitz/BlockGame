@@ -118,7 +118,7 @@ pub struct CommandOutput {
     pub moderation_actions: Vec<ModerationCommandAction>,
     /// Requests opening the in-game Admin Panel for the command sender (with optional target tab).
     pub open_admin_panel: Option<Option<crate::admin_panel::AdminTab>>,
-    /// Land claiming actions: handled by the server loop.
+    /// Chunk Claiming actions: handled by the server loop.
     pub claim_actions: Vec<ClaimCommandAction>,
     /// Block Log actions (`/log lookup|inspect|rollback|undo|purge`): handled by the server loop.
     pub log_actions: Vec<LogCommandAction>,
@@ -149,7 +149,7 @@ pub enum LogCommandAction {
     },
 }
 
-/// Land claiming actions produced by `/claim`, `/unclaim`, and `/unclaimall`.
+/// Chunk Claiming actions produced by `/claim`, `/unclaim`, and `/unclaimall`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimCommandAction {
     ClaimCurrent,
@@ -209,6 +209,7 @@ pub enum AutoMessageCommandAction {
     SetOrder(crate::automessage::AutoMessageOrder),
     List,
     Add(String),
+    Edit { index: usize, message: String },
     Remove(usize),
 }
 
@@ -703,6 +704,12 @@ pub fn execute_command(
                 );
             }
 
+            let perm_backup = if matches!(source, CommandSource::Player { .. }) {
+                Some(perms.clone())
+            } else {
+                None
+            };
+
             match args[0].to_ascii_lowercase().as_str() {
                 "list" => {
                     let mut group_list: Vec<_> = perms.groups.keys().cloned().collect();
@@ -987,6 +994,18 @@ pub fn execute_command(
                     return CommandOutput::error(
                         "Unknown subcommand. Use: /perm <user|group|list|help>",
                     );
+                }
+            }
+            if out.save_permissions {
+                if let CommandSource::Player { username, .. } = source {
+                    if let Err(lockout_err) =
+                        crate::admin_panel::validate_no_self_lockout(perms, username)
+                    {
+                        if let Some(backup) = perm_backup {
+                            *perms = backup;
+                        }
+                        return CommandOutput::error(lockout_err);
+                    }
                 }
             }
         }
@@ -1662,6 +1681,24 @@ pub fn execute_command(
                     out.automessage_actions
                         .push(AutoMessageCommandAction::Add(msg));
                 }
+                Some("edit") => {
+                    let Some(raw) = args.get(1) else {
+                        return CommandOutput::error(
+                            "Usage: /automessage edit <index> <message>",
+                        );
+                    };
+                    let Ok(idx) = raw.parse::<usize>() else {
+                        return CommandOutput::error(format!("Invalid index '{}'.", raw));
+                    };
+                    if args.len() < 3 {
+                        return CommandOutput::error(
+                            "Usage: /automessage edit <index> <message>",
+                        );
+                    }
+                    let msg = args[2..].join(" ");
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::Edit { index: idx, message: msg });
+                }
                 Some("remove") | Some("del") | Some("delete") => {
                     let Some(raw) = args.get(1) else {
                         return CommandOutput::error("Usage: /automessage remove <index>");
@@ -1674,7 +1711,7 @@ pub fn execute_command(
                 }
                 _ => {
                     return CommandOutput::error(
-                        "Usage: /automessage <status|on|off|interval <sec>|order <sequential|random>|list|add <msg>|remove <idx>>",
+                        "Usage: /automessage <status|on|off|interval <sec>|order <sequential|random>|list|add <msg>|edit <idx> <msg>|remove <idx>>",
                     );
                 }
             }

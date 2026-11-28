@@ -166,11 +166,13 @@ pub struct AdminOnlinePlayer {
 }
 
 /// Live server metrics and toggles shown in the Admin Panel `Server` tab.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminServerStats {
     pub world_name: String,
     pub online_count: usize,
     pub uptime_secs: u64,
+    #[serde(default)]
+    pub tps: f32,
     pub broadcast_achievements: bool,
 }
 

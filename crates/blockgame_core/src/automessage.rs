@@ -124,6 +124,26 @@ impl AutoMessageManager {
         self.config.messages.len()
     }
 
+    pub fn edit_message(
+        &mut self,
+        one_based_index: usize,
+        msg: impl Into<String>,
+    ) -> Result<(), String> {
+        if one_based_index == 0 || one_based_index > self.config.messages.len() {
+            return Err(format!(
+                "Invalid message index {}. Valid range: 1..={}.",
+                one_based_index,
+                self.config.messages.len()
+            ));
+        }
+        let text = msg.into();
+        if text.trim().is_empty() {
+            return Err("Auto-Message text cannot be empty.".to_string());
+        }
+        self.config.messages[one_based_index - 1] = text;
+        Ok(())
+    }
+
     pub fn remove_message(&mut self, one_based_index: usize) -> Result<String, String> {
         if one_based_index == 0 || one_based_index > self.config.messages.len() {
             return Err(format!(

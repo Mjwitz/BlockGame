@@ -336,6 +336,7 @@ pub struct AppState {
     pub claim_border_pipeline: ClaimBorderPipeline,
     pub synced_claims: Vec<blockgame_core::claims::SyncedClaimChunk>,
     pub show_claim_borders: bool,
+    pub inspect_mode_enabled: bool,
     pub claim_border_buffer: Option<(wgpu::Buffer, u32)>,
     pub last_claim_owner_display: Option<String>,
     pub player_homes: HashMap<String, (Vec3, f32, f32)>,
@@ -1836,6 +1837,7 @@ impl ApplicationHandler for BlockGameApp {
             claim_border_pipeline,
             synced_claims: Vec::new(),
             show_claim_borders: false,
+            inspect_mode_enabled: false,
             claim_border_buffer: None,
             last_claim_owner_display: None,
             player_homes: HashMap::new(),
@@ -3814,6 +3816,13 @@ impl BlockGameApp {
                                         "am_add" if !input.is_empty() => Some(
                                             AdminPanelAction::RunCommand(format!("automessage add {}", input)),
                                         ),
+                                        key if key.starts_with("am_edit:") && !input.is_empty() => {
+                                            let idx_str = &key["am_edit:".len()..];
+                                            Some(AdminPanelAction::RunCommand(format!(
+                                                "automessage edit {} {}",
+                                                idx_str, input
+                                            )))
+                                        }
                                         "server_say" if !input.is_empty() => Some(
                                             AdminPanelAction::RunCommand(format!("say {}", input)),
                                         ),
@@ -4292,6 +4301,14 @@ impl BlockGameApp {
                                 let world_guard = state.world_manager.world().lock().unwrap();
                                 world_guard.get_block(hit.hit_voxel)
                             };
+                            if state.inspect_mode_enabled {
+                                if let Some(client) = &mut state.mp_client {
+                                    client.send(&blockgame_core::net::ClientPacket::InspectBlock {
+                                        pos: hit.hit_voxel,
+                                    });
+                                }
+                                return;
+                            }
                             if block_id.is_temple_interactive() {
                                 if block_id == BlockId::TEMPLE_PORTAL {
                                     if let Some(placement) = state
@@ -6729,6 +6746,9 @@ impl BlockGameApp {
                                         is_system: true,
                                         age: 0.0,
                                     });
+                                }
+                                blockgame_core::net::ServerPacket::InspectModeSync { enabled } => {
+                                    state.inspect_mode_enabled = enabled;
                                 }
                                 blockgame_core::net::ServerPacket::AdminPanelSync {
                                     payload_yaml,

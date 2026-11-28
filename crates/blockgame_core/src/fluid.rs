@@ -197,6 +197,22 @@ impl FluidSimulation {
         world: &mut World,
         registry: &BlockRegistry,
     ) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>) {
+        self.tick_with_guard(dt, world, registry, |_, _| true)
+    }
+
+    /// Advances scheduled Water (~4 ticks/s) and Lava (~1.33 ticks/s) waves,
+    /// calling `can_spread(from_pos, to_pos)` before spreading fluid horizontally
+    /// into a neighboring cell (used to enforce Claimed Chunk borders).
+    pub fn tick_with_guard<F>(
+        &mut self,
+        dt: f32,
+        world: &mut World,
+        registry: &BlockRegistry,
+        mut can_spread: F,
+    ) -> (Vec<IVec3>, Vec<(IVec3, ItemSlot)>)
+    where
+        F: FnMut(IVec3, IVec3) -> bool,
+    {
         let mut modified = Vec::new();
         let mut drops = Vec::new();
 
@@ -207,7 +223,15 @@ impl FluidSimulation {
             for _ in 0..wave {
                 if let Some(pos) = self.water_queue.pop_front() {
                     self.water_queued.remove(&pos);
-                    self.step_fluid(pos, false, world, registry, &mut modified, &mut drops);
+                    self.step_fluid(
+                        pos,
+                        false,
+                        world,
+                        registry,
+                        &mut modified,
+                        &mut drops,
+                        &mut can_spread,
+                    );
                 }
             }
         }
@@ -219,7 +243,15 @@ impl FluidSimulation {
             for _ in 0..wave {
                 if let Some(pos) = self.lava_queue.pop_front() {
                     self.lava_queued.remove(&pos);
-                    self.step_fluid(pos, true, world, registry, &mut modified, &mut drops);
+                    self.step_fluid(
+                        pos,
+                        true,
+                        world,
+                        registry,
+                        &mut modified,
+                        &mut drops,
+                        &mut can_spread,
+                    );
                 }
             }
         }
@@ -227,7 +259,7 @@ impl FluidSimulation {
         (modified, drops)
     }
 
-    fn step_fluid(
+    fn step_fluid<F>(
         &mut self,
         pos: IVec3,
         is_lava: bool,
@@ -235,7 +267,10 @@ impl FluidSimulation {
         registry: &BlockRegistry,
         modified: &mut Vec<IVec3>,
         drops: &mut Vec<(IVec3, ItemSlot)>,
-    ) {
+        can_spread: &mut F,
+    ) where
+        F: FnMut(IVec3, IVec3) -> bool,
+    {
         let fluid_id = if is_lava { BlockId::LAVA } else { BlockId::WATER };
         let max_spread = if is_lava {
             LAVA_MAX_SPREAD
@@ -402,6 +437,9 @@ impl FluidSimulation {
         let spread_dirs = find_downhill_dirs(pos, fluid_id, world, registry);
         for d in spread_dirs {
             let np = pos + d;
+            if !can_spread(pos, np) {
+                continue;
+            }
             let (ncp, _, _, _) = crate::world::world_to_chunk_coords(np);
             if !world.has_chunk(ncp) {
                 continue;
@@ -955,5 +993,34 @@ mod tests {
         sim.tick(LAVA_TICK_INTERVAL, &mut world, &reg);
         assert_eq!(world.get_block(IVec3::new(10, 7, 10)), BlockId::LAVA);
         assert_eq!(world.get_fluid_level(IVec3::new(10, 7, 10)), FLUID_FALLING);
+    }
+
+    #[test]
+    fn test_fluid_cross_border_claim_guard_blocks_entry() {
+        let reg = BlockRegistry::new();
+        let mut world = World::new();
+        for cx in 0..=1 {
+            let mut chunk = Chunk::new(ChunkPos::new(cx, 0, 0));
+            for x in 0..16 {
+                for z in 0..16 {
+                    chunk.set(x, 4, z, BlockId::STONE);
+                }
+            }
+            world.insert_chunk(chunk);
+        }
+        // Water source placed at x=15 (chunk 0) right next to claimed chunk 1 (x=16)
+        let src = IVec3::new(15, 5, 8);
+        world.set_block(src, BlockId::WATER);
+        let mut sim = FluidSimulation::new();
+        sim.schedule_block_and_neighbors(src, &world);
+
+        for _ in 0..4 {
+            sim.tick_with_guard(WATER_TICK_INTERVAL, &mut world, &reg, |from, to| {
+                !(from.x.div_euclid(16) == 0 && to.x.div_euclid(16) == 1)
+            });
+        }
+        // Water spreads within chunk 0 (x=14), but is blocked at x=16 (chunk 1)
+        assert_eq!(world.get_block(IVec3::new(14, 5, 8)), BlockId::WATER);
+        assert_eq!(world.get_block(IVec3::new(16, 5, 8)), BlockId::AIR);
     }
 }
