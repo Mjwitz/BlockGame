@@ -121,6 +121,7 @@ impl DynamicMeshBuffers {
 
 pub struct VoxelPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
+    pub cutout_pipeline: wgpu::RenderPipeline,
     pub water_pipeline: wgpu::RenderPipeline,
     pub celestial_pipeline: wgpu::RenderPipeline,
     pub camera_buffer: wgpu::Buffer,
@@ -269,7 +270,51 @@ impl VoxelPipeline {
         });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Voxel Render Pipeline"),
+            label: Some("Voxel Opaque Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[VoxelVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_opaque"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        let cutout_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Voxel Cutout Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -282,7 +327,7 @@ impl VoxelPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -291,7 +336,7 @@ impl VoxelPipeline {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None, // Two-sided cutout quads (halves cross-plant geometry)
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -407,6 +452,7 @@ impl VoxelPipeline {
 
         Self {
             render_pipeline,
+            cutout_pipeline,
             water_pipeline,
             celestial_pipeline,
             camera_buffer,
@@ -421,28 +467,69 @@ impl VoxelPipeline {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[*uniform]));
     }
 
-    pub fn upload_mesh(&self, device: &wgpu::Device, mesh: &ChunkMesh) -> Option<GpuMeshBuffers> {
-        if mesh.indices.is_empty() {
+    fn upload_mesh_buffers(
+        device: &wgpu::Device,
+        v_label: &str,
+        i_label: &str,
+        vertices: &[VoxelVertex],
+        indices: &[u32],
+    ) -> Option<GpuMeshBuffers> {
+        if indices.is_empty() {
             return None;
         }
-
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.vertices),
+            label: Some(v_label),
+            contents: bytemuck::cast_slice(vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.indices),
+            label: Some(i_label),
+            contents: bytemuck::cast_slice(indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-
         Some(GpuMeshBuffers {
             vertex_buffer,
             index_buffer,
-            index_count: mesh.indices.len() as u32,
+            index_count: indices.len() as u32,
         })
+    }
+
+    pub fn upload_mesh(&self, device: &wgpu::Device, mesh: &ChunkMesh) -> Option<GpuMeshBuffers> {
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Vertex Buffer",
+            "Chunk Index Buffer",
+            &mesh.vertices,
+            &mesh.indices,
+        )
+    }
+
+    pub fn upload_cutout_mesh(
+        &self,
+        device: &wgpu::Device,
+        mesh: &ChunkMesh,
+    ) -> Option<GpuMeshBuffers> {
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Cutout Vertex Buffer",
+            "Chunk Cutout Index Buffer",
+            &mesh.cutout_vertices,
+            &mesh.cutout_indices,
+        )
+    }
+
+    pub fn upload_foliage_mesh(
+        &self,
+        device: &wgpu::Device,
+        mesh: &ChunkMesh,
+    ) -> Option<GpuMeshBuffers> {
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Foliage Vertex Buffer",
+            "Chunk Foliage Index Buffer",
+            &mesh.foliage_vertices,
+            &mesh.foliage_indices,
+        )
     }
 
     pub fn upload_water_mesh(
@@ -450,27 +537,13 @@ impl VoxelPipeline {
         device: &wgpu::Device,
         mesh: &ChunkMesh,
     ) -> Option<GpuMeshBuffers> {
-        if mesh.water_indices.is_empty() {
-            return None;
-        }
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Water Vertex Buffer"),
-            contents: bytemuck::cast_slice(&mesh.water_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk Water Index Buffer"),
-            contents: bytemuck::cast_slice(&mesh.water_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Some(GpuMeshBuffers {
-            vertex_buffer,
-            index_buffer,
-            index_count: mesh.water_indices.len() as u32,
-        })
+        Self::upload_mesh_buffers(
+            device,
+            "Chunk Water Vertex Buffer",
+            "Chunk Water Index Buffer",
+            &mesh.water_vertices,
+            &mesh.water_indices,
+        )
     }
 }
 

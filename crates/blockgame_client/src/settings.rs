@@ -165,6 +165,44 @@ define_key_table!(
     (F21, "F21"), (F22, "F22"), (F23, "F23"), (F24, "F24"),
 );
 
+/// Client-side visual preset trading distant foliage detail and interior leaf transparency
+/// for higher frame rates on lower-end hardware without changing gameplay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphicsQuality {
+    #[default]
+    Fancy,
+    Fast,
+}
+
+impl GraphicsQuality {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fancy => "fancy",
+            Self::Fast => "fast",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fancy" => Some(Self::Fancy),
+            "fast" => Some(Self::Fast),
+            _ => None,
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Fancy => Self::Fast,
+            Self::Fast => Self::Fancy,
+        }
+    }
+
+    #[inline]
+    pub fn is_fast(self) -> bool {
+        matches!(self, Self::Fast)
+    }
+}
+
 /// Persistent client-side configuration settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GameSettings {
@@ -188,6 +226,8 @@ pub struct GameSettings {
     pub fullscreen: bool,
     /// Vertical synchronization (VSync).
     pub vsync: bool,
+    /// Graphics Quality preset (`Fancy` default or `Fast` for lower-end GPUs).
+    pub graphics_quality: GraphicsQuality,
     /// First-person held item / hand view bobbing while walking.
     pub view_bobbing: bool,
     /// Show top-left FPS and coordinate debug HUD overlay (also toggled via F3).
@@ -235,6 +275,7 @@ impl Default for GameSettings {
             invert_y: false,
             fullscreen: false,
             vsync: true,
+            graphics_quality: GraphicsQuality::Fancy,
             view_bobbing: true,
             show_debug_hud: false,
             ui_scale: 1.0,
@@ -419,6 +460,11 @@ impl GameSettings {
                 "vsync" => {
                     if let Ok(v) = val.parse::<bool>() {
                         settings.vsync = v;
+                    }
+                }
+                "graphics_quality" => {
+                    if let Some(q) = GraphicsQuality::from_str(val) {
+                        settings.graphics_quality = q;
                     }
                 }
                 "view_bobbing" => {
@@ -620,6 +666,7 @@ impl GameSettings {
              invert_y={}\n\
              fullscreen={}\n\
              vsync={}\n\
+             graphics_quality={}\n\
              view_bobbing={}\n\
              show_debug_hud={}\n\
              ui_scale={:.2}\n\
@@ -675,6 +722,7 @@ impl GameSettings {
             self.invert_y,
             self.fullscreen,
             self.vsync,
+            self.graphics_quality.as_str(),
             self.view_bobbing,
             self.show_debug_hud,
             self.ui_scale,
@@ -751,6 +799,7 @@ mod tests {
             invert_y: true,
             fullscreen: true,
             vsync: false,
+            graphics_quality: GraphicsQuality::Fast,
             view_bobbing: false,
             show_debug_hud: true,
             ui_scale: 1.25,
@@ -793,6 +842,7 @@ mod tests {
         assert_eq!(loaded.invert_y, s.invert_y);
         assert_eq!(loaded.fullscreen, s.fullscreen);
         assert_eq!(loaded.vsync, s.vsync);
+        assert_eq!(loaded.graphics_quality, s.graphics_quality);
         assert_eq!(loaded.view_bobbing, s.view_bobbing);
         assert_eq!(loaded.show_debug_hud, s.show_debug_hud);
         assert!((loaded.ui_scale - 1.25).abs() < 0.01);

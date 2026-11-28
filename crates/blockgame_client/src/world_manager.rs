@@ -32,10 +32,19 @@ fn mesh_chunk_from_world(
     registry: &BlockRegistry,
     chunk: &Chunk,
 ) -> ChunkMesh {
+    mesh_chunk_from_world_with_options(world, registry, chunk, false)
+}
+
+fn mesh_chunk_from_world_with_options(
+    world: &World,
+    registry: &BlockRegistry,
+    chunk: &Chunk,
+    fast_leaves: bool,
+) -> ChunkMesh {
     if chunk.is_all_air() {
         return ChunkMesh::new();
     }
-    let mesher = ChunkMesher::new(registry);
+    let mesher = ChunkMesher::new(registry).with_fast_leaves(fast_leaves);
     let origin = chunk.pos.to_world_origin();
     let sources = world.get_light_sources_near(origin, 15);
     mesher.mesh_chunk_with_lighting_and_meta_opt(
@@ -72,6 +81,7 @@ fn mesh_batch_parallel(
     world_arc: &Arc<Mutex<World>>,
     registry: &Arc<BlockRegistry>,
     batch: &[(ChunkPos, u64)],
+    fast_leaves: bool,
     tx: &Sender<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
 ) {
     let mut jobs: Vec<(ChunkPos, u64, Vec<(IVec3, u8)>)> = Vec::with_capacity(batch.len());
@@ -113,7 +123,7 @@ fn mesh_batch_parallel(
         let Some(chunk) = snapshot.get(&pos) else {
             return;
         };
-        let mesher = ChunkMesher::new(registry);
+        let mesher = ChunkMesher::new(registry).with_fast_leaves(fast_leaves);
         let origin = pos.to_world_origin();
         let mesh = mesher.mesh_chunk_with_lighting_and_meta_opt(
             chunk,
@@ -283,7 +293,10 @@ pub struct WorldManager {
     next_mesh_epoch: u64,
     has_pending_chunks: bool,
     pub gpu_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
+    pub gpu_cutout_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
+    pub gpu_foliage_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
     pub gpu_water_chunks: HashMap<ChunkPos, GpuMeshBuffers>,
+    fast_graphics: bool,
     gpu_chunks_dark_underground: HashSet<ChunkPos>,
     pending_gpu_uploads: HashMap<ChunkPos, ChunkMesh>,
     mesh_rx: Receiver<(ChunkPos, u64, ChunkMesh, Vec<(IVec3, bool)>)>,
@@ -291,6 +304,7 @@ pub struct WorldManager {
     gen_done_rx: Receiver<Vec<ChunkPos>>,
     gen_done_tx: Sender<Vec<ChunkPos>>,
     last_player_chunk: ChunkPos,
+    last_village_scan_chunk: Option<ChunkPos>,
     pub item_drops: Vec<ItemDrop>,
     pub falling_blocks: Vec<FallingBlock>,
     pub animals: Vec<AnimalEntity>,
@@ -346,7 +360,10 @@ impl WorldManager {
             next_mesh_epoch: 1,
             has_pending_chunks: true,
             gpu_chunks: HashMap::new(),
+            gpu_cutout_chunks: HashMap::new(),
+            gpu_foliage_chunks: HashMap::new(),
             gpu_water_chunks: HashMap::new(),
+            fast_graphics: false,
             gpu_chunks_dark_underground: HashSet::new(),
             pending_gpu_uploads: HashMap::new(),
             mesh_rx,
@@ -354,6 +371,7 @@ impl WorldManager {
             gen_done_rx,
             gen_done_tx,
             last_player_chunk: ChunkPos::new(i32::MAX, i32::MAX, i32::MAX),
+            last_village_scan_chunk: None,
             item_drops: Vec::new(),
             falling_blocks: Vec::new(),
             animals: Vec::new(),
@@ -404,6 +422,16 @@ impl WorldManager {
             self.gpu_chunks.remove(&pos);
             self.gpu_chunks_dark_underground.remove(&pos);
         }
+        if let Some(gpu_cutout) = pipeline.upload_cutout_mesh(device, mesh) {
+            self.gpu_cutout_chunks.insert(pos, gpu_cutout);
+        } else {
+            self.gpu_cutout_chunks.remove(&pos);
+        }
+        if let Some(gpu_foliage) = pipeline.upload_foliage_mesh(device, mesh) {
+            self.gpu_foliage_chunks.insert(pos, gpu_foliage);
+        } else {
+            self.gpu_foliage_chunks.remove(&pos);
+        }
         if let Some(gpu_water) = pipeline.upload_water_mesh(device, mesh) {
             self.gpu_water_chunks.insert(pos, gpu_water);
         } else {
@@ -421,6 +449,21 @@ impl WorldManager {
     pub fn set_render_distance(&mut self, render_distance: i32) {
         self.render_distance = render_distance.clamp(2, 12);
         self.has_pending_chunks = true;
+    }
+
+    /// Updates `Fast` vs. `Fancy` Graphics Quality mode and schedules background remeshing of
+    /// loaded cutout chunks when leaf-to-leaf culling changes.
+    pub fn set_fast_graphics(&mut self, fast: bool) {
+        if self.fast_graphics == fast {
+            return;
+        }
+        self.fast_graphics = fast;
+        for &pos in self.gpu_cutout_chunks.keys() {
+            self.dirty_remesh.insert(pos);
+        }
+        if !self.dirty_remesh.is_empty() {
+            self.has_pending_chunks = true;
+        }
     }
 
     /// around `center_pos`.
@@ -498,7 +541,17 @@ impl WorldManager {
             .filter_map(|&pos| {
                 world_guard
                     .get_chunk(pos)
-                    .map(|chunk| (pos, mesh_chunk_from_world(&world_guard, &self.registry, chunk)))
+                    .map(|chunk| {
+                        (
+                            pos,
+                            mesh_chunk_from_world_with_options(
+                                &world_guard,
+                                &self.registry,
+                                chunk,
+                                self.fast_graphics,
+                            ),
+                        )
+                    })
             })
             .collect();
         drop(world_guard);
@@ -713,6 +766,8 @@ impl WorldManager {
             .loaded_chunks_set
             .iter()
             .chain(self.gpu_chunks.keys())
+            .chain(self.gpu_cutout_chunks.keys())
+            .chain(self.gpu_foliage_chunks.keys())
             .chain(self.gpu_water_chunks.keys())
             .chain(self.pending_gpu_uploads.keys())
             .chain(self.dirty_remesh.iter())
@@ -726,6 +781,8 @@ impl WorldManager {
 
         for pos in to_remove {
             self.gpu_chunks.remove(&pos);
+            self.gpu_cutout_chunks.remove(&pos);
+            self.gpu_foliage_chunks.remove(&pos);
             self.gpu_water_chunks.remove(&pos);
             self.gpu_chunks_dark_underground.remove(&pos);
             self.pending_gpu_uploads.remove(&pos);
@@ -920,6 +977,7 @@ impl WorldManager {
                 self.collect_streaming_batch(current_chunk, max_in_flight);
 
             // 5. Dispatch terrain generation + parallel lock-free meshing asynchronously
+            let fast_leaves = self.fast_graphics;
             if !batch_gen.is_empty() {
                 let generator = self.generator.clone();
                 let world_arc = self.world.clone();
@@ -953,7 +1011,7 @@ impl WorldManager {
                         let _ = gen_tx.send(affected_neighbors);
                     }
 
-                    mesh_batch_parallel(&world_arc, &registry, &batch_gen, &tx);
+                    mesh_batch_parallel(&world_arc, &registry, &batch_gen, fast_leaves, &tx);
                 });
             }
 
@@ -964,7 +1022,7 @@ impl WorldManager {
                 let tx = self.mesh_tx.clone();
 
                 rayon::spawn(move || {
-                    mesh_batch_parallel(&world_arc, &registry, &batch_mesh, &tx);
+                    mesh_batch_parallel(&world_arc, &registry, &batch_mesh, fast_leaves, &tx);
                 });
             }
         }
@@ -979,22 +1037,24 @@ impl WorldManager {
         self.render_with_frustum_and_camera(render_pass, frustum, None);
     }
 
-    /// Renders loaded GPU chunk meshes with frustum culling and surface-to-underground occlusion
-    /// culling: when the camera is on the surface (`cam.y >= 34.0`), distant sealed dark
-    /// underground cave chunks (`cy <= 1`, zero sunlight, > 48 blocks away horizontally) are
-    /// skipped so underground caverns don't triple GPU triangle counts on the surface.
-    pub fn render_with_frustum_and_camera<'a>(
+    fn collect_visible_chunks<'a>(
         &'a self,
-        render_pass: &mut wgpu::RenderPass<'a>,
+        chunks: &'a HashMap<ChunkPos, GpuMeshBuffers>,
         frustum: Option<&blockgame_render::Frustum>,
         camera_pos: Option<Vec3>,
+        cull_dark_underground: bool,
+        max_horiz_dist_sq: Option<f32>,
+        out: &mut Vec<(f32, &'a GpuMeshBuffers)>,
     ) {
-        let cull_underground = camera_pos.filter(|cam| cam.y >= 34.0);
-        for (&pos, gpu_mesh) in &self.gpu_chunks {
+        let cull_underground = if cull_dark_underground {
+            camera_pos.filter(|cam| cam.y >= 34.0)
+        } else {
+            None
+        };
+        for (&pos, gpu_mesh) in chunks {
             if gpu_mesh.index_count == 0 {
                 continue;
             }
-
             let min = Vec3::new(
                 pos.0.x as f32 * 16.0,
                 pos.0.y as f32 * 16.0,
@@ -1009,19 +1069,84 @@ impl WorldManager {
                     }
                 }
             }
-
-            if let Some(f) = frustum {
-                let max = min + Vec3::splat(16.0);
-                if !f.is_box_visible(min, max) {
+            if let (Some(cam), Some(max_sq)) = (camera_pos, max_horiz_dist_sq) {
+                let dx = (min.x + 8.0) - cam.x;
+                let dz = (min.z + 8.0) - cam.z;
+                if dx * dx + dz * dz > max_sq {
                     continue;
                 }
             }
+            if let Some(f) = frustum {
+                if !f.is_box_visible(min, min + Vec3::splat(16.0)) {
+                    continue;
+                }
+            }
+            let dist_sq = camera_pos
+                .map(|cam| (min + Vec3::splat(8.0)).distance_squared(cam))
+                .unwrap_or(0.0);
+            out.push((dist_sq, gpu_mesh));
+        }
+    }
 
+    fn draw_front_to_back<'a>(
+        render_pass: &mut wgpu::RenderPass<'a>,
+        mut visible: Vec<(f32, &'a GpuMeshBuffers)>,
+        sort: bool,
+    ) {
+        if sort {
+            visible.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        for (_, gpu_mesh) in visible {
             render_pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
             render_pass
                 .set_index_buffer(gpu_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
         }
+    }
+
+    /// Renders loaded GPU opaque chunk meshes front-to-back with frustum culling and
+    /// surface-to-underground occlusion culling so hardware Early-Z rejects occluded terrain.
+    pub fn render_with_frustum_and_camera<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+        camera_pos: Option<Vec3>,
+    ) {
+        let mut visible = Vec::with_capacity(self.gpu_chunks.len());
+        self.collect_visible_chunks(&self.gpu_chunks, frustum, camera_pos, true, None, &mut visible);
+        Self::draw_front_to_back(render_pass, visible, camera_pos.is_some());
+    }
+
+    /// Renders alpha-cutout chunk meshes (leaves, glass, oak door tops, lily pads, dripstone,
+    /// glow crystals, seagrass) and ground foliage cross-quads (flowers, tall grass, crops,
+    /// sugar cane) front-to-back. In `Fast` Graphics Quality mode, ground foliage chunks beyond
+    /// 48 blocks horizontally are skipped immediately without remeshing.
+    pub fn render_cutout_with_frustum_and_camera<'a>(
+        &'a self,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        frustum: Option<&blockgame_render::Frustum>,
+        camera_pos: Option<Vec3>,
+    ) {
+        const FAST_FOLIAGE_MAX_DIST_SQ: f32 = 48.0 * 48.0;
+        let mut visible =
+            Vec::with_capacity(self.gpu_cutout_chunks.len() + self.gpu_foliage_chunks.len());
+        self.collect_visible_chunks(
+            &self.gpu_cutout_chunks,
+            frustum,
+            camera_pos,
+            true,
+            None,
+            &mut visible,
+        );
+        self.collect_visible_chunks(
+            &self.gpu_foliage_chunks,
+            frustum,
+            camera_pos,
+            false,
+            self.fast_graphics.then_some(FAST_FOLIAGE_MAX_DIST_SQ),
+            &mut visible,
+        );
+        Self::draw_front_to_back(render_pass, visible, camera_pos.is_some());
     }
 
     /// Renders all currently loaded GPU chunk meshes without frustum culling.
@@ -1305,7 +1430,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect();
             (current, meshes, dropped_chest_items, extra_drops, spawned_falling)
@@ -1421,7 +1546,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect()
         };
@@ -1673,7 +1798,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect();
             (meshes, extra_drops, spawned_falling)
@@ -1755,7 +1880,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect();
 
@@ -1827,7 +1952,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect();
 
@@ -1883,7 +2008,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect()
         };
@@ -2346,18 +2471,23 @@ impl WorldManager {
             (player_pos.y.floor() as i32).div_euclid(16),
             (player_pos.z.floor() as i32).div_euclid(16),
         );
-        for dcx in -2..=2 {
-            for dcz in -2..=2 {
-                let cpos = ChunkPos::new(p_cpos.0.x + dcx, p_cpos.0.y, p_cpos.0.z + dcz);
-                for placement in self.generator.find_villages_for_chunk(cpos) {
-                    if is_multiplayer {
-                        if self.announced_mp_villages.insert(placement.village_id) {
-                            self.pending_village_blueprints
-                                .push(placement.to_spawn_blueprint());
+        if self.last_village_scan_chunk != Some(p_cpos) {
+            self.last_village_scan_chunk = Some(p_cpos);
+            for dcx in -2..=2 {
+                for dcz in -2..=2 {
+                    let cpos = ChunkPos::new(p_cpos.0.x + dcx, p_cpos.0.y, p_cpos.0.z + dcz);
+                    for placement in self.generator.find_villages_for_chunk(cpos) {
+                        if is_multiplayer {
+                            if self.announced_mp_villages.insert(placement.village_id) {
+                                self.pending_village_blueprints
+                                    .push(placement.to_spawn_blueprint());
+                            }
+                        } else {
+                            self.villages.ensure_village_spawned(
+                                &placement.to_spawn_blueprint(),
+                                world_ticks,
+                            );
                         }
-                    } else {
-                        self.villages
-                            .ensure_village_spawned(&placement.to_spawn_blueprint(), world_ticks);
                     }
                 }
             }
@@ -3032,7 +3162,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect();
             (meshes, extra_drops, spawned_falling)
@@ -3078,7 +3208,7 @@ impl WorldManager {
             let world = self.world.lock().unwrap();
             for cpos in chunks {
                 if let Some(chunk) = world.get_chunk(cpos) {
-                    meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                    meshes.push((cpos, mesh_chunk_from_world_with_options(&world, &registry, chunk, self.fast_graphics)));
                 }
             }
         }
@@ -3213,7 +3343,7 @@ impl WorldManager {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                        meshes.push((cpos, mesh_chunk_from_world_with_options(&world, &registry, chunk, self.fast_graphics)));
                     }
                 }
             }
@@ -3281,7 +3411,7 @@ impl WorldManager {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                        meshes.push((cpos, mesh_chunk_from_world_with_options(&world, &registry, chunk, self.fast_graphics)));
                     }
                 }
             }
@@ -3328,7 +3458,7 @@ impl WorldManager {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                        meshes.push((cpos, mesh_chunk_from_world_with_options(&world, &registry, chunk, self.fast_graphics)));
                     }
                 }
             }
@@ -3447,7 +3577,7 @@ impl WorldManager {
                 let world = self.world.lock().unwrap();
                 for cpos in changed_chunks {
                     if let Some(chunk) = world.get_chunk(cpos) {
-                        meshes.push((cpos, mesh_chunk_from_world(&world, &registry, chunk)));
+                        meshes.push((cpos, mesh_chunk_from_world_with_options(&world, &registry, chunk, self.fast_graphics)));
                     }
                 }
             }
@@ -3548,7 +3678,7 @@ impl WorldManager {
                     .filter_map(|cpos| {
                         world
                             .get_chunk(cpos)
-                            .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                            .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                     })
                     .collect();
                 (meshes, extra_drops, more_falling)
@@ -3609,7 +3739,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect::<Vec<_>>()
         };
@@ -3656,7 +3786,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect::<Vec<_>>()
         };
@@ -3718,7 +3848,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect::<Vec<_>>()
         };
@@ -3792,7 +3922,7 @@ impl WorldManager {
                 .filter_map(|cpos| {
                     world
                         .get_chunk(cpos)
-                        .map(|chunk| (cpos, mesh_chunk_from_world(&world, &self.registry, chunk)))
+                        .map(|chunk| (cpos, mesh_chunk_from_world_with_options(&world, &self.registry, chunk, self.fast_graphics)))
                 })
                 .collect::<Vec<_>>()
         };
@@ -3994,6 +4124,80 @@ mod tests {
         assert!(
             mesh_left_after.water_vertices.iter().any(|v| v.normal[0] < -0.5),
             "Remeshed water chunk must emit -X face once neighboring AIR chunk is loaded"
+        );
+    }
+
+    #[test]
+    fn test_issue_26_biome_meshing_and_village_scan_guard() {
+        let registry = Arc::new(BlockRegistry::default());
+        let mut wm = WorldManager::new(2577988685, 4, registry.clone());
+
+        // 1. Verify update_villages records last_village_scan_chunk so stationary frames skip rescanning
+        let pos = Vec3::new(1711.5, 59.0, -1129.5);
+        assert_eq!(wm.last_village_scan_chunk, None);
+        wm.update_villages(0.016, pos, 6000.0, false);
+        let expected_cpos = ChunkPos::new(
+            (1711_i32).div_euclid(16),
+            (59_i32).div_euclid(16),
+            (-1129_i32).div_euclid(16),
+        );
+        assert_eq!(wm.last_village_scan_chunk, Some(expected_cpos));
+        // Second call in the same chunk must keep the guard intact and run instantly
+        wm.update_villages(0.016, pos + Vec3::new(0.2, 0.0, 0.2), 6001.0, false);
+        assert_eq!(wm.last_village_scan_chunk, Some(expected_cpos));
+
+        // 2. Verify Fast vs Fancy leaf geometry reduction on real generated chunks around (1711, 59, -1129)
+        let mut world = World::new();
+        let mut positions = Vec::new();
+        for dz in -2..=2 {
+            for dx in -2..=2 {
+                let cpos = ChunkPos::new(106 + dx, 3, -71 + dz);
+                let mut chunk = wm.generator.generate_chunk(cpos);
+                wm.generator.populate_chunk_features(&mut chunk);
+                world.insert_chunk(chunk);
+                positions.push(cpos);
+            }
+        }
+        let mut fancy_cutout = 0usize;
+        let mut fast_cutout = 0usize;
+        let mut foliage_verts = 0usize;
+        for cpos in positions {
+            let chunk = world.get_chunk(cpos).unwrap();
+            let fancy = mesh_chunk_from_world_with_options(&world, &registry, chunk, false);
+            let fast = mesh_chunk_from_world_with_options(&world, &registry, chunk, true);
+            fancy_cutout += fancy.cutout_vertices.len();
+            fast_cutout += fast.cutout_vertices.len();
+            foliage_verts += fancy.foliage_vertices.len();
+        }
+        assert!(foliage_verts > 0, "Expected Savanna/Jungle foliage around (1711, 59, -1129)");
+        assert!(
+            fast_cutout < fancy_cutout,
+            "Fast Graphics Quality should cull internal leaf faces (fast={} vs fancy={})",
+            fast_cutout,
+            fancy_cutout
+        );
+
+        // 3. Verify Flower Meadow (784, -784) on seed 2577988685 routes flowers/tall grass to foliage stream
+        let fm_h = wm.generator.surface_height(784, -784);
+        assert_eq!(wm.generator.get_biome(784, -784, fm_h), Biome::FlowerMeadow);
+        let fm_cy = fm_h.div_euclid(16);
+        let fm_pos = ChunkPos::new(784_i32.div_euclid(16), fm_cy, (-784_i32).div_euclid(16));
+        let mut fm_chunk = wm.generator.generate_chunk(fm_pos);
+        wm.generator.populate_chunk_features(&mut fm_chunk);
+        world.insert_chunk(fm_chunk);
+        let fm_mesh = mesh_chunk_from_world_with_options(
+            &world,
+            &registry,
+            world.get_chunk(fm_pos).unwrap(),
+            false,
+        );
+        assert!(
+            !fm_mesh.vertices.is_empty(),
+            "Flower Meadow chunk should emit solid opaque ground vertices"
+        );
+        assert!(
+            !fm_mesh.foliage_vertices.is_empty() && fm_mesh.foliage_vertices.len() % 8 == 0,
+            "Flower Meadow chunk should emit 2-quad (8-vertex) flowers/tall grass into foliage stream"
         );
     }
 }

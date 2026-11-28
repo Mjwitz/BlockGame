@@ -175,3 +175,10 @@ _Avoid_: Still water, still lava, origin liquid
 **Flowing Fluid**:
 A dynamically spreading Water or Lava block fed by a Source Block that steps down in height with distance and drains automatically when cut off from its source.
 _Avoid_: Running water, fluid stream, moving liquid
+
+### Graphics & Display
+
+**Graphics Quality**:
+A client-side visual preset (`Fancy` or `Fast`) in Settings that trades distant foliage detail and interior leaf transparency for higher frame rates on lower-end hardware without changing gameplay.
+_Avoid_: Quality preset, low graphics, detail level, LOD mode
+

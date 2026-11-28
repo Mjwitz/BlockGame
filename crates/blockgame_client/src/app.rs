@@ -402,6 +402,8 @@ impl AppState {
         self.render_distance = self.settings.render_distance;
         self.world_manager
             .set_render_distance(self.settings.render_distance);
+        self.world_manager
+            .set_fast_graphics(self.settings.graphics_quality.is_fast());
         self.camera.fovy = self.settings.fov_degrees.to_radians();
         self.audio.set_volumes(
             self.settings.master_volume,
@@ -488,6 +490,7 @@ impl AppState {
             invert_y: self.settings.invert_y,
             fullscreen: self.settings.fullscreen,
             vsync: self.settings.vsync,
+            graphics_quality_fast: self.settings.graphics_quality.is_fast(),
             view_bobbing: self.settings.view_bobbing,
             show_debug_hud: self.settings.show_debug_hud,
             ui_scale: self.settings.ui_scale,
@@ -911,6 +914,7 @@ impl AppState {
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.set_fast_graphics(self.settings.graphics_quality.is_fast());
         world_manager.is_multiplayer = true;
         world_manager.init_area_around(initial_state.position, &self.device, &self.pipeline);
 
@@ -1131,6 +1135,7 @@ impl AppState {
 
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.set_fast_graphics(self.settings.graphics_quality.is_fast());
         let (spawn_x, _, spawn_z) = world_manager.generator.find_spawn_coords();
         world_manager.init_area_around(
             Vec3::new(spawn_x as f32 + 0.5, 64.0, spawn_z as f32 + 0.5),
@@ -1224,6 +1229,7 @@ impl AppState {
         let seed = save_data.metadata.seed;
         let mut world_manager =
             WorldManager::new(seed, self.render_distance, self.registry.clone());
+        world_manager.set_fast_graphics(self.settings.graphics_quality.is_fast());
         world_manager.apply_save_data(&save_data);
         world_manager.init_area_around(
             save_data.player.position,
@@ -2450,7 +2456,7 @@ impl BlockGameApp {
                                     }
 
                                     if !handled {
-                                        for idx in 0..8 {
+                                        for idx in 0..9 {
                                             let r = UiBuilder::settings_toggle_rect(
                                                 screen_w, screen_h, idx,
                                             );
@@ -2490,6 +2496,12 @@ impl BlockGameApp {
                                                             .cycle_input_device(
                                                                 &state.settings.voice_input_device,
                                                             );
+                                                    }
+                                                    8 => {
+                                                        state.settings.graphics_quality = state
+                                                            .settings
+                                                            .graphics_quality
+                                                            .toggle();
                                                     }
                                                     _ => {}
                                                 }
@@ -9459,7 +9471,7 @@ impl BlockGameApp {
                     render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
                     state.celestial_dynamic_mesh.draw(&mut render_pass);
 
-                    // Render voxel terrain meshes with frustum culling
+                    // Render opaque voxel terrain meshes front-to-back with Early-Z & frustum culling
                     render_pass.set_pipeline(&state.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
                     render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
@@ -9474,23 +9486,27 @@ impl BlockGameApp {
                             Some(state.camera.position),
                         );
 
-                    // Render floating 3D item drops
-                    state.item_drop_dynamic_mesh.draw(&mut render_pass);
-
-                    // Render active 3D animals
+                    // Render opaque 3D entities (animals, monsters, arrows, falling blocks, rotors)
                     state.animal_dynamic_mesh.draw(&mut render_pass);
-
-                    // Render active 3D monsters and arrow projectiles
                     state.monster_dynamic_mesh.draw(&mut render_pass);
                     state.arrow_dynamic_mesh.draw(&mut render_pass);
-
-                    // Render falling gravity blocks (Sand, Gravel, Red Sand)
                     state.falling_block_dynamic_mesh.draw(&mut render_pass);
-
-                    // Render animated spinning 3D Wind Turbine rotor blades
                     state.wind_turbine_dynamic_mesh.draw(&mut render_pass);
 
-                    // Render 3D held items anchored to player hands (textured voxel atlas pass)
+                    // Render alpha-cutout terrain (leaves, glass, flowers, tall grass, crops) and cutout item meshes
+                    render_pass.set_pipeline(&state.pipeline.cutout_pipeline);
+                    render_pass.set_bind_group(0, &state.pipeline.camera_bind_group, &[]);
+                    render_pass.set_bind_group(1, &state.pipeline.texture_bind_group, &[]);
+                    state
+                        .world_manager
+                        .render_cutout_with_frustum_and_camera(
+                            &mut render_pass,
+                            Some(&frustum),
+                            Some(state.camera.position),
+                        );
+
+                    // Render floating 3D item drops & held items (may use alpha-cutout item textures)
+                    state.item_drop_dynamic_mesh.draw(&mut render_pass);
                     state.player_held_items_dynamic_mesh.draw(&mut render_pass);
 
                     // Render 3D stylized low-poly player characters (dedicated vertex-colored pass)
@@ -10174,6 +10190,7 @@ impl BlockGameApp {
                         rects.push(UiBuilder::settings_slider_rect(screen_w, screen_h, i));
                         rects.push(UiBuilder::settings_toggle_rect(screen_w, screen_h, i));
                     }
+                    rects.push(UiBuilder::settings_toggle_rect(screen_w, screen_h, 8));
                 } else if state.settings_tab == 1 {
                     for i in 0..crate::settings::KeyBinds::COUNT {
                         rects.push(UiBuilder::settings_keybind_rect(screen_w, screen_h, i));
