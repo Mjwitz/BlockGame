@@ -120,6 +120,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let bind_addr = format!("{}:{}", config.bind_host, config.port);
+    let server_root = config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let config_dir = server_root.join("config");
     let saves_root = PathBuf::from("saves");
     let folder_name = sanitize_folder_name(&config.world_name);
     let effective_seed = blockgame_core::save::load_world_metadata(&saves_root.join(&folder_name))
@@ -136,9 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         effective_seed
     );
 
-    let mut server = MultiplayerServer::start(
+    let mut server = MultiplayerServer::start_with_config_dir(
         &bind_addr,
         saves_root,
+        config_dir,
         folder_name,
         config.world_name.clone(),
         effective_seed,

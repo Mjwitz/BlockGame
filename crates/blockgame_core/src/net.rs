@@ -2000,6 +2000,32 @@ impl MultiplayerServer {
     where
         F: Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync + 'static,
     {
+        let config_dir = saves_root.join("config");
+        Self::start_with_config_dir(
+            bind_addr,
+            saves_root,
+            config_dir,
+            folder_name,
+            world_name,
+            default_seed,
+            initial_world_data,
+            chunk_generator,
+        )
+    }
+
+    pub fn start_with_config_dir<F>(
+        bind_addr: impl ToSocketAddrs,
+        saves_root: PathBuf,
+        config_dir: PathBuf,
+        folder_name: String,
+        world_name: String,
+        default_seed: u32,
+        initial_world_data: Option<WorldSaveData>,
+        chunk_generator: F,
+    ) -> io::Result<Self>
+    where
+        F: Fn(ChunkPos) -> crate::chunk::Chunk + Send + Sync + 'static,
+    {
         let listener = TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
         let local_addr = listener.local_addr()?;
@@ -2020,6 +2046,7 @@ impl MultiplayerServer {
                 run_server_loop(
                     listener,
                     saves_root,
+                    config_dir,
                     folder_name,
                     world_name,
                     default_seed,
@@ -2088,10 +2115,11 @@ fn apply_command_output(
     auth_db: &mut AuthDatabase,
     default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
+    config_dir: &std::path::Path,
     stop_flag: &Arc<AtomicBool>,
 ) {
     if output.save_permissions {
-        let _ = perms_manager.save_to_dir(world_dir);
+        let _ = perms_manager.save_to_dir(config_dir);
         for c in clients.iter_mut() {
             if c.authenticated {
                 c.model.prefix = perms_manager.get_player_prefix(&c.username);
@@ -2099,7 +2127,7 @@ fn apply_command_output(
         }
     }
     if output.save_bans {
-        let _ = ban_manager.save_to_dir(world_dir);
+        let _ = ban_manager.save_to_dir(config_dir);
     }
 
     for (target_pid, msg) in output.direct_messages {
@@ -2397,7 +2425,7 @@ fn apply_command_output(
     for (target_name, new_rank) in output.rank_updates {
         // Update permissions manager
         let _ = perms_manager.add_player_group(&target_name, &new_rank);
-        let _ = perms_manager.save_to_dir(world_dir);
+        let _ = perms_manager.save_to_dir(config_dir);
 
         // Update online client if connected
         if let Some(c) = clients.iter_mut().find(|c| c.username.eq_ignore_ascii_case(&target_name)) {
@@ -2543,6 +2571,7 @@ fn find_dry_spawn_from_generator(
 fn run_server_loop(
     listener: TcpListener,
     saves_root: PathBuf,
+    config_dir: PathBuf,
     folder_name: String,
     world_name: String,
     default_seed: u32,
@@ -2554,6 +2583,7 @@ fn run_server_loop(
     command_rx: Receiver<String>,
 ) {
     let world_dir = saves_root.join(&folder_name);
+    let _ = fs::create_dir_all(&config_dir);
     let mut save_data = if let Some(data) = initial_world_data {
         data
     } else if let Ok(loaded) = load_world_from_dir(&saves_root, &folder_name) {
@@ -2564,10 +2594,16 @@ fn run_server_loop(
         WorldSaveData::new(meta, SavedPlayerState::default())
     };
 
+    let mut legacy_dirs: Vec<&std::path::Path> = vec![world_dir.as_path()];
+    if let Some(parent) = config_dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        legacy_dirs.push(parent);
+    }
+
     let mut auth_db = AuthDatabase::load_from_dir(&world_dir).unwrap_or_default();
-    let mut perms_manager =
-        PermissionsManager::load_from_dir(&world_dir).unwrap_or_else(|_| PermissionsManager::new());
-    let mut ban_manager = BanManager::load_from_dir(&world_dir).unwrap_or_default();
+    let mut perms_manager = PermissionsManager::load_from_config_dir(&config_dir, &legacy_dirs)
+        .unwrap_or_else(|_| PermissionsManager::new());
+    let mut ban_manager =
+        BanManager::load_from_config_dir(&config_dir, &legacy_dirs).unwrap_or_default();
 
     let item_registry = ItemRegistry::new();
     let block_registry = crate::block::BlockRegistry::new();
@@ -2689,6 +2725,7 @@ fn run_server_loop(
                 &mut auth_db,
                 &mut default_spawn,
                 &world_dir,
+                &config_dir,
                 &stop_flag,
             );
         }
@@ -2892,7 +2929,7 @@ fn run_server_loop(
                                 account.player_state = player_state.clone();
                                 if perms_manager.players.is_empty() {
                                     let _ = perms_manager.add_player_group(&account.username, "admin");
-                                    let _ = perms_manager.save_to_dir(&world_dir);
+                                    let _ = perms_manager.save_to_dir(&config_dir);
                                     player_state.rank = "admin".to_string();
                                     auth_db.update_player_state(&account.username, account.appearance, player_state.clone());
                                 } else {
@@ -2902,7 +2939,7 @@ fn run_server_loop(
                                     let groups = perms_manager.get_player_groups(&account.username);
                                     if groups.is_empty() || (groups.len() == 1 && groups[0] == "default" && player_state.rank != "default") {
                                         let _ = perms_manager.add_player_group(&account.username, &player_state.rank);
-                                        let _ = perms_manager.save_to_dir(&world_dir);
+                                        let _ = perms_manager.save_to_dir(&config_dir);
                                     }
                                 }
                                 clients[idx].authenticated = true;
@@ -4057,6 +4094,7 @@ fn run_server_loop(
                                     &mut auth_db,
                                     &mut default_spawn,
                                     &world_dir,
+                                    &config_dir,
                                     &stop_flag,
                                 );
                             } else {
@@ -5008,8 +5046,8 @@ fn run_server_loop(
         }
     }
     let _ = auth_db.save_to_dir(&world_dir);
-    let _ = perms_manager.save_to_dir(&world_dir);
-    let _ = ban_manager.save_to_dir(&world_dir);
+    let _ = perms_manager.save_to_dir(&config_dir);
+    let _ = ban_manager.save_to_dir(&config_dir);
     farming_sim.export_to_save_data(&mut save_data);
     save_data.capture_from_world(&world);
     let _ = save_world_to_dir(&saves_root, &mut save_data);
@@ -5957,11 +5995,79 @@ mod tests {
         client_alt.disconnect();
         server.shutdown();
 
-        // 13. Verify persistence files exist
-        let world_dir = temp_root.join("test_cmd_world");
-        assert!(world_dir.join("permissions.yml").exists(), "permissions.yml must be saved");
-        assert!(world_dir.join("bans.txt").exists(), "bans.txt must be saved");
-        assert!(world_dir.join("banned-ips.txt").exists(), "banned-ips.txt must be saved");
+        // 13. Verify persistence files exist in config/
+        let config_dir = temp_root.join("config");
+        assert!(config_dir.join("permissions.yml").exists(), "config/permissions.yml must be saved");
+        assert!(config_dir.join("bans.txt").exists(), "config/bans.txt must be saved");
+        assert!(config_dir.join("banned-ips.txt").exists(), "config/banned-ips.txt must be saved");
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_config_dir_migration_and_atomic_persistence() {
+        let temp_root = std::env::temp_dir().join("blockgame_net_config_migrate_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let saves_root = temp_root.join("saves");
+        let world_dir = saves_root.join("migrate_world");
+        let config_dir = temp_root.join("config");
+        std::fs::create_dir_all(&world_dir).unwrap();
+
+        // Seed legacy files at server root (permissions.yml, banned-ips.txt) and world_dir (bans.txt)
+        let mut legacy_perms = PermissionsManager::new();
+        legacy_perms.add_player_group("LegacyAdmin", "admin").unwrap();
+        legacy_perms.save_to_dir(&temp_root).unwrap();
+
+        let mut legacy_bans = BanManager::new();
+        legacy_bans.ban("LegacyGriefer", "Old grief", "Console");
+        legacy_bans.save_to_dir(&world_dir).unwrap();
+        // Put an IP ban in server root banned-ips.txt to verify fallback across legacy dirs
+        std::fs::remove_file(world_dir.join("banned-ips.txt")).unwrap();
+        let mut root_ip_bans = BanManager::new();
+        root_ip_bans.ban_ip("10.0.0.99", "Legacy IP ban", "Console");
+        root_ip_bans.save_to_dir(&temp_root).unwrap();
+
+        let mut meta = WorldMetadata::new("Migrate World", 1234);
+        meta.folder_name = "migrate_world".to_string();
+        let save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+
+        let mut server = MultiplayerServer::start_with_config_dir(
+            "127.0.0.1:0",
+            saves_root,
+            config_dir.clone(),
+            "migrate_world".to_string(),
+            "Migrate World".to_string(),
+            1234,
+            Some(save_data),
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server with custom config_dir");
+
+        let addr_str = server.local_addr().to_string();
+
+        // Migrated ban should immediately block LegacyGriefer
+        let ban_attempt = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "LegacyGriefer",
+            "pass",
+            CharacterAppearance::randomized(0),
+        );
+        assert!(ban_attempt.is_err(), "Migrated ban must block LegacyGriefer");
+
+        server.shutdown();
+
+        // Verify files were migrated into config/ non-destructively
+        assert!(config_dir.join("permissions.yml").exists());
+        assert!(config_dir.join("bans.txt").exists());
+        assert!(config_dir.join("banned-ips.txt").exists());
+        assert!(temp_root.join("permissions.yml").exists(), "Legacy root file kept non-destructively");
+
+        let reloaded_perms = PermissionsManager::load_from_dir(&config_dir).unwrap();
+        assert!(reloaded_perms.has_permission("LegacyAdmin", "blockgame.command.ban"));
+
+        let reloaded_bans = BanManager::load_from_dir(&config_dir).unwrap();
+        assert!(reloaded_bans.is_banned("LegacyGriefer").is_some());
+        assert!(reloaded_bans.is_ip_banned("10.0.0.99").is_some());
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

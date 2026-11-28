@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -471,9 +471,8 @@ impl PermissionsManager {
 
     // --- Persistence ---
 
-    /// Saves permissions to `<dir>/permissions.yml`.
+    /// Saves permissions atomically to `<dir>/permissions.yml`.
     pub fn save_to_dir(&self, dir: &Path) -> io::Result<()> {
-        fs::create_dir_all(dir)?;
         let path = dir.join("permissions.yml");
 
         let config = PermissionsYamlConfig {
@@ -489,14 +488,45 @@ impl PermissionsManager {
                 .collect(),
         };
 
-        let yaml = serde_yaml::to_string(&config)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("YAML serialize error: {e}")))?;
+        let header = "# BlockGame Permissions Configuration\n# Groups define permissions, inheritance, priority, and & color-coded prefixes.";
+        crate::config_io::atomic_write_yaml(&path, header, &config)
+    }
 
-        let mut file = File::create(path)?;
-        writeln!(file, "# BlockGame Permissions Configuration")?;
-        writeln!(file, "# Groups define permissions, inheritance, priority, and & color-coded prefixes.")?;
-        file.write_all(yaml.as_bytes())?;
-        file.flush()
+    /// Loads permissions from `<config_dir>/permissions.yml`, non-destructively migrating
+    /// from any legacy `permissions.yml` or `permissions.txt` in `legacy_dirs` if needed.
+    pub fn load_from_config_dir(config_dir: &Path, legacy_dirs: &[&Path]) -> io::Result<Self> {
+        let dest = config_dir.join("permissions.yml");
+        if !dest.exists() {
+            let yml_candidates: Vec<std::path::PathBuf> = legacy_dirs
+                .iter()
+                .map(|d| d.join("permissions.yml"))
+                .collect();
+            if let Some(src) = crate::config_io::migrate_file_if_missing(&dest, &yml_candidates)? {
+                log::info!(
+                    "Migrated permissions configuration from '{}' to '{}'",
+                    src.display(),
+                    dest.display()
+                );
+            } else {
+                let mut txt_candidates: Vec<std::path::PathBuf> =
+                    vec![config_dir.join("permissions.txt")];
+                for d in legacy_dirs {
+                    txt_candidates.push(d.join("permissions.txt"));
+                }
+                if let Some(legacy_txt) = txt_candidates.into_iter().find(|p| p.exists() && p.is_file()) {
+                    let migrated = Self::load_legacy_txt(&legacy_txt)?;
+                    migrated.save_to_dir(config_dir)?;
+                    log::info!(
+                        "Migrated legacy permissions.txt from '{}' to '{}'",
+                        legacy_txt.display(),
+                        dest.display()
+                    );
+                    return Ok(migrated);
+                }
+            }
+        }
+
+        Self::load_from_dir(config_dir)
     }
 
     /// Loads permissions from `<dir>/permissions.yml`.
@@ -768,34 +798,57 @@ impl BanManager {
     }
 
     pub fn save_to_dir(&self, dir: &Path) -> io::Result<()> {
-        fs::create_dir_all(dir)?;
         let path = dir.join("bans.txt");
-        let mut file = File::create(path)?;
-
-        writeln!(file, "# BlockGame Server Ban List")?;
-        writeln!(file, "# Format: username|banned_by|timestamp|reason")?;
+        let mut out = String::from(
+            "# BlockGame Server Ban List\n# Format: username|banned_by|timestamp|reason\n",
+        );
         for entry in self.bans.values() {
-            writeln!(
-                file,
-                "{}|{}|{}|{}",
+            out.push_str(&format!(
+                "{}|{}|{}|{}\n",
                 entry.username, entry.banned_by, entry.created_at, entry.reason
-            )?;
+            ));
         }
-        file.flush()?;
+        crate::config_io::atomic_write(&path, out.as_bytes())?;
 
         let ip_path = dir.join("banned-ips.txt");
-        let mut ip_file = File::create(ip_path)?;
-
-        writeln!(ip_file, "# BlockGame Server IP Ban List")?;
-        writeln!(ip_file, "# Format: ip|banned_by|timestamp|reason")?;
+        let mut ip_out = String::from(
+            "# BlockGame Server IP Ban List\n# Format: ip|banned_by|timestamp|reason\n",
+        );
         for entry in self.ip_bans.values() {
-            writeln!(
-                ip_file,
-                "{}|{}|{}|{}",
+            ip_out.push_str(&format!(
+                "{}|{}|{}|{}\n",
                 entry.ip, entry.banned_by, entry.created_at, entry.reason
-            )?;
+            ));
         }
-        ip_file.flush()
+        crate::config_io::atomic_write(&ip_path, ip_out.as_bytes())
+    }
+
+    /// Loads bans from `<config_dir>/bans.txt` and `<config_dir>/banned-ips.txt`,
+    /// non-destructively migrating from `legacy_dirs` if not yet present in `config_dir`.
+    pub fn load_from_config_dir(config_dir: &Path, legacy_dirs: &[&Path]) -> io::Result<Self> {
+        let bans_dest = config_dir.join("bans.txt");
+        let bans_candidates: Vec<std::path::PathBuf> =
+            legacy_dirs.iter().map(|d| d.join("bans.txt")).collect();
+        if let Some(src) = crate::config_io::migrate_file_if_missing(&bans_dest, &bans_candidates)? {
+            log::info!(
+                "Migrated ban list from '{}' to '{}'",
+                src.display(),
+                bans_dest.display()
+            );
+        }
+
+        let ips_dest = config_dir.join("banned-ips.txt");
+        let ips_candidates: Vec<std::path::PathBuf> =
+            legacy_dirs.iter().map(|d| d.join("banned-ips.txt")).collect();
+        if let Some(src) = crate::config_io::migrate_file_if_missing(&ips_dest, &ips_candidates)? {
+            log::info!(
+                "Migrated IP ban list from '{}' to '{}'",
+                src.display(),
+                ips_dest.display()
+            );
+        }
+
+        Self::load_from_dir(config_dir)
     }
 
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
