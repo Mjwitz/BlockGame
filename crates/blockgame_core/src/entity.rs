@@ -154,16 +154,22 @@ impl ItemDrop {
         }
     }
 
-    pub fn update(
+    pub fn with_pickup_delay(mut self, pickup_delay: f32) -> Self {
+        self.pickup_delay = pickup_delay;
+        self
+    }
+
+    /// Updates item drop age, pickup delay, gravity, buoyancy, fluid flow, and ground collision
+    /// WITHOUT player magnetism or collection. Returns `false` if the drop despawned due to age.
+    pub fn update_physics_without_magnetism(
         &mut self,
         dt: f32,
         world: &World,
         registry: &BlockRegistry,
-        player_pos: Vec3,
-    ) -> ItemDropStatus {
+    ) -> bool {
         self.age += dt;
         if self.age >= self.despawn_time {
-            return ItemDropStatus::Despawned;
+            return false;
         }
 
         if self.pickup_delay > 0.0 {
@@ -187,38 +193,68 @@ impl ItemDrop {
             // Water buoyancy: upward buoyant force + water drag + flowing current push
             self.velocity.y += 12.0 * dt;
             self.velocity.y = self.velocity.y.min(2.5); // Max upward float velocity
-            self.velocity.x *= 0.85;
-            self.velocity.z *= 0.85;
+            let water_drag = (-6.0 * dt).exp();
+            self.velocity.x *= water_drag;
+            self.velocity.z *= water_drag;
             let flow = crate::fluid::fluid_flow_vector(current_voxel, world);
             self.velocity.x += flow.x * 4.5 * dt;
             self.velocity.z += flow.z * 4.5 * dt;
         } else {
             self.velocity.y -= 18.0 * dt;
-            self.velocity.x *= 0.92;
-            self.velocity.z *= 0.92;
+            let air_drag = (-2.5 * dt).exp();
+            self.velocity.x *= air_drag;
+            self.velocity.z *= air_drag;
         }
 
-        let next_pos = self.position + self.velocity * dt;
-
-        // Check if next position collides with a solid voxel
-        let check_y = next_pos.y.floor() as i32;
-        let check_x = next_pos.x.floor() as i32;
-        let check_z = next_pos.z.floor() as i32;
-
-        let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
-        let is_solid = if let Some(chunk) = world.get_chunk(cp_next) {
-            chunk
-                .get(nlx, nly, nlz)
+        let is_solid_at = |x: f32, y: f32, z: f32| -> bool {
+            let voxel = IVec3::new(x.floor() as i32, y.floor() as i32, z.floor() as i32);
+            let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(voxel);
+            world
+                .get_chunk(cp_next)
+                .and_then(|chunk| chunk.get(nlx, nly, nlz))
                 .map_or(false, |b| registry.is_solid(b))
-        } else {
-            false
         };
 
-        if is_solid {
-            self.position.y = (check_y + 1) as f32;
-            self.velocity = Vec3::ZERO;
+        // Resolve horizontal movement first so hitting a wall stops X/Z without teleporting upward
+        let next_x = self.position.x + self.velocity.x * dt;
+        if is_solid_at(next_x, self.position.y, self.position.z) {
+            self.velocity.x = 0.0;
         } else {
-            self.position = next_pos;
+            self.position.x = next_x;
+        }
+
+        let next_z = self.position.z + self.velocity.z * dt;
+        if is_solid_at(self.position.x, self.position.y, next_z) {
+            self.velocity.z = 0.0;
+        } else {
+            self.position.z = next_z;
+        }
+
+        // Resolve vertical movement (floor landing vs ceiling bump)
+        let next_y = self.position.y + self.velocity.y * dt;
+        if is_solid_at(self.position.x, next_y, self.position.z) {
+            if self.velocity.y <= 0.0 {
+                self.position.y = (next_y.floor() as i32 + 1) as f32;
+                self.velocity = Vec3::ZERO;
+            } else {
+                self.velocity.y = 0.0;
+            }
+        } else {
+            self.position.y = next_y;
+        }
+
+        true
+    }
+
+    pub fn update(
+        &mut self,
+        dt: f32,
+        world: &World,
+        registry: &BlockRegistry,
+        player_pos: Vec3,
+    ) -> ItemDropStatus {
+        if !self.update_physics_without_magnetism(dt, world, registry) {
+            return ItemDropStatus::Despawned;
         }
 
         // 2. Player Magnetism & Collection
@@ -273,59 +309,8 @@ impl ItemDrop {
         registry: &BlockRegistry,
         player_pos: Vec3,
     ) -> bool {
-        self.age += dt;
-        if self.age >= self.despawn_time {
+        if !self.update_physics_without_magnetism(dt, world, registry) {
             return false;
-        }
-
-        if self.pickup_delay > 0.0 {
-            self.pickup_delay -= dt;
-        }
-
-        // 1. Gravity, Buoyancy and Ground Collision
-        let current_voxel = IVec3::new(
-            self.position.x.floor() as i32,
-            self.position.y.floor() as i32,
-            self.position.z.floor() as i32,
-        );
-        let (cp, lx, ly, lz) = world_to_chunk_coords(current_voxel);
-        let current_block = if let Some(chunk) = world.get_chunk(cp) {
-            chunk.get(lx, ly, lz).unwrap_or(BlockId::AIR)
-        } else {
-            BlockId::AIR
-        };
-
-        if current_block == BlockId::WATER || current_block == BlockId::SEAGRASS {
-            self.velocity.y += 12.0 * dt;
-            self.velocity.y = self.velocity.y.min(2.5);
-            self.velocity.x *= 0.85;
-            self.velocity.z *= 0.85;
-        } else {
-            self.velocity.y -= 18.0 * dt;
-            self.velocity.x *= 0.92;
-            self.velocity.z *= 0.92;
-        }
-
-        let next_pos = self.position + self.velocity * dt;
-
-        let check_y = next_pos.y.floor() as i32;
-        let check_x = next_pos.x.floor() as i32;
-        let check_z = next_pos.z.floor() as i32;
-
-        let (cp_next, nlx, nly, nlz) = world_to_chunk_coords(IVec3::new(check_x, check_y, check_z));
-        let is_solid = if let Some(chunk) = world.get_chunk(cp_next) {
-            chunk
-                .get(nlx, nly, nlz)
-                .map_or(false, |b| registry.is_solid(b))
-        } else {
-            false
-        };
-
-        if is_solid {
-            self.position.y = (check_y + 1) as f32;
-            self.velocity = Vec3::ZERO;
-        } else {
-            self.position = next_pos;
         }
 
         // 2. Player Magnetism
@@ -477,5 +462,90 @@ mod tests {
         assert_eq!(status, ItemDropStatus::Alive);
         assert!(drop.velocity.y > 0.0, "Item in water must accelerate upward from buoyancy");
         assert!(drop.position.y > 10.2, "Item position must rise toward surface");
+    }
+
+    #[test]
+    fn test_item_drop_physics_without_magnetism_preserves_drop_for_dead_player() {
+        let mut world = World::new();
+        let registry = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Solid ground at y=5 across x,z in 0..16
+        for x in 0..16 {
+            for z in 0..16 {
+                world.set_block(IVec3::new(x, 5, z), BlockId::STONE);
+            }
+        }
+
+        let death_pos = Vec3::new(8.5, 6.8, 8.5);
+        let mut drop = ItemDrop::with_velocity(
+            death_pos,
+            Vec3::new(2.0, 3.0, 0.0),
+            ItemSlot::new(ItemId::DIAMOND, 4),
+        );
+
+        // Simulate 2 seconds while the player is dead (well past 0.5s pickup_delay)
+        for _ in 0..120 {
+            let alive = drop.update_physics_without_magnetism(1.0 / 60.0, &world, &registry);
+            assert!(alive, "Death drop must remain alive while player is dead");
+        }
+
+        assert!(
+            drop.pickup_delay <= 0.0,
+            "Pickup delay should have elapsed while waiting on ground"
+        );
+        assert_eq!(
+            drop.position.y, 6.0,
+            "Death drop should have landed on top of the solid stone floor at y=6"
+        );
+        assert!(
+            !drop.pickup_pending,
+            "Dead player must not mark drop as pickup_pending"
+        );
+
+        // Once the player respawns and walks back to the drop, it can be collected
+        let status = drop.update(1.0 / 60.0, &world, &registry, drop.position);
+        assert_eq!(
+            status,
+            ItemDropStatus::Collected(ItemSlot::new(ItemId::DIAMOND, 4))
+        );
+    }
+
+    #[test]
+    fn test_item_drop_thrown_into_wall_falls_to_floor() {
+        let mut world = World::new();
+        let registry = BlockRegistry::new();
+        world.insert_chunk(crate::chunk::Chunk::new(crate::chunk::ChunkPos::new(0, 0, 0)));
+
+        // Floor at y=5, vertical wall at x=9 for y=6..10
+        for x in 0..16 {
+            for z in 0..16 {
+                world.set_block(IVec3::new(x, 5, z), BlockId::STONE);
+            }
+        }
+        for y in 6..10 {
+            world.set_block(IVec3::new(9, y, 8), BlockId::STONE);
+        }
+
+        // Thrown toward +X from x=8.7 directly into the wall at x=9
+        let mut drop = ItemDrop::with_velocity(
+            Vec3::new(8.7, 7.2, 8.5),
+            Vec3::new(10.5, 2.0, 0.0),
+            ItemSlot::new(ItemId::COBBLESTONE, 1),
+        );
+
+        for _ in 0..120 {
+            assert!(drop.update_physics_without_magnetism(1.0 / 60.0, &world, &registry));
+        }
+
+        assert!(
+            drop.position.x < 9.0,
+            "Item drop must not enter solid wall at x=9, got x={}",
+            drop.position.x
+        );
+        assert_eq!(
+            drop.position.y, 6.0,
+            "Item drop must fall to the floor at y=6 instead of climbing the wall"
+        );
     }
 }

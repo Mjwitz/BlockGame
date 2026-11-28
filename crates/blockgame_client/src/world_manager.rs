@@ -1576,10 +1576,17 @@ impl WorldManager {
         }
     }
 
-    /// Spawns a floating item drop with an initial velocity vector
-    pub fn spawn_item_drop_with_velocity(&mut self, pos: Vec3, vel: Vec3, item: ItemSlot) {
+    /// Spawns a floating item drop with an initial velocity vector and custom pickup delay
+    pub fn spawn_item_drop_with_velocity_and_delay(
+        &mut self,
+        pos: Vec3,
+        vel: Vec3,
+        item: ItemSlot,
+        pickup_delay: f32,
+    ) {
         if !item.is_empty() {
-            self.item_drops.push(ItemDrop::with_velocity(pos, vel, item));
+            self.item_drops
+                .push(ItemDrop::with_velocity(pos, vel, item).with_pickup_delay(pickup_delay));
         }
     }
 
@@ -1591,9 +1598,23 @@ impl WorldManager {
         vel: Vec3,
         item: ItemSlot,
     ) {
+        self.spawn_item_drop_with_id_velocity_and_delay(drop_id, pos, vel, item, 0.5);
+    }
+
+    /// Spawns a floating item drop with an explicit network drop ID, velocity, and custom pickup delay
+    pub fn spawn_item_drop_with_id_velocity_and_delay(
+        &mut self,
+        drop_id: u64,
+        pos: Vec3,
+        vel: Vec3,
+        item: ItemSlot,
+        pickup_delay: f32,
+    ) {
         if !item.is_empty() && !self.item_drops.iter().any(|d| d.drop_id == drop_id) {
-            self.item_drops
-                .push(ItemDrop::with_id_and_velocity(drop_id, pos, vel, item));
+            self.item_drops.push(
+                ItemDrop::with_id_and_velocity(drop_id, pos, vel, item)
+                    .with_pickup_delay(pickup_delay),
+            );
         }
     }
 
@@ -1644,6 +1665,15 @@ impl WorldManager {
         });
 
         pickable
+    }
+
+    /// Updates item drop physics, buoyancy, collision, and despawn timers WITHOUT player magnetism
+    /// or pickup collection. Used while the local player is dead so death-scattered items stay on
+    /// the ground instead of being magnetized/collected by the dead player.
+    pub fn update_item_drops_physics_only(&mut self, dt: f32) {
+        let world_guard = self.world.lock().unwrap();
+        self.item_drops
+            .retain_mut(|drop| drop.update_physics_without_magnetism(dt, &world_guard, &self.registry));
     }
 
     pub fn place_block(

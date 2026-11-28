@@ -575,6 +575,17 @@ impl AppState {
     /// Spawns an item drop into the world. In multiplayer, automatically assigns a unique drop ID,
     /// spawns it locally with 0ms visual latency, and broadcasts `ClientPacket::SpawnItemDrop` to the server.
     pub fn spawn_drop_synced(&mut self, pos: Vec3, vel: Vec3, item: ItemSlot) {
+        self.spawn_drop_synced_with_delay(pos, vel, item, 0.5);
+    }
+
+    /// Spawns an item drop into the world with a custom local pickup delay (in seconds).
+    pub fn spawn_drop_synced_with_delay(
+        &mut self,
+        pos: Vec3,
+        vel: Vec3,
+        item: ItemSlot,
+        pickup_delay: f32,
+    ) {
         if item.is_empty() {
             return;
         }
@@ -583,7 +594,7 @@ impl AppState {
                 | (self.next_mp_drop_nonce as u64 & 0x000000FFFFFFFFFF);
             self.next_mp_drop_nonce = self.next_mp_drop_nonce.wrapping_add(1);
             self.world_manager
-                .spawn_item_drop_with_id_and_velocity(drop_id, pos, vel, item);
+                .spawn_item_drop_with_id_velocity_and_delay(drop_id, pos, vel, item, pickup_delay);
             client.send(&blockgame_core::net::ClientPacket::SpawnItemDrop {
                 drop_id,
                 position: pos,
@@ -592,7 +603,7 @@ impl AppState {
             });
         } else {
             self.world_manager
-                .spawn_item_drop_with_velocity(pos, vel, item);
+                .spawn_item_drop_with_velocity_and_delay(pos, vel, item, pickup_delay);
         }
     }
 
@@ -6705,6 +6716,7 @@ impl BlockGameApp {
                                     drops_to_scatter.push((vel, slot));
                                 }
                             }
+                            state.crafting_grid = CraftingGrid::new_2x2();
                             // Scatter equipped armor
                             for (i, slot) in state.armor.slots.iter_mut().enumerate() {
                                 if !slot.is_empty() {
@@ -6720,8 +6732,9 @@ impl BlockGameApp {
                                     std::mem::replace(&mut state.cursor_held, ItemSlot::EMPTY);
                                 drops_to_scatter.push((Vec3::new(0.0, 3.0, 0.0), drop_slot));
                             }
+                            let death_drop_pos = state.player.position + Vec3::new(0.0, 0.8, 0.0);
                             for (vel, slot) in drops_to_scatter {
-                                state.spawn_drop_synced(state.player.position, vel, slot);
+                                state.spawn_drop_synced(death_drop_pos, vel, slot);
                             }
 
                             // Unlock mouse so user can click the Respawn button
@@ -6790,26 +6803,20 @@ impl BlockGameApp {
                     }
 
                     // 3. Update Item Drops & Magnetism Pickup (only when alive)
-                    if state.mp_client.is_some() {
-                        if !state.player_stats.is_dead {
-                            let pickable_ids = state
-                                .world_manager
-                                .update_item_drops_multiplayer(dt, state.player.position);
-                            if let Some(client) = &mut state.mp_client {
-                                for drop_id in pickable_ids {
-                                    client.send(
-                                        &blockgame_core::net::ClientPacket::PickupItemDrop {
-                                            drop_id,
-                                        },
-                                    );
-                                }
+                    if state.player_stats.is_dead {
+                        state.world_manager.update_item_drops_physics_only(dt);
+                    } else if state.mp_client.is_some() {
+                        let pickable_ids = state
+                            .world_manager
+                            .update_item_drops_multiplayer(dt, state.player.position);
+                        if let Some(client) = &mut state.mp_client {
+                            for drop_id in pickable_ids {
+                                client.send(
+                                    &blockgame_core::net::ClientPacket::PickupItemDrop { drop_id },
+                                );
                             }
-                        } else {
-                            let _ = state
-                                .world_manager
-                                .update_item_drops_multiplayer(dt, state.player.position);
                         }
-                    } else if !state.player_stats.is_dead {
+                    } else {
                         let collected = state
                             .world_manager
                             .update_item_drops(dt, state.player.position);
@@ -6827,10 +6834,6 @@ impl BlockGameApp {
                                     .spawn_item_drop(state.player.position, remaining);
                             }
                         }
-                    } else {
-                        let _ = state
-                            .world_manager
-                            .update_item_drops(dt, state.player.position);
                     }
 
                     // 3a. Hold-Right-Click Eating / Drinking Tick (Issue #12)
@@ -10302,6 +10305,66 @@ impl BlockGameApp {
     }
 }
 
+fn split_cursor_item_for_drop(cursor_held: &mut ItemSlot, is_right_click: bool) -> ItemSlot {
+    if cursor_held.is_empty() {
+        return ItemSlot::EMPTY;
+    }
+    if !is_right_click || cursor_held.count <= 1 {
+        std::mem::replace(cursor_held, ItemSlot::EMPTY)
+    } else {
+        let mut single = *cursor_held;
+        single.count = 1;
+        cursor_held.count -= 1;
+        single
+    }
+}
+
+fn drop_cursor_held_item(state: &mut AppState, is_right_click: bool) {
+    let item_to_drop = split_cursor_item_for_drop(&mut state.cursor_held, is_right_click);
+    if item_to_drop.is_empty() {
+        return;
+    }
+    let forward = state.camera.forward().normalize_or_zero();
+    let horiz_forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
+    let throw_dir = if horiz_forward.length_squared() > 0.001 {
+        horiz_forward
+    } else {
+        Vec3::Z
+    };
+    let origin = state.player.eye_position() - Vec3::new(0.0, 0.25, 0.0);
+    let candidate_pos = origin + throw_dir * 0.5;
+    let blocked = {
+        let world_guard = state.world_manager.world().lock().unwrap();
+        let voxel = IVec3::new(
+            candidate_pos.x.floor() as i32,
+            candidate_pos.y.floor() as i32,
+            candidate_pos.z.floor() as i32,
+        );
+        state
+            .world_manager
+            .registry()
+            .is_solid(world_guard.get_block(voxel))
+    };
+    let (drop_pos, drop_vel) = if blocked {
+        (origin, Vec3::new(0.0, 1.5, 0.0))
+    } else {
+        (candidate_pos, throw_dir * 10.5 + Vec3::new(0.0, 2.0, 0.0))
+    };
+    state.spawn_drop_synced_with_delay(drop_pos, drop_vel, item_to_drop, 1.5);
+}
+
+fn drop_cursor_if_outside(
+    state: &mut AppState,
+    cx: f32,
+    cy: f32,
+    bounds: blockgame_render::UiRect,
+    is_right_click: bool,
+) {
+    if !state.cursor_held.is_empty() && !bounds.contains(cx, cy) {
+        drop_cursor_held_item(state, is_right_click);
+    }
+}
+
 fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
     let (screen_w, screen_h, [cx, cy]) = state.ui_metrics();
 
@@ -10550,6 +10613,15 @@ fn handle_inventory_click(state: &mut AppState, is_right_click: bool) {
             return;
         }
     }
+
+    // 6. Click outside inventory panel drops the cursor-held item on the ground
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::inventory_panel_bounds(screen_w, screen_h, grid_h),
+        is_right_click,
+    );
 }
 
 fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
@@ -10681,6 +10753,15 @@ fn handle_chest_click(state: &mut AppState, is_right_click: bool) {
             return;
         }
     }
+
+    // 4. Click outside chest panel drops the cursor-held item on the ground
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, chest_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_storage_terminal_click(state: &mut AppState, is_right_click: bool) {
@@ -10919,6 +11000,14 @@ fn handle_storage_terminal_click(state: &mut AppState, is_right_click: bool) {
             return;
         }
     }
+
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, ctrl_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_backpack_click(state: &mut AppState, is_right_click: bool) {
@@ -11064,6 +11153,14 @@ fn handle_backpack_click(state: &mut AppState, is_right_click: bool) {
             return;
         }
     }
+
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, chest_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_power_screen_inv_click(state: &mut AppState, is_right_click: bool) {
@@ -11107,6 +11204,14 @@ fn handle_power_screen_inv_click(state: &mut AppState, is_right_click: bool) {
             return;
         }
     }
+
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, top_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn handle_coal_generator_click(state: &mut AppState, is_right_click: bool) {
@@ -11508,6 +11613,14 @@ fn handle_furnace_click(state: &mut AppState, is_right_click: bool) {
             return;
         }
     }
+
+    drop_cursor_if_outside(
+        state,
+        cx,
+        cy,
+        UiBuilder::container_panel_bounds(screen_w, furnace_top_y, hotbar_y),
+        is_right_click,
+    );
 }
 
 fn add_to_chest_slots(
@@ -12090,6 +12203,13 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
 
     let Some((kind, idx)) = UiBuilder::hit_test_cooking_pot_screen(screen_w, screen_h, mx, my)
     else {
+        drop_cursor_if_outside(
+            state,
+            mx,
+            my,
+            UiBuilder::cooking_pot_panel_bounds(screen_w, screen_h),
+            is_right_click,
+        );
         return;
     };
 
@@ -12211,3 +12331,49 @@ fn handle_cooking_pot_click(state: &mut AppState, is_right_click: bool) {
     }
 }
 
+#[cfg(test)]
+mod drop_item_tests {
+    use super::*;
+
+    #[test]
+    fn test_split_cursor_item_for_drop_left_and_right_click() {
+        // Left-click drops the full stack and empties the cursor
+        let mut cursor = ItemSlot::new(ItemId::COBBLESTONE, 16);
+        let dropped = split_cursor_item_for_drop(&mut cursor, false);
+        assert_eq!(dropped, ItemSlot::new(ItemId::COBBLESTONE, 16));
+        assert!(cursor.is_empty());
+
+        // Right-click drops 1 item and keeps the rest on the cursor
+        let mut cursor = ItemSlot {
+            item_id: ItemId::APPLE,
+            count: 5,
+            durability: 42,
+            enhancement: None,
+        };
+        let dropped = split_cursor_item_for_drop(&mut cursor, true);
+        assert_eq!(dropped.item_id, ItemId::APPLE);
+        assert_eq!(dropped.count, 1);
+        assert_eq!(dropped.durability, 42);
+        assert_eq!(cursor.count, 4);
+
+        // Right-click with count == 1 drops the item and clears the cursor
+        let mut single = ItemSlot::new(ItemId::DIAMOND_SWORD, 1);
+        let dropped_single = split_cursor_item_for_drop(&mut single, true);
+        assert_eq!(dropped_single, ItemSlot::new(ItemId::DIAMOND_SWORD, 1));
+        assert!(single.is_empty());
+    }
+
+    #[test]
+    fn test_inventory_panel_bounds_outside_detection() {
+        let bounds = UiBuilder::inventory_panel_bounds(1280.0, 720.0, 2);
+
+        // Center of the screen (inside inventory grid) is inside
+        assert!(bounds.contains(640.0, 360.0));
+
+        // Clicking far left, far right, top, or bottom margin is outside
+        assert!(!bounds.contains(40.0, 360.0));
+        assert!(!bounds.contains(1000.0, 360.0));
+        assert!(!bounds.contains(640.0, 20.0));
+        assert!(!bounds.contains(640.0, 700.0));
+    }
+}
