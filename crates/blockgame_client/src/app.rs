@@ -3704,7 +3704,15 @@ impl BlockGameApp {
                                     state.admin_panel_input.clear();
                                 }
                                 AdminUiClickAction::SelectPlayer(name) => {
-                                    state.admin_panel_selected_player = Some(name);
+                                    if state
+                                        .admin_panel_selected_player
+                                        .as_deref()
+                                        .is_some_and(|s| s.eq_ignore_ascii_case(&name))
+                                    {
+                                        state.admin_panel_selected_player = None;
+                                    } else {
+                                        state.admin_panel_selected_player = Some(name);
+                                    }
                                 }
                                 AdminUiClickAction::SelectGroup(name) => {
                                     state.admin_panel_selected_group = Some(name);
@@ -4386,21 +4394,14 @@ impl BlockGameApp {
                                     .iter()
                                     .find(|c| c.chunk_x == cx && c.chunk_z == cz)
                                 {
-                                    let blocked = match claim.relation {
-                                        blockgame_core::claims::ClaimRelation::Other => true,
-                                        blockgame_core::claims::ClaimRelation::Admin => {
-                                            !state.has_admin_panel_access
-                                        }
-                                        _ => false,
-                                    };
-                                    if blocked {
+                                    if !claim.can_modify {
                                         if let Some(client) = &mut state.mp_client {
                                             client.chat_history.push(
                                                 blockgame_core::net::ChatEntry {
                                                     sender: "Server".to_string(),
                                                     prefix: String::new(),
                                                     message: format!(
-                                                        "&cYou cannot open containers in {}'s Claimed Chunk.",
+                                                        "&cYou cannot open containers in {}.",
                                                         claim.display_name
                                                     ),
                                                     is_system: true,

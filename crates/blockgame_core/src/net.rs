@@ -2315,12 +2315,14 @@ fn chunk_intersects_protected_landmark(coord: (i32, i32), save_data: &WorldSaveD
 fn push_claims_sync_to_all(
     clients: &[ConnectedClient],
     claim_mgr: &crate::claims::ClaimManager,
+    perms_manager: &PermissionsManager,
     direct_sends: &mut Vec<(u32, ServerPacket)>,
 ) {
     for c in clients {
         if c.authenticated && !c.is_dead {
             let center = crate::claims::world_pos_to_claim_coord(c.model.position);
-            let nearby = claim_mgr.nearby_claims_for_client(center, 8, &c.username);
+            let can_edit_admin = perms_manager.has_permission(&c.username, "blockgame.claim.admin");
+            let nearby = claim_mgr.nearby_claims_for_client(center, 8, &c.username, can_edit_admin);
             if let Ok(payload_yaml) = serde_yaml::to_string(&nearby) {
                 direct_sends.push((c.player_id, ServerPacket::ClaimsSync { payload_yaml }));
             }
@@ -2441,6 +2443,11 @@ fn apply_rollback_plan(
     for ev in &plan.block_events {
         let target_block = if forward_undo { ev.new_block } else { ev.old_block };
         world.set_block(ev.pos, target_block);
+        if target_block == BlockId::AIR {
+            world.chest_containers.remove(&ev.pos);
+            world.furnaces.remove(&ev.pos);
+            world.cooking_pots.remove(&ev.pos);
+        }
         let (cpos, _, _, _) = world_to_chunk_coords(ev.pos);
         touched_chunks.insert(cpos);
         outgoing_broadcasts.push((
@@ -3037,6 +3044,7 @@ fn apply_command_output(
                     }
                     ClaimCommandAction::AdminBypassToggle => {
                         let enabled = claim_mgr.toggle_admin_bypass(&actor_name);
+                        push_claims_sync_to_all(clients, claim_mgr, perms_manager, direct_sends);
                         claim_feedback.push(format!(
                             "&eClaim Bypass turned {}.",
                             if enabled { "ON" } else { "OFF" }
@@ -3063,7 +3071,7 @@ fn apply_command_output(
             }
             if claims_dirty {
                 let _ = claim_mgr.save_world_claims(world_dir);
-                push_claims_sync_to_all(clients, claim_mgr, direct_sends);
+                push_claims_sync_to_all(clients, claim_mgr, perms_manager, direct_sends);
             }
             for line in claim_feedback {
                 direct_sends.push((
@@ -5716,7 +5724,10 @@ fn run_server_loop(
                                 group,
                                 assigned,
                             } => {
-                                if !allowed_tabs.contains(&AdminTab::Permissions) {
+                                let can_assign_groups = allowed_tabs.contains(&AdminTab::Permissions)
+                                    || (allowed_tabs.contains(&AdminTab::Players)
+                                        && perms_manager.has_permission(&requester, "blockgame.command.perm"));
+                                if !can_assign_groups {
                                     status_message = "[Error] Missing permissions management access.".to_string();
                                 } else {
                                     let mut candidate = perms_manager.clone();
@@ -6348,7 +6359,14 @@ fn run_server_loop(
                     let cur_chunk = crate::claims::world_pos_to_claim_coord(c.model.position);
                     if last_synced_claim_chunk.get(&c.player_id) != Some(&cur_chunk) {
                         last_synced_claim_chunk.insert(c.player_id, cur_chunk);
-                        let nearby = claim_mgr.nearby_claims_for_client(cur_chunk, 8, &c.username);
+                        let can_edit_admin = perms_manager
+                            .has_permission(&c.username, "blockgame.claim.admin");
+                        let nearby = claim_mgr.nearby_claims_for_client(
+                            cur_chunk,
+                            8,
+                            &c.username,
+                            can_edit_admin,
+                        );
                         if let Ok(payload_yaml) = serde_yaml::to_string(&nearby) {
                             if let Ok(bytes) = (ServerPacket::ClaimsSync { payload_yaml }).encode() {
                                 let _ = c.stream.write_all(&bytes);

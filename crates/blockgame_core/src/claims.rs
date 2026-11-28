@@ -71,6 +71,8 @@ pub struct SyncedClaimChunk {
     pub chunk_z: i32,
     pub relation: ClaimRelation,
     pub display_name: String,
+    #[serde(default)]
+    pub can_modify: bool,
 }
 
 /// Server-wide claim rules stored in `config/claims.yml`.
@@ -512,6 +514,7 @@ impl ClaimManager {
         center: (i32, i32),
         radius_chunks: i32,
         viewer: &str,
+        can_edit_admin: bool,
     ) -> Vec<SyncedClaimChunk> {
         let mut out = Vec::new();
         for (&(cx, cz), owner) in &self.chunks {
@@ -521,6 +524,7 @@ impl ClaimManager {
                     chunk_z: cz,
                     relation: self.relation_for_viewer(owner, viewer),
                     display_name: owner.display_name(),
+                    can_modify: self.check_modify_at((cx, cz), viewer, can_edit_admin).is_ok(),
                 });
             }
         }
