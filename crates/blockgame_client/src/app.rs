@@ -3798,20 +3798,23 @@ impl BlockGameApp {
                                         "player_warnings" if !target_player.is_empty() => Some(
                                             AdminPanelAction::RunCommand(format!("warnings {}", target_player)),
                                         ),
-                                        "player_group_add" if !target_player.is_empty() && !input.is_empty() => Some(
-                                            AdminPanelAction::SetPlayerGroup {
-                                                username: target_player,
-                                                group: input.clone(),
-                                                assigned: true,
-                                            },
-                                        ),
-                                        "player_group_remove" if !target_player.is_empty() && !input.is_empty() => Some(
-                                            AdminPanelAction::SetPlayerGroup {
-                                                username: target_player,
-                                                group: input.clone(),
-                                                assigned: false,
-                                            },
-                                        ),
+                                        "player_group_add" | "player_group_remove" if !input.is_empty() => {
+                                            let assigned = kind == "player_group_add";
+                                            let pair = if let Some(ref sel) = state.admin_panel_selected_player {
+                                                Some((sel.clone(), input.clone()))
+                                            } else {
+                                                let mut parts = input.split_whitespace();
+                                                match (parts.next(), parts.next()) {
+                                                    (Some(u), Some(g)) => Some((u.to_string(), g.to_string())),
+                                                    _ => None,
+                                                }
+                                            };
+                                            pair.map(|(username, group)| AdminPanelAction::SetPlayerGroup {
+                                                username,
+                                                group,
+                                                assigned,
+                                            })
+                                        }
                                         "player_rank" if !target_player.is_empty() && !input.is_empty() => Some(
                                             AdminPanelAction::RunCommand(format!("rank {} {}", target_player, input)),
                                         ),
@@ -4369,6 +4372,45 @@ impl BlockGameApp {
                                     }
                                 }
                                 return;
+                            }
+                            let is_container_block = block_id == BlockId::FURNACE
+                                || block_id == BlockId::FURNACE_LIT
+                                || block_id == BlockId::CHEST
+                                || block_id.is_cooking_pot();
+                            if is_container_block && state.mp_client.is_some() {
+                                let (cx, cz) = blockgame_core::claims::block_pos_to_claim_coord(
+                                    hit.hit_voxel,
+                                );
+                                if let Some(claim) = state
+                                    .synced_claims
+                                    .iter()
+                                    .find(|c| c.chunk_x == cx && c.chunk_z == cz)
+                                {
+                                    let blocked = match claim.relation {
+                                        blockgame_core::claims::ClaimRelation::Other => true,
+                                        blockgame_core::claims::ClaimRelation::Admin => {
+                                            !state.has_admin_panel_access
+                                        }
+                                        _ => false,
+                                    };
+                                    if blocked {
+                                        if let Some(client) = &mut state.mp_client {
+                                            client.chat_history.push(
+                                                blockgame_core::net::ChatEntry {
+                                                    sender: "Server".to_string(),
+                                                    prefix: String::new(),
+                                                    message: format!(
+                                                        "&cYou cannot open containers in {}'s Claimed Chunk.",
+                                                        claim.display_name
+                                                    ),
+                                                    is_system: true,
+                                                    age: 0.0,
+                                                },
+                                            );
+                                        }
+                                        return;
+                                    }
+                                }
                             }
                             if block_id == BlockId::FURNACE || block_id == BlockId::FURNACE_LIT {
                                 state.mouse_left_down = false;

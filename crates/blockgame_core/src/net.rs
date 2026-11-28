@@ -2342,7 +2342,7 @@ fn snapshot_container_at(
             .map(|(i, s)| (i, *s))
             .collect();
         if non_empty.is_empty() { None } else { Some(non_empty) }
-    } else if block == BlockId::FURNACE {
+    } else if block == BlockId::FURNACE || block == BlockId::FURNACE_LIT {
         let f = world.furnaces.get(&pos)?;
         let arr = [f.input, f.fuel, f.output];
         let non_empty: Vec<(usize, ItemSlot)> = arr
@@ -4944,6 +4944,38 @@ fn run_server_loop(
                                     },
                                 ));
                             }
+                            let (auth_slots, bt, mbt, cp) = if is_furnace {
+                                world
+                                    .furnaces
+                                    .get(&pos)
+                                    .map(|f| {
+                                        (
+                                            vec![f.input, f.fuel, f.output],
+                                            f.burn_time_remaining,
+                                            f.max_burn_time,
+                                            f.cook_progress,
+                                        )
+                                    })
+                                    .unwrap_or_else(|| (vec![ItemSlot::EMPTY; 3], 0.0, 0.0, 0.0))
+                            } else {
+                                let chest_slots = world
+                                    .chest_containers
+                                    .get(&pos)
+                                    .cloned()
+                                    .unwrap_or_else(|| vec![ItemSlot::EMPTY; 27]);
+                                (chest_slots, 0.0, 0.0, 0.0)
+                            };
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::ContainerSync {
+                                    pos,
+                                    is_furnace,
+                                    slots: auth_slots,
+                                    burn_time: bt,
+                                    max_burn_time: mbt,
+                                    cook_progress: cp,
+                                },
+                            ));
                             continue;
                         }
                         if !is_furnace && save_data.temples.is_chest_locked(pos) {
@@ -5128,6 +5160,33 @@ fn run_server_loop(
                                         prefix: String::new(),
                                         message: format!("&c{}", claim_err),
                                         is_system: true,
+                                    },
+                                ));
+                            }
+                            if let Some(p) = world.cooking_pots.get(&pos) {
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::CookingPotSync {
+                                        pos,
+                                        ingredients: p.ingredients,
+                                        fuel: p.fuel,
+                                        output: p.output,
+                                        burn_time: p.burn_time_remaining,
+                                        max_burn_time: p.max_burn_time,
+                                        cook_progress: p.cook_progress,
+                                    },
+                                ));
+                            } else {
+                                direct_sends.push((
+                                    pid,
+                                    ServerPacket::CookingPotSync {
+                                        pos,
+                                        ingredients: [ItemSlot::EMPTY; 4],
+                                        fuel: ItemSlot::EMPTY,
+                                        output: ItemSlot::EMPTY,
+                                        burn_time: 0.0,
+                                        max_burn_time: 0.0,
+                                        cook_progress: 0.0,
                                     },
                                 ));
                             }
