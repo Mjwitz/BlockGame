@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::block::BlockId;
 use crate::tool::{ToolTier, ToolType};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct ItemId(pub u16);
 
 impl ItemId {
@@ -371,7 +371,7 @@ impl ItemId {
 }
 
 /// Shop-exclusive Enhancement applied to a single tool, weapon, armor piece, or fishing rod (ADR-0005).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum Enhancement {
     Reinforced = 1,
@@ -472,7 +472,7 @@ pub struct ItemDef {
     pub icon_tile: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ItemSlot {
     pub item_id: ItemId,
     pub count: u16,

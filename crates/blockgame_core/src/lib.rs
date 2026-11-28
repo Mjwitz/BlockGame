@@ -4,6 +4,7 @@ pub mod animal;
 pub mod auth;
 pub mod automessage;
 pub mod block;
+pub mod blocklog;
 pub mod character;
 pub mod chat;
 pub mod chunk;

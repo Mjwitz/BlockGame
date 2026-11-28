@@ -120,8 +120,33 @@ pub struct CommandOutput {
     pub open_admin_panel: Option<Option<crate::admin_panel::AdminTab>>,
     /// Land claiming actions: handled by the server loop.
     pub claim_actions: Vec<ClaimCommandAction>,
+    /// Block Log actions (`/log lookup|inspect|rollback|undo|purge`): handled by the server loop.
+    pub log_actions: Vec<LogCommandAction>,
     /// Player IDs whose Achievement Eligibility is forfeited by this admin/cheat command.
     pub cheat_taint_players: Vec<u32>,
+}
+
+/// Block Log actions produced by `/log` and `/rollback`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogCommandAction {
+    Lookup {
+        player: Option<String>,
+        time_secs: Option<u64>,
+        radius: Option<i32>,
+        action: Option<String>,
+        page: usize,
+    },
+    InspectToggle,
+    Rollback {
+        radius: i32,
+        time_secs: u64,
+        player: Option<String>,
+        preview: bool,
+    },
+    Undo,
+    Purge {
+        older_than_secs: u64,
+    },
 }
 
 /// Land claiming actions produced by `/claim`, `/unclaim`, and `/unclaimall`.
@@ -1938,6 +1963,138 @@ pub fn execute_command(
                 return CommandOutput::error("/unclaimall can only be run by an in-game player.");
             }
             out.claim_actions.push(ClaimCommandAction::UnclaimAll);
+        }
+
+        "log" | "blocklog" | "rollback" => {
+            let (sub, rest): (&str, &[&str]) = if cmd == "rollback" {
+                ("rollback", args)
+            } else {
+                match args.first() {
+                    Some(&s) => (s, &args[1..]),
+                    None => {
+                        return CommandOutput::error(
+                            "Usage: /log <lookup|inspect|rollback|undo|purge> ...",
+                        );
+                    }
+                }
+            };
+            match sub.to_ascii_lowercase().as_str() {
+                "lookup" | "l" => {
+                    if !check_perm("blockgame.log.lookup") {
+                        return CommandOutput::error("You do not have permission: blockgame.log.lookup");
+                    }
+                    let mut player = None;
+                    let mut time_secs = None;
+                    let mut radius = None;
+                    let mut action = None;
+                    let mut page = 1usize;
+                    for tok in rest {
+                        if let Some((k, v)) = tok.split_once(':') {
+                            match k.to_ascii_lowercase().as_str() {
+                                "p" | "player" | "u" | "user" => player = Some(v.to_string()),
+                                "t" | "time" => {
+                                    let Some(secs) = crate::moderation::parse_duration_secs(v) else {
+                                        return CommandOutput::error(format!("Invalid time '{}'.", v));
+                                    };
+                                    time_secs = Some(secs);
+                                }
+                                "r" | "radius" => {
+                                    let Ok(r) = v.parse::<i32>() else {
+                                        return CommandOutput::error(format!("Invalid radius '{}'.", v));
+                                    };
+                                    radius = Some(r.max(0));
+                                }
+                                "a" | "action" => action = Some(v.to_ascii_lowercase()),
+                                "page" => page = v.parse::<usize>().unwrap_or(1).max(1),
+                                _ => {}
+                            }
+                        }
+                    }
+                    out.log_actions.push(LogCommandAction::Lookup {
+                        player,
+                        time_secs,
+                        radius,
+                        action,
+                        page,
+                    });
+                }
+                "inspect" | "i" => {
+                    if source.is_console() {
+                        return CommandOutput::error("/log inspect can only be used in-game.");
+                    }
+                    if !check_perm("blockgame.log.inspect") {
+                        return CommandOutput::error("You do not have permission: blockgame.log.inspect");
+                    }
+                    out.log_actions.push(LogCommandAction::InspectToggle);
+                }
+                "rollback" | "rb" => {
+                    if !check_perm("blockgame.log.rollback") {
+                        return CommandOutput::error("You do not have permission: blockgame.log.rollback");
+                    }
+                    let mut radius: Option<i32> = None;
+                    let mut time_secs: Option<u64> = None;
+                    let mut player: Option<String> = None;
+                    let mut preview = false;
+                    for tok in rest {
+                        if *tok == "--preview" || tok.eq_ignore_ascii_case("preview") {
+                            preview = true;
+                        } else if let Some((k, v)) = tok.split_once(':') {
+                            match k.to_ascii_lowercase().as_str() {
+                                "r" | "radius" => {
+                                    let Ok(r) = v.parse::<i32>() else {
+                                        return CommandOutput::error(format!("Invalid radius '{}'.", v));
+                                    };
+                                    radius = Some(r.max(0));
+                                }
+                                "t" | "time" => {
+                                    let Some(secs) = crate::moderation::parse_duration_secs(v) else {
+                                        return CommandOutput::error(format!("Invalid time '{}'.", v));
+                                    };
+                                    time_secs = Some(secs);
+                                }
+                                "p" | "player" | "u" | "user" => player = Some(v.to_string()),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let (Some(r), Some(t)) = (radius, time_secs) else {
+                        return CommandOutput::error(
+                            "Usage: /log rollback radius:<r> time:<t> [player:<name>] [--preview]",
+                        );
+                    };
+                    out.log_actions.push(LogCommandAction::Rollback {
+                        radius: r,
+                        time_secs: t,
+                        player,
+                        preview,
+                    });
+                }
+                "undo" => {
+                    if !check_perm("blockgame.log.rollback") {
+                        return CommandOutput::error("You do not have permission: blockgame.log.rollback");
+                    }
+                    out.log_actions.push(LogCommandAction::Undo);
+                }
+                "purge" => {
+                    if !check_perm("blockgame.log.purge") {
+                        return CommandOutput::error("You do not have permission: blockgame.log.purge");
+                    }
+                    let Some(raw) = rest.first() else {
+                        return CommandOutput::error("Usage: /log purge <duration>");
+                    };
+                    let Some(secs) = crate::moderation::parse_duration_secs(raw) else {
+                        return CommandOutput::error(format!("Invalid duration '{}'.", raw));
+                    };
+                    out.log_actions.push(LogCommandAction::Purge {
+                        older_than_secs: secs,
+                    });
+                }
+                _ => {
+                    return CommandOutput::error(
+                        "Usage: /log <lookup|inspect|rollback|undo|purge> ...",
+                    );
+                }
+            }
         }
 
         other => {

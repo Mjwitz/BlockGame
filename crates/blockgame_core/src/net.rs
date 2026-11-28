@@ -2296,6 +2296,247 @@ fn push_claims_sync_to_all(
     }
 }
 
+fn snapshot_container_at(
+    world: &World,
+    pos: IVec3,
+    block: BlockId,
+) -> Option<Vec<(usize, ItemSlot)>> {
+    if block == BlockId::CHEST {
+        let slots = world.chest_containers.get(&pos)?;
+        let non_empty: Vec<(usize, ItemSlot)> = slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.is_empty() && s.count > 0)
+            .map(|(i, s)| (i, *s))
+            .collect();
+        if non_empty.is_empty() { None } else { Some(non_empty) }
+    } else if block == BlockId::FURNACE {
+        let f = world.furnaces.get(&pos)?;
+        let arr = [f.input, f.fuel, f.output];
+        let non_empty: Vec<(usize, ItemSlot)> = arr
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.is_empty() && s.count > 0)
+            .map(|(i, s)| (i, *s))
+            .collect();
+        if non_empty.is_empty() { None } else { Some(non_empty) }
+    } else if block.is_cooking_pot() {
+        let p = world.cooking_pots.get(&pos)?;
+        let arr = [
+            p.ingredients[0],
+            p.ingredients[1],
+            p.ingredients[2],
+            p.ingredients[3],
+            p.fuel,
+            p.output,
+        ];
+        let non_empty: Vec<(usize, ItemSlot)> = arr
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.is_empty() && s.count > 0)
+            .map(|(i, s)| (i, *s))
+            .collect();
+        if non_empty.is_empty() { None } else { Some(non_empty) }
+    } else {
+        None
+    }
+}
+
+fn adjust_slots_by_delta(slots: &mut [ItemSlot], item: ItemSlot, add: bool) {
+    if add {
+        let mut remaining = item.count;
+        for s in slots.iter_mut() {
+            if !s.is_empty()
+                && s.item_id == item.item_id
+                && s.durability == item.durability
+                && s.enhancement == item.enhancement
+                && s.count < 64
+            {
+                let space = 64 - s.count;
+                let put = space.min(remaining);
+                s.count += put;
+                remaining -= put;
+                if remaining == 0 {
+                    return;
+                }
+            }
+        }
+        for s in slots.iter_mut() {
+            if s.is_empty() {
+                let put = remaining.min(64);
+                *s = ItemSlot {
+                    item_id: item.item_id,
+                    count: put,
+                    durability: item.durability,
+                    enhancement: item.enhancement,
+                };
+                remaining -= put;
+                if remaining == 0 {
+                    return;
+                }
+            }
+        }
+    } else {
+        let mut remaining = item.count;
+        for s in slots.iter_mut() {
+            if !s.is_empty()
+                && s.item_id == item.item_id
+                && s.durability == item.durability
+                && s.enhancement == item.enhancement
+            {
+                let take = s.count.min(remaining);
+                s.count -= take;
+                if s.count == 0 {
+                    *s = ItemSlot::EMPTY;
+                }
+                remaining -= take;
+                if remaining == 0 {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn apply_rollback_plan(
+    world: &mut World,
+    plan: &crate::blocklog::RollbackPlan,
+    forward_undo: bool,
+    outgoing_broadcasts: &mut Vec<(Option<u32>, ServerPacket)>,
+) {
+    for ev in &plan.block_events {
+        let target_block = if forward_undo { ev.new_block } else { ev.old_block };
+        world.set_block(ev.pos, target_block);
+        outgoing_broadcasts.push((
+            None,
+            ServerPacket::BlockUpdate {
+                pos: ev.pos,
+                block_id: target_block,
+            },
+        ));
+
+        // If rolling back a broken container, restore its snapshotted items
+        if !forward_undo {
+            if let Some(ref snap) = ev.container_snapshot {
+                if target_block == BlockId::CHEST {
+                    let chest = world.get_or_create_chest(ev.pos);
+                    for s in chest.iter_mut() {
+                        *s = ItemSlot::EMPTY;
+                    }
+                    for &(slot_idx, slot) in snap {
+                        if slot_idx < chest.len() {
+                            chest[slot_idx] = slot;
+                        }
+                    }
+                    let sync_slots = chest.clone();
+                    outgoing_broadcasts.push((
+                        None,
+                        ServerPacket::ContainerSync {
+                            pos: ev.pos,
+                            is_furnace: false,
+                            slots: sync_slots,
+                            burn_time: 0.0,
+                            max_burn_time: 0.0,
+                            cook_progress: 0.0,
+                        },
+                    ));
+                } else if target_block == BlockId::FURNACE {
+                    let f = world.get_or_create_furnace(ev.pos);
+                    f.input = ItemSlot::EMPTY;
+                    f.fuel = ItemSlot::EMPTY;
+                    f.output = ItemSlot::EMPTY;
+                    for &(slot_idx, slot) in snap {
+                        match slot_idx {
+                            0 => f.input = slot,
+                            1 => f.fuel = slot,
+                            2 => f.output = slot,
+                            _ => {}
+                        }
+                    }
+                    let sync_slots = vec![f.input, f.fuel, f.output];
+                    outgoing_broadcasts.push((
+                        None,
+                        ServerPacket::ContainerSync {
+                            pos: ev.pos,
+                            is_furnace: true,
+                            slots: sync_slots,
+                            burn_time: f.burn_time_remaining,
+                            max_burn_time: f.max_burn_time,
+                            cook_progress: f.cook_progress,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
+    for ev in &plan.container_events {
+        // Reversing an "add" removes the item; reversing a "remove" adds it back.
+        // On forward_undo, do the original operation again.
+        let should_add = if forward_undo { ev.is_add } else { !ev.is_add };
+        if ev.container_kind == "chest" {
+            let chest = world.get_or_create_chest(ev.pos);
+            adjust_slots_by_delta(chest, ev.item, should_add);
+            let sync_slots = chest.clone();
+            outgoing_broadcasts.push((
+                None,
+                ServerPacket::ContainerSync {
+                    pos: ev.pos,
+                    is_furnace: false,
+                    slots: sync_slots,
+                    burn_time: 0.0,
+                    max_burn_time: 0.0,
+                    cook_progress: 0.0,
+                },
+            ));
+        } else if ev.container_kind == "furnace" {
+            let f = world.get_or_create_furnace(ev.pos);
+            let mut arr = [f.input, f.fuel, f.output];
+            adjust_slots_by_delta(&mut arr, ev.item, should_add);
+            f.input = arr[0];
+            f.fuel = arr[1];
+            f.output = arr[2];
+            outgoing_broadcasts.push((
+                None,
+                ServerPacket::ContainerSync {
+                    pos: ev.pos,
+                    is_furnace: true,
+                    slots: vec![f.input, f.fuel, f.output],
+                    burn_time: f.burn_time_remaining,
+                    max_burn_time: f.max_burn_time,
+                    cook_progress: f.cook_progress,
+                },
+            ));
+        } else if ev.container_kind == "cooking_pot" {
+            let p = world.get_or_create_cooking_pot(ev.pos);
+            let mut arr = [
+                p.ingredients[0],
+                p.ingredients[1],
+                p.ingredients[2],
+                p.ingredients[3],
+                p.fuel,
+                p.output,
+            ];
+            adjust_slots_by_delta(&mut arr, ev.item, should_add);
+            p.ingredients = [arr[0], arr[1], arr[2], arr[3]];
+            p.fuel = arr[4];
+            p.output = arr[5];
+            outgoing_broadcasts.push((
+                None,
+                ServerPacket::CookingPotSync {
+                    pos: ev.pos,
+                    ingredients: p.ingredients,
+                    fuel: p.fuel,
+                    output: p.output,
+                    burn_time: p.burn_time_remaining,
+                    max_burn_time: p.max_burn_time,
+                    cook_progress: p.cook_progress,
+                },
+            ));
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_command_output(
     output: CommandOutput,
@@ -2310,6 +2551,9 @@ fn apply_command_output(
     automessage_mgr: &mut crate::automessage::AutoMessageManager,
     moderation_mgr: &mut crate::moderation::ModerationManager,
     claim_mgr: &mut crate::claims::ClaimManager,
+    blocklog_mgr: &crate::blocklog::BlockLogManager,
+    inspect_mode_players: &mut std::collections::HashSet<u32>,
+    world: &mut World,
     save_data_ref: &WorldSaveData,
     default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
@@ -2341,6 +2585,182 @@ fn apply_command_output(
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(config_dir);
+    }
+
+    if !output.log_actions.is_empty() {
+        let actor_pos_vec = source_pid
+            .and_then(|pid| clients.iter().find(|c| c.player_id == pid).map(|c| c.model.position))
+            .unwrap_or(*default_spawn);
+        let center = IVec3::new(
+            actor_pos_vec.x.floor() as i32,
+            actor_pos_vec.y.floor() as i32,
+            actor_pos_vec.z.floor() as i32,
+        );
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut log_feedback: Vec<String> = Vec::new();
+        for action in output.log_actions {
+            use crate::command::LogCommandAction;
+            match action {
+                LogCommandAction::InspectToggle => {
+                    if let Some(pid) = source_pid {
+                        let enabled = if inspect_mode_players.contains(&pid) {
+                            inspect_mode_players.remove(&pid);
+                            false
+                        } else {
+                            inspect_mode_players.insert(pid);
+                            true
+                        };
+                        log_feedback.push(format!(
+                            "&eBlock Log Inspect Mode turned {}.",
+                            if enabled { "ON" } else { "OFF" }
+                        ));
+                    }
+                }
+                LogCommandAction::Lookup {
+                    player,
+                    time_secs,
+                    radius,
+                    action,
+                    page,
+                } => {
+                    let q = crate::blocklog::BlockLogQuery {
+                        actor: player.clone(),
+                        since_ts: time_secs.map(|s| now_ts.saturating_sub(s)),
+                        center: radius.map(|_| center),
+                        radius,
+                        action_filter: action.clone(),
+                        page,
+                        page_size: 6,
+                    };
+                    match blocklog_mgr.lookup(&q) {
+                        Ok((entries, total)) => {
+                            if entries.is_empty() {
+                                log_feedback.push("No matching Block Log entries found.".to_string());
+                            } else {
+                                let total_pages = (total + 5) / 6;
+                                log_feedback.push(format!(
+                                    "&6Block Log Lookup (Page {}/{} - {} total):",
+                                    page, total_pages, total
+                                ));
+                                for e in entries {
+                                    let ago = now_ts.saturating_sub(e.ts);
+                                    let rb_tag = if e.rolled_back { " &8[rolled back]" } else { "" };
+                                    log_feedback.push(format!(
+                                        "  &7{} ago &f{} &e{} &7@ ({},{},{}){}",
+                                        crate::moderation::format_duration_secs(ago),
+                                        e.actor,
+                                        e.summary,
+                                        e.pos.x,
+                                        e.pos.y,
+                                        e.pos.z,
+                                        rb_tag
+                                    ));
+                                }
+                                if page < total_pages {
+                                    let mut next_cmd = String::from("/log lookup");
+                                    if let Some(ref p) = player {
+                                        next_cmd.push_str(&format!(" player:{}", p));
+                                    }
+                                    if let Some(t) = time_secs {
+                                        next_cmd.push_str(&format!(" time:{}s", t));
+                                    }
+                                    if let Some(r) = radius {
+                                        next_cmd.push_str(&format!(" radius:{}", r));
+                                    }
+                                    if let Some(ref a) = action {
+                                        next_cmd.push_str(&format!(" action:{}", a));
+                                    }
+                                    next_cmd.push_str(&format!(" page:{}", page + 1));
+                                    log_feedback.push(format!("  [click:{}]", next_cmd));
+                                }
+                            }
+                        }
+                        Err(e) => log_feedback.push(format!("&c{}", e)),
+                    }
+                }
+                LogCommandAction::Rollback {
+                    radius,
+                    time_secs,
+                    player,
+                    preview,
+                } => {
+                    if source_pid.is_some() && radius > blocklog_mgr.config.max_rollback_radius {
+                        log_feedback.push(format!(
+                            "&cRollback radius {} exceeds max allowed ({}).",
+                            radius, blocklog_mgr.config.max_rollback_radius
+                        ));
+                        continue;
+                    }
+                    let since_ts = now_ts.saturating_sub(time_secs);
+                    match blocklog_mgr.query_rollback(center, radius, since_ts, player.as_deref()) {
+                        Ok(plan) => {
+                            let b_cnt = plan.block_events.len();
+                            let c_cnt = plan.container_events.len();
+                            if preview {
+                                log_feedback.push(format!(
+                                    "&e[Rollback Preview] Would revert {} block change(s) and {} container change(s).",
+                                    b_cnt, c_cnt
+                                ));
+                            } else if b_cnt == 0 && c_cnt == 0 {
+                                log_feedback.push("No matching changes found to roll back.".to_string());
+                            } else {
+                                apply_rollback_plan(world, &plan, false, outgoing_broadcasts);
+                                let b_ids: Vec<i64> = plan.block_events.iter().map(|e| e.id).collect();
+                                let c_ids: Vec<i64> = plan.container_events.iter().map(|e| e.id).collect();
+                                let _ = blocklog_mgr.mark_rolled_back(&b_ids, &c_ids, &actor_name);
+                                log_feedback.push(format!(
+                                    "&aRolled back {} block change(s) and {} container change(s). Use /log undo to reverse.",
+                                    b_cnt, c_cnt
+                                ));
+                            }
+                        }
+                        Err(e) => log_feedback.push(format!("&c{}", e)),
+                    }
+                }
+                LogCommandAction::Undo => match blocklog_mgr.undo_last_rollback(&actor_name) {
+                    Ok(Some(plan)) => {
+                        let b_cnt = plan.block_events.len();
+                        let c_cnt = plan.container_events.len();
+                        apply_rollback_plan(world, &plan, true, outgoing_broadcasts);
+                        log_feedback.push(format!(
+                            "&aUndid last rollback ({} block change(s), {} container change(s) re-applied).",
+                            b_cnt, c_cnt
+                        ));
+                    }
+                    Ok(None) => log_feedback.push("No previous rollback found to undo.".to_string()),
+                    Err(e) => log_feedback.push(format!("&c{}", e)),
+                },
+                LogCommandAction::Purge { older_than_secs } => {
+                    let cutoff = now_ts.saturating_sub(older_than_secs);
+                    match blocklog_mgr.purge_older_than(cutoff) {
+                        Ok(deleted) => log_feedback.push(format!(
+                            "&ePurged {} Block Log entry(s) older than {}.",
+                            deleted,
+                            crate::moderation::format_duration_secs(older_than_secs)
+                        )),
+                        Err(e) => log_feedback.push(format!("&c{}", e)),
+                    }
+                }
+            }
+        }
+        for line in log_feedback {
+            if let Some(pid) = source_pid {
+                direct_sends.push((
+                    pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: line,
+                        is_system: true,
+                    },
+                ));
+            } else {
+                log::info!("[Console] {}", line);
+            }
+        }
     }
 
     if !output.claim_actions.is_empty() {
@@ -3316,6 +3736,8 @@ fn run_server_loop(
         crate::automessage::AutoMessageManager::load_from_dir(&config_dir).unwrap_or_default();
     let mut moderation_mgr = crate::moderation::ModerationManager::load_from_dir(&config_dir);
     let mut claim_mgr = crate::claims::ClaimManager::load(&config_dir, &world_dir);
+    let mut blocklog_mgr = crate::blocklog::BlockLogManager::open(&config_dir, &world_dir);
+    let mut inspect_mode_players: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut last_claim_warn: HashMap<u32, Instant> = HashMap::new();
     let mut last_synced_claim_chunk: HashMap<u32, (i32, i32)> = HashMap::new();
     let server_started_at = Instant::now();
@@ -3441,6 +3863,9 @@ fn run_server_loop(
                 &mut automessage_mgr,
                 &mut moderation_mgr,
                 &mut claim_mgr,
+                &blocklog_mgr,
+                &mut inspect_mode_players,
+                &mut world,
                 &save_data,
                 &mut default_spawn,
                 &world_dir,
@@ -3884,6 +4309,68 @@ fn run_server_loop(
                             fluid_sim.schedule_exposed_fluids_in_chunk(cpos, &world);
                         }
                         let existing_block = world.get_block(pos);
+                        if inspect_mode_players.contains(&pid) {
+                            direct_sends.push((
+                                pid,
+                                ServerPacket::BlockUpdate {
+                                    pos,
+                                    block_id: existing_block,
+                                },
+                            ));
+                            match blocklog_mgr.inspect_coord(pos, 8) {
+                                Ok(entries) if entries.is_empty() => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "&7[Inspect] No Block Log history at ({}, {}, {}).",
+                                                pos.x, pos.y, pos.z
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                                Ok(entries) => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "&6[Inspect] History at ({}, {}, {}):",
+                                                pos.x, pos.y, pos.z
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                    for e in entries {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: "Server".to_string(),
+                                                prefix: String::new(),
+                                                message: format!("  &f{} &e{}", e.actor, e.summary),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    }
+                                }
+                                Err(err) => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!("&c{}", err),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
                         let claim_coord = crate::claims::block_pos_to_claim_coord(pos);
                         let can_edit_admin = perms_manager
                             .has_permission(&clients[idx].username, "blockgame.claim.admin");
@@ -3935,7 +4422,19 @@ fn run_server_loop(
                                 },
                             ));
                         } else {
+                            let broken_snap = if block_id.is_air() {
+                                snapshot_container_at(&world, pos, existing_block)
+                            } else {
+                                None
+                            };
                             world.set_block(pos, block_id);
+                            blocklog_mgr.log_block(
+                                &clients[idx].username,
+                                pos,
+                                existing_block,
+                                block_id,
+                                broken_snap,
+                            );
                             if block_id.is_water()
                                 || block_id.is_lava()
                                 || existing_block.is_water()
@@ -4303,6 +4802,61 @@ fn run_server_loop(
                         max_burn_time,
                         cook_progress,
                     } if clients[idx].authenticated => {
+                        if inspect_mode_players.contains(&pid) {
+                            match blocklog_mgr.inspect_coord(pos, 8) {
+                                Ok(entries) if entries.is_empty() => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "&7[Inspect] No Block Log history at ({}, {}, {}).",
+                                                pos.x, pos.y, pos.z
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                                Ok(entries) => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "&6[Inspect] History at ({}, {}, {}):",
+                                                pos.x, pos.y, pos.z
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                    for e in entries {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: "Server".to_string(),
+                                                prefix: String::new(),
+                                                message: format!("  &f{} &e{}", e.actor, e.summary),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    }
+                                }
+                                Err(err) => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!("&c[Inspect] Failed: {}", err),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
                         let can_edit_admin = perms_manager
                             .has_permission(&clients[idx].username, "blockgame.claim.admin");
                         if let Err(claim_err) = claim_mgr.check_modify_at(
@@ -4330,6 +4884,29 @@ fn run_server_loop(
                         }
                         if !is_furnace && save_data.temples.is_chest_locked(pos) {
                             continue;
+                        }
+                        let old_slots: Vec<ItemSlot> = if is_furnace {
+                            world
+                                .furnaces
+                                .get(&pos)
+                                .map(|f| vec![f.input, f.fuel, f.output])
+                                .unwrap_or_else(|| vec![ItemSlot::EMPTY; 3])
+                        } else {
+                            world
+                                .chest_containers
+                                .get(&pos)
+                                .cloned()
+                                .unwrap_or_default()
+                        };
+                        let container_kind = if is_furnace { "furnace" } else { "chest" };
+                        for (is_add, item) in crate::blocklog::diff_container_slots(&old_slots, &slots) {
+                            blocklog_mgr.log_container(
+                                &clients[idx].username,
+                                pos,
+                                container_kind,
+                                is_add,
+                                item,
+                            );
                         }
                         if is_furnace {
                             let f = world.get_or_create_furnace(pos);
@@ -4478,6 +5055,82 @@ fn run_server_loop(
                                 ));
                             }
                             continue;
+                        }
+                        if inspect_mode_players.contains(&pid) {
+                            match blocklog_mgr.inspect_coord(pos, 8) {
+                                Ok(entries) if entries.is_empty() => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "&7[Inspect] No Block Log history at ({}, {}, {}).",
+                                                pos.x, pos.y, pos.z
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                                Ok(entries) => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!(
+                                                "&6[Inspect] History at ({}, {}, {}):",
+                                                pos.x, pos.y, pos.z
+                                            ),
+                                            is_system: true,
+                                        },
+                                    ));
+                                    for e in entries {
+                                        direct_sends.push((
+                                            pid,
+                                            ServerPacket::ChatBroadcast {
+                                                sender: "Server".to_string(),
+                                                prefix: String::new(),
+                                                message: format!("  &f{} &e{}", e.actor, e.summary),
+                                                is_system: true,
+                                            },
+                                        ));
+                                    }
+                                }
+                                Err(err) => {
+                                    direct_sends.push((
+                                        pid,
+                                        ServerPacket::ChatBroadcast {
+                                            sender: "Server".to_string(),
+                                            prefix: String::new(),
+                                            message: format!("&c[Inspect] Failed: {}", err),
+                                            is_system: true,
+                                        },
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
+                        let mut old_slots: Vec<ItemSlot> = Vec::new();
+                        if let Some(existing) = world.cooking_pots.get(&pos) {
+                            old_slots.extend_from_slice(&existing.ingredients);
+                            old_slots.push(existing.fuel);
+                            old_slots.push(existing.output);
+                        }
+                        let mut new_slots: Vec<ItemSlot> = Vec::new();
+                        new_slots.extend_from_slice(&ingredients);
+                        new_slots.push(fuel);
+                        new_slots.push(output);
+                        for (is_add, item) in
+                            crate::blocklog::diff_container_slots(&old_slots, &new_slots)
+                        {
+                            blocklog_mgr.log_container(
+                                &clients[idx].username,
+                                pos,
+                                "cooking_pot",
+                                is_add,
+                                item,
+                            );
                         }
                         let pot = world.get_or_create_cooking_pot(pos);
                         pot.ingredients = ingredients;
@@ -4834,6 +5487,9 @@ fn run_server_loop(
                                     &mut automessage_mgr,
                                     &mut moderation_mgr,
                                     &mut claim_mgr,
+                                    &blocklog_mgr,
+                                    &mut inspect_mode_players,
+                                    &mut world,
                                     &save_data,
                                     &mut default_spawn,
                                     &world_dir,
@@ -5305,6 +5961,9 @@ fn run_server_loop(
                                     &mut automessage_mgr,
                                     &mut moderation_mgr,
                                     &mut claim_mgr,
+                                    &blocklog_mgr,
+                                    &mut inspect_mode_players,
+                                    &mut world,
                                     &save_data,
                                     &mut default_spawn,
                                     &world_dir,
@@ -6339,6 +6998,7 @@ fn run_server_loop(
     farming_sim.export_to_save_data(&mut save_data);
     save_data.capture_from_world(&world);
     let _ = save_world_to_dir(&saves_root, &mut save_data);
+    blocklog_mgr.shutdown();
 
 }
 
@@ -8288,6 +8948,234 @@ mod tests {
         drop(alice);
         drop(bob);
         drop(server);
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_block_logging_inspect_rollback_and_undo() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "blockgame_mp_blocklog_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).unwrap();
+
+        let server = MultiplayerServer::start(
+            "127.0.0.1:0",
+            temp_root.clone(),
+            "mp_log_world".to_string(),
+            "MP Log World".to_string(),
+            42,
+            None,
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("start server");
+        let addr = server.local_addr().to_string();
+
+        let (mut alice, _) = MultiplayerClient::connect_and_authenticate(
+            &addr,
+            "Alice",
+            "pass1234",
+            CharacterAppearance::default(),
+        )
+        .expect("alice connect");
+        let (mut bob, _) = MultiplayerClient::connect_and_authenticate(
+            &addr,
+            "Bob",
+            "pass1234",
+            CharacterAppearance::default(),
+        )
+        .expect("bob connect");
+
+        // Grant Alice admin group so she can use /log commands
+        server.execute_command("perm user Alice group add admin");
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let _ = alice.poll_packets();
+        let _ = bob.poll_packets();
+
+        // Pick coordinates outside spawn protection (radius 16)
+        let stone_pos = IVec3::new(30, 5, 30);
+        let chest_pos = IVec3::new(31, 5, 30);
+
+        // Move Alice near the test area so radius-based lookup/rollback covers it
+        alice.send(&ClientPacket::PlayerStateUpdate {
+            position: Vec3::new(30.5, 6.0, 30.5),
+            velocity: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            held_item: ItemId::EMPTY,
+            walk_anim: 0.0,
+            swing_anim: 0.0,
+            is_sneaking: false,
+            health: 20.0,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(40));
+
+        // 1. Bob places Stone, places Chest, puts 5 Diamonds in Chest, then breaks Chest
+        bob.send(&ClientPacket::BlockChange {
+            pos: stone_pos,
+            block_id: BlockId::STONE,
+        });
+        bob.send(&ClientPacket::BlockChange {
+            pos: chest_pos,
+            block_id: BlockId::CHEST,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(60));
+
+        let mut chest_slots = vec![ItemSlot::EMPTY; 27];
+        chest_slots[0] = ItemSlot::new(ItemId::DIAMOND, 5);
+        bob.send(&ClientPacket::ContainerUpdate {
+            pos: chest_pos,
+            is_furnace: false,
+            slots: chest_slots,
+            burn_time: 0.0,
+            max_burn_time: 0.0,
+            cook_progress: 0.0,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(60));
+
+        bob.send(&ClientPacket::BlockChange {
+            pos: chest_pos,
+            block_id: BlockId::AIR,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let _ = alice.poll_packets();
+        let _ = bob.poll_packets();
+
+        // 2. Alice runs /log lookup player:Bob radius:20
+        alice.send(&ClientPacket::Chat {
+            message: "/log lookup player:Bob radius:20".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let pkts = alice.poll_packets();
+        let chat_lines: Vec<String> = pkts
+            .iter()
+            .filter_map(|p| match p {
+                ServerPacket::ChatBroadcast { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            chat_lines.iter().any(|m| m.contains("Block Log") && m.contains("Page 1")),
+            "Expected paginated Block Log header, got: {:?}",
+            chat_lines
+        );
+        assert!(
+            chat_lines.iter().any(|m| m.contains("Bob")),
+            "Expected Bob's events in lookup output, got: {:?}",
+            chat_lines
+        );
+
+        // 3. Alice toggles Inspect Mode and clicks chest_pos — should NOT mutate block
+        alice.send(&ClientPacket::Chat {
+            message: "/log inspect".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let _ = alice.poll_packets();
+
+        alice.send(&ClientPacket::BlockChange {
+            pos: chest_pos,
+            block_id: BlockId::STONE,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let pkts = alice.poll_packets();
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::BlockUpdate { pos, block_id }
+                    if *pos == chest_pos && *block_id == BlockId::AIR
+            )),
+            "Inspect Mode must revert attempted block edit back to AIR"
+        );
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::ChatBroadcast { message, .. }
+                    if message.contains("[Inspect] History at (31, 5, 30)")
+            )),
+            "Inspect Mode must send coordinate history"
+        );
+
+        // Toggle Inspect Mode off
+        alice.send(&ClientPacket::Chat {
+            message: "/log inspect".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        let _ = alice.poll_packets();
+
+        // 4. Dry-run preview rollback
+        alice.send(&ClientPacket::Chat {
+            message: "/log rollback radius:20 time:1h player:Bob --preview".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let pkts = alice.poll_packets();
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::ChatBroadcast { message, .. }
+                    if message.contains("[Rollback Preview]")
+            )),
+            "Expected rollback preview summary"
+        );
+
+        // 5. Execute rollback: stone_pos -> AIR, chest_pos -> AIR (all of Bob's edits reverted)
+        alice.send(&ClientPacket::Chat {
+            message: "/log rollback radius:20 time:1h player:Bob".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let pkts = alice.poll_packets();
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::ChatBroadcast { message, .. }
+                    if message.contains("Rolled back")
+            )),
+            "Expected rollback confirmation message"
+        );
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::BlockUpdate { pos, block_id }
+                    if *pos == stone_pos && *block_id == BlockId::AIR
+            )),
+            "Expected stone_pos to be rolled back to AIR"
+        );
+
+        // 6. Undo the rollback: stone_pos should return to STONE
+        alice.send(&ClientPacket::Chat {
+            message: "/log undo".to_string(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let pkts = alice.poll_packets();
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::ChatBroadcast { message, .. }
+                    if message.contains("Undid last rollback")
+            )),
+            "Expected undo confirmation message"
+        );
+        assert!(
+            pkts.iter().any(|p| matches!(
+                p,
+                ServerPacket::BlockUpdate { pos, block_id }
+                    if *pos == stone_pos && *block_id == BlockId::STONE
+            )),
+            "Expected stone_pos to be restored to STONE after /log undo"
+        );
+
+        // 7. Purge smoke test via console
+        server.execute_command("log purge 1d");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+
+        drop(alice);
+        drop(bob);
+        drop(server);
+
+        assert!(
+            temp_root.join("mp_log_world").join("blocklog.db").exists(),
+            "Expected per-world blocklog.db to exist"
+        );
         let _ = std::fs::remove_dir_all(&temp_root);
     }
 }

@@ -11,3 +11,4 @@ log.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
