@@ -1,6 +1,7 @@
 pub mod achievement;
 pub mod animal;
 pub mod auth;
+pub mod automessage;
 pub mod block;
 pub mod character;
 pub mod chat;

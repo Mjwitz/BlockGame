@@ -2113,6 +2113,7 @@ fn apply_command_output(
     perms_manager: &mut PermissionsManager,
     ban_manager: &mut BanManager,
     auth_db: &mut AuthDatabase,
+    automessage_mgr: &mut crate::automessage::AutoMessageManager,
     default_spawn: &mut Vec3,
     world_dir: &std::path::Path,
     config_dir: &std::path::Path,
@@ -2128,6 +2129,93 @@ fn apply_command_output(
     }
     if output.save_bans {
         let _ = ban_manager.save_to_dir(config_dir);
+    }
+
+    if !output.automessage_actions.is_empty() {
+        let mut am_feedback: Vec<String> = Vec::new();
+        let mut am_dirty = false;
+        for action in output.automessage_actions {
+            match action {
+                crate::command::AutoMessageCommandAction::Status => {
+                    am_feedback.push(format!(
+                        "Auto-Messages: {} | Interval: {}s | Order: {} | Messages: {}",
+                        if automessage_mgr.config.enabled { "ON" } else { "OFF" },
+                        automessage_mgr.config.interval_secs,
+                        automessage_mgr.config.order.as_str(),
+                        automessage_mgr.config.messages.len(),
+                    ));
+                }
+                crate::command::AutoMessageCommandAction::SetEnabled(enabled) => {
+                    automessage_mgr.set_enabled(enabled);
+                    am_dirty = true;
+                    am_feedback.push(format!(
+                        "Auto-Messages turned {}.",
+                        if enabled { "ON" } else { "OFF" }
+                    ));
+                }
+                crate::command::AutoMessageCommandAction::SetInterval(secs) => {
+                    match automessage_mgr.set_interval_secs(secs) {
+                        Ok(()) => {
+                            am_dirty = true;
+                            am_feedback.push(format!("Auto-Message interval set to {}s.", secs));
+                        }
+                        Err(err) => am_feedback.push(format!("[Error] {}", err)),
+                    }
+                }
+                crate::command::AutoMessageCommandAction::SetOrder(order) => {
+                    automessage_mgr.set_order(order);
+                    am_dirty = true;
+                    am_feedback.push(format!("Auto-Message order set to '{}'.", order.as_str()));
+                }
+                crate::command::AutoMessageCommandAction::List => {
+                    if automessage_mgr.config.messages.is_empty() {
+                        am_feedback.push("No Auto-Messages configured.".to_string());
+                    } else {
+                        am_feedback.push(format!(
+                            "Auto-Messages ({}, every {}s, {}):",
+                            if automessage_mgr.config.enabled { "ON" } else { "OFF" },
+                            automessage_mgr.config.interval_secs,
+                            automessage_mgr.config.order.as_str(),
+                        ));
+                        for (i, msg) in automessage_mgr.config.messages.iter().enumerate() {
+                            am_feedback.push(format!("  {}. {}", i + 1, msg));
+                        }
+                    }
+                }
+                crate::command::AutoMessageCommandAction::Add(msg) => {
+                    let count = automessage_mgr.add_message(msg);
+                    am_dirty = true;
+                    am_feedback.push(format!("Added Auto-Message #{}.", count));
+                }
+                crate::command::AutoMessageCommandAction::Remove(idx) => {
+                    match automessage_mgr.remove_message(idx) {
+                        Ok(_) => {
+                            am_dirty = true;
+                            am_feedback.push(format!("Removed Auto-Message #{}.", idx));
+                        }
+                        Err(err) => am_feedback.push(format!("[Error] {}", err)),
+                    }
+                }
+            }
+        }
+        if am_dirty {
+            let _ = automessage_mgr.save_to_dir(config_dir);
+        }
+        for line in am_feedback {
+            if let Some(pid) = source_pid {
+                direct_sends.push((
+                    pid,
+                    ServerPacket::ChatBroadcast {
+                        sender: "Server".to_string(),
+                        prefix: String::new(),
+                        message: line,
+                        is_system: true,
+                    },
+                ));
+            } else {
+                log::info!("[Console] {}", line);
+            }
+        }
     }
 
     for (target_pid, msg) in output.direct_messages {
@@ -2604,6 +2692,8 @@ fn run_server_loop(
         .unwrap_or_else(|_| PermissionsManager::new());
     let mut ban_manager =
         BanManager::load_from_config_dir(&config_dir, &legacy_dirs).unwrap_or_default();
+    let mut automessage_mgr =
+        crate::automessage::AutoMessageManager::load_from_dir(&config_dir).unwrap_or_default();
 
     let item_registry = ItemRegistry::new();
     let block_registry = crate::block::BlockRegistry::new();
@@ -2723,6 +2813,7 @@ fn run_server_loop(
                 &mut perms_manager,
                 &mut ban_manager,
                 &mut auth_db,
+                &mut automessage_mgr,
                 &mut default_spawn,
                 &world_dir,
                 &config_dir,
@@ -4092,6 +4183,7 @@ fn run_server_loop(
                                     &mut perms_manager,
                                     &mut ban_manager,
                                     &mut auth_db,
+                                    &mut automessage_mgr,
                                     &mut default_spawn,
                                     &world_dir,
                                     &config_dir,
@@ -4345,6 +4437,27 @@ fn run_server_loop(
                 .collect();
 
             *online_count.lock().unwrap() = all_players.len();
+
+            // Tick scheduled Auto-Messages and broadcast when due
+            if let Some(auto_msg) = automessage_mgr.tick(dt, !all_players.is_empty()) {
+                let pkt = ServerPacket::ChatBroadcast {
+                    sender: "Server".to_string(),
+                    prefix: String::new(),
+                    message: auto_msg,
+                    is_system: true,
+                };
+                if let Ok(bytes) = pkt.encode() {
+                    for c in clients.iter_mut() {
+                        if c.authenticated && !c.is_dead {
+                            if let Err(e) = c.stream.write_all(&bytes) {
+                                if e.kind() != io::ErrorKind::WouldBlock {
+                                    c.is_dead = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Tick temple re-challenge cooldowns and active server-authoritative boss encounters
             save_data.temples.tick_cooldowns(dt);
@@ -6068,6 +6181,75 @@ mod tests {
         let reloaded_bans = BanManager::load_from_dir(&config_dir).unwrap();
         assert!(reloaded_bans.is_banned("LegacyGriefer").is_some());
         assert!(reloaded_bans.is_ip_banned("10.0.0.99").is_some());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_multiplayer_automessages_commands_and_persistence() {
+        let temp_root = std::env::temp_dir().join("blockgame_net_automessage_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let saves_root = temp_root.join("saves");
+        let config_dir = temp_root.join("config");
+        std::fs::create_dir_all(&saves_root).unwrap();
+
+        let mut meta = WorldMetadata::new("AutoMsg World", 999);
+        meta.folder_name = "automsg_world".to_string();
+        let save_data = WorldSaveData::new(meta, SavedPlayerState::default());
+
+        let mut server = MultiplayerServer::start_with_config_dir(
+            "127.0.0.1:0",
+            saves_root,
+            config_dir.clone(),
+            "automsg_world".to_string(),
+            "AutoMsg World".to_string(),
+            999,
+            Some(save_data),
+            |cpos| crate::chunk::Chunk::new(cpos),
+        )
+        .expect("Failed to start server");
+
+        let addr_str = server.local_addr().to_string();
+        let (mut admin, _) = MultiplayerClient::connect_and_authenticate(
+            &addr_str,
+            "AdminAM",
+            "pass",
+            CharacterAppearance::randomized(0),
+        )
+        .expect("Admin should connect");
+
+        // Configure Auto-Messages via commands
+        admin.send(&ClientPacket::Chat {
+            message: "/automessage add &bJoin https://blockgame.dev".to_string(),
+        });
+        admin.send(&ClientPacket::Chat {
+            message: "/automessage interval 5".to_string(),
+        });
+        admin.send(&ClientPacket::Chat {
+            message: "/automessage order random".to_string(),
+        });
+        admin.send(&ClientPacket::Chat {
+            message: "/automessage on".to_string(),
+        });
+        thread::sleep(Duration::from_millis(200));
+        let pkts = admin.poll_packets();
+        assert!(
+            pkts.iter().any(|p| matches!(p, ServerPacket::ChatBroadcast { message, .. } if message.contains("Auto-Messages turned ON"))),
+            "Expected Auto-Messages ON confirmation"
+        );
+
+        admin.disconnect();
+        server.shutdown();
+
+        let reloaded = crate::automessage::AutoMessageManager::load_from_dir(&config_dir).unwrap();
+        assert!(reloaded.config.enabled);
+        assert_eq!(reloaded.config.interval_secs, 5);
+        assert_eq!(reloaded.config.order, crate::automessage::AutoMessageOrder::Random);
+        assert!(reloaded
+            .config
+            .messages
+            .iter()
+            .any(|m| m == "&bJoin https://blockgame.dev"));
 
         let _ = std::fs::remove_dir_all(&temp_root);
     }

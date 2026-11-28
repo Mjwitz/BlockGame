@@ -112,8 +112,22 @@ pub struct CommandOutput {
     pub gamemode_updates: Vec<(u32, crate::player::GameMode)>,
     /// Skill inspection or modification actions: handled by the server loop.
     pub skill_actions: Vec<SkillCommandAction>,
+    /// Auto-Message configuration or listing actions: handled by the server loop.
+    pub automessage_actions: Vec<AutoMessageCommandAction>,
     /// Player IDs whose Achievement Eligibility is forfeited by this admin/cheat command.
     pub cheat_taint_players: Vec<u32>,
+}
+
+/// Auto-Message management actions produced by `/automessage`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoMessageCommandAction {
+    Status,
+    SetEnabled(bool),
+    SetInterval(u64),
+    SetOrder(crate::automessage::AutoMessageOrder),
+    List,
+    Add(String),
+    Remove(usize),
 }
 
 /// Skill inspection or administrative adjustment produced by `/skills`.
@@ -1504,8 +1518,83 @@ pub fn execute_command(
             if check_perm("blockgame.command.say") {
                 out.feedback.push("  /say <message> - Broadcast announcement".to_string());
             }
+            if check_perm("blockgame.command.automessage") {
+                out.feedback.push("  /automessage <on|off|interval|order|list|add|remove> - Manage Auto-Messages".to_string());
+            }
             if check_perm("blockgame.command.stop") {
                 out.feedback.push("  /stop - Shut down server".to_string());
+            }
+        }
+
+        "automessage" | "automessages" | "am" => {
+            if !check_perm("blockgame.command.automessage") {
+                return CommandOutput::error(
+                    "You do not have permission: blockgame.command.automessage",
+                );
+            }
+            let sub = args.first().map(|s| s.to_ascii_lowercase());
+            match sub.as_deref() {
+                None | Some("status") => {
+                    out.automessage_actions.push(AutoMessageCommandAction::Status);
+                }
+                Some("on") | Some("enable") => {
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::SetEnabled(true));
+                }
+                Some("off") | Some("disable") => {
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::SetEnabled(false));
+                }
+                Some("interval") => {
+                    let Some(raw) = args.get(1) else {
+                        return CommandOutput::error("Usage: /automessage interval <seconds>");
+                    };
+                    let Ok(secs) = raw.parse::<u64>() else {
+                        return CommandOutput::error(format!("Invalid interval '{}'.", raw));
+                    };
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::SetInterval(secs));
+                }
+                Some("order") => {
+                    let Some(raw) = args.get(1) else {
+                        return CommandOutput::error(
+                            "Usage: /automessage order <sequential|random>",
+                        );
+                    };
+                    let Some(order) = crate::automessage::AutoMessageOrder::parse(raw) else {
+                        return CommandOutput::error(
+                            "Order must be 'sequential' or 'random'.",
+                        );
+                    };
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::SetOrder(order));
+                }
+                Some("list") => {
+                    out.automessage_actions.push(AutoMessageCommandAction::List);
+                }
+                Some("add") => {
+                    if args.len() < 2 {
+                        return CommandOutput::error("Usage: /automessage add <message>");
+                    }
+                    let msg = args[1..].join(" ");
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::Add(msg));
+                }
+                Some("remove") | Some("del") | Some("delete") => {
+                    let Some(raw) = args.get(1) else {
+                        return CommandOutput::error("Usage: /automessage remove <index>");
+                    };
+                    let Ok(idx) = raw.parse::<usize>() else {
+                        return CommandOutput::error(format!("Invalid index '{}'.", raw));
+                    };
+                    out.automessage_actions
+                        .push(AutoMessageCommandAction::Remove(idx));
+                }
+                _ => {
+                    return CommandOutput::error(
+                        "Usage: /automessage <status|on|off|interval <sec>|order <sequential|random>|list|add <msg>|remove <idx>>",
+                    );
+                }
             }
         }
 
